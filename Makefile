@@ -1,4 +1,4 @@
-VERSION="Axiom (April 2007)"
+VERSION="Axiom (May 2007)"
 SPD=$(shell pwd)
 SYS=$(notdir $(AXIOM))
 SPAD=${SPD}/mnt/${SYS}
@@ -46,7 +46,7 @@ ENV= SPAD=${SPAD} SYS=${SYS} SPD=${SPD} LSP=${LSP} GCLDIR=${GCLDIR} \
      TANGLE=${TANGLE} VERSION=${VERSION} PATCH=${PATCH} DOCUMENT=${DOCUMENT} \
      WEAVE=${WEAVE}
 
-all: noweb ${MNT}/${SYS}/bin/Makefile.pamphlet
+all: noweb ${MNT}/${SYS}/bin/document
 	@ echo 1 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
 	@ echo 2 Environment ${ENV}
 	@ ${TANGLE} -t8 -RMakefile.${SYS} Makefile.pamphlet >Makefile.${SYS}
@@ -56,7 +56,7 @@ all: noweb ${MNT}/${SYS}/bin/Makefile.pamphlet
 	@ ${ENV} $(MAKE) -f Makefile.${SYS} 
 	@echo 3 finished system build on `date` | tee >lastBuildDate
 
-start: noweb ${MNT}/${SYS}/bin/Makefile.pamphlet
+start: noweb ${MNT}/${SYS}/bin/document
 
 book:
 	@ echo 79 building the book as ${MNT}/${SYS}/doc/book.dvi 
@@ -100,7 +100,7 @@ nowebclean:
 	@rm -rf ${OBJ}/noweb
 	@rm -f noweb
 
-${MNT}/${SYS}/bin/Makefile.pamphlet:
+${MNT}/${SYS}/bin/document:
 	@echo 0 ${ENV}
 	@echo 10 copying ${SRC}/scripts to ${MNT}/${SYS}/bin
 	@cp -pr ${SRC}/scripts/* ${MNT}/${SYS}/bin
@@ -123,7 +123,7 @@ install:
 	@echo 
 
 
-document: noweb ${MNT}/${SYS}/bin/Makefile.pamphlet
+document: noweb ${MNT}/${SYS}/bin/document
 	@ echo 4 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
 	@ echo 5 Environment ${ENV}
 	@ ${TANGLE} -t8 -RMakefile.${SYS} Makefile.pamphlet >Makefile.${SYS}
