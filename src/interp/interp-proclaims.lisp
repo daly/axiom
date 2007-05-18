@@ -1144,7 +1144,7 @@
             BOOT::|fortFormatCharacterTypes,mkCharName|
             BOOT::|opPageFast|
             BOOT::|fortFormatCharacterTypes,par2string| VMLISP::MAKEDIR
-            VMLISP::GET-IO-INDEX-STREAM
+            VMLISP::DELETE-DIRECTORY VMLISP::GET-IO-INDEX-STREAM
             VMLISP::GET-INPUT-INDEX-STREAM VMLISP::DIRECTORY?
             BOOT::|c05pbfGen| BOOT::|c05nbfGen| BOOT::|c05pbfSolve|
             BOOT::|c05nbfSolve| BOOT::|e02dafSolve| BOOT::|c06ebfGen|
@@ -2145,7 +2145,7 @@
             BOOT::|getSubstSignature| BOOT::|getfortexp1|
             BOOT::|fortran2Lines1| BOOT::|koOps,trim|
             BOOT::|isPatternVar| BOOT::|dispfortexp1|
-            BOOT::|displayBreakIntoAnds| 
+            BOOT::|displayBreakIntoAnds| VMLISP::LIBRARY-FILE
             VMLISP::GET-DIRECTORY-LIST VMLISP::PROBE-NAME
             VMLISP::SPAD-FIXED-ARG VMLISP::LIBSTREAM-INDEXSTREAM
             VMLISP::LIBSTREAM-INDEXTABLE VMLISP::LIBSTREAM-MODE
