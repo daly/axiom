@@ -46,7 +46,7 @@
             BOOT::|e04jafDefaultSolve| BOOT::|f01brfDefaultSolve|
             BOOT::|e04ycfDefaultSolve|)) 
 (PROCLAIM
-    '(FTYPE (FUNCTION (T T *) *) VMLISP:$FCOPY VMLISP:CONCAT
+    '(FTYPE (FUNCTION (T T *) *) VMLISP:CONCAT
             BOOT::LOCALDATABASE BOOT::FE BOOT::|ncBug|)) 
 (PROCLAIM
     '(FTYPE (FUNCTION (T T T) *) BOOT::|replacePercentByDollar,fn|
@@ -81,7 +81,7 @@
             BOOT::|bcDrawIt2| BOOT::|charybdis| BOOT::|bcMkFunction|
             BOOT::|charyTop| BOOT::|bcDrawIt|
             BOOT::|f01qcfDefaultSolve| BOOT::|e02zafDefaultSolve|
-            BOOT::|ncloopInclude0|)) 
+            BOOT::|ncloopInclude0| VMLISP:$FCOPY)) 
 (PROCLAIM
     '(FTYPE (FUNCTION (T T T T T T) *) BOOT::|e02befColdSolve|
             BOOT::|e02ahfDefaultSolve| BOOT::|e02akfDefaultSolve|
