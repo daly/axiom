@@ -1,0 +1,362 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra lingrob.spad}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package LGROBP LinGroebnerPackage}
+<<package LGROBP LinGroebnerPackage>>=
+)abbrev package LGROBP LinGroebnerPackage
+++  Given a Groebner basis B with respect to the total degree ordering for
+++  a zero-dimensional ideal I, compute
+++  a Groebner basis with respect to the lexicographical ordering by using
+++  linear algebra.
+LinGroebnerPackage(lv,F) : C == T
+
+ where
+  Z      ==>  Integer
+  lv     :    List Symbol
+  F      :    GcdDomain
+
+  DP     ==>  DirectProduct(#lv,NonNegativeInteger)
+  DPoly  ==>  DistributedMultivariatePolynomial(lv,F)
+
+  HDP    ==>  HomogeneousDirectProduct(#lv,NonNegativeInteger)
+  HDPoly ==>  HomogeneousDistributedMultivariatePolynomial(lv,F)
+
+  OV     ==>  OrderedVariableList(lv)
+  NNI    ==>  NonNegativeInteger
+  LVals  ==>  Record(gblist : List DPoly,gvlist : List Z)
+  VF     ==>  Vector F
+  VV     ==>  Vector NNI
+  MF     ==>  Matrix F
+  cLVars ==>  Record(glbase:List DPoly,glval:List Z)
+
+  C == with
+
+     linGenPos    :           List HDPoly      -> LVals
+	++ linGenPos \undocumented
+     groebgen     :           List DPoly       -> cLVars
+	++ groebgen \undocumented
+     totolex      :           List HDPoly      -> List DPoly
+	++ totolex \undocumented
+     minPol       : (List HDPoly,List HDPoly,OV) -> HDPoly
+	++ minPol \undocumented
+     minPol       :        (List HDPoly,OV)     -> HDPoly
+	++ minPol \undocumented
+
+
+     computeBasis :        List HDPoly           -> List HDPoly
+	++ computeBasis \undocumented
+     coord        : (HDPoly,List HDPoly)         -> VF
+	++ coord \undocumented
+     anticoord    : (List F,DPoly,List DPoly)    -> DPoly
+	++ anticoord \undocumented
+     intcompBasis : (OV,List HDPoly,List HDPoly) -> List HDPoly
+	++ intcompBasis \undocumented
+     choosemon    :     (DPoly,List  DPoly)      -> DPoly
+	++ choosemon \undocumented
+     transform    :           DPoly              -> HDPoly
+	++ transform \undocumented
+
+
+  T == add
+
+    import GroebnerPackage(F,DP,OV,DPoly)
+    import GroebnerPackage(F,HDP,OV,HDPoly)
+    import GroebnerInternalPackage(F,HDP,OV,HDPoly)
+    import GroebnerInternalPackage(F,DP,OV,DPoly)
+
+    lvar :=[variable(yx)::OV for yx in lv]
+
+    reduceRow(M:MF, v : VF, lastRow: Integer, pivots: Vector(Integer)) : VF ==
+      a1:F := 1
+      b:F := 0
+      dim := #v
+      for j in 1..lastRow repeat -- scan over rows
+         mj := row(M,j)
+         k:=pivots(j)
+         b:=mj.k
+         vk := v.k
+         for kk in 1..(k-1) repeat
+            v(kk) := ((-b*v(kk)) exquo a1) :: F
+         for kk in k..dim repeat
+            v(kk) := ((vk*mj(kk)-b*v(kk)) exquo a1)::F
+         a1 := b
+      v
+
+    rRedPol(f:HDPoly, B:List HDPoly):Record(poly:HDPoly, mult:F) ==
+      gm := redPo(f,B)
+      gm.poly = 0 => gm
+      gg := reductum(gm.poly)
+      ggm := rRedPol(gg,B)
+      [ggm.mult*(gm.poly - gg) + ggm.poly, ggm.mult*gm.mult]
+
+----- transform the total basis B in lex basis -----
+    totolex(B : List HDPoly) : List DPoly ==
+      result:List DPoly :=[]
+      ltresult:List DPoly :=[]
+      vBasis:= computeBasis B
+      nBasis:List DPoly :=[1$DPoly]
+      ndim:=(#vBasis)::PositiveInteger
+      ndim1:NNI:=ndim+1
+      lm:VF
+      linmat:MF:=zero(ndim,2*ndim+1)
+      linmat(1,1):=1$F
+      linmat(1,ndim1):=1
+      pivots:Vector Integer := new(ndim,0)
+      pivots(1) := 1
+      firstmon:DPoly:=1$DPoly
+      ofirstmon:DPoly:=1$DPoly
+      orecfmon:Record(poly:HDPoly, mult:F) := [1,1]
+      i:NNI:=2
+      while (firstmon:=choosemon(firstmon,ltresult))^=1 repeat
+        if (v:=firstmon exquo ofirstmon) case "failed" then
+          recfmon:=rRedPol(transform firstmon,B)
+        else
+          recfmon:=rRedPol(transform(v::DPoly) *orecfmon.poly,B)
+          recfmon.mult := recfmon.mult * orecfmon.mult
+        cc := gcd(content recfmon.poly, recfmon.mult)
+        recfmon.poly := (recfmon.poly exquo cc)::HDPoly
+        recfmon.mult := (recfmon.mult exquo cc)::F
+        veccoef:VF:=coord(recfmon.poly,vBasis)
+        ofirstmon:=firstmon
+        orecfmon := recfmon
+        lm:=zero(2*ndim+1)
+        for j in 1..ndim repeat lm(j):=veccoef(j)
+        lm(ndim+i):=recfmon.mult
+        lm := reduceRow(linmat, lm, i-1, pivots)
+        if i=ndim1 then j:=ndim1
+        else
+          j:=1
+          while lm(j) = 0 and j< ndim1 repeat j:=j+1
+        if j=ndim1 then
+          cordlist:List F:=[lm(k) for k in ndim1..ndim1+(#nBasis)]
+          antc:=+/[c*b for c in reverse cordlist
+                       for b in concat(firstmon,nBasis)]
+          antc:=primitivePart antc
+          result:=concat(antc,result)
+          ltresult:=concat(antc-reductum antc,ltresult)
+        else
+          pivots(i) := j
+          setRow_!(linmat,i,lm)
+          i:=i+1
+          nBasis:=cons(firstmon,nBasis)
+      result
+
+---- Compute the univariate polynomial for x
+----oldBasis is a total degree Groebner basis
+    minPol(oldBasis:List HDPoly,x:OV) :HDPoly ==
+      algBasis:= computeBasis oldBasis
+      minPol(oldBasis,algBasis,x)
+
+---- Compute the univariate polynomial for x
+---- oldBasis is total Groebner, algBasis is the basis as algebra
+    minPol(oldBasis:List HDPoly,algBasis:List HDPoly,x:OV) :HDPoly ==
+      nvp:HDPoly:=x::HDPoly
+      f:=1$HDPoly
+      omult:F :=1
+      ndim:=(#algBasis)::PositiveInteger
+      ndim1:NNI:=ndim+1
+      lm:VF
+      linmat:MF:=zero(ndim,2*ndim+1)
+      linmat(1,1):=1$F
+      linmat(1,ndim1):=1
+      pivots:Vector Integer := new(ndim,0)
+      pivots(1) := 1
+      for i in 2..ndim1 repeat
+        recf:=rRedPol(f*nvp,oldBasis)
+        omult := recf.mult * omult
+        f := recf.poly
+        cc := gcd(content f, omult)
+        f := (f exquo cc)::HDPoly
+        omult := (omult exquo cc)::F
+        veccoef:VF:=coord(f,algBasis)
+        lm:=zero(2*ndim+1)
+        for j in 1..ndim repeat lm(j) := veccoef(j)
+        lm(ndim+i):=omult
+        lm := reduceRow(linmat, lm, i-1, pivots)
+        j:=1
+        while lm(j)=0 and j<ndim1 repeat j:=j+1
+        if j=ndim1 then return
+          g:HDPoly:=0
+          for k in ndim1..2*ndim+1 repeat
+            g:=g+lm(k) * nvp**((k-ndim1):NNI)
+          primitivePart g
+        pivots(i) := j
+        setRow_!(linmat,i,lm)
+
+----- transform a DPoly in a HDPoly -----
+    transform(dpol:DPoly) : HDPoly ==
+      dpol=0 => 0$HDPoly
+      monomial(leadingCoefficient dpol,
+               directProduct(degree(dpol)::VV)$HDP)$HDPoly +
+                                      transform(reductum dpol)
+
+----- compute the basis for the vector space determined by B -----
+    computeBasis(B:List HDPoly) : List HDPoly ==
+      mB:List HDPoly:=[monomial(1$F,degree f)$HDPoly for f in B]
+      result:List HDPoly := [1$HDPoly]
+      for var in lvar repeat
+        part:=intcompBasis(var,result,mB)
+        result:=concat(result,part)
+      result
+
+----- internal function for computeBasis -----
+    intcompBasis(x:OV,lr:List HDPoly,mB : List HDPoly):List HDPoly ==
+      lr=[] => lr
+      part:List HDPoly :=[]
+      for f in lr repeat
+        g:=x::HDPoly * f
+        if redPo(g,mB).poly^=0 then part:=concat(g,part)
+      concat(part,intcompBasis(x,part,mB))
+
+----- coordinate of f with respect to the basis B -----
+----- f is a reduced polynomial -----
+    coord(f:HDPoly,B:List HDPoly) : VF ==
+      ndim := #B
+      vv:VF:=new(ndim,0$F)$VF
+      while f^=0 repeat
+        rf := reductum f
+        lf := f-rf
+        lcf := leadingCoefficient f
+        i:Z:=position(monomial(1$F,degree lf),B)
+        vv.i:=lcf
+        f := rf
+      vv
+
+----- reconstruct the polynomial from its coordinate -----
+    anticoord(vv:List F,mf:DPoly,B:List DPoly) : DPoly ==
+      for f in B for c in vv repeat (mf:=mf-c*f)
+      mf
+
+----- choose the next monom -----
+    choosemon(mf:DPoly,nB:List DPoly) : DPoly ==
+      nB = [] => ((lvar.last)::DPoly)*mf
+      for x in reverse lvar repeat
+        xx:=x ::DPoly
+        mf:=xx*mf
+        if redPo(mf,nB).poly ^= 0 then return mf
+        dx := degree(mf,x)
+        mf := (mf exquo (xx ** dx))::DPoly
+      mf
+
+----- put B in general position, B is Groebner -----
+    linGenPos(B : List HDPoly) : LVals ==
+      result:List DPoly :=[]
+      ltresult:List DPoly :=[]
+      vBasis:= computeBasis B
+      nBasis:List DPoly :=[1$DPoly]
+      ndim:=#vBasis : PositiveInteger
+      ndim1:NNI:=ndim+1
+      lm:VF
+      linmat:MF:=zero(ndim,2*ndim+1)
+      linmat(1,1):=1$F
+      linmat(1,ndim1):=1
+      pivots:Vector Integer := new(ndim,0)
+      pivots(1) := 1
+      i:NNI:=2
+      rval:List Z :=[]
+      for ii in 1..(#lvar-1) repeat
+        c:Z:=0
+        while c=0 repeat c:=random()$Z rem 11
+        rval:=concat(c,rval)
+      nval:DPoly := (last.lvar)::DPoly -
+                (+/[r*(vv)::DPoly for r in rval for vv in lvar])
+      firstmon:DPoly:=1$DPoly
+      ofirstmon:DPoly:=1$DPoly
+      orecfmon:Record(poly:HDPoly, mult:F) := [1,1]
+      lx:= lvar.last
+      while (firstmon:=choosemon(firstmon,ltresult))^=1 repeat
+        if (v:=firstmon exquo ofirstmon) case "failed" then
+          recfmon:=rRedPol(transform(eval(firstmon,lx,nval)),B)
+        else
+          recfmon:=rRedPol(transform(eval(v,lx,nval))*orecfmon.poly,B)
+          recfmon.mult := recfmon.mult * orecfmon.mult
+        cc := gcd(content recfmon.poly, recfmon.mult)
+        recfmon.poly := (recfmon.poly exquo cc)::HDPoly
+        recfmon.mult := (recfmon.mult exquo cc)::F
+        veccoef:VF:=coord(recfmon.poly,vBasis)
+        ofirstmon:=firstmon
+        orecfmon := recfmon
+        lm:=zero(2*ndim+1)
+        for j in 1..ndim repeat lm(j):=veccoef(j)
+        lm(ndim+i):=recfmon.mult
+        lm := reduceRow(linmat, lm, i-1, pivots)
+        j:=1
+        while lm(j) = 0 and j<ndim1 repeat j:=j+1
+        if j=ndim1 then
+          cordlist:List F:=[lm(j) for j in ndim1..ndim1+(#nBasis)]
+          antc:=+/[c*b for c in reverse cordlist
+                       for b in concat(firstmon,nBasis)]
+          result:=concat(primitivePart antc,result)
+          ltresult:=concat(antc-reductum antc,ltresult)
+        else
+          pivots(i) := j
+          setRow_!(linmat,i,lm)
+          i:=i+1
+          nBasis:=concat(firstmon,nBasis)
+      [result,rval]$LVals
+
+----- given a basis of a zero-dimensional ideal,
+----- performs a random change of coordinates
+----- computes a Groebner basis for the lex ordering
+    groebgen(L:List DPoly) : cLVars ==
+      xn:=lvar.last
+      val := xn::DPoly
+      nvar1:NNI:=(#lvar-1):NNI
+      ll: List Z :=[random()$Z rem 11 for i in 1..nvar1]
+      val:=val+ +/[ll.i*(lvar.i)::DPoly for i in 1..nvar1]
+      LL:=[elt(univariate(f,xn),val) for f in L]
+      LL:=  groebner(LL)
+      [LL,ll]$cLVars
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package LGROBP LinGroebnerPackage>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

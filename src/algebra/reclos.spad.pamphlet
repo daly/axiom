@@ -1,0 +1,1242 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra reclos.spad}
+\author{Renaud Rioboo}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+This file describes the Real Closure 1.0 package which consists of different
+packages, categoris and domains :
+
+- the package RealPolynomialUtilitiesPackage whichs receives a field and a
+univariate polynomial domain with coefficients in the field. It computes some
+simple functions such as Strum and Sylvester sequences.
+
+- The category RealRootCharacterizationCategory provides abstarct
+functionalities to work with "real roots" of univariate polynomials. These
+resemble variables with some functionalities needed to compute important
+operations.
+
+- RealClosedField is a category with provides comon operations available over
+real closed fiels. These include finding all the roots of univariate
+polynomial, taking square roots, ...
+
+- The domain RightOpenIntervalRootCharacterization is the main code that
+provides the functionalities of RealRootCharacterizationCategory for the case
+of archimedean fileds. Abstract roots are encoded with a left closed right
+open interval containing the root together with a defining polynomial for the
+root.
+
+- The RealClosure domain is the end-user code, it provides usual arithmetics
+with real algebraic numbers, along with the functionalities of a real closed
+field. It also provides functions to approximate a real algebraic number by an
+element of the base field. This approximation may either be absolute
+(approximate) or relative (realtivApprox).
+
+
+CAVEEATS
+
+Since real algebraic expressions are stored as depending on "real roots" which
+are managed like variables, there is an ordering on these. This ordering is
+dynamical in the sense that any new algebraic takes precedence over older
+ones. In particular every cretaion function raises a new "real root". This has
+the effect that when you type something like sqrt(2) + sqrt(2) you have two
+new variables which happen to be equal. To avoid this name the expression such
+as in s2 := sqrt(2) ; s2 + s2
+
+Also note that computing times depend strongly on the ordering you implicitly
+provide. Please provide algebraics in the order which most natural to you.
+
+LIMITATIONS
+
+The file reclos.input show some basic use of the package.  This packages uses
+algorithms which are published in [1] and [2] which are based on field
+arithmetics, inparticular for polynomial gcd related algorithms. This can be
+quite slow for high degree polynomials and subresultants methods usually work
+best. Betas versions of the package try to use these techniques in a better
+way and work significantly faster. These are mostly based on unpublished
+algorithms and cannot be distributed. Please contact the author if you have a
+particular problem to solve or want to use these versions.
+
+Be aware that approximations behave as post-processing and that all
+computations are done excatly. They can thus be quite time consuming when
+depending on several "real roots".
+\section{package POLUTIL RealPolynomialUtilitiesPackage}
+<<package POLUTIL RealPolynomialUtilitiesPackage>>=
+)abbrev package POLUTIL RealPolynomialUtilitiesPackage
+++ Author: Renaud Rioboo
+++ Date Created: summer 1992
+++ Basic Functions: provides polynomial utilities
+++ Related Constructors: RealClosure, 
+++ Date Last Updated: July 2004
+++ Also See: 
+++ AMS Classifications:
+++ Keywords: Sturm sequences
+++ References:  
+++ Description:
+++ \axiomType{RealPolynomialUtilitiesPackage} provides common functions used
+++ by interval coding.
+RealPolynomialUtilitiesPackage(TheField,ThePols) : PUB == PRIV where
+
+    TheField : Field
+    ThePols : UnivariatePolynomialCategory(TheField)
+
+    Z ==> Integer
+    N ==> NonNegativeInteger
+    P ==> ThePols
+
+    PUB == with
+
+       sylvesterSequence : (ThePols,ThePols) -> List ThePols
+         ++ \axiom{sylvesterSequence(p,q)} is the negated remainder sequence
+         ++ of p and q divided by the last computed term
+       sturmSequence : ThePols -> List ThePols
+         ++ \axiom{sturmSequence(p) = sylvesterSequence(p,p')}
+       if TheField has OrderedRing then
+         boundOfCauchy : ThePols -> TheField
+           ++ \axiom{boundOfCauchy(p)} bounds the roots of p
+         sturmVariationsOf : List TheField -> N
+           ++ \axiom{sturmVariationsOf(l)} is the number of sign variations 
+           ++ in the list of numbers l,
+           ++ note that the first term counts as a sign
+         lazyVariations : (List(TheField), Z, Z) -> N
+           ++ \axiom{lazyVariations(l,s1,sn)} is the number of sign variations 
+           ++ in the list of non null numbers [s1::l]@sn,
+
+
+    PRIV == add
+
+     sturmSequence(p) ==
+       sylvesterSequence(p,differentiate(p))
+
+     sylvesterSequence(p1,p2) ==
+       res : List(ThePols) := [p1]
+       while (p2 ^= 0) repeat
+         res := cons(p2 , res)
+         (p1 , p2) := (p2 , -(p1 rem p2))
+       if degree(p1) > 0
+       then
+         p1 := unitCanonical(p1)
+         res := [ term quo p1 for term in res ]
+       reverse! res
+
+     if TheField has OrderedRing
+     then
+
+       boundOfCauchy(p) ==
+         c :TheField := inv(leadingCoefficient(p))
+         l := [ c*term for term in rest(coefficients(p))]
+         null(l) => 1
+         1 + ("max" / [ abs(t) for t in l ])
+
+--       sturmVariationsOf(l) == 
+--         res : N := 0
+--         lsg := sign(first(l))
+--         for term in l repeat
+--           if ^( (sg := sign(term) ) = 0 ) then
+--             if (sg ^= lsg) then res := res + 1
+--             lsg := sg
+--         res
+
+       sturmVariationsOf(l) == 
+         null(l) => error "POLUTIL: sturmVariationsOf: empty list !"
+         l1 := first(l)
+         -- first 0 counts as a sign
+         ll : List(TheField) := []
+         for term in rest(l) repeat
+           -- zeros don't count
+           if not(zero?(term)) then ll := cons(term,ll)
+         -- if l1 is not zero then ll = reverse(l)
+         null(ll) => error "POLUTIL: sturmVariationsOf: Bad sequence"
+         ln := first(ll)
+         ll := reverse(rest(ll))
+         -- if l1 is not zero then first(l) = first(ll)
+         -- if l1 is zero then first zero should count as a sign
+         zero?(l1) => 1 + lazyVariations(rest(ll),sign(first(ll)),sign(ln))
+         lazyVariations(ll, sign(l1), sign(ln))
+
+       lazyVariations(l,sl,sh) ==
+         zero?(sl) or zero?(sh) => error "POLUTIL: lazyVariations: zero sign!"
+         null(l) =>
+           if sl = sh then 0 else 1
+         null(rest(l)) => 
+           if zero?(first(l))
+           then error "POLUTIL: lazyVariations: zero sign!"
+           else
+             if sl = sh 
+             then 
+               if (sl = sign(first(l)))
+               then 0
+               else 2
+             -- in this case we save one test
+             else 1
+         s := sign(l.2)
+         lazyVariations([first(l)],sl,s) + 
+           lazyVariations(rest(rest(l)),s,sh)
+    
+@
+\section{category RRCC RealRootCharacterizationCategory}
+<<category RRCC RealRootCharacterizationCategory>>=
+)abbrev category RRCC RealRootCharacterizationCategory
+++ Author: Renaud Rioboo
+++ Date Created: summer 1992
+++ Date Last Updated: January 2004
+++ Basic Functions: provides operations with generic real roots of 
+++                  polynomials 
+++ Related Constructors: RealClosure, RightOpenIntervalRootCharacterization
+++ Also See: 
+++ AMS Classifications:
+++ Keywords: Real Algebraic Numbers
+++ References: 
+++ Description:
+++ \axiomType{RealRootCharacterizationCategory} provides common acces
+++ functions for all real root codings.
+RealRootCharacterizationCategory(TheField, ThePols ) : Category == PUB where
+
+   TheField : Join(OrderedRing, Field)
+   ThePols : UnivariatePolynomialCategory(TheField)
+
+   Z ==> Integer
+   N ==> PositiveInteger
+
+   PUB ==>
+     SetCategory with
+
+        sign:                ( ThePols, $ )   ->            Z
+              ++ \axiom{sign(pol,aRoot)} gives the sign of \axiom{pol}
+              ++ interpreted as \axiom{aRoot}
+        zero? :              ( ThePols, $ )   ->         Boolean
+              ++ \axiom{zero?(pol,aRoot)} answers if \axiom{pol}
+              ++ interpreted as \axiom{aRoot} is \axiom{0}
+        negative?:           ( ThePols, $ )   ->         Boolean
+              ++ \axiom{negative?(pol,aRoot)} answers if \axiom{pol}
+              ++ interpreted as \axiom{aRoot} is negative
+        positive?:           ( ThePols, $ )   ->         Boolean
+              ++ \axiom{positive?(pol,aRoot)} answers if \axiom{pol}
+              ++ interpreted as \axiom{aRoot} is positive
+        recip:               ( ThePols, $ )   ->   Union(ThePols,"failed") 
+              ++ \axiom{recip(pol,aRoot)} tries to inverse \axiom{pol}
+              ++ interpreted as \axiom{aRoot}
+        definingPolynomial:         $         ->         ThePols
+              ++ \axiom{definingPolynomial(aRoot)} gives a polynomial
+              ++ such that \axiom{definingPolynomial(aRoot).aRoot = 0} 
+        allRootsOf:              ThePols      ->          List $
+              ++ \axiom{allRootsOf(pol)} creates all the roots of \axiom{pol} 
+              ++ in the Real Closure, assumed in order.
+        rootOf:              ( ThePols, N )   ->      Union($,"failed")
+              ++ \axiom{rootOf(pol,n)} gives the nth root for the order of the
+              ++ Real Closure
+        approximate :  (ThePols,$,TheField)   ->    TheField
+              ++ \axiom{approximate(term,root,prec)} gives an approximation 
+              ++ of \axiom{term} over \axiom{root} with precision \axiom{prec}
+
+        relativeApprox :  (ThePols,$,TheField)   ->    TheField
+              ++ \axiom{approximate(term,root,prec)} gives an approximation 
+              ++ of \axiom{term} over \axiom{root} with precision \axiom{prec}
+
+      add
+
+        zero?(toTest, rootChar) == 
+          sign(toTest, rootChar) = 0
+                
+        negative?(toTest, rootChar) == 
+          sign(toTest, rootChar) < 0              
+        
+        positive?(toTest, rootChar) == 
+          sign(toTest, rootChar) > 0
+
+        rootOf(pol,n) ==
+          liste:List($):= allRootsOf(pol)
+          # liste > n => "failed"
+          liste.n
+
+        recip(toInv,rootChar) ==
+          degree(toInv) = 0 => 
+            res := recip(leadingCoefficient(toInv))
+            if (res case "failed") then "failed" else (res::TheField::ThePols)
+          defPol := definingPolynomial(rootChar)
+          d := principalIdeal([defPol,toInv])
+          zero?(d.generator,rootChar) => "failed"
+          if (degree(d.generator) ^= 0 )
+          then
+            defPol := (defPol exquo (d.generator))::ThePols
+            d := principalIdeal([defPol,toInv])
+          d.coef.2
+
+@
+\section{category RCFIELD RealClosedField}
+<<category RCFIELD RealClosedField>>=
+)abbrev category RCFIELD RealClosedField
+++ Author: Renaud Rioboo
+++ Date Created: may 1993
+++ Date Last Updated: January 2004
+++ Basic Functions: provides computations with generic real roots of 
+++                  polynomials 
+++ Related Constructors: SimpleOrderedAlgebraicExtension, RealClosure
+++ Also See: 
+++ AMS Classifications:
+++ Keywords: Real Algebraic Numbers
+++ References: 
+++ Description:
+++ \axiomType{RealClosedField} provides common acces
+++ functions for all real closed fields.
+RealClosedField : Category == PUB where
+
+    E ==> OutputForm
+    SUP ==> SparseUnivariatePolynomial
+    OFIELD ==> Join(OrderedRing,Field)
+    PME ==> SUP($)
+    N ==> NonNegativeInteger
+    PI ==> PositiveInteger
+    RN ==> Fraction(Integer)
+    Z  ==> Integer
+    POLY ==> Polynomial
+    PACK ==> SparseUnivariatePolynomialFunctions2
+
+    PUB == Join(CharacteristicZero,
+                OrderedRing,
+                CommutativeRing,
+                Field,
+                FullyRetractableTo(Fraction(Integer)),
+                Algebra Integer,
+                Algebra(Fraction(Integer)),
+                RadicalCategory) with
+
+        mainForm :   $ -> Union(E,"failed")
+             ++ \axiom{mainForm(x)} is the main algebraic quantity name of 
+             ++ \axiom{x}
+
+        mainDefiningPolynomial :   $ -> Union(PME,"failed")
+             ++ \axiom{mainDefiningPolynomial(x)} is the defining 
+             ++ polynomial for the main algebraic quantity of \axiom{x}
+
+        mainValue :   $ -> Union(PME,"failed")
+             ++ \axiom{mainValue(x)} is the expression of \axiom{x} in terms
+             ++ of \axiom{SparseUnivariatePolynomial($)} 
+
+        rootOf:          (PME,PI,E)           -> Union($,"failed")
+             ++ \axiom{rootOf(pol,n,name)} creates the nth root for the order
+             ++ of \axiom{pol} and names it \axiom{name}
+
+        rootOf:          (PME,PI)             -> Union($,"failed")
+             ++ \axiom{rootOf(pol,n)} creates the nth root for the order
+             ++ of \axiom{pol} and gives it unique name
+
+        allRootsOf:       PME                ->  List $
+             ++ \axiom{allRootsOf(pol)} creates all the roots
+             ++ of \axiom{pol} naming each uniquely
+
+        allRootsOf:       (SUP(RN))          ->  List $
+             ++ \axiom{allRootsOf(pol)} creates all the roots
+             ++ of \axiom{pol} naming each uniquely
+
+        allRootsOf:       (SUP(Z))          ->  List $
+             ++ \axiom{allRootsOf(pol)} creates all the roots
+             ++ of \axiom{pol} naming each uniquely
+
+        allRootsOf:       (POLY($))         ->  List $
+             ++ \axiom{allRootsOf(pol)} creates all the roots
+             ++ of \axiom{pol} naming each uniquely
+
+        allRootsOf:       (POLY(RN))        ->  List $
+             ++ \axiom{allRootsOf(pol)} creates all the roots
+             ++ of \axiom{pol} naming each uniquely
+
+        allRootsOf:       (POLY(Z))         ->  List $
+             ++ \axiom{allRootsOf(pol)} creates all the roots
+             ++ of \axiom{pol} naming each uniquely
+
+        sqrt:            ($,N)                ->     $
+             ++ \axiom{sqrt(x,n)} is \axiom{x ** (1/n)}
+
+        sqrt:              $                  ->     $
+             ++ \axiom{sqrt(x)} is \axiom{x ** (1/2)}
+
+        sqrt:             RN                  ->     $
+             ++ \axiom{sqrt(x)} is \axiom{x ** (1/2)}
+
+        sqrt:              Z                  ->     $
+             ++ \axiom{sqrt(x)} is \axiom{x ** (1/2)}
+
+        rename! :        ($,E)                ->     $
+             ++ \axiom{rename!(x,name)} changes the way \axiom{x} is printed
+
+        rename :         ($,E)                ->     $
+             ++ \axiom{rename(x,name)} gives a new number that prints as name
+
+        approximate:       ($,$) -> RN
+              ++ \axiom{approximate(n,p)} gives an approximation of \axiom{n}
+              ++ that has precision \axiom{p}
+
+      add
+
+        sqrt(a:$):$ == sqrt(a,2)
+
+        sqrt(a:RN):$ == sqrt(a::$,2)
+
+        sqrt(a:Z):$ == sqrt(a::$,2)
+
+        characteristic() == 0
+
+        rootOf(pol,n,o) == 
+          r := rootOf(pol,n)
+          r case "failed" => "failed"
+          rename!(r,o)
+
+        rootOf(pol,n) ==
+          liste:List($):= allRootsOf(pol)
+          # liste > n => "failed"
+          liste.n
+
+
+        sqrt(x,n) ==
+          n = 0 => 1
+          n = 1 => x
+          zero?(x) => 0
+          one?(x) => 1 
+          if odd?(n)
+          then
+            r := rootOf(monomial(1,n) - (x :: PME), 1)
+          else
+            r := rootOf(monomial(1,n) - (x :: PME), 2)
+          r case "failed" => error "no roots"
+          n = 2 => rename(r,root(x::E)$E)
+          rename(r,root(x :: E, n :: E)$E)
+
+        (x : $) ** (rn : RN) == sqrt(x**numer(rn),denom(rn)::N)
+
+        nthRoot(x, n) == 
+          zero?(n) => x
+          negative?(n) => inv(sqrt(x,(-n) :: N))
+          sqrt(x,n :: N)
+
+        allRootsOf(p:SUP(RN)) == allRootsOf(map(#1 :: $ ,p)$PACK(RN,$))
+
+        allRootsOf(p:SUP(Z)) == allRootsOf(map(#1 :: $ ,p)$PACK(Z,$))
+
+        allRootsOf(p:POLY($)) == allRootsOf(univariate(p))
+
+        allRootsOf(p:POLY(RN)) == allRootsOf(univariate(p))
+
+        allRootsOf(p:POLY(Z)) == allRootsOf(univariate(p))
+
+@
+\section{domain ROIRC RightOpenIntervalRootCharacterization}
+\subsection{makeChar performance problem}
+The following lines of code, which check for a possible error,
+cause major performance problems and were removed by Renaud Rioboo,
+the original author. They were originally inserted for debugging.
+\begin{verbatim}
+    right <= left => error "ROIRC: makeChar: Bad interval"
+    (pol.left * pol.right) > 0 => error "ROIRC: makeChar: Bad pol"
+\end{verbatim}
+<<performance problem>>=
+@
+<<domain ROIRC RightOpenIntervalRootCharacterization>>=
+)abbrev domain ROIRC RightOpenIntervalRootCharacterization 
+++ Author: Renaud Rioboo
+++ Date Created: summer 1992
+++ Date Last Updated: January 2004
+++ Basic Functions: provides computations with real roots of olynomials 
+++ Related Constructors: RealRootCharacterizationCategory, RealClosure
+++ Also See: 
+++ AMS Classifications:
+++ Keywords: Real Algebraic Numbers
+++ References: 
+++ Description:
+++ \axiomType{RightOpenIntervalRootCharacterization} provides work with
+++ interval root coding.
+RightOpenIntervalRootCharacterization(TheField,ThePolDom) : PUB == PRIV where
+
+  TheField : Join(OrderedRing,Field)
+  ThePolDom : UnivariatePolynomialCategory(TheField)
+
+
+  Z           ==>  Integer
+  P           ==>  ThePolDom
+  N           ==>  NonNegativeInteger
+  B           ==>  Boolean
+  UTIL        ==>  RealPolynomialUtilitiesPackage(TheField,ThePolDom)
+  RRCC        ==>  RealRootCharacterizationCategory
+  O ==> OutputForm
+  TwoPoints ==> Record(low:TheField , high:TheField)
+
+  PUB == RealRootCharacterizationCategory(TheField, ThePolDom) with
+
+      left    :             $            -> TheField
+           ++ \axiom{left(rootChar)} is the left bound of the isolating
+           ++ interval
+      right   :             $            -> TheField
+           ++ \axiom{right(rootChar)} is the right bound of the isolating
+           ++ interval
+      size    :             $            -> TheField
+           ++ The size of the isolating interval
+      middle  :             $            -> TheField
+           ++ \axiom{middle(rootChar)} is the middle of the isolating
+           ++ interval
+      refine  :             $            ->    $
+           ++ \axiom{refine(rootChar)} shrinks isolating interval around 
+           ++ \axiom{rootChar}
+      mightHaveRoots :     (P,$)         ->    B
+           ++ \axiom{mightHaveRoots(p,r)} is false if \axiom{p.r} is not 0
+      relativeApprox :     (P,$,TheField) -> TheField
+           ++ \axiom{relativeApprox(exp,c,p) = a} is relatively close to exp
+           ++ as a polynomial in c ip to precision p
+
+  PRIV == add
+
+
+
+-- local functions
+
+
+   makeChar:             (TheField,TheField,ThePolDom) ->     $
+   refine! :                              $            ->     $
+   sturmIsolate : (List(P), TheField, TheField,N,N)    -> List TwoPoints
+   isolate :                            List(P)        -> List TwoPoints
+   rootBound :                             P           ->   TheField
+--   varStar :                                P          ->     N
+   linearRecip :                       ( P , $)        -> Union(P, "failed")
+   linearZero? :                     (TheField,$)      ->     B
+   linearSign :                          (P,$)         ->     Z
+   sturmNthRoot : (List(P), TheField, TheField,N,N,N)  -> Union(TwoPoints,"failed")
+   addOne :                              P             ->      P
+   minus :                               P             ->      P
+   translate :                    (P,TheField)         ->      P
+   dilate :                       (P,TheField)         ->      P
+   invert :                              P             ->      P
+   evalOne :                             P             ->   TheField
+   hasVarsl:                     List(TheField)        ->      B
+   hasVars:                              P             ->      B
+
+-- Representation
+
+   Rep:= Record(low:TheField,high:TheField,defPol:ThePolDom)
+
+-- and now the code !
+
+
+   size(rootCode) ==
+     rootCode.high - rootCode.low
+
+   relativeApprox(pval,rootCode,prec) ==
+     -- beurk !
+     dPol := rootCode.defPol
+     degree(dPol) = 1 => 
+       c := -coefficient(dPol,0)/leadingCoefficient(dPol)
+       pval.c
+     pval := pval rem dPol
+     degree(pval) = 0 => leadingCoefficient(pval)
+     zero?(pval,rootCode)  => 0
+     while mightHaveRoots(pval,rootCode) repeat
+          rootCode := refine(rootCode)
+     dpval := differentiate(pval)
+     degree(dpval) = 0 =>
+       l := left(rootCode)
+       r := right(rootCode)
+       a := pval.l
+       b := pval.r
+       while ( abs(2*(a-b)/(a+b)) > prec ) repeat
+         rootCode := refine(rootCode)
+         l := left(rootCode)
+         r := right(rootCode)
+         a := pval.l
+         b := pval.r
+       (a+b)/(2::TheField)
+     zero?(dpval,rootCode) => 
+        relativeApprox(pval, 
+                       [left(rootCode),
+                         right(rootCode),
+                           gcd(dpval,rootCode.defPol)]$Rep,
+                       prec)
+     while mightHaveRoots(dpval,rootCode) repeat
+          rootCode := refine(rootCode)
+     l := left(rootCode)
+     r := right(rootCode)
+     a := pval.l
+     b := pval.r
+     while ( abs(2*(a-b)/(a+b)) > prec ) repeat
+       rootCode := refine(rootCode)
+       l := left(rootCode)
+       r := right(rootCode)
+       a := pval.l
+       b := pval.r
+     (a+b)/(2::TheField)
+
+   approximate(pval,rootCode,prec) ==
+     -- glurp
+     dPol := rootCode.defPol
+     degree(dPol) = 1 => 
+       c := -coefficient(dPol,0)/leadingCoefficient(dPol)
+       pval.c
+     pval := pval rem dPol
+     degree(pval) = 0 => leadingCoefficient(pval)
+     dpval := differentiate(pval)
+     degree(dpval) = 0 =>
+       l := left(rootCode)
+       r := right(rootCode)
+       while ( abs((a := pval.l) - (b := pval.r)) > prec ) repeat
+         rootCode := refine(rootCode)
+         l := left(rootCode)
+         r := right(rootCode)
+       (a+b)/(2::TheField)
+     zero?(dpval,rootCode) => 
+        approximate(pval, 
+                    [left(rootCode),
+                     right(rootCode),
+                      gcd(dpval,rootCode.defPol)]$Rep,
+                    prec)
+     while mightHaveRoots(dpval,rootCode) repeat
+          rootCode := refine(rootCode)
+     l := left(rootCode)
+     r := right(rootCode)
+     while ( abs((a := pval.l) - (b := pval.r)) > prec ) repeat
+       rootCode := refine(rootCode)
+       l := left(rootCode)
+       r := right(rootCode)
+     (a+b)/(2::TheField)
+
+
+   addOne(p) == p.(monomial(1,1)+(1::P))
+
+   minus(p) == p.(monomial(-1,1))
+
+   translate(p,a) == p.(monomial(1,1)+(a::P))
+
+   dilate(p,a) == p.(monomial(a,1))
+
+   evalOne(p) == "+" / coefficients(p)
+
+   invert(p) == 
+        d := degree(p)
+        mapExponents((d-#1)::N, p)
+
+   rootBound(p) ==
+     res : TheField := 1
+     raw :TheField := 1+boundOfCauchy(p)$UTIL
+     while (res < raw) repeat
+       res := 2*(res)
+     res
+
+   sturmNthRoot(lp,l,r,vl,vr,n) ==
+    nv := (vl - vr)::N
+    nv < n => "failed"
+    ((nv = 1) and (n = 1)) => [l,r]
+    int := (l+r)/(2::TheField)
+    lt:List(TheField):=[]
+    for t in lp repeat
+        lt := cons(t.int , lt)
+    vi := sturmVariationsOf(reverse! lt)$UTIL
+    o :Z := n - vl + vi
+    if o > 0
+    then 
+       sturmNthRoot(lp,int,r,vi,vr,o::N)
+    else
+       sturmNthRoot(lp,l,int,vl,vi,n)
+
+   sturmIsolate(lp,l,r,vl,vr) ==
+    r <= l => error "ROIRC: sturmIsolate: bad bounds"
+    n := (vl - vr)::N
+    zero?(n) => []
+    one?(n) => [[l,r]]
+    int := (l+r)/(2::TheField)
+    vi := sturmVariationsOf( [t.int for t in lp ] )$UTIL
+    append(sturmIsolate(lp,l,int,vl,vi),sturmIsolate(lp,int,r,vi,vr))
+
+   isolate(lp) ==
+     b := rootBound(first(lp))
+     l1,l2 : List(TheField)
+     (l1,l2) := ([] , [])
+     for t in reverse(lp) repeat
+       if odd?(degree(t))
+       then
+        (l1,l2):= (cons(-leadingCoefficient(t),l1),
+                   cons(leadingCoefficient(t),l2))
+       else
+        (l1,l2):= (cons(leadingCoefficient(t),l1),
+                   cons(leadingCoefficient(t),l2))
+     sturmIsolate(lp,
+                  -b,
+                  b,
+                  sturmVariationsOf(l1)$UTIL,
+                  sturmVariationsOf(l2)$UTIL)
+
+   rootOf(pol,n) ==
+    ls := sturmSequence(pol)$UTIL
+    pol := unitCanonical(first(ls)) -- this one is SqFR
+    degree(pol) = 0 => "failed"
+    numberOfMonomials(pol) = 1 => ([0,1,monomial(1,1)]$Rep)::$
+    b := rootBound(pol)
+    l1,l2 : List(TheField)
+    (l1,l2) := ([] , [])
+    for t in reverse(ls) repeat
+      if odd?(degree(t))
+      then
+       (l1,l2):= (cons(leadingCoefficient(t),l1),
+                  cons(-leadingCoefficient(t),l2))
+      else
+       (l1,l2):= (cons(leadingCoefficient(t),l1),
+                  cons(leadingCoefficient(t),l2))
+    res := sturmNthRoot(ls,
+                        -b,
+                        b,
+                        sturmVariationsOf(l2)$UTIL,
+                        sturmVariationsOf(l1)$UTIL,
+                        n)
+    res case "failed" => "failed"
+    makeChar(res.low,res.high,pol)
+
+   allRootsOf(pol) == 
+    ls := sturmSequence(unitCanonical pol)$UTIL
+    pol := unitCanonical(first(ls)) -- this one is SqFR
+    degree(pol) = 0 => []
+    numberOfMonomials(pol) = 1 => [[0,1,monomial(1,1)]$Rep]
+    [ makeChar(term.low,term.high,pol) for term in isolate(ls) ]
+
+
+   hasVarsl(l:List(TheField)) ==
+    null(l) => false
+    f := sign(first(l))
+    for term in rest(l) repeat
+      if f*term < 0 then return(true)
+    false
+    
+   hasVars(p:P) ==
+    zero?(p) => error "ROIRC: hasVars: null polynonial"
+    zero?(coefficient(p,0)) => true
+    hasVarsl(coefficients(p))
+
+
+   mightHaveRoots(p,rootChar) == 
+      a := rootChar.low
+      q := translate(p,a)
+      not(hasVars(q)) => false
+--      varStar(q) = 0 => false
+      a := (rootChar.high) - a
+      q := dilate(q,a)
+      sign(coefficient(q,0))*sign(evalOne(q)) <= 0 => true
+      q := minus(addOne(q))
+      not(hasVars(q)) => false
+--      varStar(q) = 0 => false
+      q := invert(q)
+      hasVars(addOne(q))
+--      ^(varStar(addOne(q)) = 0)
+
+   coerce(rootChar:$):O == 
+     commaSeparate([ hconcat("[" :: O , (rootChar.low)::O), 
+                     hconcat((rootChar.high)::O,"[" ::O ) ])
+
+   c1 = c2 == 
+     mM := max(c1.low,c2.low)
+     Mm := min(c1.high,c2.high)
+     mM >= Mm => false
+     rr : ThePolDom := gcd(c1.defPol,c2.defPol)
+     degree(rr) = 0 => false
+     sign(rr.mM) * sign(rr.Mm) <= 0
+
+   makeChar(left,right,pol) == 
+<<performance problem>>
+    res :$ := [left,right,leadingMonomial(pol)+reductum(pol)]$Rep -- safe copy
+    while zero?(pol.(res.high)) repeat refine!(res)
+    while (res.high * res.low < 0 ) repeat refine!(res)
+    zero?(pol.(res.low)) => [res.low,res.high,monomial(1,1)-(res.low)::P]
+    res
+
+   definingPolynomial(rootChar) == rootChar.defPol
+
+   linearRecip(toTest,rootChar) ==
+      c := - inv(leadingCoefficient(toTest)) * coefficient(toTest,0)
+      r := recip(rootChar.defPol.c)
+      if (r case "failed")
+      then
+        if (c - rootChar.low) * (c - rootChar.high) <= 0
+        then 
+          "failed"
+        else
+          newPol := (rootChar.defPol exquo toTest)::P
+          ((1$ThePolDom - inv(newPol.c)*newPol) exquo toTest)::P
+      else
+         ((1$ThePolDom - (r::TheField)*rootChar.defPol) exquo toTest)::P
+
+   recip(toTest,rootChar) ==
+     degree(toTest) = 0 or degree(rootChar.defPol) <= degree(toTest) =>
+       error "IRC: recip: Not reduced"
+     degree(rootChar.defPol) = 1 =>
+       error "IRC: recip: Linear Defining Polynomial"
+     degree(toTest) = 1 =>
+       linearRecip(toTest, rootChar)
+     d := extendedEuclidean((rootChar.defPol),toTest)
+     (degree(d.generator) = 0 ) => 
+         d.coef2
+     d.generator := unitCanonical(d.generator)
+     (d.generator.(rootChar.low) *
+      d.generator.(rootChar.high)<= 0) => "failed"
+     newPol := (rootChar.defPol exquo (d.generator))::P
+     degree(newPol) = 1 =>
+       c := - inv(leadingCoefficient(newPol)) * coefficient(newPol,0)
+       inv(toTest.c)::P
+     degree(toTest) = 1 => 
+       c := - coefficient(toTest,0)/ leadingCoefficient(toTest)
+       ((1$ThePolDom - inv(newPol.(c))*newPol) exquo toTest)::P
+     d := extendedEuclidean(newPol,toTest)
+     d.coef2
+
+   linearSign(toTest,rootChar) ==
+      c := - inv(leadingCoefficient(toTest)) * coefficient(toTest,0)
+      ev := sign(rootChar.defPol.c)
+      if zero?(ev)
+      then
+        if (c - rootChar.low) * (c - rootChar.high) <= 0
+        then
+          0
+        else
+          sign(toTest.(rootChar.high))
+      else
+        if (ev*sign(rootChar.defPol.(rootChar.high)) <= 0 )
+        then
+          sign(toTest.(rootChar.high))
+        else
+          sign(toTest.(rootChar.low))
+
+   sign(toTest,rootChar) ==
+     degree(toTest) = 0 or degree(rootChar.defPol) <= degree(toTest) =>
+       error "IRC: sign: Not reduced"
+     degree(rootChar.defPol) = 1 =>
+       error "IRC: sign: Linear Defining Polynomial"
+     degree(toTest) = 1 =>
+      linearSign(toTest, rootChar)
+     s := sign(leadingCoefficient(toTest))
+     toTest := monomial(1,degree(toTest))+
+               inv(leadingCoefficient(toTest))*reductum(toTest)
+     delta := gcd(toTest,rootChar.defPol)
+     newChar := [rootChar.low,rootChar.high,rootChar.defPol]$Rep
+     if degree(delta) > 0
+     then
+       if sign(delta.(rootChar.low) * delta.(rootChar.high)) <= 0
+       then
+        return(0)
+       else
+        newChar.defPol := (newChar.defPol exquo delta) :: P
+        toTest := toTest rem (newChar.defPol)
+     degree(toTest) = 0 => s * sign(leadingCoefficient(toTest))
+     degree(toTest) = 1 => s * linearSign(toTest, newChar)
+     while mightHaveRoots(toTest,newChar) repeat
+       newChar := refine(newChar)
+     s*sign(toTest.(newChar.low))
+
+   linearZero?(c,rootChar) == 
+      zero?((rootChar.defPol).c) and 
+       (c - rootChar.low) * (c - rootChar.high) <= 0
+
+   zero?(toTest,rootChar) ==
+     degree(toTest) = 0 or degree(rootChar.defPol) <= degree(toTest) =>
+       error "IRC: zero?: Not reduced"
+     degree(rootChar.defPol) = 1 =>
+       error "IRC: zero?: Linear Defining Polynomial"
+     degree(toTest) = 1 => 
+      linearZero?(- inv(leadingCoefficient(toTest)) * coefficient(toTest,0),
+                  rootChar)
+     toTest := monomial(1,degree(toTest))+
+               inv(leadingCoefficient(toTest))*reductum(toTest)
+     delta := gcd(toTest,rootChar.defPol)
+     degree(delta) = 0 => false
+     sign(delta.(rootChar.low) * delta.(rootChar.high)) <= 0
+
+
+   refine!(rootChar) ==
+     -- this is not a safe function, it can work with badly created object
+     -- we do not assume (rootChar.defPol).(rootChar.high) <> 0
+        int := middle(rootChar)
+        s1 := sign((rootChar.defPol).(rootChar.low))
+        zero?(s1) =>
+          rootChar.high := int
+          rootChar.defPol := monomial(1,1) - (rootChar.low)::P
+          rootChar
+        s2 := sign((rootChar.defPol).int)
+        zero?(s2) =>
+          rootChar.low := int
+          rootChar.defPol := monomial(1,1) - int::P
+          rootChar
+        if (s1*s2 < 0)
+        then 
+          rootChar.high := int
+        else 
+          rootChar.low := int
+        rootChar
+
+   refine(rootChar) ==
+     -- we assume (rootChar.defPol).(rootChar.high) <> 0
+        int := middle(rootChar)
+        s:= (rootChar.defPol).int * (rootChar.defPol).(rootChar.high)
+        zero?(s) => [int,rootChar.high,monomial(1,1)-int::P]
+        if s < 0 
+        then 
+          [int,rootChar.high,rootChar.defPol]
+        else 
+          [rootChar.low,int,rootChar.defPol]
+
+   left(rootChar) == rootChar.low
+
+   right(rootChar) == rootChar.high
+
+   middle(rootChar) == (rootChar.low + rootChar.high)/(2::TheField)
+
+--   varStar(p) == -- if 0 no roots in [0,:infty[
+--     res : N := 0
+--     lsg := sign(coefficient(p,0))
+--     l := [ sign(i) for i in reverse!(coefficients(p))]
+--     for sg in l repeat
+--      if (sg ^= lsg) then res := res + 1
+--      lsg := sg
+--     res
+@
+\section{domain RECLOS RealClosure}
+The domain constructore {\bf RealClosure} by Renaud Rioboo (University
+of Paris 6, France) provides the real closure of an ordered field.
+The implementation is based on interval arithmetic. Moreover, the
+design of this constructor and its related packages allows an easy
+use of other codings for real algebraic numbers.
+ordered field
+<<domain RECLOS RealClosure>>=
+)abbrev domain RECLOS RealClosure
+++ Author: Renaud Rioboo
+++ Date Created: summer 1988
+++ Date Last Updated: January 2004
+++ Basic Functions: provides computations in an ordered real closure
+++ Related Constructors: RightOpenIntervalRootCharacterization
+++ Also See:
+++ AMS Classifications:
+++ Keywords: Real Algebraic Numbers
+++ References: 
+++ Description:
+++ This domain implements the real closure of an ordered field.
+++ Note: 
+++ The code here is generic i.e. it does not depend of the way the operations
+++ are done. The two macros PME and SEG should be passed as functorial
+++ arguments to the domain. It does not help much to write a category
+++ since non trivial methods cannot be placed there either.
+++ 
+RealClosure(TheField): PUB == PRIV where
+
+   TheField   : Join(OrderedRing, Field, RealConstant)
+
+--   ThePols    : UnivariatePolynomialCategory($)
+--   PME       ==> ThePols
+--   TheCharDom : RealRootCharacterizationCategory($, ThePols )
+--   SEG       ==> TheCharDom
+-- this does not work yet
+
+   E         ==> OutputForm
+   Z         ==> Integer
+   SE        ==> Symbol
+   B         ==> Boolean
+   SUP       ==> SparseUnivariatePolynomial($)
+   N         ==> PositiveInteger
+   RN        ==> Fraction Z
+   LF        ==> ListFunctions2($,N)
+
+-- *****************************************************************
+-- *****************************************************************
+--             PUT YOUR OWN PREFERENCE HERE
+-- *****************************************************************
+-- *****************************************************************
+   PME       ==> SparseUnivariatePolynomial($)
+   SEG       ==> RightOpenIntervalRootCharacterization($,PME)
+-- *****************************************************************
+-- *****************************************************************
+
+
+   PUB == Join(RealClosedField,
+               FullyRetractableTo TheField,
+               Algebra TheField) with
+
+       algebraicOf :   (SEG,E) -> $
+             ++ \axiom{algebraicOf(char)} is the external number
+
+       mainCharacterization :   $ -> Union(SEG,"failed")
+             ++ \axiom{mainCharacterization(x)} is the main algebraic 
+             ++ quantity of \axiom{x} (\axiom{SEG})
+
+       relativeApprox :     ($,$) -> RN
+             ++ \axiom{relativeApprox(n,p)} gives a relative 
+             ++ approximation of \axiom{n} 
+             ++ that has precision \axiom{p}
+
+   PRIV == add
+
+-- local functions
+
+       lessAlgebraic  : $ -> $
+       newElementIfneeded : (SEG,E) -> $
+
+-- Representation
+
+       Rec := Record(seg: SEG, val:PME, outForm:E, order:N)
+       Rep := Union(TheField,Rec)
+
+-- global (mutable) variables
+
+       orderOfCreation : N := 1$N
+          -- it is internally used to sort the algebraic levels
+
+       instanceName : Symbol := new()$Symbol
+          -- this used to print the results, thus different instanciations
+          -- use different names
+
+-- now the code
+
+       relativeApprox(nbe,prec) ==
+          nbe case TheField => retract(nbe)
+          appr := relativeApprox(nbe.val, nbe.seg, prec)
+          -- now appr has the good exact precision but is $
+          relativeApprox(appr,prec)
+
+
+       approximate(nbe,prec) ==
+          abs(nbe) < prec => 0
+          nbe case TheField => retract(nbe)
+          appr := approximate(nbe.val, nbe.seg, prec)
+          -- now appr has the good exact precision but is $
+          approximate(appr,prec)
+
+       newElementIfneeded(s,o) ==
+         p := definingPolynomial(s)
+         degree(p) = 1 => 
+             - coefficient(p,0) / leadingCoefficient(p)
+         res := [s, monomial(1,1), o, orderOfCreation ]$Rec
+         orderOfCreation := orderOfCreation + 1
+         res :: $
+
+       algebraicOf(s,o) ==
+         pol := definingPolynomial(s)
+         degree(pol) = 1 => 
+           -coefficient(pol,0) / leadingCoefficient(pol) 
+         res := [s, monomial(1,1), o, orderOfCreation ]$Rec
+         orderOfCreation := orderOfCreation + 1
+         res :: $
+         
+       rename!(x,o) ==
+         x.outForm := o
+         x
+
+       rename(x,o) ==
+         [x.seg, x.val, o, x.order]$Rec
+
+       rootOf(pol,n) ==
+        degree(pol) = 0 => "failed"
+        degree(pol) = 1 =>
+          if n=1
+          then
+            -coefficient(pol,0) / leadingCoefficient(pol)
+          else
+            "failed"
+        r := rootOf(pol,n)$SEG
+        r case "failed" => "failed"
+        o := hconcat(instanceName :: E , orderOfCreation :: E)$E
+        algebraicOf(r,o)
+
+       allRootsOf(pol:SUP):List($) == 
+        degree(pol)=0 => []
+        degree(pol)=1 => [-coefficient(pol,0) / leadingCoefficient(pol)]
+        liste := allRootsOf(pol)$SEG
+        res : List $ := []
+        for term in liste repeat
+           o := hconcat(instanceName :: E , orderOfCreation :: E)$E
+           res := cons(algebraicOf(term,o), res)
+        reverse! res
+
+       coerce(x:$):$ ==
+          x case TheField => x
+          [x.seg,x.val rem$PME definingPolynomial(x.seg),x.outForm,x.order]$Rec
+
+       positive?(x) == 
+          x case TheField => positive?(x)$TheField
+          positive?(x.val,x.seg)$SEG
+
+       negative?(x) == 
+          x case TheField => negative?(x)$TheField
+          negative?(x.val,x.seg)$SEG
+
+       abs(x) == sign(x)*x
+
+       sign(x) ==
+          x case TheField => sign(x)$TheField
+          sign(x.val,x.seg)$SEG
+
+       x < y == positive?(y-x)
+
+       x = y == zero?(x-y)
+
+       mainCharacterization(x) ==
+          x case TheField => "failed"
+          x.seg
+
+       mainDefiningPolynomial(x) ==
+          x case TheField => "failed"
+          definingPolynomial x.seg
+
+       mainForm(x) ==
+          x case TheField => "failed"
+          x.outForm
+
+       mainValue(x) ==
+          x case TheField => "failed"
+          x.val
+
+       coerce(x:$):E ==
+          x case TheField => x::TheField :: E
+          xx:$ := coerce(x)
+          outputForm(univariate(xx.val),x.outForm)$SUP
+
+
+       inv(x) ==
+          (res:= recip x) case "failed" => error "Division by 0"
+          res :: $
+
+       recip(x) ==
+         x case TheField =>
+           if ((r := recip(x)$TheField) case TheField)
+           then r::$
+           else "failed"
+         if ((r := recip(x.val,x.seg)$SEG) case "failed")
+         then "failed"
+         else lessAlgebraic([x.seg,r::PME,x.outForm,x.order]$Rec) 
+
+       (n:Z * x:$):$ == 
+          x case TheField => n *$TheField x
+          zero?(n) => 0
+          one?(n) => x
+          [x.seg,map(n * #1, x.val),x.outForm,x.order]$Rec
+
+       (rn:TheField * x:$):$ == 
+          x case TheField => rn *$TheField x
+          zero?(rn) => 0
+          one?(rn) => x
+          [x.seg,map(rn * #1, x.val),x.outForm,x.order]$Rec
+
+       (x:$ * y:$):$ ==
+          (x case TheField) and (y case TheField) => x *$TheField y
+          (x case TheField) => x::TheField * y
+              -- x is no longer TheField
+          (y case TheField) => y::TheField * x
+              -- now both are algebraic
+          y.order > x.order => 
+            [y.seg,map(x * #1 , y.val),y.outForm,y.order]$Rec
+          x.order > y.order => 
+            [x.seg,map( #1 * y , x.val),x.outForm,x.order]$Rec
+              -- now x.exp = y.exp
+              -- we will multiply the polynomials and then reduce
+              -- however wee need to call lessAlgebraic  
+          lessAlgebraic([x.seg,
+                         (x.val * y.val) rem definingPolynomial(x.seg),
+                         x.outForm,
+                         x.order]$Rec)
+
+       nonNull(rep:Rec):$ ==
+         degree(rep.val)=0 => leadingCoefficient(rep.val)
+         numberOfMonomials(rep.val) = 1 => rep
+         zero?(rep.val,rep.seg)$SEG => 0
+         rep
+
+--       zero?(x) ==
+--          x case TheField => zero?(x)$TheField
+--          zero?(x.val,x.seg)$SEG
+ 
+       zero?(x) ==
+          x case TheField => zero?(x)$TheField
+          false
+ 
+       x + y ==
+          (x case TheField) and (y case TheField) => x +$TheField y
+          (x case TheField) => 
+             if zero?(x)
+             then 
+               y
+             else 
+               nonNull([y.seg,x::PME+(y.val),y.outForm,y.order]$Rec)
+             -- x is no longer TheField
+          (y case TheField) => 
+             if zero?(y)
+             then 
+               x
+             else 
+               nonNull([x.seg,(x.val)+y::PME,x.outForm,x.order]$Rec)
+             -- now both are algebraic
+          y.order > x.order => 
+               nonNull([y.seg,x::PME+y.val,y.outForm,y.order]$Rec)
+          x.order > y.order => 
+               nonNull([x.seg,(x.val)+y::PME,x.outForm,x.order]$Rec)
+              -- now x.exp = y.exp 
+              -- we simply add polynomials (since degree cannot increase)
+              -- however wee need to call lessAlgebraic  
+          nonNull([x.seg,x.val + y.val,x.outForm,x.order])
+
+
+       -x ==
+          x case TheField => -$TheField (x::TheField)
+          [x.seg,-$PME x.val,x.outForm,x.order]$Rec
+
+
+       retractIfCan(x:$):Union(TheField,"failed") ==
+          x case TheField => x
+          o := x.order
+          res := lessAlgebraic x
+          res case TheField => res
+          o = res.order => "failed"
+          retractIfCan res
+
+       retract(x:$):TheField ==
+          x case TheField => x
+          o := x.order
+          res := lessAlgebraic x
+          res case TheField => res
+          o = res.order => error "Can't retract"
+          retract res
+
+
+       lessAlgebraic(x) ==
+          x case TheField => x
+          degree(x.val) = 0 => leadingCoefficient(x.val)
+          def := definingPolynomial(x.seg)
+          degree(def) = 1 => 
+            x.val.(- coefficient(def,0) / leadingCoefficient(def))
+          x
+
+       0 == (0$TheField) :: $
+
+       1 == (1$TheField) :: $
+
+       coerce(rn:TheField):$ == rn :: $
+
+@
+\section{License}
+<<license>>=
+-----------------------------------------------------------------------------
+-- This software was written by Renaud Rioboo (Computer Algebra group of
+-- Laboratoire d'Informatique de Paris 6) and is the property of university
+-- Paris 6.
+-----------------------------------------------------------------------------
+@
+<<*>>=
+<<license>>
+<<package POLUTIL RealPolynomialUtilitiesPackage>>
+<<category RRCC RealRootCharacterizationCategory>>
+<<category RCFIELD RealClosedField>>
+<<domain ROIRC RightOpenIntervalRootCharacterization>>
+<<domain RECLOS RealClosure>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} R. Rioboo,
+{\sl Real Algebraic Closure of an ordered Field : Implementation in Axiom.},
+In proceedings of the ISSAC'92 Conference, Berkeley 1992 pp. 206-215.
+\bibitem{2} Z. Ligatsikas, R. Rioboo, M. F. Roy 
+{\sl Generic computation of the real closure of an ordered field.},
+In Mathematics and Computers in Simulation Volume 42, Issue 4-6,
+November 1996.
+\end{thebibliography}
+\end{document}

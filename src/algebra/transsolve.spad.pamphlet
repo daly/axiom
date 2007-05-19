@@ -1,0 +1,694 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra transsolve.spad}
+\author{Waldemar Wiwianka, Martin Rubey}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package SOLVETRA TransSolvePackage}
+<<package SOLVETRA TransSolvePackage>>=
+)abbrev package SOLVETRA TransSolvePackage
+++ Author: W. Wiwianka, Martin Rubey
+++ Date Created: Summer 1991
+++ Change History: 9/91
+++ Basic Operations: solve
+++ Related Constructors: RadicalSolvePackage, FloatingRealPackage
+++ Keywords:
+++ Description:
+++  This package tries to find solutions of equations of type Expression(R).
+++  This means expressions involving transcendental, exponential, logarithmic
+++  and nthRoot functions.
+++  After trying to transform different kernels to one kernel by applying
+++  several rules, it calls zerosOf for the SparseUnivariatePolynomial in
+++  the remaining kernel.
+++  For example the expression  \spad{sin(x)*cos(x)-2}  will be transformed to
+++     \spad{-2 tan(x/2)**4 -2 tan(x/2)**3 -4 tan(x/2)**2 +2 tan(x/2) -2}
+++  by  using the function  normalize  and then to
+++     \spad{-2 tan(x)**2 + tan(x) -2}
+++  with help of subsTan. This function tries to express the given function
+++  in terms of \spad{tan(x/2)}  to express in terms of \spad{tan(x)} .
+++  Other examples are the expressions    \spad{sqrt(x+1)+sqrt(x+7)+1}   or
+++   \spad{sqrt(sin(x))+1} .
+
+
+TransSolvePackage(R) : Exports == Implementation where
+   R : Join(OrderedSet, EuclideanDomain, RetractableTo Integer, 
+             LinearlyExplicitRingOver Integer, CharacteristicZero)
+
+   I   ==> Integer
+   NNI ==> NonNegativeInteger
+   RE  ==> Expression R
+   EQ  ==> Equation
+   S   ==> Symbol
+   V   ==> Variable
+   L   ==> List
+   K   ==> Kernel RE
+   SUP ==> SparseUnivariatePolynomial
+   C   ==> Complex 
+   F   ==> Float
+   INT ==> Interval
+   SMP ==> SparseMultivariatePolynomial
+
+
+   Exports == with
+
+     solve :  RE           ->  L EQ RE
+       ++ solve(expr) finds the solutions of the equation expr = 0
+       ++ where expr is a function of type Expression(R)
+       ++ with respect to the unique symbol x appearing in eq.
+     solve :  EQ RE        ->  L EQ RE
+       ++ solve(eq) finds the solutions of the equation  eq
+       ++ where  eq  is  an equation of functions of type Expression(R)
+       ++ with respect to the unique symbol x appearing in eq.
+     solve : ( EQ RE , S ) ->  L EQ RE
+       ++ solve(eq,x) finds the solutions of the equation  eq
+       ++ where  eq  is  an equation of functions of type Expression(R)
+       ++ with respect to the symbol x.
+     solve : ( RE , S)     ->  L EQ RE
+       ++ solve(expr,x) finds the solutions of the equation expr = 0
+       ++ with respect to the symbol x where expr is a function
+       ++ of type Expression(R).
+     solve :  (L EQ RE, L S) -> L L EQ RE
+       ++ solve(leqs, lvar) returns a list of solutions to the list of 
+       ++ equations leqs with respect to the list of symbols lvar.
+--     solve :  (L EQ RE, L Kernel RE) -> L L EQ RE
+--       ++ solve(leqs, lker) returns a list of solutions to the list
+--       ++ of equations leqs with respect to the list of kernels lker.
+
+   Implementation == add
+     import ACF
+     import HomogeneousAggregate(R)
+     import AlgebraicManipulations(R, RE)
+     import TranscendentalManipulations(R, RE)
+     import TrigonometricManipulations(R, RE)
+     import ElementaryFunctionStructurePackage(R, RE)
+     import SparseUnivariatePolynomial(R)
+     import LinearSystemMatrixPackage(RE,Vector RE,Vector RE,Matrix RE)
+     import TransSolvePackageService(R)
+     import MultivariateFactorize(K, IndexedExponents K, R, SMP(R, K))
+
+
+
+        ---- Local Function Declarations ----
+
+     solveInner : (RE, S) -> L EQ RE
+     tryToTrans : ( RE , S)     ->  RE
+
+     eliminateKernRoot: (RE , K) -> RE
+     eliminateRoot: (RE , S) -> RE
+
+     combineLog : ( RE , S ) -> RE
+     testLog : ( RE , S ) -> Boolean
+     splitExpr : ( RE ) -> L RE
+     buildnexpr : ( RE , S ) -> L RE
+     logsumtolog : RE -> RE
+     logexpp : ( RE , RE ) -> RE
+
+     testRootk : ( RE, S) -> Boolean
+     testkernel : ( RE , S ) -> Boolean
+     funcinv : ( RE , RE ) -> Union(RE,"failed")
+     testTrig : ( RE , S ) -> Boolean
+     testHTrig : ( RE , S ) -> Boolean
+     tableXkernels : ( RE , S ) -> L RE
+     subsTan : ( RE , S )  -> RE
+ 
+ 
+     -- exported functions
+
+
+     solve(oside: RE) : L EQ RE ==
+       zero? oside => error "equation is always satisfied"
+       lv := variables oside
+       empty? lv => error "inconsistent equation"
+       #lv>1 => error "too many variables"
+       solve(oside,lv.first)
+
+     solve(equ:EQ RE) : L EQ RE ==
+       solve(lhs(equ)-rhs(equ))
+
+     solve(equ:EQ RE, x:S) : L EQ RE ==
+       oneside:=lhs(equ)-rhs(equ)
+       solve(oneside,x)
+
+     testZero?(lside:RE,sol:EQ RE):Boolean ==
+       if R has QuotientFieldCategory(Integer) then
+         retractIfCan(rhs sol)@Union(Integer,"failed") case "failed" => true
+       else
+         retractIfCan(rhs sol)@Union(Fraction Integer,"failed") case "failed" => true
+       zero? eval(lside,sol) => true
+       false
+
+     solve(lside: RE, x:S) : L EQ RE ==
+       [sol for sol in solveInner(lside,x) | testZero?(lside,sol)]
+
+     solveInner(lside: RE, x:S) : L EQ RE ==
+       lside:=eliminateRoot(lside,x)
+       ausgabe1:=tableXkernels(lside,x)
+
+       X:=new()@Symbol
+       Y:=new()@Symbol::RE
+       (#ausgabe1) = 1 =>
+          bigX:= (first ausgabe1)::RE
+          eq1:=eval(lside,bigX=(X::RE))
+              -- Type  :  Expression R
+          f:=univariate(eq1,first kernels (X::RE))
+              -- Type  :  Fraction SparseUnivariatePolynomial Expression R
+          lfatt:= factors factorPolynomial numer f
+          lr:L RE := "append" /[zerosOf(fatt.factor,x) for fatt in lfatt]
+              -- Type  :  List Expression R
+          r1:=[]::L RE
+          for i in 1..#lr repeat
+             finv := funcinv(bigX,lr(i))
+             if finv case RE then r1:=cons(finv::RE,r1)
+          bigX_back:=funcinv(bigX,bigX)::RE
+          if not testkernel(bigX_back,x) then
+            if bigX = bigX_back then return []::L EQ RE
+            return
+              "append"/[solve(bigX_back-ri, x) for ri in r1]
+          newlist:=[]::L EQ RE
+
+          for i in 1..#r1 repeat
+             elR :=  eliminateRoot((numer(bigX_back - r1(i))::RE ),x)
+             f:=univariate(elR, kernel(x))
+              -- Type  :  Fraction SparseUnivariatePolynomial Expression R
+             lfatt:= factors factorPolynomial numer f
+             secondsol:="append" /[zerosOf(ff.factor,x) for ff in lfatt]
+             for j in 1..#secondsol repeat
+                newlist:=cons((x::RE)=rootSimp( secondsol(j) ),newlist)
+          newlist
+       newlside:=tryToTrans(lside,x) ::RE
+       listofkernels:=tableXkernels(newlside,x)
+       (#listofkernels) = 1 => solve(newlside,x)
+       lfacts := factors factor(numer lside)
+       #lfacts > 1 =>
+          sols : L EQ RE := []
+          for frec in lfacts repeat
+              sols := append(solve(frec.factor :: RE, x), sols)
+          sols
+       return []::L EQ RE
+
+    -- local functions
+
+     --  This function was suggested by Manuel Bronstein as a simpler 
+     --  alternative to normalize.
+     simplifyingLog(f:RE):RE ==
+       (u:=isExpt(f,"exp"::Symbol)) case Record(var:Kernel RE,exponent:Integer) =>       
+         rec := u::Record(var:Kernel RE,exponent:Integer)
+         rec.exponent * first argument(rec.var)
+       log f
+
+
+     testkernel(var1:RE,y:S) : Boolean ==
+       var1:=eliminateRoot(var1,y)
+       listvar1:=tableXkernels(var1,y)
+       if (#listvar1 = 1) and ((listvar1(1) = (y::RE))@Boolean ) then
+            true
+       else if #listvar1 = 0 then true
+            else false
+
+     solveRetract(lexpr:L RE, lvar:L S):Union(L L EQ RE, "failed") ==
+        nlexpr : L Fraction Polynomial R := []
+        for expr in lexpr repeat
+           rf:Union(Fraction Polynomial R, "failed") := retractIfCan(expr)$RE
+           rf case "failed" => return "failed"
+           nlexpr := cons(rf, nlexpr)
+        radicalSolve(nlexpr, lvar)$RadicalSolvePackage(R)
+
+     tryToTrans(lside: RE, x:S) : RE ==
+       if testTrig(lside,x) or testHTrig(lside,x) then
+          convLside:=( simplify(lside) )::RE
+          resultLside:=convLside
+          listConvLside:=tableXkernels(convLside,x)
+          if (#listConvLside) > 1  then
+            NormConvLside:=normalize(convLside,x)
+            NormConvLside:=( NormConvLside ) :: RE
+            resultLside:=subsTan(NormConvLside , x)
+
+       else if testLog(lside,x) then
+              numlside:=numer(lside)::RE
+              resultLside:=combineLog(numlside,x)
+            else
+              NormConvLside:=normalize(lside,x)
+              NormConvLside:=( NormConvLside ) :: RE
+              resultLside:=NormConvLside
+              listConvLside:=tableXkernels(NormConvLside,x)
+              if  (#listConvLside) > 1  then
+                cnormConvLside:=complexNormalize(lside,x)
+                cnormConvLside:=cnormConvLside::RE
+                resultLside:=cnormConvLside
+                listcnorm:=tableXkernels(cnormConvLside,x)
+                if (#listcnorm) > 1 then
+                  if testLog(cnormConvLside,x) then
+                    numlside:=numer(cnormConvLside)::RE
+                    resultLside:=combineLog(numlside,x)
+       resultLside
+
+
+     subsTan(exprvar:RE,y:S) : RE ==
+       Z:=new()@Symbol
+       listofkern:=tableXkernels(exprvar,y)
+       varkern:=(first listofkern)::RE
+       Y:=(numer first argument first (kernels(varkern)))::RE
+       test : Boolean := varkern=tan(((Y::RE)/(2::RE))::RE)
+       if not( (#listofkern=1) and test) then
+         return exprvar
+       fZ:=eval(exprvar,varkern=(Z::RE))
+       fN:=(numer fZ)::RE
+       f:=univariate(fN, first kernels(Z::RE))
+       secondfun:=(-2*(Y::RE)/((Y::RE)**2-1) )::RE
+       g:=univariate(secondfun,first kernels(y::RE))
+       H:=(new()@Symbol)::RE
+       newH:=univariate(H,first kernels(Z::RE))
+       result:=decomposeFunc(f,g,newH)
+       if not ( result = f ) then
+         result1:=result( H::RE )
+         resultnew:=eval(result1,H=(( tan((Y::RE))::RE ) ))
+       else return exprvar
+
+
+     eliminateKernRoot(var: RE, varkern: K) : RE ==
+       X:=new()@Symbol
+       var1:=eval(var, (varkern::RE)=(X::RE) )
+       var2:=numer univariate(var1, first kernels(X::RE))
+       var3:= monomial(1, ( retract( second argument varkern)@I )::NNI)@SUP RE_
+              - monomial(first argument varkern, 0::NNI)@SUP RE
+       resultvar:=resultant(var2, var3)
+
+     eliminateRoot(var:RE, y:S) : RE ==
+       var1:=var
+       while testRootk(var1,y) repeat
+         varlistk1:=tableXkernels(var1,y)
+         for i in varlistk1 repeat
+            if is?(i, "nthRoot"::S) then
+              var1:=eliminateKernRoot(var1,first kernels(i::RE))
+       var1
+
+
+     logsumtolog(var:RE) : RE ==
+       (listofexpr:=isPlus(var)) case "failed" => var
+       listofexpr:= listofexpr ::L RE
+       listforgcd:=[]::L R
+       for i in listofexpr repeat
+          exprcoeff:=leadingCoefficient(numer(i))
+          listforgcd:=cons(exprcoeff, listforgcd)
+       gcdcoeff:=gcd(listforgcd)::RE
+       newexpr:RE :=0
+       for i in listofexpr repeat
+          exprlist:=splitExpr(i::RE)
+          newexpr:=newexpr + logexpp(exprlist.2, exprlist.1/gcdcoeff)
+       kernelofvar:=kernels(newexpr)
+       var2:=1::RE
+       for i in kernelofvar repeat
+          var2:=var2*(first argument i)
+       gcdcoeff * log(var2)
+
+
+     testLog(expr:RE,Z:S) : Boolean ==
+       testList:=[log]::L S
+       kernelofexpr:=tableXkernels(expr,Z)
+       if #kernelofexpr = 0 then
+         return false
+       for i in kernelofexpr repeat
+          if not member?(name(first kernels(i)),testList) or _
+             not testkernel( (first argument first kernels(i)) ,Z) then
+            return false
+       true
+
+     splitExpr(expr:RE) : L RE ==
+       lcoeff:=leadingCoefficient((numer expr))
+       exprwcoeff:=expr
+       listexpr:=isTimes(exprwcoeff)
+       if listexpr case "failed" then
+         [1::RE , expr]
+       else
+         listexpr:=remove_!(lcoeff::RE , listexpr)
+         cons(lcoeff::RE , listexpr)
+
+     buildnexpr(expr:RE, Z:S) : L RE ==
+       nlist:=splitExpr(expr)
+       n2list:=remove_!(nlist.1, nlist)
+       anscoeff:RE:=1
+       ansmant:RE:=0
+       for i in n2list repeat
+          if freeOf?(i::RE,Z) then
+            anscoeff:=(i::RE)*anscoeff
+          else
+            ansmant:=(i::RE)
+       [anscoeff, ansmant * nlist.1 ]
+
+     logexpp(expr1:RE, expr2:RE) : RE ==
+       log( (first argument first kernels(expr1))**expr2 )
+
+     combineLog(expr:RE,Y:S) : RE ==
+       exprtable:Table(RE,RE):=table()
+       (isPlus(expr)) case "failed" => expr
+       ans:RE:=0
+       while expr ^= 0 repeat
+         loopexpr:RE:=leadingMonomial(numer(expr))::RE
+         if testLog(loopexpr,Y) and (#tableXkernels(loopexpr,Y)=1) then
+           exprr:=buildnexpr(loopexpr,Y)
+           if search(exprr.1,exprtable) case "failed" then
+             exprtable.(exprr.1):=0
+           exprtable.(exprr.1):= exprtable.(exprr.1) + exprr.2
+         else
+           ans:=ans+loopexpr
+         expr:=(reductum(numer expr))::RE
+       ansexpr:RE:=0
+       for i in keys(exprtable) repeat
+          ansexpr:=ansexpr + logsumtolog(exprtable.i) * (i::RE)
+       ansexpr:=ansexpr + ans
+
+
+     testRootk(varlistk:RE,y:S) : Boolean ==
+       testList:=[nthRoot]::L S
+       kernelofeqnvar:=tableXkernels(varlistk,y)
+       if #kernelofeqnvar = 0 then
+         return false
+       for i in kernelofeqnvar repeat
+          if member?(name(first kernels(i)),testList) then
+            return true
+       false
+
+     tableXkernels(evar:RE,Z:S) : L RE ==
+       kOfvar:=kernels(evar)
+       listkOfvar:=[]::L RE
+       for i in kOfvar repeat
+          if not freeOf?(i::RE,Z) then
+              listkOfvar:=cons(i::RE,listkOfvar)
+       listkOfvar
+
+     testTrig(eqnvar:RE,Z:S) : Boolean ==
+       testList:=[sin , cos , tan , cot , sec , csc]::L S
+       kernelofeqnvar:=tableXkernels(eqnvar,Z)
+       if #kernelofeqnvar = 0 then
+         return false
+       for i in kernelofeqnvar repeat
+          if not member?(name(first kernels(i)),testList) or _
+             not testkernel( (first argument first kernels(i)) ,Z) then
+            return false
+       true
+
+
+     testHTrig(eqnvar:RE,Z:S) : Boolean ==
+       testList:=[sinh , cosh , tanh , coth , sech , csch]::L S
+       kernelofeqnvar:=tableXkernels(eqnvar,Z)
+       if #kernelofeqnvar = 0 then
+         return false
+       for i in kernelofeqnvar repeat
+          if not member?(name(first kernels(i)),testList) or _
+             not testkernel( (first argument first kernels(i)) ,Z) then
+            return false
+       true
+
+     -- Auxiliary local function for use in funcinv.
+     makeInterval(l:R):C INT F ==
+       if R has complex and R has ConvertibleTo(C F) then
+         map(interval$INT(F),convert(l)$R)$ComplexFunctions2(F,INT F)
+       else
+         error "This should never happen"
+
+     funcinv(k:RE,l:RE) : Union(RE,"failed") ==
+       is?(k, "sin"::Symbol)   => asin(l)
+       is?(k, "cos"::Symbol)   => acos(l)
+       is?(k, "tan"::Symbol)   => atan(l)
+       is?(k, "cot"::Symbol)   => acot(l)
+       is?(k, "sec"::Symbol)   =>
+           l = 0 => "failed"
+           asec(l)
+       is?(k, "csc"::Symbol)   =>
+           l = 0 => "failed"
+           acsc(l)
+       is?(k, "sinh"::Symbol)  => asinh(l)
+       is?(k, "cosh"::Symbol)  => acosh(l)
+       is?(k, "tanh"::Symbol)  => atanh(l)
+       is?(k, "coth"::Symbol)  => acoth(l)
+       is?(k, "sech"::Symbol)  => asech(l)
+       is?(k, "csch"::Symbol)  => acsch(l)
+       is?(k, "atan"::Symbol)  => tan(l)
+       is?(k, "acot"::Symbol)  =>
+           l = 0 => "failed"
+           cot(l)
+       is?(k, "asin"::Symbol)  => sin(l)
+       is?(k, "acos"::Symbol)  => cos(l)
+       is?(k, "asec"::Symbol)  => sec(l)
+       is?(k, "acsc"::Symbol)  =>
+           l = 0 => "failed"
+           csc(l)
+       is?(k, "asinh"::Symbol) => sinh(l)
+       is?(k, "acosh"::Symbol) => cosh(l)
+       is?(k, "atanh"::Symbol) => tanh(l)
+       is?(k, "acoth"::Symbol) =>
+           l = 0 => "failed"
+           coth(l)
+       is?(k, "asech"::Symbol) => sech(l)
+       is?(k, "acsch"::Symbol) =>
+           l = 0 => "failed"
+           csch(l)
+       is?(k, "exp"::Symbol)   =>
+           l = 0 => "failed"
+           simplifyingLog l
+       is?(k, "log"::Symbol)   =>
+         if R has complex and R has ConvertibleTo(C F) then
+           -- We will check to see if the imaginary part lies in [-Pi,Pi)
+           ze : Expression C INT F
+           ze := map(makeInterval,l)$ExpressionFunctions2(R,C INT F)
+           z : Union(C INT F,"failed") := retractIfCan ze
+           z case "failed" => exp l
+           im := imag z
+           fpi : Float := pi()
+           (-fpi < inf(im)) and (sup(im) <= fpi) => exp l
+           "failed"
+         else -- R not Complex or something which doesn't map to Complex Floats
+           exp l 
+       is?(k, "%power"::Symbol)   => 
+            (t:=normalize(l)) = 0 => "failed"
+            log t
+       l
+
+     import SystemSolvePackage(RE)
+
+     ker2Poly(k:Kernel RE, lvar:L S):Polynomial RE ==
+        member?(nm:=name k, lvar) => nm :: Polynomial RE
+        k :: RE :: Polynomial RE
+
+     smp2Poly(pol:SMP(R,Kernel RE), lvar:L S):Polynomial RE ==
+        map(ker2Poly(#1, lvar),
+           #1::RE::Polynomial RE, pol)$PolynomialCategoryLifting(
+              IndexedExponents Kernel RE, Kernel RE, R, SMP(R, Kernel RE), 
+                      Polynomial RE)
+
+     makeFracPoly(expr:RE, lvar:L S):Fraction Polynomial RE ==
+        smp2Poly(numer expr, lvar) / smp2Poly(denom expr, lvar)
+
+     makeREpol(pol:Polynomial RE):RE ==
+        lvar := variables pol
+        lval : List RE := [v::RE for v in lvar]
+        ground eval(pol,lvar,lval)
+
+     makeRE(frac:Fraction Polynomial RE):RE ==
+        makeREpol(numer frac)/makeREpol(denom frac)
+
+     solve1Pol(pol:Polynomial RE, var: S, sol:L EQ RE):L L EQ RE ==
+        repol := eval(makeREpol pol, sol)
+        vsols := solve(repol, var)
+        [cons(vsol, sol) for vsol in vsols]
+
+     solve1Sys(plist:L Polynomial RE, lvar:L S):L L EQ RE ==
+        rplist := reverse plist
+        rlvar := reverse lvar
+        sols : L L EQ RE := list(empty())
+        for p in rplist for v in rlvar repeat
+           sols := "append"/[solve1Pol(p,v,sol) for sol in sols]
+        sols
+
+@
+The input
+\begin{verbatim}
+  solve(sinh(z)=cosh(z),z)
+\end{verbatim}
+generates the error (reported as bug \# 102):
+\begin{verbatim}
+ >> Error detected within library code:
+    No identity element for reduce of empty list using operation append
+\end{verbatim}
+<<package SOLVETRA TransSolvePackage>>=
+
+     solveList(lexpr:L RE, lvar:L S):L L EQ RE ==
+        ans1 := solveRetract(lexpr, lvar)
+        not(ans1 case "failed") => ans1 :: L L EQ RE
+        lfrac:L Fraction Polynomial RE :=
+           [makeFracPoly(expr, lvar) for expr in lexpr]
+        trianglist := triangularSystems(lfrac, lvar)
+--        "append"/[solve1Sys(plist, lvar) for plist in trianglist]
+        l: L L L EQ RE := [solve1Sys(plist, lvar) for plist in trianglist]
+        reduce(append, l, [])
+        
+     solve(leqs:L EQ RE, lvar:L S):L L EQ RE ==
+        lexpr:L RE := [lhs(eq)-rhs(eq) for eq in leqs]
+        solveList(lexpr, lvar)
+
+--     solve(leqs:L EQ RE, lker:L Kernel RE):L L EQ RE ==
+--        lexpr:L RE := [lhs(eq)-rhs(eq) for eq in leqs]
+--        lvar :L S := [new()$S for k in lker]
+--        lval :L RE := [kernel v for v in lvar]
+--        nlexpr := [eval(expr,lker,lval) for expr in lexpr]
+--        ans := solveList(nlexpr, lvar)
+--        lker2 :L Kernel RE := [v::Kernel(RE) for v in lvar]
+--        lval2 := [k::RE for k in lker]
+--        [[map(eval(#1,lker2,lval2), neq) for neq in sol] for sol in ans]
+
+@
+\section{package SOLVESER TransSolvePackageService}
+<<package SOLVESER TransSolvePackageService>>=
+)abbrev package SOLVESER TransSolvePackageService
+++ Author: W. Wiwianka
+++ Date Created: Summer 1991
+++ Change History: 9/91
+++ Basic Operations: decomposeFunc, unvectorise
+++ Related Constructors:
+++ Keywords:
+++ Description: This package finds the function func3 where  func1 and func2
+++  are given and  func1 = func3(func2) .  If there is no solution then
+++  function func1 will be returned.
+++  An example would be  \spad{func1:= 8*X**3+32*X**2-14*X ::EXPR INT} and
+++  \spad{func2:=2*X ::EXPR INT} convert them via univariate
+++  to FRAC SUP EXPR INT and then the solution is \spad{func3:=X**3+X**2-X}
+++  of type FRAC SUP EXPR INT
+TransSolvePackageService(R) : Exports == Implementation where
+   R   :   Join(IntegralDomain, OrderedSet)
+
+   RE  ==> Expression R
+   EQ  ==> Equation
+   S   ==> Symbol
+   V   ==> Variable
+   L   ==> List
+   SUP ==> SparseUnivariatePolynomial
+   ACF      ==> AlgebraicallyClosedField()
+
+
+   Exports == with
+
+     decomposeFunc : ( Fraction SUP RE , Fraction SUP RE, Fraction SUP RE )  -> Fraction SUP RE
+       ++ decomposeFunc(func1, func2, newvar)  returns a function  func3 where
+       ++ func1 = func3(func2)  and expresses it in the new variable  newvar.
+       ++ If there is no solution then func1 will be returned.
+     unvectorise : ( Vector RE , Fraction SUP RE , Integer ) -> Fraction SUP RE
+       ++ unvectorise(vect, var, n) returns
+       ++ \spad{vect(1) + vect(2)*var + ... + vect(n+1)*var**(n)} where
+       ++ vect  is the vector of the coefficients of the polynomail , var
+       ++ the new variable and n the degree.
+
+
+   Implementation == add
+     import ACF
+     import TranscendentalManipulations(R, RE)
+     import ElementaryFunctionStructurePackage(R, RE)
+     import SparseUnivariatePolynomial(R)
+     import LinearSystemMatrixPackage(RE,Vector RE,Vector RE,Matrix RE)
+     import HomogeneousAggregate(R)
+
+        ---- Local Function Declarations ----
+
+     subsSolve : ( SUP RE, NonNegativeInteger, SUP RE, SUP RE, Integer, Fraction SUP RE) -> Union(SUP RE , "failed" )
+       --++ subsSolve(f, degf, g1, g2, m, h)
+
+
+    -- exported functions
+
+
+     unvectorise(vect:Vector RE, var:Fraction SUP RE,n:Integer) : Fraction SUP RE ==
+       Z:=new()@Symbol
+       polyvar: Fraction SUP RE :=0
+       for i in 1..((n+1)::Integer) repeat
+          vecti:=univariate(vect( i ),first kernels(Z::RE))
+          polyvar:=polyvar + ( vecti )*( var )**( (n-i+1)::NonNegativeInteger )
+       polyvar
+
+
+     decomposeFunc(exprf:Fraction SUP RE , exprg:Fraction SUP RE, newH:Fraction SUP RE ) : Fraction SUP RE ==
+       X:=new()@Symbol
+       f1:=numer(exprf)
+       f2:=denom(exprf)
+       g1:=numer(exprg)
+       g2:=denom(exprg)
+       degF:=max(degree(numer(exprf)),degree(denom(exprf)))
+       degG:=max(degree(g1),degree(g2))
+       newF1,newF2 : Union(SUP RE, "failed")
+       N:= degF exquo degG
+       if not ( N case "failed" ) then
+         m:=N::Integer
+         newF1:=subsSolve(f1,degF,g1,g2,m,newH)
+         if f2 = 1 then
+           newF2:= 1 :: SUP RE
+         else newF2:=subsSolve(f2,degF,g1,g2,m,newH)
+         if ( not ( newF1 case "failed" ) ) and ( not ( newF2 case "failed" ) ) then
+           newF:=newF1/newF2
+         else return exprf
+       else return exprf
+
+
+    -- local functions
+
+
+     subsSolve(F:SUP RE, DegF:NonNegativeInteger, G1:SUP RE, G2:SUP RE, M:Integer, HH: Fraction SUP RE) : Union(SUP RE , "failed" ) ==
+       coeffmat:=new((DegF+1),1,0)@Matrix RE
+       for i in 0..M repeat
+          coeffmat:=horizConcat(coeffmat, (vectorise( ( ( G1**((M-i)::NonNegativeInteger) )*G2**i ), (DegF+1) )::Matrix RE) )
+       vec:= vectorise(F,DegF+1)
+       coeffma:=subMatrix(coeffmat,1,(DegF+1),2,(M+2))
+       solvar:=solve(coeffma,vec)
+       if not ( solvar.particular  case  "failed" ) then
+         solvevarlist:=(solvar.particular)::Vector RE
+         resul:= numer(unvectorise(solvevarlist,( HH ),M))
+         resul
+       else return "failed"
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package SOLVETRA TransSolvePackage>>
+<<package SOLVESER TransSolvePackageService>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

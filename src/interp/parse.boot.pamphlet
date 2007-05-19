@@ -1,0 +1,1321 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp parse.boot}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+This file contains both the {\bf boot} code and the {\bf Lisp}
+code that is the result of the {\bf boot to lisp} translation.
+We need to keep the translated code around so we can bootstrap
+the system. In other words, we need this boot code translated
+so we can build the boot translator. 
+
+{\bf NOTE WELL: IF YOU CHANGE THIS BOOT CODE YOU MUST TRANSLATE
+THIS CODE TO LISP AND STORE THE RESULTING LISP CODE BACK INTO
+THIS FILE.}
+
+See the {\bf parse.clisp} section below.
+\section{parseTransform}
+This is the top-level function in this file. 
+
+When parsing spad code we walk an source code expression such as
+
+[[P ==> PositiveInteger]]
+
+This gets translated by [[|postTransform|]]\cite{1} into
+
+[[(MDEF P NIL NIL (|PositiveInteger|))]]
+
+[[|parseTranform|]] is called with this expression. The [[%]] symbol,
+which represents the current domain, is replaced with the [[$]] symbol
+internally. This hack was introduced because the Aldor compiler wanted
+to use [[%]] for the [[current domain]]. The Spad compiler used [[$]].
+In order not to have to change this everywhere we do a subsitution here.
+<<parseTransform>>=
+parseTransform x ==
+  $defOp: local:= nil
+  x := substitute('$,'%,x) -- for new compiler compatibility
+  parseTran x
+
+@
+\section{parseTran}
+[[|parseTran|]] sees an expression such as
+
+[[(MDEF P NIL NIL (|PositiveInteger|))]]
+
+It walks the
+expression, which is a list, item by item (note the tail recursive
+call in this function). In general, we are converting certain 
+source-level constructs into internal constructs. Note the subtle
+way that functions get called in this file. The information about
+what function to call is stored on the property list of the symbol.
+
+For example, given the form: [[(|has| S (|OrderedSet|))]]
+the symbol [[|has|]] occurs in the car of the list. [[|parseTran|]]
+assigns [[$op]] to be [[|has|]] and [[argl]] to be the list
+[[(S (|OrderedSet|))]]. Next, a local function [[g]], which checks
+for the compile-time elts, returns [[$op]] unchanged. The variable
+[[u]] is set to [[|has|]].
+
+Since [[|has|]] is an atom we do 
+[[(GET '|has| '|parseTran|)]] which returns [[|parseHas|]]
+because the symbol [[|has|]] contains the association 
+[[|parseTran| |parseHas|]] on it's symbol property list.
+You can see this by calling [[(symbol-plist '|has|)]].
+
+This ends up calling [[(|parseHas| '(S (|OrderedSet|)))]].
+
+The [[|parseTran|]] function walks the entire s-expression
+calling special parsers for various special forms in the input.
+This does things like reverse tests so that [[(if (not x) a b)]]
+becomes [[(if x b a)]], etc.
+
+<<parseTran>>= 
+parseTran x ==
+  $op: local := nil
+  atom x => parseAtom x
+  [$op,:argl]:= x
+  u := g($op) where g op == (op is ['elt,op,x] => g x; op)
+  u='construct =>
+    r:= parseConstruct argl
+    $op is ['elt,:.] => [parseTran $op,:rest r]
+    r
+  atom u and (fn:= GET(u,'parseTran)) => FUNCALL(fn,argl)
+  [parseTran $op,:parseTranList argl]
+ 
+@ 
+\section{License}
+<<license>>=
+-- Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+-- All rights reserved.
+--
+-- Redistribution and use in source and binary forms, with or without
+-- modification, are permitted provided that the following conditions are
+-- met:
+--
+--     - Redistributions of source code must retain the above copyright
+--       notice, this list of conditions and the following disclaimer.
+--
+--     - Redistributions in binary form must reproduce the above copyright
+--       notice, this list of conditions and the following disclaimer in
+--       the documentation and/or other materials provided with the
+--       distribution.
+--
+--     - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--       names of its contributors may be used to endorse or promote products
+--       derived from this software without specific prior written permission.
+--
+-- THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+-- IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+-- TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+-- PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+-- OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+-- EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+-- PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+-- PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+-- LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+-- NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+-- SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+@
+<<*>>=
+<<license>>
+
+--% Transformation of Parser Output
+ 
+<<parseTransform>>
+<<parseTran>>
+
+parseAtom x ==
+ -- next line for compatibility with new compiler
+  x = 'break => parseLeave ['$NoValue]
+  x
+ 
+parseTranList l ==
+  atom l => parseTran l
+  [parseTran first l,:parseTranList rest l]
+ 
+parseConstruct u ==
+  $insideConstructIfTrue: local:= true
+  l:= parseTranList u
+  ["construct",:l]
+ 
+parseUpArrow u ==  parseTran ["**",:u]
+ 
+parseLeftArrow u == parseTran ["LET",:u]
+ 
+parseIs [a,b] == ['is,parseTran a,transIs parseTran b]
+ 
+parseIsnt [a,b] == ['isnt,parseTran a,transIs parseTran b]
+ 
+transIs u ==
+  isListConstructor u => ['construct,:transIs1 u]
+  u
+ 
+isListConstructor u == u is [op,:.] and op in '(construct append cons)
+ 
+transIs1 u ==
+  u is ['construct,:l] => [transIs x for x in l]
+  u is ['append,x,y] =>
+    h:= [":",transIs x]
+    (v:= transIs1 y) is [":",z] => [h,z]
+    v="nil" => first rest h
+    atom v => [h,[":",v]]
+    [h,:v]
+  u is ['cons,x,y] =>
+    h:= transIs x
+    (v:= transIs1 y) is [":",z] => [h,z]
+    v="nil" => [h]
+    atom v => [h,[":",v]]
+    [h,:v]
+  u
+ 
+parseLET [x,y] ==
+  p := ['LET,parseTran x,parseTranCheckForRecord(y,opOf x)]
+  opOf x = 'cons => ['LET,transIs p.1,p.2]
+  p
+ 
+parseLETD [x,y] == ['LETD,parseTran x,parseTran parseType y]
+ 
+parseColon u ==
+  u is [x] => [":",parseTran x]
+  u is [x,typ] =>
+    $InteractiveMode =>
+      $insideConstructIfTrue=true => ['TAG,parseTran x,parseTran typ]
+      [":",parseTran x,parseTran parseType typ]
+    [":",parseTran x,parseTran typ]
+ 
+parseBigelt [typ,consForm] ==
+  [['elt,typ,'makeRecord],:transUnCons consForm]
+ 
+transUnCons u ==
+  atom u => systemErrorHere '"transUnCons"
+  u is ["APPEND",x,y] =>
+    null y => x
+    systemErrorHere '"transUnCons"
+  u is ["CONS",x,y] =>
+    atom y => [x,:y]
+    [x,:transUnCons y]
+ 
+parseCoerce [x,typ] ==
+  $InteractiveMode => ["::",parseTran x,parseTran parseType typ]
+  ["::",parseTran x,parseTran typ]
+ 
+parseAtSign [x,typ] ==
+  $InteractiveMode => ["@",parseTran x,parseTran parseType typ]
+  ["@",parseTran x,parseTran typ]
+ 
+parsePretend [x,typ] ==
+  $InteractiveMode => ['pretend,parseTran x,parseTran parseType typ]
+  ['pretend,parseTran x,parseTran typ]
+ 
+parseType x ==
+  x := substitute($EmptyMode,$quadSymbol,x)
+  x is ['typeOf,val] => ['typeOf,parseTran val]
+  $oldParserExpandAbbrs => parseTypeEvaluate unabbrevAndLoad x
+  x
+ 
+parseTypeEvaluate form ==
+  form is [op,:argl] =>
+    newType? op => form
+    $op: local:= op
+    op = 'Mapping =>
+      [op,:[parseTypeEvaluate a for a in argl]]
+    op = 'Union =>
+      isTaggedUnion form =>
+        [op,:[['_:,sel,parseTypeEvaluate type] for
+          ['_:,sel,type] in argl]]
+      [op,:[parseTypeEvaluate a for a in argl]]
+    op = 'Record =>
+      [op,:[['_:,sel,parseTypeEvaluate type] for ['_:,sel,type] in argl]]
+    cmm :=
+      fn := constructor? op =>
+        p := pathname [fn,$spadLibFT,'"*"] =>
+          isExistingFile p => getConstructorModemap(abbreviation? fn)
+          nil
+      nil
+    cmm is [[.,.,:argml],:.] => [op,:parseTypeEvaluateArgs(argl,argml)]
+    throwKeyedMsg("S2IL0015",[op])
+  form
+ 
+parseTypeEvaluateArgs(argl,argml) ==
+  [argVal for arg in argl for md in argml for i in 1..] where argVal ==
+      isCategoryForm(md,$CategoryFrame) => parseTypeEvaluate arg
+      arg
+ 
+ 
+parseTypeError(x,md,i) == throwKeyedMsg("S2IP0003",[i,$op,md])
+ 
+specialModeTran form ==
+  form is [op,:argl] =>
+    not ATOM op => form --added 10/5/84 by SCM
+    (s0:= (sop:= PNAME op).0) = "*" =>
+      n:= #sop
+      n=1=> form
+      argKey:= sop.1
+      numArgs:= #argl - (argKey="1" => 1; 0)
+      zeroOrOne:= argKey="0" or argKey="1"
+      isDmp :=
+        numArgs < 10 =>
+          n=6 and ('"DMP"=SUBSTRING(sop,3,3)) and zeroOrOne
+        true =>
+          n=7 and ('"DMP"=SUBSTRING(sop,4,3)) and zeroOrOne
+      isDmp =>
+        if argKey="0" then
+          extraDomain:= $EmptyMode
+          vl:= argl
+         else
+          [:vl,extraDomain] := argl
+        ['DistributedMultivariatePolynomial,['construct,:vl],
+            specialModeTran extraDomain]
+      n=4 and (s3:= sop.3) = "M" and zeroOrOne =>
+        specialModeTran
+          extraDomain:= (argKey="0" => [$EmptyMode]; nil)
+          (n:= PARSE_-INTEGER PNAME sop.2)=1 =>
+            ['SquareMatrix,:argl,:extraDomain]
+          n=2 => ['RectangularMatrix,:argl,:extraDomain]
+          form
+      isUpOrMp :=
+        numArgs < 10 =>
+          n=4 and (s3:= sop.3) = 'P and zeroOrOne or
+            n=5 and (s3:= sop.3)='R and sop.4='F and zeroOrOne
+        true =>
+          n=5 and (s3:= sop.4) = 'P and zeroOrOne or
+            n=6 and (s3:= sop.4)='R and sop.5='F and zeroOrOne
+      isUpOrMp =>
+        polyForm:=
+          domainPart:= (argKey="0" => $EmptyMode; last argl)
+          argPart:= (argKey="0" => argl; drop(-1,argl))
+          numArgs < 10 and (n:= PARSE_-INTEGER PNAME sop.2)=1
+            => ['UP,:argPart,domainPart]
+          ['MP,['construct,:argPart],domainPart]
+        specialModeTran
+          s3 = 'R => [$QuotientField,polyForm]
+          polyForm
+      [first form,:[specialModeTran x for x in rest form]]
+    [first form,:[specialModeTran x for x in rest form]]
+  form
+ 
+parseHas [x,y] ==
+  if $InteractiveMode then
+    x:=
+      get(x,'value,$CategoryFrame) is [D,m,.]
+        and m in '((Mode) (Domain) (SubDomain (Domain))) => D
+      parseType x
+  mkand [['has,x,u] for u in fn y] where
+    mkand x ==
+      x is [a] => a
+      ['and,:x]
+    fn y ==
+      if $InteractiveMode then y:= unabbrevAndLoad y
+      y is [":" ,op,['Mapping,:map]] =>
+         op:= (STRINGP op => INTERN op; op)
+         [['SIGNATURE,op,map]]
+      y is ['Join,:u] => "append"/[fn z for z in u]
+      y is ['CATEGORY,:u] => "append"/[fn z for z in u]
+      kk:= GETDATABASE(opOf y,'CONSTRUCTORKIND)
+      kk = 'domain or kk = 'category => [makeNonAtomic y]
+      y is ['ATTRIBUTE,:.] => [y]
+      y is ['SIGNATURE,:.] => [y]
+      $InteractiveMode => parseHasRhs y
+      [['ATTRIBUTE,y]]
+ 
+parseHasRhs u ==   --$InteractiveMode = true
+  get(u,'value,$CategoryFrame) is [D,m,.]
+    and m in '((Mode) (Domain) (SubDomain (Domain))) => m
+  y := abbreviation? u =>
+    loadIfNecessary y => [unabbrevAndLoad y]
+    [['ATTRIBUTE,u]]
+  [['ATTRIBUTE,u]]
+ 
+parseDEF [$lhs,tList,specialList,body] ==
+  setDefOp $lhs
+  ['DEF,parseLhs $lhs,parseTranList tList,parseTranList specialList,
+    parseTranCheckForRecord(body,opOf $lhs)]
+ 
+parseLhs x ==
+  atom x => parseTran x
+  atom first x => [parseTran first x,:[transIs parseTran y for y in rest x]]
+  parseTran x
+ 
+parseMDEF [$lhs,tList,specialList,body] ==
+  ['MDEF,parseTran $lhs,parseTranList tList,parseTranList specialList,
+    parseTranCheckForRecord(body,opOf $lhs)]
+ 
+parseTranCheckForRecord(x,op) ==
+  (x:= parseTran x) is ['Record,:l] =>
+    or/[y for y in l | y isnt [":",.,.]] =>
+      postError ['"   Constructor",:bright x,'"has missing label"]
+    x
+  x
+ 
+parseCases [expr,ifClause] ==
+  casefn(expr,ifClause) where
+    casefn(x,ifExpr) ==
+      ifExpr='noBranch => ['ifClauseError,x]
+      ifExpr is ['IF,a,b,c] => ['IF,parseTran a,parseTran b,casefn(x,c)]
+      postError ['"   CASES format error: cases ",x," of ",ifExpr]
+ 
+parseCategory x ==
+  l:= parseTranList parseDropAssertions x
+  key:=
+    CONTAINED("$",l) => "domain"
+    'package
+  ['CATEGORY,key,:l]
+ 
+parseDropAssertions x ==
+--note: the COPY of this list is necessary-- do not replace by RPLACing version
+  x is [y,:r] =>
+    y is ['IF,'asserted,:.] => parseDropAssertions r
+    [y,:parseDropAssertions r]
+  x
+ 
+parseGreaterThan [x,y] ==
+  [substitute("<",">",$op),parseTran y,parseTran x]
+ 
+parseGreaterEqual u == parseTran ['not,[substitute("<",">=",$op),:u]]
+ 
+parseLessEqual u == parseTran ['not,[substitute(">","<=",$op),:u]]
+ 
+parseNotEqual u == parseTran ['not,[substitute("=","^=",$op),:u]]
+ 
+parseDollarGreaterThan [x,y] ==
+  [substitute("$<","$>",$op),parseTran y,parseTran x]
+ 
+parseDollarGreaterEqual u ==
+  parseTran ['not,[substitute("$<","$>=",$op),:u]]
+ 
+parseDollarLessEqual u ==
+  parseTran ['not,[substitute("$>","$<=",$op),:u]]
+ 
+parseDollarNotEqual u ==
+  parseTran ['not,[substitute("$=","$^=",$op),:u]]
+ 
+parseAnd u ==
+  $InteractiveMode => ['and,:parseTranList u]
+  null u => 'true
+  null rest u => first u
+  parseIf [parseTran first u,parseAnd rest u,"false"]
+ 
+parseOr u ==
+  $InteractiveMode => ['or,:parseTranList u]
+  null u => 'false
+  null rest u => first u
+  (x:= parseTran first u) is ['not,y] => parseIf [y,parseOr rest u,'true]
+  true => parseIf [x,'true,parseOr rest u]
+ 
+parseNot u ==
+  $InteractiveMode => ['not,parseTran first u]
+  parseTran ['IF,first u,:'(false true)]
+ 
+parseEquivalence [a,b] == parseIf [a,b,parseIf [b,:'(false true)]]
+ 
+parseImplies [a,b] == parseIf [a,b,'true]
+ 
+parseExclusiveOr [a,b] == parseIf [a,parseIf [b,:'(false true)],b]
+ 
+parseExit [a,:b] ==
+  --  note: I wanted to convert 1s to 0s here to facilitate indexing in
+  --   comp code; unfortunately, parseTran-ning is sometimes done more
+  --   than once so that the count can be decremented more than once
+  a:= parseTran a
+  b:= parseTran b
+  b =>
+    null INTEGERP a =>
+      (MOAN('"first arg ",a,'" for exit must be integer"); ['exit,1,a])
+    ['exit,a,:b]
+  ['exit,1,a]
+ 
+parseLeave [a,:b] ==
+  a:= parseTran a
+  b:= parseTran b
+  b =>
+    null INTEGERP a =>
+      (MOAN('"first arg ",a,'" for 'leave' must be integer"); ['leave,1,a])
+    ['leave,a,:b]
+  ['leave,1,a]
+ 
+parseReturn [a,:b] ==
+  a:= parseTran a
+  b:= parseTran b
+  b =>
+    (if a^=1 then MOAN '"multiple-level 'return' not allowed"; ["return",1,:b])
+  ['return,1,a]
+ 
+parseJoin l ==
+  ['Join,:fn parseTranList l] where
+    fn l ==
+      null l => nil
+      l is [['Join,:x],:y] => [:x,:fn y]
+      [first l,:fn rest l]
+ 
+parseInBy [i,n,inc] ==
+  (u:= parseIn [i,n]) isnt ['STEP,i,a,j,:r] =>
+    postError ["   You cannot use",:bright '"by",
+      '"except for an explicitly indexed sequence."]
+  inc:= parseTran inc
+  ['STEP,i,a,parseTran inc,:r]
+ 
+parseSegment p ==
+  p is [a,b] =>
+    b => ['SEGMENT,parseTran a, parseTran b]
+    ['SEGMENT,parseTran a]
+  ['SEGMENT,:p]
+ 
+parseIn [i,n] ==
+  i:= parseTran i
+  n:= parseTran n
+  n is ['SEGMENT,a] => ['STEP,i,a,1]
+  n is ['reverse,['SEGMENT,a]] =>
+    postError ['"  You cannot reverse an infinite sequence."]
+  n is ['SEGMENT,a,b] => (b => ['STEP,i,a,1,b]; ['STEP,i,a,1])
+  n is ['reverse,['SEGMENT,a,b]] =>
+    b => ['STEP,i,b,-1,a]
+    postError ['"  You cannot reverse an infinite sequence."]
+  n is ['tails,s] => ['ON,i,s]
+  ['IN,i,n]
+ 
+parseIf t ==
+  t isnt [p,a,b] => t
+  ifTran(parseTran p,parseTran a,parseTran b) where
+    ifTran(p,a,b) ==
+      null($InteractiveMode) and p='true  => a
+      null($InteractiveMode) and p='false  => b
+      p is ['not,p'] => ifTran(p',b,a)
+      p is ['IF,p',a',b'] => ifTran(p',ifTran(a',COPY a,COPY b),ifTran(b',a,b))
+      p is ['SEQ,:l,['exit,1,p']] =>
+        ['SEQ,:l,['exit,1,ifTran(p',incExitLevel a,incExitLevel b)]]
+         --this assumes that l has no exits
+      a is ['IF, =p,a',.] => ['IF,p,a',b]
+      b is ['IF, =p,.,b'] => ['IF,p,a,b']
+      makeSimplePredicateOrNil p is ['SEQ,:s,['exit,1,val]] =>
+        parseTran ['SEQ,:s,['exit,1,incExitLevel ['IF,val,a,b]]]
+      ['IF,p,a,b]
+ 
+makeSimplePredicateOrNil p ==
+  isSimple p => nil
+  u:= isAlmostSimple p => u
+  true => wrapSEQExit [['LET,g:= GENSYM(),p],g]
+ 
+parseWhere l == ['where,:mapInto(l,'parseTran)]
+ 
+ 
+parseSeq l ==
+  not l is [:.,['exit,:.]] =>
+    postError ['"   Invalid ending to block: ",last l]
+  transSeq mapInto(l,'parseTran)
+ 
+transSeq l ==
+  null l => nil
+  null rest l => decExitLevel first l
+  [item,:tail]:= l
+  item is ['SEQ,:l,['exit,1,['IF,p,['exit, =2,q],'noBranch]]] and
+    (and/[x is ['LET,:.] for x in l]) =>
+      ['SEQ,:[decExitLevel x for x in l],['exit,1,['IF,decExitLevel p,
+        decExitLevel q,transSeq tail]]]
+  item is ['IF,a,['exit,1,b],'noBranch] =>
+    ['IF,decExitLevel a,decExitLevel b,transSeq tail]
+  item is ['IF,a,'noBranch,['exit,1,b]] =>
+    ['IF,decExitLevel a,transSeq tail,decExitLevel b]
+  (y:= transSeq tail) is ['SEQ,:s] => ['SEQ,item,:s]
+  ['SEQ,item,['exit,1,incExitLevel y]]
+ 
+transCategoryItem x ==
+  x is ['SIGNATURE,lhs,rhs] =>
+    lhs is ['LISTOF,:y] =>
+      "append" /[transCategoryItem ['SIGNATURE,z,rhs] for z in y]
+    atom lhs =>
+      if STRINGP lhs then lhs:= INTERN lhs
+      rhs is ['Mapping,:m] =>
+        m is [.,'constant] => LIST ['SIGNATURE,lhs,[first m],'constant]
+        LIST ['SIGNATURE,lhs,m]
+      $transCategoryAssoc:= [[lhs,:rhs],:$transCategoryAssoc]
+      NIL
+    [op,:argl]:= lhs
+    extra:= nil
+    if rhs is ['Mapping,:m] then
+      if rest m then extra:= rest m
+                 --should only be 'constant' or 'variable'
+      rhs:= first m
+    LIST ['SIGNATURE,op,[rhs,:SUBLIS($transCategoryAssoc,argl)],:extra]
+  LIST x
+ 
+superSub(name,x) ==
+  for u in x repeat y:= [:y,:u]
+  code:=
+    x is [[u]] => $quadSymbol
+    STRCONC("_(",scriptTranRow first x,scriptTran rest x,"_)")
+  [INTERNL(PNAME name,"$",code),:y]
+ 
+scriptTran x ==
+  null x => ""
+  STRCONC(";",scriptTranRow first x,scriptTran rest x)
+ 
+scriptTranRow x ==
+  null x => ""
+  STRCONC($quadSymbol,scriptTranRow1 rest x)
+ 
+scriptTranRow1 x ==
+  null x => ""
+  STRCONC(",",$quadSymbol,scriptTranRow1 rest x)
+ 
+parseVCONS l == ["VECTOR",:parseTranList l]
+@
+\section{parse.clisp}
+<<parse.clisp>>=
+
+(IN-PACKAGE "BOOT" )
+
+;--% Transformation of Parser Output
+;
+;parseTransform x ==
+;  $defOp: local:= nil
+;  x := substitute('$,'%,x) -- for new compiler compatibility
+;  parseTran x
+
+;;;     ***       |parseTransform| REDEFINED
+
+(DEFUN |parseTransform| (|x|) (PROG (|$defOp|) (DECLARE (SPECIAL |$defOp|)) (RETURN (PROGN (SPADLET |$defOp| NIL) (SPADLET |x| (MSUBST (QUOTE $) (QUOTE %) |x|)) (|parseTran| |x|))))) 
+;
+;parseTran x ==
+;  $op: local
+;  atom x => parseAtom x
+;  [$op,:argl]:= x
+;  u := g($op) where g op == (op is ['elt,op,x] => g x; op)
+;  u='construct =>
+;    r:= parseConstruct argl
+;    $op is ['elt,:.] => [parseTran $op,:rest r]
+;    r
+;  atom u and (fn:= GET(u,'parseTran)) => FUNCALL(fn,argl)
+;  [parseTran $op,:parseTranList argl]
+
+;;;     ***       |parseTran,g| REDEFINED
+
+(DEFUN |parseTran,g| (|op|) (PROG (|ISTMP#1| |ISTMP#2| |x|) (RETURN (SEQ (IF (AND (PAIRP |op|) (EQ (QCAR |op|) (QUOTE |elt|)) (PROGN (SPADLET |ISTMP#1| (QCDR |op|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |op| (QCAR |ISTMP#1|)) (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL) (PROGN (SPADLET |x| (QCAR |ISTMP#2|)) (QUOTE T))))))) (EXIT (|parseTran,g| |x|))) (EXIT |op|))))) 
+
+;;;     ***       |parseTran| REDEFINED
+
+(DEFUN |parseTran| (|x|) (PROG (|$op| |argl| |u| |r| |fn|) (DECLARE (SPECIAL |$op|)) (RETURN (PROGN (SPADLET |$op| NIL) (COND ((ATOM |x|) (|parseAtom| |x|)) ((QUOTE T) (SPADLET |$op| (CAR |x|)) (SPADLET |argl| (CDR |x|)) (SPADLET |u| (|parseTran,g| |$op|)) (COND ((BOOT-EQUAL |u| (QUOTE |construct|)) (SPADLET |r| (|parseConstruct| |argl|)) (COND ((AND (PAIRP |$op|) (EQ (QCAR |$op|) (QUOTE |elt|))) (CONS (|parseTran| |$op|) (CDR |r|))) ((QUOTE T) |r|))) ((AND (ATOM |u|) (SPADLET |fn| (GETL |u| (QUOTE |parseTran|)))) (FUNCALL |fn| |argl|)) ((QUOTE T) (CONS (|parseTran| |$op|) (|parseTranList| |argl|)))))))))) 
+;
+;parseAtom x ==
+; -- next line for compatibility with new compiler
+;  x = 'break => parseLeave ['$NoValue]
+;  x
+
+;;;     ***       |parseAtom| REDEFINED
+
+(DEFUN |parseAtom| (|x|) (COND ((BOOT-EQUAL |x| (QUOTE |break|)) (|parseLeave| (CONS (QUOTE |$NoValue|) NIL))) ((QUOTE T) |x|))) 
+;
+;parseTranList l ==
+;  atom l => parseTran l
+;  [parseTran first l,:parseTranList rest l]
+
+;;;     ***       |parseTranList| REDEFINED
+
+(DEFUN |parseTranList| (|l|) (COND ((ATOM |l|) (|parseTran| |l|)) ((QUOTE T) (CONS (|parseTran| (CAR |l|)) (|parseTranList| (CDR |l|)))))) 
+;
+;parseConstruct u ==
+;  $insideConstructIfTrue: local:= true
+;  l:= parseTranList u
+;  ["construct",:l]
+
+;;;     ***       |parseConstruct| REDEFINED
+
+(DEFUN |parseConstruct| (|u|) (PROG (|$insideConstructIfTrue| |l|) (DECLARE (SPECIAL |$insideConstructIfTrue|)) (RETURN (PROGN (SPADLET |$insideConstructIfTrue| (QUOTE T)) (SPADLET |l| (|parseTranList| |u|)) (CONS (QUOTE |construct|) |l|))))) 
+;
+;parseUpArrow u ==  parseTran ["**",:u]
+
+;;;     ***       |parseUpArrow| REDEFINED
+
+(DEFUN |parseUpArrow| (|u|) (|parseTran| (CONS (QUOTE **) |u|))) 
+;
+;parseLeftArrow u == parseTran ["LET",:u]
+
+;;;     ***       |parseLeftArrow| REDEFINED
+
+(DEFUN |parseLeftArrow| (|u|) (|parseTran| (CONS (QUOTE LET) |u|))) 
+;
+;parseIs [a,b] == ['is,parseTran a,transIs parseTran b]
+
+;;;     ***       |parseIs| REDEFINED
+
+(DEFUN |parseIs| (#0=#:G2259) (PROG (|a| |b|) (RETURN (PROGN (SPADLET |a| (CAR #0#)) (SPADLET |b| (CADR #0#)) (CONS (QUOTE |is|) (CONS (|parseTran| |a|) (CONS (|transIs| (|parseTran| |b|)) NIL))))))) 
+;
+;parseIsnt [a,b] == ['isnt,parseTran a,transIs parseTran b]
+
+;;;     ***       |parseIsnt| REDEFINED
+
+(DEFUN |parseIsnt| (#0=#:G2273) (PROG (|a| |b|) (RETURN (PROGN (SPADLET |a| (CAR #0#)) (SPADLET |b| (CADR #0#)) (CONS (QUOTE |isnt|) (CONS (|parseTran| |a|) (CONS (|transIs| (|parseTran| |b|)) NIL))))))) 
+;
+;transIs u ==
+;  isListConstructor u => ['construct,:transIs1 u]
+;  u
+
+;;;     ***       |transIs| REDEFINED
+
+(DEFUN |transIs| (|u|) (COND ((|isListConstructor| |u|) (CONS (QUOTE |construct|) (|transIs1| |u|))) ((QUOTE T) |u|))) 
+;
+;isListConstructor u == u is [op,:.] and op in '(construct append cons)
+
+;;;     ***       |isListConstructor| REDEFINED
+
+(DEFUN |isListConstructor| (|u|) (PROG (|op|) (RETURN (AND (PAIRP |u|) (PROGN (SPADLET |op| (QCAR |u|)) (QUOTE T)) (|member| |op| (QUOTE (|construct| |append| |cons|))))))) 
+;
+;transIs1 u ==
+;  u is ['construct,:l] => [transIs x for x in l]
+;  u is ['append,x,y] =>
+;    h:= [":",transIs x]
+;    (v:= transIs1 y) is [":",z] => [h,z]
+;    v="nil" => first rest h
+;    atom v => [h,[":",v]]
+;    [h,:v]
+;  u is ['cons,x,y] =>
+;    h:= transIs x
+;    (v:= transIs1 y) is [":",z] => [h,z]
+;    v="nil" => [h]
+;    atom v => [h,[":",v]]
+;    [h,:v]
+;  u
+
+;;;     ***       |transIs1| REDEFINED
+
+(DEFUN |transIs1| (|u|) (PROG (|l| |x| |y| |h| |v| |ISTMP#1| |ISTMP#2| |z|) (RETURN (SEQ (COND ((AND (PAIRP |u|) (EQ (QCAR |u|) (QUOTE |construct|)) (PROGN (SPADLET |l| (QCDR |u|)) (QUOTE T))) (PROG (#0=#:G2354) (SPADLET #0# NIL) (RETURN (DO ((#1=#:G2359 |l| (CDR #1#)) (|x| NIL)) ((OR (ATOM #1#) (PROGN (SETQ |x| (CAR #1#)) NIL)) (NREVERSE0 #0#)) (SEQ (EXIT (SETQ #0# (CONS (|transIs| |x|) #0#)))))))) ((AND (PAIRP |u|) (EQ (QCAR |u|) (QUOTE |append|)) (PROGN (SPADLET |ISTMP#1| (QCDR |u|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |x| (QCAR |ISTMP#1|)) (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL) (PROGN (SPADLET |y| (QCAR |ISTMP#2|)) (QUOTE T))))))) (SPADLET |h| (CONS (QUOTE |:|) (CONS (|transIs| |x|) NIL))) (COND ((PROGN (SPADLET |ISTMP#1| (SPADLET |v| (|transIs1| |y|))) (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) (QUOTE |:|)) (PROGN (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL) (PROGN (SPADLET |z| (QCAR |ISTMP#2|)) (QUOTE T)))))) (CONS |h| (CONS |z| NIL))) ((BOOT-EQUAL |v| (QUOTE |nil|)) (CAR (CDR |h|))) ((ATOM |v|) (CONS |h| (CONS (CONS (QUOTE |:|) (CONS |v| NIL)) NIL))) ((QUOTE T) (CONS |h| |v|)))) ((AND (PAIRP |u|) (EQ (QCAR |u|) (QUOTE |cons|)) (PROGN (SPADLET |ISTMP#1| (QCDR |u|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |x| (QCAR |ISTMP#1|)) (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL) (PROGN (SPADLET |y| (QCAR |ISTMP#2|)) (QUOTE T))))))) (SPADLET |h| (|transIs| |x|)) (COND ((PROGN (SPADLET |ISTMP#1| (SPADLET |v| (|transIs1| |y|))) (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) (QUOTE |:|)) (PROGN (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL) (PROGN (SPADLET |z| (QCAR |ISTMP#2|)) (QUOTE T)))))) (CONS |h| (CONS |z| NIL))) ((BOOT-EQUAL |v| (QUOTE |nil|)) (CONS |h| NIL)) ((ATOM |v|) (CONS |h| (CONS (CONS (QUOTE |:|) (CONS |v| NIL)) NIL))) ((QUOTE T) (CONS |h| |v|)))) ((QUOTE T) |u|)))))) 
+;
+;parseLET [x,y] ==
+;  p := ['LET,parseTran x,parseTranCheckForRecord(y,opOf x)]
+;  opOf x = 'cons => ['LET,transIs p.1,p.2]
+;  p
+
+;;;     ***       |parseLET| REDEFINED
+
+(DEFUN |parseLET| (#0=#:G2389) (PROG (|x| |y| |p|) (RETURN (PROGN (SPADLET |x| (CAR #0#)) (SPADLET |y| (CADR #0#)) (SPADLET |p| (CONS (QUOTE LET) (CONS (|parseTran| |x|) (CONS (|parseTranCheckForRecord| |y| (|opOf| |x|)) NIL)))) (COND ((BOOT-EQUAL (|opOf| |x|) (QUOTE |cons|)) (CONS (QUOTE LET) (CONS (|transIs| (ELT |p| 1)) (CONS (ELT |p| 2) NIL)))) ((QUOTE T) |p|)))))) 
+;
+;parseLETD [x,y] == ['LETD,parseTran x,parseTran parseType y]
+
+;;;     ***       |parseLETD| REDEFINED
+
+(DEFUN |parseLETD| (#0=#:G2404) (PROG (|x| |y|) (RETURN (PROGN (SPADLET |x| (CAR #0#)) (SPADLET |y| (CADR #0#)) (CONS (QUOTE LETD) (CONS (|parseTran| |x|) (CONS (|parseTran| (|parseType| |y|)) NIL))))))) 
+;
+;parseColon u ==
+;  u is [x] => [":",parseTran x]
+;  u is [x,typ] =>
+;    $InteractiveMode =>
+;      $insideConstructIfTrue=true => ['TAG,parseTran x,parseTran typ]
+;      [":",parseTran x,parseTran parseType typ]
+;    [":",parseTran x,parseTran typ]
+
+;;;     ***       |parseColon| REDEFINED
+
+(DEFUN |parseColon| (|u|) (PROG (|x| |ISTMP#1| |typ|) (RETURN (COND ((AND (PAIRP |u|) (EQ (QCDR |u|) NIL) (PROGN (SPADLET |x| (QCAR |u|)) (QUOTE T))) (CONS (QUOTE |:|) (CONS (|parseTran| |x|) NIL))) ((AND (PAIRP |u|) (PROGN (SPADLET |x| (QCAR |u|)) (SPADLET |ISTMP#1| (QCDR |u|)) (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL) (PROGN (SPADLET |typ| (QCAR |ISTMP#1|)) (QUOTE T))))) (COND (|$InteractiveMode| (COND ((BOOT-EQUAL |$insideConstructIfTrue| (QUOTE T)) (CONS (QUOTE TAG) (CONS (|parseTran| |x|) (CONS (|parseTran| |typ|) NIL)))) ((QUOTE T) (CONS (QUOTE |:|) (CONS (|parseTran| |x|) (CONS (|parseTran| (|parseType| |typ|)) NIL)))))) ((QUOTE T) (CONS (QUOTE |:|) (CONS (|parseTran| |x|) (CONS (|parseTran| |typ|) NIL)))))))))) 
+;
+;parseBigelt [typ,consForm] ==
+;  [['elt,typ,'makeRecord],:transUnCons consForm]
+
+;;;     ***       |parseBigelt| REDEFINED
+
+(DEFUN |parseBigelt| (#0=#:G2437) (PROG (|typ| |consForm|) (RETURN (PROGN (SPADLET |typ| (CAR #0#)) (SPADLET |consForm| (CADR #0#)) (CONS (CONS (QUOTE |elt|) (CONS |typ| (CONS (QUOTE |makeRecord|) NIL))) (|transUnCons| |consForm|)))))) 
+;
+;transUnCons u ==
+;  atom u => systemErrorHere '"transUnCons"
+;  u is ["APPEND",x,y] =>
+;    null y => x
+;    systemErrorHere '"transUnCons"
+;  u is ["CONS",x,y] =>
+;    atom y => [x,:y]
+;    [x,:transUnCons y]
+
+;;;     ***       |transUnCons| REDEFINED
+
+(DEFUN |transUnCons| (|u|) (PROG (|ISTMP#1| |x| |ISTMP#2| |y|) (RETURN (COND ((ATOM |u|) (|systemErrorHere| (MAKESTRING "transUnCons"))) ((AND (PAIRP |u|) (EQ (QCAR |u|) (QUOTE APPEND)) (PROGN (SPADLET |ISTMP#1| (QCDR |u|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |x| (QCAR |ISTMP#1|)) (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL) (PROGN (SPADLET |y| (QCAR |ISTMP#2|)) (QUOTE T))))))) (COND ((NULL |y|) |x|) ((QUOTE T) (|systemErrorHere| (MAKESTRING "transUnCons"))))) ((AND (PAIRP |u|) (EQ (QCAR |u|) (QUOTE CONS)) (PROGN (SPADLET |ISTMP#1| (QCDR |u|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |x| (QCAR |ISTMP#1|)) (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL) (PROGN (SPADLET |y| (QCAR |ISTMP#2|)) (QUOTE T))))))) (COND ((ATOM |y|) (CONS |x| |y|)) ((QUOTE T) (CONS |x| (|transUnCons| |y|))))))))) 
+;
+;parseCoerce [x,typ] ==
+;  $InteractiveMode => ["::",parseTran x,parseTran parseType typ]
+;  ["::",parseTran x,parseTran typ]
+
+;;;     ***       |parseCoerce| REDEFINED
+
+(DEFUN |parseCoerce| (#0=#:G2498) (PROG (|x| |typ|) (RETURN (PROGN (SPADLET |x| (CAR #0#)) (SPADLET |typ| (CADR #0#)) (COND (|$InteractiveMode| (CONS (QUOTE |::|) (CONS (|parseTran| |x|) (CONS (|parseTran| (|parseType| |typ|)) NIL)))) ((QUOTE T) (CONS (QUOTE |::|) (CONS (|parseTran| |x|) (CONS (|parseTran| |typ|) NIL))))))))) 
+;
+;parseAtSign [x,typ] ==
+;  $InteractiveMode => ["@",parseTran x,parseTran parseType typ]
+;  ["@",parseTran x,parseTran typ]
+
+;;;     ***       |parseAtSign| REDEFINED
+
+(DEFUN |parseAtSign| (#0=#:G2513) (PROG (|x| |typ|) (RETURN (PROGN (SPADLET |x| (CAR #0#)) (SPADLET |typ| (CADR #0#)) (COND (|$InteractiveMode| (CONS (QUOTE @) (CONS (|parseTran| |x|) (CONS (|parseTran| (|parseType| |typ|)) NIL)))) ((QUOTE T) (CONS (QUOTE @) (CONS (|parseTran| |x|) (CONS (|parseTran| |typ|) NIL))))))))) 
+;
+;parsePretend [x,typ] ==
+;  $InteractiveMode => ['pretend,parseTran x,parseTran parseType typ]
+;  ['pretend,parseTran x,parseTran typ]
+
+;;;     ***       |parsePretend| REDEFINED
+
+(DEFUN |parsePretend| (#0=#:G2528) (PROG (|x| |typ|) (RETURN (PROGN (SPADLET |x| (CAR #0#)) (SPADLET |typ| (CADR #0#)) (COND (|$InteractiveMode| (CONS (QUOTE |pretend|) (CONS (|parseTran| |x|) (CONS (|parseTran| (|parseType| |typ|)) NIL)))) ((QUOTE T) (CONS (QUOTE |pretend|) (CONS (|parseTran| |x|) (CONS (|parseTran| |typ|) NIL))))))))) 
+;
+;parseType x ==
+;  x := substitute($EmptyMode,$quadSymbol,x)
+;  x is ['typeOf,val] => ['typeOf,parseTran val]
+;  $oldParserExpandAbbrs => parseTypeEvaluate unabbrevAndLoad x
+;  x
+
+;;;     ***       |parseType| REDEFINED
+
+(DEFUN |parseType| (|x|) (PROG (|ISTMP#1| |val|) (RETURN (PROGN (SPADLET |x| (MSUBST |$EmptyMode| |$quadSymbol| |x|)) (COND ((AND (PAIRP |x|) (EQ (QCAR |x|) (QUOTE |typeOf|)) (PROGN (SPADLET |ISTMP#1| (QCDR |x|)) (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL) (PROGN (SPADLET |val| (QCAR |ISTMP#1|)) (QUOTE T))))) (CONS (QUOTE |typeOf|) (CONS (|parseTran| |val|) NIL))) (|$oldParserExpandAbbrs| (|parseTypeEvaluate| (|unabbrevAndLoad| |x|))) ((QUOTE T) |x|)))))) 
+;
+;parseTypeEvaluate form ==
+;  form is [op,:argl] =>
+;    newType? op => form
+;    $op: local:= op
+;    op = 'Mapping =>
+;      [op,:[parseTypeEvaluate a for a in argl]]
+;    op = 'Union =>
+;      isTaggedUnion form =>
+;        [op,:[['_:,sel,parseTypeEvaluate type] for
+;          ['_:,sel,type] in argl]]
+;      [op,:[parseTypeEvaluate a for a in argl]]
+;    op = 'Record =>
+;      [op,:[['_:,sel,parseTypeEvaluate type] for ['_:,sel,type] in argl]]
+;    cmm :=
+;      fn := constructor? op =>
+;        p := pathname [fn,$spadLibFT,'"*"] =>
+;          isExistingFile p => getConstructorModemap(abbreviation? fn)
+;          nil
+;      nil
+;    cmm is [[.,.,:argml],:.] => [op,:parseTypeEvaluateArgs(argl,argml)]
+;    throwKeyedMsg("S2IL0015",[op])
+;  form
+
+;;;     ***       |parseTypeEvaluate| REDEFINED
+
+(DEFUN |parseTypeEvaluate| (|form|) (PROG (|$op| |op| |argl| |sel| |type| |fn| |p| |cmm| |ISTMP#1| |ISTMP#2| |argml|) (DECLARE (SPECIAL |$op|)) (RETURN (SEQ (COND ((AND (PAIRP |form|) (PROGN (SPADLET |op| (QCAR |form|)) (SPADLET |argl| (QCDR |form|)) (QUOTE T))) (COND ((|newType?| |op|) |form|) ((QUOTE T) (SPADLET |$op| |op|) (COND ((BOOT-EQUAL |op| (QUOTE |Mapping|)) (CONS |op| (PROG (#0=#:G2583) (SPADLET #0# NIL) (RETURN (DO ((#1=#:G2588 |argl| (CDR #1#)) (|a| NIL)) ((OR (ATOM #1#) (PROGN (SETQ |a| (CAR #1#)) NIL)) (NREVERSE0 #0#)) (SEQ (EXIT (SETQ #0# (CONS (|parseTypeEvaluate| |a|) #0#))))))))) ((BOOT-EQUAL |op| (QUOTE |Union|)) (COND ((|isTaggedUnion| |form|) (CONS |op| (PROG (#2=#:G2599) (SPADLET #2# NIL) (RETURN (DO ((#3=#:G2605 |argl| (CDR #3#)) (#4=#:G2556 NIL)) ((OR (ATOM #3#) (PROGN (SETQ #4# (CAR #3#)) NIL) (PROGN (PROGN (SPADLET |sel| (CADR #4#)) (SPADLET |type| (CADDR #4#)) #4#) NIL)) (NREVERSE0 #2#)) (SEQ (EXIT (SETQ #2# (CONS (CONS (QUOTE |:|) (CONS |sel| (CONS (|parseTypeEvaluate| |type|) NIL))) #2#))))))))) ((QUOTE T) (CONS |op| (PROG (#5=#:G2616) (SPADLET #5# NIL) (RETURN (DO ((#6=#:G2621 |argl| (CDR #6#)) (|a| NIL)) ((OR (ATOM #6#) (PROGN (SETQ |a| (CAR #6#)) NIL)) (NREVERSE0 #5#)) (SEQ (EXIT (SETQ #5# (CONS (|parseTypeEvaluate| |a|) #5#))))))))))) ((BOOT-EQUAL |op| (QUOTE |Record|)) (CONS |op| (PROG (#7=#:G2632) (SPADLET #7# NIL) (RETURN (DO ((#8=#:G2638 |argl| (CDR #8#)) (#9=#:G2561 NIL)) ((OR (ATOM #8#) (PROGN (SETQ #9# (CAR #8#)) NIL) (PROGN (PROGN (SPADLET |sel| (CADR #9#)) (SPADLET |type| (CADDR #9#)) #9#) NIL)) (NREVERSE0 #7#)) (SEQ (EXIT (SETQ #7# (CONS (CONS (QUOTE |:|) (CONS |sel| (CONS (|parseTypeEvaluate| |type|) NIL))) #7#))))))))) ((QUOTE T) (SPADLET |cmm| (SEQ (COND ((SPADLET |fn| (|constructor?| |op|)) (COND ((SPADLET |p| (|pathname| (CONS |fn| (CONS |$spadLibFT| (CONS (MAKESTRING "*") NIL))))) (EXIT (COND ((|isExistingFile| |p|) (|getConstructorModemap| (|abbreviation?| |fn|))) ((QUOTE T) NIL)))))) ((QUOTE T) NIL)))) (COND ((AND (PAIRP |cmm|) (PROGN (SPADLET |ISTMP#1| (QCAR |cmm|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (PROGN (SPADLET |argml| (QCDR |ISTMP#2|)) (QUOTE T))))))) (CONS |op| (|parseTypeEvaluateArgs| |argl| |argml|))) ((QUOTE T) (|throwKeyedMsg| (QUOTE S2IL0015) (CONS |op| NIL))))))))) ((QUOTE T) |form|)))))) 
+;
+;parseTypeEvaluateArgs(argl,argml) ==
+;  [argVal for arg in argl for md in argml for i in 1..] where argVal ==
+;      isCategoryForm(md,$CategoryFrame) => parseTypeEvaluate arg
+;      arg
+
+;;;     ***       |parseTypeEvaluateArgs| REDEFINED
+
+(DEFUN |parseTypeEvaluateArgs| (|argl| |argml|) (PROG NIL (RETURN (SEQ (PROG (#0=#:G2675) (SPADLET #0# NIL) (RETURN (DO ((#1=#:G2682 |argl| (CDR #1#)) (|arg| NIL) (#2=#:G2683 |argml| (CDR #2#)) (|md| NIL) (|i| 1 (QSADD1 |i|))) ((OR (ATOM #1#) (PROGN (SETQ |arg| (CAR #1#)) NIL) (ATOM #2#) (PROGN (SETQ |md| (CAR #2#)) NIL)) (NREVERSE0 #0#)) (SEQ (EXIT (SETQ #0# (CONS (COND ((|isCategoryForm| |md| |$CategoryFrame|) (|parseTypeEvaluate| |arg|)) ((QUOTE T) |arg|)) #0#))))))))))) 
+;
+;
+;parseTypeError(x,md,i) == throwKeyedMsg("S2IP0003",[i,$op,md])
+
+;;;     ***       |parseTypeError| REDEFINED
+
+(DEFUN |parseTypeError| (|x| |md| |i|) (|throwKeyedMsg| (QUOTE S2IP0003) (CONS |i| (CONS |$op| (CONS |md| NIL))))) 
+;
+;specialModeTran form ==
+;  form is [op,:argl] =>
+;    not ATOM op => form --added 10/5/84 by SCM
+;    (s0:= (sop:= PNAME op).0) = "*" =>
+;      n:= #sop
+;      n=1=> form
+;      argKey:= sop.1
+;      numArgs:= #argl - (argKey="1" => 1; 0)
+;      zeroOrOne:= argKey="0" or argKey="1"
+;      isDmp :=
+;        numArgs < 10 =>
+;          n=6 and ('"DMP"=SUBSTRING(sop,3,3)) and zeroOrOne
+;        true =>
+;          n=7 and ('"DMP"=SUBSTRING(sop,4,3)) and zeroOrOne
+;      isDmp =>
+;        if argKey="0" then
+;          extraDomain:= $EmptyMode
+;          vl:= argl
+;         else
+;          [:vl,extraDomain] := argl
+;        ['DistributedMultivariatePolynomial,['construct,:vl],
+;            specialModeTran extraDomain]
+;      n=4 and (s3:= sop.3) = "M" and zeroOrOne =>
+;        specialModeTran
+;          extraDomain:= (argKey="0" => [$EmptyMode]; nil)
+;          (n:= PARSE_-INTEGER PNAME sop.2)=1 =>
+;            ['SquareMatrix,:argl,:extraDomain]
+;          n=2 => ['RectangularMatrix,:argl,:extraDomain]
+;          form
+;      isUpOrMp :=
+;        numArgs < 10 =>
+;          n=4 and (s3:= sop.3) = 'P and zeroOrOne or
+;            n=5 and (s3:= sop.3)='R and sop.4='F and zeroOrOne
+;        true =>
+;          n=5 and (s3:= sop.4) = 'P and zeroOrOne or
+;            n=6 and (s3:= sop.4)='R and sop.5='F and zeroOrOne
+;      isUpOrMp =>
+;        polyForm:=
+;          domainPart:= (argKey="0" => $EmptyMode; last argl)
+;          argPart:= (argKey="0" => argl; drop(-1,argl))
+;          numArgs < 10 and (n:= PARSE_-INTEGER PNAME sop.2)=1
+;            => ['UP,:argPart,domainPart]
+;          ['MP,['construct,:argPart],domainPart]
+;        specialModeTran
+;          s3 = 'R => [$QuotientField,polyForm]
+;          polyForm
+;      [first form,:[specialModeTran x for x in rest form]]
+;    [first form,:[specialModeTran x for x in rest form]]
+;  form
+
+;;;     ***       |specialModeTran| REDEFINED
+
+(DEFUN |specialModeTran| (|form|) (PROG (|op| |argl| |sop| |s0| |argKey| |numArgs| |zeroOrOne| |isDmp| |LETTMP#1| |vl| |extraDomain| |s3| |isUpOrMp| |domainPart| |argPart| |n| |polyForm|) (RETURN (SEQ (COND ((AND (PAIRP |form|) (PROGN (SPADLET |op| (QCAR |form|)) (SPADLET |argl| (QCDR |form|)) (QUOTE T))) (COND ((NULL (ATOM |op|)) |form|) ((BOOT-EQUAL (SPADLET |s0| (ELT (SPADLET |sop| (PNAME |op|)) 0)) (QUOTE *)) (SPADLET |n| (|#| |sop|)) (COND ((EQL |n| 1) |form|) ((QUOTE T) (SPADLET |argKey| (ELT |sop| 1)) (SPADLET |numArgs| (SPADDIFFERENCE (|#| |argl|) (COND ((BOOT-EQUAL |argKey| (QUOTE |1|)) 1) ((QUOTE T) 0)))) (SPADLET |zeroOrOne| (OR (BOOT-EQUAL |argKey| (QUOTE |0|)) (BOOT-EQUAL |argKey| (QUOTE |1|)))) (SPADLET |isDmp| (COND ((> 10 |numArgs|) (AND (EQL |n| 6) (BOOT-EQUAL (MAKESTRING "DMP") (SUBSTRING |sop| 3 3)) |zeroOrOne|)) ((QUOTE T) (AND (EQL |n| 7) (BOOT-EQUAL (MAKESTRING "DMP") (SUBSTRING |sop| 4 3)) |zeroOrOne|)))) (COND (|isDmp| (COND ((BOOT-EQUAL |argKey| (QUOTE |0|)) (SPADLET |extraDomain| |$EmptyMode|) (SPADLET |vl| |argl|)) ((QUOTE T) (SPADLET |LETTMP#1| (REVERSE |argl|)) (SPADLET |extraDomain| (CAR |LETTMP#1|)) (SPADLET |vl| (NREVERSE (CDR |LETTMP#1|))) |argl|)) (CONS (QUOTE |DistributedMultivariatePolynomial|) (CONS (CONS (QUOTE |construct|) |vl|) (CONS (|specialModeTran| |extraDomain|) NIL)))) ((AND (EQL |n| 4) (BOOT-EQUAL (SPADLET |s3| (ELT |sop| 3)) (QUOTE M)) |zeroOrOne|) (|specialModeTran| (PROGN (SPADLET |extraDomain| (COND ((BOOT-EQUAL |argKey| (QUOTE |0|)) (CONS |$EmptyMode| NIL)) ((QUOTE T) NIL))) (COND ((EQL (SPADLET |n| (PARSE-INTEGER (PNAME (ELT |sop| 2)))) 1) (CONS (QUOTE |SquareMatrix|) (APPEND |argl| |extraDomain|))) ((EQL |n| 2) (CONS (QUOTE |RectangularMatrix|) (APPEND |argl| |extraDomain|))) ((QUOTE T) |form|))))) ((QUOTE T) (SPADLET |isUpOrMp| (COND ((> 10 |numArgs|) (OR (AND (EQL |n| 4) (BOOT-EQUAL (SPADLET |s3| (ELT |sop| 3)) (QUOTE P)) |zeroOrOne|) (AND (EQL |n| 5) (BOOT-EQUAL (SPADLET |s3| (ELT |sop| 3)) (QUOTE R)) (BOOT-EQUAL (ELT |sop| 4) (QUOTE F)) |zeroOrOne|))) ((QUOTE T) (OR (AND (EQL |n| 5) (BOOT-EQUAL (SPADLET |s3| (ELT |sop| 4)) (QUOTE P)) |zeroOrOne|) (AND (EQL |n| 6) (BOOT-EQUAL (SPADLET |s3| (ELT |sop| 4)) (QUOTE R)) (BOOT-EQUAL (ELT |sop| 5) (QUOTE F)) |zeroOrOne|))))) (COND (|isUpOrMp| (SPADLET |polyForm| (PROGN (SPADLET |domainPart| (COND ((BOOT-EQUAL |argKey| (QUOTE |0|)) |$EmptyMode|) ((QUOTE T) (|last| |argl|)))) (SPADLET |argPart| (COND ((BOOT-EQUAL |argKey| (QUOTE |0|)) |argl|) ((QUOTE T) (DROP (SPADDIFFERENCE 1) |argl|)))) (COND ((AND (> 10 |numArgs|) (EQL (SPADLET |n| (PARSE-INTEGER (PNAME (ELT |sop| 2)))) 1)) (CONS (QUOTE UP) (APPEND |argPart| (CONS |domainPart| NIL)))) ((QUOTE T) (CONS (QUOTE MP) (CONS (CONS (QUOTE |construct|) |argPart|) (CONS |domainPart| NIL))))))) (|specialModeTran| (COND ((BOOT-EQUAL |s3| (QUOTE R)) (CONS |$QuotientField| (CONS |polyForm| NIL))) ((QUOTE T) |polyForm|)))) ((QUOTE T) (CONS (CAR |form|) (PROG (#0=#:G2725) (SPADLET #0# NIL) (RETURN (DO ((#1=#:G2730 (CDR |form|) (CDR #1#)) (|x| NIL)) ((OR (ATOM #1#) (PROGN (SETQ |x| (CAR #1#)) NIL)) (NREVERSE0 #0#)) (SEQ (EXIT (SETQ #0# (CONS (|specialModeTran| |x|) #0#))))))))))))))) ((QUOTE T) (CONS (CAR |form|) (PROG (#2=#:G2740) (SPADLET #2# NIL) (RETURN (DO ((#3=#:G2745 (CDR |form|) (CDR #3#)) (|x| NIL)) ((OR (ATOM #3#) (PROGN (SETQ |x| (CAR #3#)) NIL)) (NREVERSE0 #2#)) (SEQ (EXIT (SETQ #2# (CONS (|specialModeTran| |x|) #2#))))))))))) ((QUOTE T) |form|)))))) 
+;
+;parseHas [x,y] ==
+;  if $InteractiveMode then
+;    x:=
+;      get(x,'value,$CategoryFrame) is [D,m,.]
+;        and m in '((Mode) (Domain) (SubDomain (Domain))) => D
+;      parseType x
+;  mkand [['has,x,u] for u in fn y] where
+;    mkand x ==
+;      x is [a] => a
+;      ['and,:x]
+;    fn y ==
+;      if $InteractiveMode then y:= unabbrevAndLoad y
+;      y is [":" ,op,['Mapping,:map]] =>
+;         op:= (STRINGP op => INTERN op; op)
+;         [['SIGNATURE,op,map]]
+;      y is ['Join,:u] => "append"/[fn z for z in u]
+;      y is ['CATEGORY,:u] => "append"/[fn z for z in u]
+;      kk:= GETDATABASE(opOf y,'CONSTRUCTORKIND)
+;      kk = 'domain or kk = 'category => [makeNonAtomic y]
+;      y is ['ATTRIBUTE,:.] => [y]
+;      y is ['SIGNATURE,:.] => [y]
+;      $InteractiveMode => parseHasRhs y
+;      [['ATTRIBUTE,y]]
+
+;;;     ***       |parseHas,fn| REDEFINED
+
+(DEFUN |parseHas,fn| (|y|) (PROG (|ISTMP#1| |ISTMP#2| |ISTMP#3| |map| |op| |u| |kk|) (RETURN (SEQ (IF |$InteractiveMode| (SPADLET |y| (|unabbrevAndLoad| |y|)) NIL) (IF (AND (PAIRP |y|) (EQ (QCAR |y|) (QUOTE |:|)) (PROGN (SPADLET |ISTMP#1| (QCDR |y|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |op| (QCAR |ISTMP#1|)) (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL) (PROGN (SPADLET |ISTMP#3| (QCAR |ISTMP#2|)) (AND (PAIRP |ISTMP#3|) (EQ (QCAR |ISTMP#3|) (QUOTE |Mapping|)) (PROGN (SPADLET |map| (QCDR |ISTMP#3|)) (QUOTE T))))))))) (EXIT (SEQ (SPADLET |op| (SEQ (IF (STRINGP |op|) (EXIT (INTERN |op|))) (EXIT |op|))) (EXIT (CONS (CONS (QUOTE SIGNATURE) (CONS |op| (CONS |map| NIL))) NIL))))) (IF (AND (PAIRP |y|) (EQ (QCAR |y|) (QUOTE |Join|)) (PROGN (SPADLET |u| (QCDR |y|)) (QUOTE T))) (EXIT (PROG (#0=#:G2837) (SPADLET #0# NIL) (RETURN (DO ((#1=#:G2842 |u| (CDR #1#)) (|z| NIL)) ((OR (ATOM #1#) (PROGN (SETQ |z| (CAR #1#)) NIL)) #0#) (SEQ (EXIT (SETQ #0# (APPEND #0# (|parseHas,fn| |z|)))))))))) (IF (AND (PAIRP |y|) (EQ (QCAR |y|) (QUOTE CATEGORY)) (PROGN (SPADLET |u| (QCDR |y|)) (QUOTE T))) (EXIT (PROG (#2=#:G2848) (SPADLET #2# NIL) (RETURN (DO ((#3=#:G2853 |u| (CDR #3#)) (|z| NIL)) ((OR (ATOM #3#) (PROGN (SETQ |z| (CAR #3#)) NIL)) #2#) (SEQ (EXIT (SETQ #2# (APPEND #2# (|parseHas,fn| |z|)))))))))) (SPADLET |kk| (GETDATABASE (|opOf| |y|) (QUOTE CONSTRUCTORKIND))) (IF (OR (BOOT-EQUAL |kk| (QUOTE |domain|)) (BOOT-EQUAL |kk| (QUOTE |category|))) (EXIT (CONS (|makeNonAtomic| |y|) NIL))) (IF (AND (PAIRP |y|) (EQ (QCAR |y|) (QUOTE ATTRIBUTE))) (EXIT (CONS |y| NIL))) (IF (AND (PAIRP |y|) (EQ (QCAR |y|) (QUOTE SIGNATURE))) (EXIT (CONS |y| NIL))) (IF |$InteractiveMode| (EXIT (|parseHasRhs| |y|))) (EXIT (CONS (CONS (QUOTE ATTRIBUTE) (CONS |y| NIL)) NIL)))))) 
+
+;;;     ***       |parseHas,mkand| REDEFINED
+
+(DEFUN |parseHas,mkand| (|x|) (PROG (|a|) (RETURN (SEQ (IF (AND (PAIRP |x|) (EQ (QCDR |x|) NIL) (PROGN (SPADLET |a| (QCAR |x|)) (QUOTE T))) (EXIT |a|)) (EXIT (CONS (QUOTE |and|) |x|)))))) 
+
+;;;     ***       |parseHas| REDEFINED
+
+(DEFUN |parseHas| (#0=#:G2880) (PROG (|y| |ISTMP#1| D |ISTMP#2| |m| |ISTMP#3| |x|) (RETURN (SEQ (PROGN (SPADLET |x| (CAR #0#)) (SPADLET |y| (CADR #0#)) (COND (|$InteractiveMode| (SPADLET |x| (COND ((AND (PROGN (SPADLET |ISTMP#1| (|get| |x| (QUOTE |value|) |$CategoryFrame|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET D (QCAR |ISTMP#1|)) (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (PROGN (SPADLET |m| (QCAR |ISTMP#2|)) (SPADLET |ISTMP#3| (QCDR |ISTMP#2|)) (AND (PAIRP |ISTMP#3|) (EQ (QCDR |ISTMP#3|) NIL))))))) (|member| |m| (QUOTE ((|Mode|) (|Domain|) (|SubDomain| (|Domain|)))))) D) ((QUOTE T) (|parseType| |x|)))))) (|parseHas,mkand| (PROG (#1=#:G2901) (SPADLET #1# NIL) (RETURN (DO ((#2=#:G2906 (|parseHas,fn| |y|) (CDR #2#)) (|u| NIL)) ((OR (ATOM #2#) (PROGN (SETQ |u| (CAR #2#)) NIL)) (NREVERSE0 #1#)) (SEQ (EXIT (SETQ #1# (CONS (CONS (QUOTE |has|) (CONS |x| (CONS |u| NIL))) #1#))))))))))))) 
+;
+;parseHasRhs u ==   --$InteractiveMode = true
+;  get(u,'value,$CategoryFrame) is [D,m,.]
+;    and m in '((Mode) (Domain) (SubDomain (Domain))) => m
+;  y := abbreviation? u =>
+;    loadIfNecessary y => [unabbrevAndLoad y]
+;    [['ATTRIBUTE,u]]
+;  [['ATTRIBUTE,u]]
+
+;;;     ***       |parseHasRhs| REDEFINED
+
+(DEFUN |parseHasRhs| (|u|) (PROG (|ISTMP#1| D |ISTMP#2| |m| |ISTMP#3| |y|) (RETURN (COND ((AND (PROGN (SPADLET |ISTMP#1| (|get| |u| (QUOTE |value|) |$CategoryFrame|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET D (QCAR |ISTMP#1|)) (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (PROGN (SPADLET |m| (QCAR |ISTMP#2|)) (SPADLET |ISTMP#3| (QCDR |ISTMP#2|)) (AND (PAIRP |ISTMP#3|) (EQ (QCDR |ISTMP#3|) NIL))))))) (|member| |m| (QUOTE ((|Mode|) (|Domain|) (|SubDomain| (|Domain|)))))) |m|) ((SPADLET |y| (|abbreviation?| |u|)) (COND ((|loadIfNecessary| |y|) (CONS (|unabbrevAndLoad| |y|) NIL)) ((QUOTE T) (CONS (CONS (QUOTE ATTRIBUTE) (CONS |u| NIL)) NIL)))) ((QUOTE T) (CONS (CONS (QUOTE ATTRIBUTE) (CONS |u| NIL)) NIL)))))) 
+;
+;parseDEF [$lhs,tList,specialList,body] ==
+;  setDefOp $lhs
+;  ['DEF,parseLhs $lhs,parseTranList tList,parseTranList specialList,
+;    parseTranCheckForRecord(body,opOf $lhs)]
+
+;;;     ***       |parseDEF| REDEFINED
+
+(DEFUN |parseDEF| (#0=#:G2960) (PROG (|$lhs| |tList| |specialList| |body|) (DECLARE (SPECIAL |$lhs|)) (RETURN (PROGN (SPADLET |$lhs| (CAR #0#)) (SPADLET |tList| (CADR #0#)) (SPADLET |specialList| (CADDR #0#)) (SPADLET |body| (CADDDR #0#)) (|setDefOp| |$lhs|) (CONS (QUOTE DEF) (CONS (|parseLhs| |$lhs|) (CONS (|parseTranList| |tList|) (CONS (|parseTranList| |specialList|) (CONS (|parseTranCheckForRecord| |body| (|opOf| |$lhs|)) NIL))))))))) 
+;
+;parseLhs x ==
+;  atom x => parseTran x
+;  atom first x => [parseTran first x,:[transIs parseTran y for y in rest x]]
+;  parseTran x
+
+;;;     ***       |parseLhs| REDEFINED
+
+(DEFUN |parseLhs| (|x|) (PROG NIL (RETURN (SEQ (COND ((ATOM |x|) (|parseTran| |x|)) ((ATOM (CAR |x|)) (CONS (|parseTran| (CAR |x|)) (PROG (#0=#:G2987) (SPADLET #0# NIL) (RETURN (DO ((#1=#:G2992 (CDR |x|) (CDR #1#)) (|y| NIL)) ((OR (ATOM #1#) (PROGN (SETQ |y| (CAR #1#)) NIL)) (NREVERSE0 #0#)) (SEQ (EXIT (SETQ #0# (CONS (|transIs| (|parseTran| |y|)) #0#))))))))) ((QUOTE T) (|parseTran| |x|))))))) 
+;
+;parseMDEF [$lhs,tList,specialList,body] ==
+;  ['MDEF,parseTran $lhs,parseTranList tList,parseTranList specialList,
+;    parseTranCheckForRecord(body,opOf $lhs)]
+
+;;;     ***       |parseMDEF| REDEFINED
+
+(DEFUN |parseMDEF| (#0=#:G3002) (PROG (|$lhs| |tList| |specialList| |body|) (DECLARE (SPECIAL |$lhs|)) (RETURN (PROGN (SPADLET |$lhs| (CAR #0#)) (SPADLET |tList| (CADR #0#)) (SPADLET |specialList| (CADDR #0#)) (SPADLET |body| (CADDDR #0#)) (CONS (QUOTE MDEF) (CONS (|parseTran| |$lhs|) (CONS (|parseTranList| |tList|) (CONS (|parseTranList| |specialList|) (CONS (|parseTranCheckForRecord| |body| (|opOf| |$lhs|)) NIL))))))))) 
+;
+;parseTranCheckForRecord(x,op) ==
+;  (x:= parseTran x) is ['Record,:l] =>
+;    or/[y for y in l | y isnt [":",.,.]] =>
+;      postError ['"   Constructor",:bright x,'"has missing label"]
+;    x
+;  x
+
+;;;     ***       |parseTranCheckForRecord| REDEFINED
+
+(DEFUN |parseTranCheckForRecord| (|x| |op|) (PROG (|l| |ISTMP#1| |ISTMP#2|) (RETURN (SEQ (COND ((PROGN (SPADLET |ISTMP#1| (SPADLET |x| (|parseTran| |x|))) (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) (QUOTE |Record|)) (PROGN (SPADLET |l| (QCDR |ISTMP#1|)) (QUOTE T)))) (COND ((PROG (#0=#:G3036) (SPADLET #0# NIL) (RETURN (DO ((#1=#:G3043 NIL #0#) (#2=#:G3044 |l| (CDR #2#)) (|y| NIL)) ((OR #1# (ATOM #2#) (PROGN (SETQ |y| (CAR #2#)) NIL)) #0#) (SEQ (EXIT (COND ((NULL (AND (PAIRP |y|) (EQ (QCAR |y|) (QUOTE |:|)) (PROGN (SPADLET |ISTMP#1| (QCDR |y|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL))))))) (SETQ #0# (OR #0# |y|))))))))) (|postError| (CONS (MAKESTRING "   Constructor") (APPEND (|bright| |x|) (CONS (MAKESTRING "has missing label") NIL))))) ((QUOTE T) |x|))) ((QUOTE T) |x|)))))) 
+;
+;parseCases [expr,ifClause] ==
+;  casefn(expr,ifClause) where
+;    casefn(x,ifExpr) ==
+;      ifExpr='noBranch => ['ifClauseError,x]
+;      ifExpr is ['IF,a,b,c] => ['IF,parseTran a,parseTran b,casefn(x,c)]
+;      postError ['"   CASES format error: cases ",x," of ",ifExpr]
+
+;;;     ***       |parseCases,casefn| REDEFINED
+
+(DEFUN |parseCases,casefn| (|x| |ifExpr|) (PROG (|ISTMP#1| |a| |ISTMP#2| |b| |ISTMP#3| |c|) (RETURN (SEQ (IF (BOOT-EQUAL |ifExpr| (QUOTE |noBranch|)) (EXIT (CONS (QUOTE |ifClauseError|) (CONS |x| NIL)))) (IF (AND (PAIRP |ifExpr|) (EQ (QCAR |ifExpr|) (QUOTE IF)) (PROGN (SPADLET |ISTMP#1| (QCDR |ifExpr|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |a| (QCAR |ISTMP#1|)) (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (PROGN (SPADLET |b| (QCAR |ISTMP#2|)) (SPADLET |ISTMP#3| (QCDR |ISTMP#2|)) (AND (PAIRP |ISTMP#3|) (EQ (QCDR |ISTMP#3|) NIL) (PROGN (SPADLET |c| (QCAR |ISTMP#3|)) (QUOTE T))))))))) (EXIT (CONS (QUOTE IF) (CONS (|parseTran| |a|) (CONS (|parseTran| |b|) (CONS (|parseCases,casefn| |x| |c|) NIL)))))) (EXIT (|postError| (CONS (MAKESTRING "   CASES format error: cases ") (CONS |x| (CONS (QUOTE | of |) (CONS |ifExpr| NIL)))))))))) 
+
+;;;     ***       |parseCases| REDEFINED
+
+(DEFUN |parseCases| (#0=#:G3105) (PROG (|expr| |ifClause|) (RETURN (PROGN (SPADLET |expr| (CAR #0#)) (SPADLET |ifClause| (CADR #0#)) (|parseCases,casefn| |expr| |ifClause|))))) 
+;
+;parseCategory x ==
+;  l:= parseTranList parseDropAssertions x
+;  key:=
+;    CONTAINED("$",l) => "domain"
+;    'package
+;  ['CATEGORY,key,:l]
+
+;;;     ***       |parseCategory| REDEFINED
+
+(DEFUN |parseCategory| (|x|) (PROG (|l| |key|) (RETURN (PROGN (SPADLET |l| (|parseTranList| (|parseDropAssertions| |x|))) (SPADLET |key| (COND ((CONTAINED (QUOTE $) |l|) (QUOTE |domain|)) ((QUOTE T) (QUOTE |package|)))) (CONS (QUOTE CATEGORY) (CONS |key| |l|)))))) 
+;
+;parseDropAssertions x ==
+;--note: the COPY of this list is necessary-- do not replace by RPLACing version
+;  x is [y,:r] =>
+;    y is ['IF,'asserted,:.] => parseDropAssertions r
+;    [y,:parseDropAssertions r]
+;  x
+
+;;;     ***       |parseDropAssertions| REDEFINED
+
+(DEFUN |parseDropAssertions| (|x|) (PROG (|y| |r| |ISTMP#1|) (RETURN (COND ((AND (PAIRP |x|) (PROGN (SPADLET |y| (QCAR |x|)) (SPADLET |r| (QCDR |x|)) (QUOTE T))) (COND ((AND (PAIRP |y|) (EQ (QCAR |y|) (QUOTE IF)) (PROGN (SPADLET |ISTMP#1| (QCDR |y|)) (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) (QUOTE |asserted|))))) (|parseDropAssertions| |r|)) ((QUOTE T) (CONS |y| (|parseDropAssertions| |r|))))) ((QUOTE T) |x|))))) 
+;
+;parseGreaterThan [x,y] ==
+;  [substitute("<",">",$op),parseTran y,parseTran x]
+
+;;;     ***       |parseGreaterThan| REDEFINED
+
+(DEFUN |parseGreaterThan| (#0=#:G3139) (PROG (|x| |y|) (RETURN (PROGN (SPADLET |x| (CAR #0#)) (SPADLET |y| (CADR #0#)) (CONS (MSUBST (QUOTE <) (QUOTE >) |$op|) (CONS (|parseTran| |y|) (CONS (|parseTran| |x|) NIL))))))) 
+;
+;parseGreaterEqual u == parseTran ['not,[substitute("<",">=",$op),:u]]
+
+;;;     ***       |parseGreaterEqual| REDEFINED
+
+(DEFUN |parseGreaterEqual| (|u|) (|parseTran| (CONS (QUOTE |not|) (CONS (CONS (MSUBST (QUOTE <) (QUOTE >=) |$op|) |u|) NIL)))) 
+;
+;parseLessEqual u == parseTran ['not,[substitute(">","<=",$op),:u]]
+
+;;;     ***       |parseLessEqual| REDEFINED
+
+(DEFUN |parseLessEqual| (|u|) (|parseTran| (CONS (QUOTE |not|) (CONS (CONS (MSUBST (QUOTE >) (QUOTE <=) |$op|) |u|) NIL)))) 
+;
+;parseNotEqual u == parseTran ['not,[substitute("=","^=",$op),:u]]
+
+;;;     ***       |parseNotEqual| REDEFINED
+
+(DEFUN |parseNotEqual| (|u|) (|parseTran| (CONS (QUOTE |not|) (CONS (CONS (MSUBST (QUOTE =) (QUOTE ^=) |$op|) |u|) NIL)))) 
+;
+;parseDollarGreaterThan [x,y] ==
+;  [substitute("$<","$>",$op),parseTran y,parseTran x]
+
+;;;     ***       |parseDollarGreaterThan| REDEFINED
+
+(DEFUN |parseDollarGreaterThan| (#0=#:G3162) (PROG (|x| |y|) (RETURN (PROGN (SPADLET |x| (CAR #0#)) (SPADLET |y| (CADR #0#)) (CONS (MSUBST (QUOTE $<) (QUOTE $>) |$op|) (CONS (|parseTran| |y|) (CONS (|parseTran| |x|) NIL))))))) 
+;
+;parseDollarGreaterEqual u ==
+;  parseTran ['not,[substitute("$<","$>=",$op),:u]]
+
+;;;     ***       |parseDollarGreaterEqual| REDEFINED
+
+(DEFUN |parseDollarGreaterEqual| (|u|) (|parseTran| (CONS (QUOTE |not|) (CONS (CONS (MSUBST (QUOTE $<) (QUOTE $>=) |$op|) |u|) NIL)))) 
+;
+;parseDollarLessEqual u ==
+;  parseTran ['not,[substitute("$>","$<=",$op),:u]]
+
+;;;     ***       |parseDollarLessEqual| REDEFINED
+
+(DEFUN |parseDollarLessEqual| (|u|) (|parseTran| (CONS (QUOTE |not|) (CONS (CONS (MSUBST (QUOTE $>) (QUOTE $<=) |$op|) |u|) NIL)))) 
+;
+;parseDollarNotEqual u ==
+;  parseTran ['not,[substitute("$=","$^=",$op),:u]]
+
+;;;     ***       |parseDollarNotEqual| REDEFINED
+
+(DEFUN |parseDollarNotEqual| (|u|) (|parseTran| (CONS (QUOTE |not|) (CONS (CONS (MSUBST (QUOTE $=) (QUOTE $^=) |$op|) |u|) NIL)))) 
+;
+;parseAnd u ==
+;  $InteractiveMode => ['and,:parseTranList u]
+;  null u => 'true
+;  null rest u => first u
+;  parseIf [parseTran first u,parseAnd rest u,"false"]
+
+;;;     ***       |parseAnd| REDEFINED
+
+(DEFUN |parseAnd| (|u|) (COND (|$InteractiveMode| (CONS (QUOTE |and|) (|parseTranList| |u|))) ((NULL |u|) (QUOTE |true|)) ((NULL (CDR |u|)) (CAR |u|)) ((QUOTE T) (|parseIf| (CONS (|parseTran| (CAR |u|)) (CONS (|parseAnd| (CDR |u|)) (CONS (QUOTE |false|) NIL))))))) 
+;
+;parseOr u ==
+;  $InteractiveMode => ['or,:parseTranList u]
+;  null u => 'false
+;  null rest u => first u
+;  (x:= parseTran first u) is ['not,y] => parseIf [y,parseOr rest u,'true]
+;  true => parseIf [x,'true,parseOr rest u]
+
+;;;     ***       |parseOr| REDEFINED
+
+(DEFUN |parseOr| (|u|) (PROG (|x| |ISTMP#1| |ISTMP#2| |y|) (RETURN (COND (|$InteractiveMode| (CONS (QUOTE |or|) (|parseTranList| |u|))) ((NULL |u|) (QUOTE |false|)) ((NULL (CDR |u|)) (CAR |u|)) ((PROGN (SPADLET |ISTMP#1| (SPADLET |x| (|parseTran| (CAR |u|)))) (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) (QUOTE |not|)) (PROGN (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL) (PROGN (SPADLET |y| (QCAR |ISTMP#2|)) (QUOTE T)))))) (|parseIf| (CONS |y| (CONS (|parseOr| (CDR |u|)) (CONS (QUOTE |true|) NIL))))) ((QUOTE T) (|parseIf| (CONS |x| (CONS (QUOTE |true|) (CONS (|parseOr| (CDR |u|)) NIL))))))))) 
+;
+;parseNot u ==
+;  $InteractiveMode => ['not,parseTran first u]
+;  parseTran ['IF,first u,:'(false true)]
+
+;;;     ***       |parseNot| REDEFINED
+
+(DEFUN |parseNot| (|u|) (COND (|$InteractiveMode| (CONS (QUOTE |not|) (CONS (|parseTran| (CAR |u|)) NIL))) ((QUOTE T) (|parseTran| (CONS (QUOTE IF) (CONS (CAR |u|) (QUOTE (|false| |true|)))))))) 
+;
+;parseEquivalence [a,b] == parseIf [a,b,parseIf [b,:'(false true)]]
+
+;;;     ***       |parseEquivalence| REDEFINED
+
+(DEFUN |parseEquivalence| (#0=#:G3211) (PROG (|a| |b|) (RETURN (PROGN (SPADLET |a| (CAR #0#)) (SPADLET |b| (CADR #0#)) (|parseIf| (CONS |a| (CONS |b| (CONS (|parseIf| (CONS |b| (QUOTE (|false| |true|)))) NIL)))))))) 
+;
+;parseImplies [a,b] == parseIf [a,b,'true]
+
+;;;     ***       |parseImplies| REDEFINED
+
+(DEFUN |parseImplies| (#0=#:G3225) (PROG (|a| |b|) (RETURN (PROGN (SPADLET |a| (CAR #0#)) (SPADLET |b| (CADR #0#)) (|parseIf| (CONS |a| (CONS |b| (CONS (QUOTE |true|) NIL)))))))) 
+;
+;parseExclusiveOr [a,b] == parseIf [a,parseIf [b,:'(false true)],b]
+
+;;;     ***       |parseExclusiveOr| REDEFINED
+
+(DEFUN |parseExclusiveOr| (#0=#:G3239) (PROG (|a| |b|) (RETURN (PROGN (SPADLET |a| (CAR #0#)) (SPADLET |b| (CADR #0#)) (|parseIf| (CONS |a| (CONS (|parseIf| (CONS |b| (QUOTE (|false| |true|)))) (CONS |b| NIL)))))))) 
+;
+;parseExit [a,:b] ==
+;  --  note: I wanted to convert 1s to 0s here to facilitate indexing in
+;  --   comp code; unfortunately, parseTran-ning is sometimes done more
+;  --   than once so that the count can be decremented more than once
+;  a:= parseTran a
+;  b:= parseTran b
+;  b =>
+;    null INTEGERP a =>
+;      (MOAN('"first arg ",a,'" for exit must be integer"); ['exit,1,a])
+;    ['exit,a,:b]
+;  ['exit,1,a]
+
+;;;     ***       |parseExit| REDEFINED
+
+(DEFUN |parseExit| (#0=#:G3256) (PROG (|a| |b|) (RETURN (PROGN (SPADLET |a| (CAR #0#)) (SPADLET |b| (CDR #0#)) (SPADLET |a| (|parseTran| |a|)) (SPADLET |b| (|parseTran| |b|)) (COND (|b| (COND ((NULL (INTEGERP |a|)) (MOAN (MAKESTRING "first arg ") |a| (MAKESTRING " for exit must be integer")) (CONS (QUOTE |exit|) (CONS 1 (CONS |a| NIL)))) ((QUOTE T) (CONS (QUOTE |exit|) (CONS |a| |b|))))) ((QUOTE T) (CONS (QUOTE |exit|) (CONS 1 (CONS |a| NIL))))))))) 
+;
+;parseLeave [a,:b] ==
+;  a:= parseTran a
+;  b:= parseTran b
+;  b =>
+;    null INTEGERP a =>
+;      (MOAN('"first arg ",a,'" for 'leave' must be integer"); ['leave,1,a])
+;    ['leave,a,:b]
+;  ['leave,1,a]
+
+;;;     ***       |parseLeave| REDEFINED
+
+(DEFUN |parseLeave| (#0=#:G3275) (PROG (|a| |b|) (RETURN (PROGN (SPADLET |a| (CAR #0#)) (SPADLET |b| (CDR #0#)) (SPADLET |a| (|parseTran| |a|)) (SPADLET |b| (|parseTran| |b|)) (COND (|b| (COND ((NULL (INTEGERP |a|)) (MOAN (MAKESTRING "first arg ") |a| (MAKESTRING " for 'leave' must be integer")) (CONS (QUOTE |leave|) (CONS 1 (CONS |a| NIL)))) ((QUOTE T) (CONS (QUOTE |leave|) (CONS |a| |b|))))) ((QUOTE T) (CONS (QUOTE |leave|) (CONS 1 (CONS |a| NIL))))))))) 
+;
+;parseReturn [a,:b] ==
+;  a:= parseTran a
+;  b:= parseTran b
+;  b =>
+;    (if a^=1 then MOAN '"multiple-level 'return' not allowed"; ["return",1,:b])
+;  ['return,1,a]
+
+;;;     ***       |parseReturn| REDEFINED
+
+(DEFUN |parseReturn| (#0=#:G3293) (PROG (|a| |b|) (RETURN (PROGN (SPADLET |a| (CAR #0#)) (SPADLET |b| (CDR #0#)) (SPADLET |a| (|parseTran| |a|)) (SPADLET |b| (|parseTran| |b|)) (COND (|b| (COND ((NEQUAL |a| 1) (MOAN (MAKESTRING "multiple-level 'return' not allowed")))) (CONS (QUOTE |return|) (CONS 1 |b|))) ((QUOTE T) (CONS (QUOTE |return|) (CONS 1 (CONS |a| NIL))))))))) 
+;
+;parseJoin l ==
+;  ['Join,:fn parseTranList l] where
+;    fn l ==
+;      null l => nil
+;      l is [['Join,:x],:y] => [:x,:fn y]
+;      [first l,:fn rest l]
+
+;;;     ***       |parseJoin,fn| REDEFINED
+
+(DEFUN |parseJoin,fn| (|l|) (PROG (|ISTMP#1| |x| |y|) (RETURN (SEQ (IF (NULL |l|) (EXIT NIL)) (IF (AND (PAIRP |l|) (PROGN (SPADLET |ISTMP#1| (QCAR |l|)) (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) (QUOTE |Join|)) (PROGN (SPADLET |x| (QCDR |ISTMP#1|)) (QUOTE T)))) (PROGN (SPADLET |y| (QCDR |l|)) (QUOTE T))) (EXIT (APPEND |x| (|parseJoin,fn| |y|)))) (EXIT (CONS (CAR |l|) (|parseJoin,fn| (CDR |l|)))))))) 
+
+;;;     ***       |parseJoin| REDEFINED
+
+(DEFUN |parseJoin| (|l|) (CONS (QUOTE |Join|) (|parseJoin,fn| (|parseTranList| |l|)))) 
+;
+;parseInBy [i,n,inc] ==
+;  (u:= parseIn [i,n]) isnt ['STEP,i,a,j,:r] =>
+;    postError ["   You cannot use",:bright '"by",
+;      '"except for an explicitly indexed sequence."]
+;  inc:= parseTran inc
+;  ['STEP,i,a,parseTran inc,:r]
+
+;;;     ***       |parseInBy| REDEFINED
+
+(DEFUN |parseInBy| (#0=#:G3380) (PROG (|n| |u| |ISTMP#1| |ISTMP#2| |i| |ISTMP#3| |a| |ISTMP#4| |j| |r| |inc|) (RETURN (PROGN (SPADLET |i| (CAR #0#)) (SPADLET |n| (CADR #0#)) (SPADLET |inc| (CADDR #0#)) (COND ((NULL (PROGN (SPADLET |ISTMP#1| (SPADLET |u| (|parseIn| (CONS |i| (CONS |n| NIL))))) (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) (QUOTE STEP)) (PROGN (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (PROGN (SPADLET |i| (QCAR |ISTMP#2|)) (SPADLET |ISTMP#3| (QCDR |ISTMP#2|)) (AND (PAIRP |ISTMP#3|) (PROGN (SPADLET |a| (QCAR |ISTMP#3|)) (SPADLET |ISTMP#4| (QCDR |ISTMP#3|)) (AND (PAIRP |ISTMP#4|) (PROGN (SPADLET |j| (QCAR |ISTMP#4|)) (SPADLET |r| (QCDR |ISTMP#4|)) (QUOTE T))))))))))) (|postError| (CONS (QUOTE |   You cannot use|) (APPEND (|bright| (MAKESTRING "by")) (CONS (MAKESTRING "except for an explicitly indexed sequence.") NIL))))) ((QUOTE T) (SPADLET |inc| (|parseTran| |inc|)) (CONS (QUOTE STEP) (CONS |i| (CONS |a| (CONS (|parseTran| |inc|) |r|)))))))))) 
+;
+;parseSegment p ==
+;  p is [a,b] =>
+;    b => ['SEGMENT,parseTran a, parseTran b]
+;    ['SEGMENT,parseTran a]
+;  ['SEGMENT,:p]
+
+;;;     ***       |parseSegment| REDEFINED
+
+(DEFUN |parseSegment| (|p|) (PROG (|a| |ISTMP#1| |b|) (RETURN (COND ((AND (PAIRP |p|) (PROGN (SPADLET |a| (QCAR |p|)) (SPADLET |ISTMP#1| (QCDR |p|)) (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL) (PROGN (SPADLET |b| (QCAR |ISTMP#1|)) (QUOTE T))))) (COND (|b| (CONS (QUOTE SEGMENT) (CONS (|parseTran| |a|) (CONS (|parseTran| |b|) NIL)))) ((QUOTE T) (CONS (QUOTE SEGMENT) (CONS (|parseTran| |a|) NIL))))) ((QUOTE T) (CONS (QUOTE SEGMENT) |p|)))))) 
+;
+;parseIn [i,n] ==
+;  i:= parseTran i
+;  n:= parseTran n
+;  n is ['SEGMENT,a] => ['STEP,i,a,1]
+;  n is ['reverse,['SEGMENT,a]] =>
+;    postError ['"  You cannot reverse an infinite sequence."]
+;  n is ['SEGMENT,a,b] => (b => ['STEP,i,a,1,b]; ['STEP,i,a,1])
+;  n is ['reverse,['SEGMENT,a,b]] =>
+;    b => ['STEP,i,b,-1,a]
+;    postError ['"  You cannot reverse an infinite sequence."]
+;  n is ['tails,s] => ['ON,i,s]
+;  ['IN,i,n]
+
+;;;     ***       |parseIn| REDEFINED
+
+(DEFUN |parseIn| (#0=#:G3518) (PROG (|i| |n| |ISTMP#2| |ISTMP#3| |a| |ISTMP#4| |b| |ISTMP#1| |s|) (RETURN (PROGN (SPADLET |i| (CAR #0#)) (SPADLET |n| (CADR #0#)) (SPADLET |i| (|parseTran| |i|)) (SPADLET |n| (|parseTran| |n|)) (COND ((AND (PAIRP |n|) (EQ (QCAR |n|) (QUOTE SEGMENT)) (PROGN (SPADLET |ISTMP#1| (QCDR |n|)) (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL) (PROGN (SPADLET |a| (QCAR |ISTMP#1|)) (QUOTE T))))) (CONS (QUOTE STEP) (CONS |i| (CONS |a| (CONS 1 NIL))))) ((AND (PAIRP |n|) (EQ (QCAR |n|) (QUOTE |reverse|)) (PROGN (SPADLET |ISTMP#1| (QCDR |n|)) (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL) (PROGN (SPADLET |ISTMP#2| (QCAR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCAR |ISTMP#2|) (QUOTE SEGMENT)) (PROGN (SPADLET |ISTMP#3| (QCDR |ISTMP#2|)) (AND (PAIRP |ISTMP#3|) (EQ (QCDR |ISTMP#3|) NIL) (PROGN (SPADLET |a| (QCAR |ISTMP#3|)) (QUOTE T))))))))) (|postError| (CONS (MAKESTRING "  You cannot reverse an infinite sequence.") NIL))) ((AND (PAIRP |n|) (EQ (QCAR |n|) (QUOTE SEGMENT)) (PROGN (SPADLET |ISTMP#1| (QCDR |n|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |a| (QCAR |ISTMP#1|)) (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL) (PROGN (SPADLET |b| (QCAR |ISTMP#2|)) (QUOTE T))))))) (COND (|b| (CONS (QUOTE STEP) (CONS |i| (CONS |a| (CONS 1 (CONS |b| NIL)))))) ((QUOTE T) (CONS (QUOTE STEP) (CONS |i| (CONS |a| (CONS 1 NIL))))))) ((AND (PAIRP |n|) (EQ (QCAR |n|) (QUOTE |reverse|)) (PROGN (SPADLET |ISTMP#1| (QCDR |n|)) (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL) (PROGN (SPADLET |ISTMP#2| (QCAR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCAR |ISTMP#2|) (QUOTE SEGMENT)) (PROGN (SPADLET |ISTMP#3| (QCDR |ISTMP#2|)) (AND (PAIRP |ISTMP#3|) (PROGN (SPADLET |a| (QCAR |ISTMP#3|)) (SPADLET |ISTMP#4| (QCDR |ISTMP#3|)) (AND (PAIRP |ISTMP#4|) (EQ (QCDR |ISTMP#4|) NIL) (PROGN (SPADLET |b| (QCAR |ISTMP#4|)) (QUOTE T))))))))))) (COND (|b| (CONS (QUOTE STEP) (CONS |i| (CONS |b| (CONS (SPADDIFFERENCE 1) (CONS |a| NIL)))))) ((QUOTE T) (|postError| (CONS (MAKESTRING "  You cannot reverse an infinite sequence.") NIL))))) ((AND (PAIRP |n|) (EQ (QCAR |n|) (QUOTE |tails|)) (PROGN (SPADLET |ISTMP#1| (QCDR |n|)) (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL) (PROGN (SPADLET |s| (QCAR |ISTMP#1|)) (QUOTE T))))) (CONS (QUOTE ON) (CONS |i| (CONS |s| NIL)))) ((QUOTE T) (CONS (QUOTE IN) (CONS |i| (CONS |n| NIL))))))))) 
+;
+;parseIf t ==
+;  t isnt [p,a,b] => t
+;  ifTran(parseTran p,parseTran a,parseTran b) where
+;    ifTran(p,a,b) ==
+;      null($InteractiveMode) and p='true  => a
+;      null($InteractiveMode) and p='false  => b
+;      p is ['not,p'] => ifTran(p',b,a)
+;      p is ['IF,p',a',b'] => ifTran(p',ifTran(a',COPY a,COPY b),ifTran(b',a,b))
+;      p is ['SEQ,:l,['exit,1,p']] =>
+;        ['SEQ,:l,['exit,1,ifTran(p',incExitLevel a,incExitLevel b)]]
+;         --this assumes that l has no exits
+;      a is ['IF, =p,a',.] => ['IF,p,a',b]
+;      b is ['IF, =p,.,b'] => ['IF,p,a,b']
+;      makeSimplePredicateOrNil p is ['SEQ,:s,['exit,1,val]] =>
+;        parseTran ['SEQ,:s,['exit,1,incExitLevel ['IF,val,a,b]]]
+;      ['IF,p,a,b]
+
+;;;     ***       |parseIf,ifTran| REDEFINED
+
+(DEFUN |parseIf,ifTran| (|p| |a| |b|) (PROG (|p'| |l| |a'| |b'| |ISTMP#1| |ISTMP#2| |ISTMP#3| |ISTMP#4| |ISTMP#5| |ISTMP#6| |val| |s|) (RETURN (SEQ (IF (AND (NULL |$InteractiveMode|) (BOOT-EQUAL |p| (QUOTE |true|))) (EXIT |a|)) (IF (AND (NULL |$InteractiveMode|) (BOOT-EQUAL |p| (QUOTE |false|))) (EXIT |b|)) (IF (AND (PAIRP |p|) (EQ (QCAR |p|) (QUOTE |not|)) (PROGN (SPADLET |ISTMP#1| (QCDR |p|)) (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL) (PROGN (SPADLET |p'| (QCAR |ISTMP#1|)) (QUOTE T))))) (EXIT (|parseIf,ifTran| |p'| |b| |a|))) (IF (AND (PAIRP |p|) (EQ (QCAR |p|) (QUOTE IF)) (PROGN (SPADLET |ISTMP#1| (QCDR |p|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |p'| (QCAR |ISTMP#1|)) (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (PROGN (SPADLET |a'| (QCAR |ISTMP#2|)) (SPADLET |ISTMP#3| (QCDR |ISTMP#2|)) (AND (PAIRP |ISTMP#3|) (EQ (QCDR |ISTMP#3|) NIL) (PROGN (SPADLET |b'| (QCAR |ISTMP#3|)) (QUOTE T))))))))) (EXIT (|parseIf,ifTran| |p'| (|parseIf,ifTran| |a'| (COPY |a|) (COPY |b|)) (|parseIf,ifTran| |b'| |a| |b|)))) (IF (AND (PAIRP |p|) (EQ (QCAR |p|) (QUOTE SEQ)) (PROGN (SPADLET |ISTMP#1| (QCDR |p|)) (AND (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |ISTMP#2| (REVERSE |ISTMP#1|)) (QUOTE T))) (AND (PAIRP |ISTMP#2|) (PROGN (SPADLET |ISTMP#3| (QCAR |ISTMP#2|)) (AND (PAIRP |ISTMP#3|) (EQ (QCAR |ISTMP#3|) (QUOTE |exit|)) (PROGN (SPADLET |ISTMP#4| (QCDR |ISTMP#3|)) (AND (PAIRP |ISTMP#4|) (EQUAL (QCAR |ISTMP#4|) 1) (PROGN (SPADLET |ISTMP#5| (QCDR |ISTMP#4|)) (AND (PAIRP |ISTMP#5|) (EQ (QCDR |ISTMP#5|) NIL) (PROGN (SPADLET |p'| (QCAR |ISTMP#5|)) (QUOTE T)))))))) (PROGN (SPADLET |l| (QCDR |ISTMP#2|)) (QUOTE T))) (PROGN (SPADLET |l| (NREVERSE |l|)) (QUOTE T))))) (EXIT (CONS (QUOTE SEQ) (APPEND |l| (CONS (CONS (QUOTE |exit|) (CONS 1 (CONS (|parseIf,ifTran| |p'| (|incExitLevel| |a|) (|incExitLevel| |b|)) NIL))) NIL))))) (IF (AND (PAIRP |a|) (EQ (QCAR |a|) (QUOTE IF)) (PROGN (SPADLET |ISTMP#1| (QCDR |a|)) (AND (PAIRP |ISTMP#1|) (EQUAL (QCAR |ISTMP#1|) |p|) (PROGN (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (PROGN (SPADLET |a'| (QCAR |ISTMP#2|)) (SPADLET |ISTMP#3| (QCDR |ISTMP#2|)) (AND (PAIRP |ISTMP#3|) (EQ (QCDR |ISTMP#3|) NIL)))))))) (EXIT (CONS (QUOTE IF) (CONS |p| (CONS |a'| (CONS |b| NIL)))))) (IF (AND (PAIRP |b|) (EQ (QCAR |b|) (QUOTE IF)) (PROGN (SPADLET |ISTMP#1| (QCDR |b|)) (AND (PAIRP |ISTMP#1|) (EQUAL (QCAR |ISTMP#1|) |p|) (PROGN (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (PROGN (SPADLET |ISTMP#3| (QCDR |ISTMP#2|)) (AND (PAIRP |ISTMP#3|) (EQ (QCDR |ISTMP#3|) NIL) (PROGN (SPADLET |b'| (QCAR |ISTMP#3|)) (QUOTE T))))))))) (EXIT (CONS (QUOTE IF) (CONS |p| (CONS |a| (CONS |b'| NIL)))))) (IF (PROGN (SPADLET |ISTMP#1| (|makeSimplePredicateOrNil| |p|)) (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) (QUOTE SEQ)) (PROGN (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (AND (PAIRP |ISTMP#2|) (PROGN (SPADLET |ISTMP#3| (REVERSE |ISTMP#2|)) (QUOTE T))) (AND (PAIRP |ISTMP#3|) (PROGN (SPADLET |ISTMP#4| (QCAR |ISTMP#3|)) (AND (PAIRP |ISTMP#4|) (EQ (QCAR |ISTMP#4|) (QUOTE |exit|)) (PROGN (SPADLET |ISTMP#5| (QCDR |ISTMP#4|)) (AND (PAIRP |ISTMP#5|) (EQUAL (QCAR |ISTMP#5|) 1) (PROGN (SPADLET |ISTMP#6| (QCDR |ISTMP#5|)) (AND (PAIRP |ISTMP#6|) (EQ (QCDR |ISTMP#6|) NIL) (PROGN (SPADLET |val| (QCAR |ISTMP#6|)) (QUOTE T)))))))) (PROGN (SPADLET |s| (QCDR |ISTMP#3|)) (QUOTE T))) (PROGN (SPADLET |s| (NREVERSE |s|)) (QUOTE T)))))) (EXIT (|parseTran| (CONS (QUOTE SEQ) (APPEND |s| (CONS (CONS (QUOTE |exit|) (CONS 1 (CONS (|incExitLevel| (CONS (QUOTE IF) (CONS |val| (CONS |a| (CONS |b| NIL))))) NIL))) NIL)))))) (EXIT (CONS (QUOTE IF) (CONS |p| (CONS |a| (CONS |b| NIL))))))))) 
+
+;;;     ***       |parseIf| REDEFINED
+
+(DEFUN |parseIf| (|t|) (PROG (|p| |ISTMP#1| |a| |ISTMP#2| |b|) (RETURN (COND ((NULL (AND (PAIRP |t|) (PROGN (SPADLET |p| (QCAR |t|)) (SPADLET |ISTMP#1| (QCDR |t|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |a| (QCAR |ISTMP#1|)) (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL) (PROGN (SPADLET |b| (QCAR |ISTMP#2|)) (QUOTE T)))))))) |t|) ((QUOTE T) (|parseIf,ifTran| (|parseTran| |p|) (|parseTran| |a|) (|parseTran| |b|))))))) 
+;
+;makeSimplePredicateOrNil p ==
+;  isSimple p => nil
+;  u:= isAlmostSimple p => u
+;  true => wrapSEQExit [['LET,g:= GENSYM(),p],g]
+
+;;;     ***       |makeSimplePredicateOrNil| REDEFINED
+
+(DEFUN |makeSimplePredicateOrNil| (|p|) (PROG (|u| |g|) (RETURN (COND ((|isSimple| |p|) NIL) ((SPADLET |u| (|isAlmostSimple| |p|)) |u|) ((QUOTE T) (|wrapSEQExit| (CONS (CONS (QUOTE LET) (CONS (SPADLET |g| (GENSYM)) (CONS |p| NIL))) (CONS |g| NIL)))))))) 
+;
+;parseWhere l == ['where,:mapInto(l,'parseTran)]
+
+;;;     ***       |parseWhere| REDEFINED
+
+(DEFUN |parseWhere| (|l|) (CONS (QUOTE |where|) (|mapInto| |l| (QUOTE |parseTran|)))) 
+;
+;
+;parseSeq l ==
+;  not l is [:.,['exit,:.]] =>
+;    postError ['"   Invalid ending to block: ",last l]
+;  transSeq mapInto(l,'parseTran)
+
+;;;     ***       |parseSeq| REDEFINED
+
+(DEFUN |parseSeq| (|l|) (PROG (|ISTMP#1| |ISTMP#2|) (RETURN (COND ((NULL (AND (PAIRP |l|) (PROGN (SPADLET |ISTMP#1| (REVERSE |l|)) (QUOTE T)) (PAIRP |ISTMP#1|) (PROGN (SPADLET |ISTMP#2| (QCAR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCAR |ISTMP#2|) (QUOTE |exit|)))))) (|postError| (CONS (MAKESTRING "   Invalid ending to block: ") (CONS (|last| |l|) NIL)))) ((QUOTE T) (|transSeq| (|mapInto| |l| (QUOTE |parseTran|)))))))) 
+;
+;transSeq l ==
+;  null l => nil
+;  null rest l => decExitLevel first l
+;  [item,:tail]:= l
+;  item is ['SEQ,:l,['exit,1,['IF,p,['exit, =2,q],'noBranch]]] and
+;    (and/[x is ['LET,:.] for x in l]) =>
+;      ['SEQ,:[decExitLevel x for x in l],['exit,1,['IF,decExitLevel p,
+;        decExitLevel q,transSeq tail]]]
+;  item is ['IF,a,['exit,1,b],'noBranch] =>
+;    ['IF,decExitLevel a,decExitLevel b,transSeq tail]
+;  item is ['IF,a,'noBranch,['exit,1,b]] =>
+;    ['IF,decExitLevel a,transSeq tail,decExitLevel b]
+;  (y:= transSeq tail) is ['SEQ,:s] => ['SEQ,item,:s]
+;  ['SEQ,item,['exit,1,incExitLevel y]]
+
+;;;     ***       |transSeq| REDEFINED
+
+(DEFUN |transSeq| (|l|) (PROG (|item| |tail| |ISTMP#7| |p| |ISTMP#8| |ISTMP#9| |ISTMP#10| |ISTMP#11| |q| |ISTMP#12| |a| |ISTMP#2| |ISTMP#3| |ISTMP#4| |ISTMP#5| |ISTMP#6| |b| |y| |ISTMP#1| |s|) (RETURN (SEQ (COND ((NULL |l|) NIL) ((NULL (CDR |l|)) (|decExitLevel| (CAR |l|))) ((QUOTE T) (SPADLET |item| (CAR |l|)) (SPADLET |tail| (CDR |l|)) (COND ((AND (PAIRP |item|) (EQ (QCAR |item|) (QUOTE SEQ)) (PROGN (SPADLET |ISTMP#1| (QCDR |item|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |ISTMP#2| (REVERSE |ISTMP#1|)) (QUOTE T)) (PAIRP |ISTMP#2|) (PROGN (SPADLET |ISTMP#3| (QCAR |ISTMP#2|)) (AND (PAIRP |ISTMP#3|) (EQ (QCAR |ISTMP#3|) (QUOTE |exit|)) (PROGN (SPADLET |ISTMP#4| (QCDR |ISTMP#3|)) (AND (PAIRP |ISTMP#4|) (EQUAL (QCAR |ISTMP#4|) 1) (PROGN (SPADLET |ISTMP#5| (QCDR |ISTMP#4|)) (AND (PAIRP |ISTMP#5|) (EQ (QCDR |ISTMP#5|) NIL) (PROGN (SPADLET |ISTMP#6| (QCAR |ISTMP#5|)) (AND (PAIRP |ISTMP#6|) (EQ (QCAR |ISTMP#6|) (QUOTE IF)) (PROGN (SPADLET |ISTMP#7| (QCDR |ISTMP#6|)) (AND (PAIRP |ISTMP#7|) (PROGN (SPADLET |p| (QCAR |ISTMP#7|)) (SPADLET |ISTMP#8| (QCDR |ISTMP#7|)) (AND (PAIRP |ISTMP#8|) (PROGN (SPADLET |ISTMP#9| (QCAR |ISTMP#8|)) (AND (PAIRP |ISTMP#9|) (EQ (QCAR |ISTMP#9|) (QUOTE |exit|)) (PROGN (SPADLET |ISTMP#10| (QCDR |ISTMP#9|)) (AND (PAIRP |ISTMP#10|) (EQUAL (QCAR |ISTMP#10|) 2) (PROGN (SPADLET |ISTMP#11| (QCDR |ISTMP#10|)) (AND (PAIRP |ISTMP#11|) (EQ (QCDR |ISTMP#11|) NIL) (PROGN (SPADLET |q| (QCAR |ISTMP#11|)) (QUOTE T)))))))) (PROGN (SPADLET |ISTMP#12| (QCDR |ISTMP#8|)) (AND (PAIRP |ISTMP#12|) (EQ (QCDR |ISTMP#12|) NIL) (EQ (QCAR |ISTMP#12|) (QUOTE |noBranch|)))))))))))))))) (PROGN (SPADLET |l| (QCDR |ISTMP#2|)) (QUOTE T)) (PROGN (SPADLET |l| (NREVERSE |l|)) (QUOTE T)))) (PROG (#0=#:G4140) (SPADLET #0# (QUOTE T)) (RETURN (DO ((#1=#:G4146 NIL (NULL #0#)) (#2=#:G4147 |l| (CDR #2#)) (|x| NIL)) ((OR #1# (ATOM #2#) (PROGN (SETQ |x| (CAR #2#)) NIL)) #0#) (SEQ (EXIT (SETQ #0# (AND #0# (AND (PAIRP |x|) (EQ (QCAR |x|) (QUOTE LET))))))))))) (CONS (QUOTE SEQ) (APPEND (PROG (#3=#:G4158) (SPADLET #3# NIL) (RETURN (DO ((#4=#:G4163 |l| (CDR #4#)) (|x| NIL)) ((OR (ATOM #4#) (PROGN (SETQ |x| (CAR #4#)) NIL)) (NREVERSE0 #3#)) (SEQ (EXIT (SETQ #3# (CONS (|decExitLevel| |x|) #3#))))))) (CONS (CONS (QUOTE |exit|) (CONS 1 (CONS (CONS (QUOTE IF) (CONS (|decExitLevel| |p|) (CONS (|decExitLevel| |q|) (CONS (|transSeq| |tail|) NIL)))) NIL))) NIL)))) ((AND (PAIRP |item|) (EQ (QCAR |item|) (QUOTE IF)) (PROGN (SPADLET |ISTMP#1| (QCDR |item|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |a| (QCAR |ISTMP#1|)) (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (PROGN (SPADLET |ISTMP#3| (QCAR |ISTMP#2|)) (AND (PAIRP |ISTMP#3|) (EQ (QCAR |ISTMP#3|) (QUOTE |exit|)) (PROGN (SPADLET |ISTMP#4| (QCDR |ISTMP#3|)) (AND (PAIRP |ISTMP#4|) (EQUAL (QCAR |ISTMP#4|) 1) (PROGN (SPADLET |ISTMP#5| (QCDR |ISTMP#4|)) (AND (PAIRP |ISTMP#5|) (EQ (QCDR |ISTMP#5|) NIL) (PROGN (SPADLET |b| (QCAR |ISTMP#5|)) (QUOTE T)))))))) (PROGN (SPADLET |ISTMP#6| (QCDR |ISTMP#2|)) (AND (PAIRP |ISTMP#6|) (EQ (QCDR |ISTMP#6|) NIL) (EQ (QCAR |ISTMP#6|) (QUOTE |noBranch|))))))))) (CONS (QUOTE IF) (CONS (|decExitLevel| |a|) (CONS (|decExitLevel| |b|) (CONS (|transSeq| |tail|) NIL))))) ((AND (PAIRP |item|) (EQ (QCAR |item|) (QUOTE IF)) (PROGN (SPADLET |ISTMP#1| (QCDR |item|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |a| (QCAR |ISTMP#1|)) (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCAR |ISTMP#2|) (QUOTE |noBranch|)) (PROGN (SPADLET |ISTMP#3| (QCDR |ISTMP#2|)) (AND (PAIRP |ISTMP#3|) (EQ (QCDR |ISTMP#3|) NIL) (PROGN (SPADLET |ISTMP#4| (QCAR |ISTMP#3|)) (AND (PAIRP |ISTMP#4|) (EQ (QCAR |ISTMP#4|) (QUOTE |exit|)) (PROGN (SPADLET |ISTMP#5| (QCDR |ISTMP#4|)) (AND (PAIRP |ISTMP#5|) (EQUAL (QCAR |ISTMP#5|) 1) (PROGN (SPADLET |ISTMP#6| (QCDR |ISTMP#5|)) (AND (PAIRP |ISTMP#6|) (EQ (QCDR |ISTMP#6|) NIL) (PROGN (SPADLET |b| (QCAR |ISTMP#6|)) (QUOTE T))))))))))))))) (CONS (QUOTE IF) (CONS (|decExitLevel| |a|) (CONS (|transSeq| |tail|) (CONS (|decExitLevel| |b|) NIL))))) ((PROGN (SPADLET |ISTMP#1| (SPADLET |y| (|transSeq| |tail|))) (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) (QUOTE SEQ)) (PROGN (SPADLET |s| (QCDR |ISTMP#1|)) (QUOTE T)))) (CONS (QUOTE SEQ) (CONS |item| |s|))) ((QUOTE T) (CONS (QUOTE SEQ) (CONS |item| (CONS (CONS (QUOTE |exit|) (CONS 1 (CONS (|incExitLevel| |y|) NIL))) NIL))))))))))) 
+;
+;transCategoryItem x ==
+;  x is ['SIGNATURE,lhs,rhs] =>
+;    lhs is ['LISTOF,:y] =>
+;      "append" /[transCategoryItem ['SIGNATURE,z,rhs] for z in y]
+;    atom lhs =>
+;      if STRINGP lhs then lhs:= INTERN lhs
+;      rhs is ['Mapping,:m] =>
+;        m is [.,'constant] => LIST ['SIGNATURE,lhs,[first m],'constant]
+;        LIST ['SIGNATURE,lhs,m]
+;      $transCategoryAssoc:= [[lhs,:rhs],:$transCategoryAssoc]
+;      NIL
+;    [op,:argl]:= lhs
+;    extra:= nil
+;    if rhs is ['Mapping,:m] then
+;      if rest m then extra:= rest m
+;                 --should only be 'constant' or 'variable'
+;      rhs:= first m
+;    LIST ['SIGNATURE,op,[rhs,:SUBLIS($transCategoryAssoc,argl)],:extra]
+;  LIST x
+
+;;;     ***       |transCategoryItem| REDEFINED
+
+(DEFUN |transCategoryItem| (|x|) (PROG (|ISTMP#2| |y| |lhs| |ISTMP#1| |op| |argl| |m| |extra| |rhs|) (RETURN (SEQ (COND ((AND (PAIRP |x|) (EQ (QCAR |x|) (QUOTE SIGNATURE)) (PROGN (SPADLET |ISTMP#1| (QCDR |x|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |lhs| (QCAR |ISTMP#1|)) (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL) (PROGN (SPADLET |rhs| (QCAR |ISTMP#2|)) (QUOTE T))))))) (COND ((AND (PAIRP |lhs|) (EQ (QCAR |lhs|) (QUOTE LISTOF)) (PROGN (SPADLET |y| (QCDR |lhs|)) (QUOTE T))) (PROG (#0=#:G4237) (SPADLET #0# NIL) (RETURN (DO ((#1=#:G4242 |y| (CDR #1#)) (|z| NIL)) ((OR (ATOM #1#) (PROGN (SETQ |z| (CAR #1#)) NIL)) #0#) (SEQ (EXIT (SETQ #0# (APPEND #0# (|transCategoryItem| (CONS (QUOTE SIGNATURE) (CONS |z| (CONS |rhs| NIL)))))))))))) ((ATOM |lhs|) (COND ((STRINGP |lhs|) (SPADLET |lhs| (INTERN |lhs|)))) (COND ((AND (PAIRP |rhs|) (EQ (QCAR |rhs|) (QUOTE |Mapping|)) (PROGN (SPADLET |m| (QCDR |rhs|)) (QUOTE T))) (COND ((AND (PAIRP |m|) (PROGN (SPADLET |ISTMP#1| (QCDR |m|)) (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL) (EQ (QCAR |ISTMP#1|) (QUOTE |constant|))))) (LIST (CONS (QUOTE SIGNATURE) (CONS |lhs| (CONS (CONS (CAR |m|) NIL) (CONS (QUOTE |constant|) NIL)))))) ((QUOTE T) (LIST (CONS (QUOTE SIGNATURE) (CONS |lhs| (CONS |m| NIL))))))) ((QUOTE T) (SPADLET |$transCategoryAssoc| (CONS (CONS |lhs| |rhs|) |$transCategoryAssoc|)) NIL))) ((QUOTE T) (SPADLET |op| (CAR |lhs|)) (SPADLET |argl| (CDR |lhs|)) (SPADLET |extra| NIL) (COND ((AND (PAIRP |rhs|) (EQ (QCAR |rhs|) (QUOTE |Mapping|)) (PROGN (SPADLET |m| (QCDR |rhs|)) (QUOTE T))) (COND ((CDR |m|) (SPADLET |extra| (CDR |m|)))) (SPADLET |rhs| (CAR |m|)))) (LIST (CONS (QUOTE SIGNATURE) (CONS |op| (CONS (CONS |rhs| (SUBLIS |$transCategoryAssoc| |argl|)) |extra|))))))) ((QUOTE T) (LIST |x|))))))) 
+;
+;superSub(name,x) ==
+;  for u in x repeat y:= [:y,:u]
+;  code:=
+;    x is [[u]] => $quadSymbol
+;    STRCONC("_(",scriptTranRow first x,scriptTran rest x,"_)")
+;  [INTERNL(PNAME name,"$",code),:y]
+
+;;;     ***       |superSub| REDEFINED
+
+(DEFUN |superSub| (|name| |x|) (PROG (|y| |ISTMP#1| |u| |code|) (RETURN (SEQ (PROGN (DO ((#0=#:G4276 |x| (CDR #0#)) (|u| NIL)) ((OR (ATOM #0#) (PROGN (SETQ |u| (CAR #0#)) NIL)) NIL) (SEQ (EXIT (SPADLET |y| (APPEND |y| |u|))))) (SPADLET |code| (COND ((AND (PAIRP |x|) (EQ (QCDR |x|) NIL) (PROGN (SPADLET |ISTMP#1| (QCAR |x|)) (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL) (PROGN (SPADLET |u| (QCAR |ISTMP#1|)) (QUOTE T))))) |$quadSymbol|) ((QUOTE T) (STRCONC (QUOTE |(|) (|scriptTranRow| (CAR |x|)) (|scriptTran| (CDR |x|)) (QUOTE |)|))))) (CONS (INTERNL (PNAME |name|) (QUOTE $) |code|) |y|)))))) 
+;
+;scriptTran x ==
+;  null x => ""
+;  STRCONC(";",scriptTranRow first x,scriptTran rest x)
+
+;;;     ***       |scriptTran| REDEFINED
+
+(DEFUN |scriptTran| (|x|) (COND ((NULL |x|) (QUOTE ||)) ((QUOTE T) (STRCONC (QUOTE |;|) (|scriptTranRow| (CAR |x|)) (|scriptTran| (CDR |x|)))))) 
+;
+;scriptTranRow x ==
+;  null x => ""
+;  STRCONC($quadSymbol,scriptTranRow1 rest x)
+
+;;;     ***       |scriptTranRow| REDEFINED
+
+(DEFUN |scriptTranRow| (|x|) (COND ((NULL |x|) (QUOTE ||)) ((QUOTE T) (STRCONC |$quadSymbol| (|scriptTranRow1| (CDR |x|)))))) 
+;
+;scriptTranRow1 x ==
+;  null x => ""
+;  STRCONC(",",$quadSymbol,scriptTranRow1 rest x)
+
+;;;     ***       |scriptTranRow1| REDEFINED
+
+(DEFUN |scriptTranRow1| (|x|) (COND ((NULL |x|) (QUOTE ||)) ((QUOTE T) (STRCONC (QUOTE |,|) |$quadSymbol| (|scriptTranRow1| (CDR |x|)))))) 
+;
+;parseVCONS l == ["VECTOR",:parseTranList l]
+
+;;;     ***       |parseVCONS| REDEFINED
+
+(DEFUN |parseVCONS| (|l|) (CONS (QUOTE VECTOR) (|parseTranList| |l|))) 
+;;;Boot translation finished for parse.boot
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

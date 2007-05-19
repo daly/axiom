@@ -1,0 +1,349 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra rule.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{domain RULE RewriteRule}
+<<domain RULE RewriteRule>>=
+)abbrev domain RULE RewriteRule
+++ Rules for the pattern matcher
+++ Author: Manuel Bronstein
+++ Date Created: 24 Oct 1988
+++ Date Last Updated: 26 October 1993
+++ Keywords: pattern, matching, rule.
+RewriteRule(Base, R, F): Exports == Implementation where
+  Base   : SetCategory
+  R      : Join(Ring, PatternMatchable Base, OrderedSet,
+                                 ConvertibleTo Pattern Base)
+  F      : Join(FunctionSpace R, PatternMatchable Base,
+                                 ConvertibleTo Pattern Base)
+
+  P    ==> Pattern Base
+
+  Exports ==>
+   Join(SetCategory, Eltable(F, F), RetractableTo Equation F) with
+    rule    : (F, F) -> $
+      ++ rule(f, g) creates the rewrite rule: \spad{f == eval(g, g is f)},
+      ++ with left-hand side f and right-hand side g.
+    rule    : (F, F, List Symbol) -> $
+      ++ rule(f, g, [f1,...,fn]) creates the rewrite rule
+      ++ \spad{f == eval(eval(g, g is f), [f1,...,fn])},
+      ++ that is a rule with left-hand side f and right-hand side g;
+      ++ The symbols f1,...,fn are the operators that are considered
+      ++ quoted, that is they are not evaluated during any rewrite,
+      ++ but just applied formally to their arguments.
+    suchThat: ($, List Symbol, List F -> Boolean) -> $
+      ++ suchThat(r, [a1,...,an], f) returns the rewrite rule r with
+      ++ the predicate \spad{f(a1,...,an)} attached to it.
+    pattern : $ -> P
+      ++ pattern(r) returns the pattern corresponding to
+      ++ the left hand side of the rule r.
+    lhs     : $ -> F
+      ++ lhs(r) returns the left hand side of the rule r.
+    rhs     : $ -> F
+      ++ rhs(r) returns the right hand side of the rule r.
+    elt     : ($, F, PositiveInteger) -> F
+      ++ elt(r,f,n) or r(f, n) applies the rule r to f at most n times.
+    quotedOperators: $ -> List Symbol
+      ++ quotedOperators(r) returns the list of operators
+      ++ on the right hand side of r that are considered
+      ++ quoted, that is they are not evaluated during any rewrite,
+      ++ but just applied formally to their arguments.
+
+  Implementation ==> add
+    import ApplyRules(Base, R, F)
+    import PatternFunctions1(Base, F)
+    import FunctionSpaceAssertions(R, F)
+
+    Rep := Record(pat: P, lft: F, rgt: F, qot: List Symbol)
+
+    mkRule      : (P, F, F, List Symbol) -> $
+    transformLhs: P -> Record(plus: F, times: F)
+    bad?        : Union(List P, "failed") -> Boolean
+    appear?     : (P, List P) -> Boolean
+    opt         : F -> P
+    F2Symbol    : F -> F
+
+    pattern x                == x.pat
+    lhs x                    == x.lft
+    rhs x                    == x.rgt
+    quotedOperators x        == x.qot
+    mkRule(pt, p, s, l)      == [pt, p, s, l]
+    coerce(eq:Equation F):$  == rule(lhs eq, rhs eq, empty())
+    rule(l, r)               == rule(l, r, empty())
+    elt(r:$, s:F) == applyRules([r pretend RewriteRule(Base, R, F)], s)
+
+    suchThat(x, l, f) ==
+      mkRule(suchThat(pattern x,l,f),  lhs x, rhs x, quotedOperators x)
+
+    x = y ==
+     (lhs x = lhs y) and (rhs x = rhs y) and
+        (quotedOperators x = quotedOperators y)
+
+    elt(r:$, s:F, n:PositiveInteger) ==
+      applyRules([r pretend RewriteRule(Base, R, F)], s, n)
+
+-- remove the extra properties from the constant symbols in f
+    F2Symbol f ==
+      l := select_!(symbolIfCan #1 case Symbol, tower f)$List(Kernel F)
+      eval(f, l, [symbolIfCan(k)::Symbol::F for k in l])
+
+    retractIfCan r ==
+      constant? pattern r =>
+        (u:= retractIfCan(lhs r)@Union(Kernel F,"failed")) case "failed"
+          => "failed"
+        F2Symbol(u::Kernel(F)::F) = rhs r
+      "failed"
+
+    rule(p, s, l) ==
+      lh := transformLhs(pt := convert(p)@P)
+      mkRule(opt(lh.times) * (opt(lh.plus) + pt),
+             lh.times * (lh.plus + p), lh.times * (lh.plus + s), l)
+
+    opt f ==
+      retractIfCan(f)@Union(R, "failed") case R => convert f
+      convert optional f
+
+-- appear?(x, [p1,...,pn]) is true if x appears as a variable in
+-- a composite pattern pi.
+    appear?(x, l) ==
+      for p in l | p ^= x repeat
+        member?(x, variables p) => return true
+      false
+
+-- a sum/product p1 @ ... @ pn is "bad" if it will not match
+-- a sum/product p1 @ ... @ pn @ p(n+1)
+-- in which case one should transform p1 @ ... @ pn to
+-- p1 @ ... @ ?p(n+1) which does not change its meaning.
+-- examples of "bad" combinations
+--   sin(x) @ sin(y)     sin(x) @ x
+-- examples of "good" combinations
+--   sin(x) @ y
+    bad? u ==
+      u case List(P) =>
+        for x in u::List(P) repeat
+          generic? x and not appear?(x, u::List(P)) => return false
+        true
+      false
+
+    transformLhs p ==
+      bad? isPlus p  => [new()$Symbol :: F, 1]
+      bad? isTimes p => [0, new()$Symbol :: F]
+      [0, 1]
+
+    coerce(x:$):OutputForm ==
+      infix(" == "::Symbol::OutputForm,
+            lhs(x)::OutputForm, rhs(x)::OutputForm)
+
+@
+\section{package APPRULE ApplyRules}
+<<package APPRULE ApplyRules>>=
+)abbrev package APPRULE ApplyRules
+++ Applications of rules to expressions
+++ Author: Manuel Bronstein
+++ Date Created: 20 Mar 1990
+++ Date Last Updated: 5 Jul 1990
+++ Description:
+++   This package apply rewrite rules to expressions, calling
+++   the pattern matcher.
+++ Keywords: pattern, matching, rule.
+ApplyRules(Base, R, F): Exports == Implementation where
+  Base   : SetCategory
+  R      : Join(Ring, PatternMatchable Base, OrderedSet,
+                                 ConvertibleTo Pattern Base)
+  F      : Join(FunctionSpace R, PatternMatchable Base,
+                                 ConvertibleTo Pattern Base)
+
+  P  ==> Pattern Base
+  PR ==> PatternMatchResult(Base, F)
+  RR ==> RewriteRule(Base, R, F)
+  K  ==> Kernel F
+
+  Exports ==> with
+    applyRules  : (List RR, F) -> F
+      ++ applyRules([r1,...,rn], expr) applies the rules
+      ++ r1,...,rn to f an unlimited number of times, i.e. until
+      ++ none of r1,...,rn is applicable to the expression.
+    applyRules  : (List RR, F, PositiveInteger) -> F
+      ++ applyRules([r1,...,rn], expr, n) applies the rules
+      ++ r1,...,rn to f a most n times.
+    localUnquote: (F, List Symbol) -> F
+      ++ localUnquote(f,ls) is a local function.
+
+  Implementation ==> add
+    import PatternFunctions1(Base, F)
+
+    splitRules: List RR -> Record(lker: List K,lval: List F,rl: List RR)
+    localApply  : (List K, List F, List RR, F, PositiveInteger) -> F
+    rewrite     : (F, PR, List Symbol) -> F
+    app         : (List RR, F) -> F
+    applist     : (List RR, List F) -> List F
+    isit        : (F, P) -> PR
+    isitwithpred: (F, P, List P, List PR) -> PR
+
+    applist(lrule, arglist)  == [app(lrule, arg) for arg in arglist]
+
+    splitRules l ==
+      ncr := empty()$List(RR)
+      lk  := empty()$List(K)
+      lv  := empty()$List(F)
+      for r in l repeat
+        if (u := retractIfCan(r)@Union(Equation F, "failed"))
+          case "failed" then ncr := concat(r, ncr)
+          else
+            lk := concat(retract(lhs(u::Equation F))@K, lk)
+            lv := concat(rhs(u::Equation F), lv)
+      [lk, lv, ncr]
+
+    applyRules(l, s) ==
+      rec := splitRules l
+      repeat
+        (new:= localApply(rec.lker,rec.lval,rec.rl,s,1)) = s => return s
+        s := new
+
+    applyRules(l, s, n) ==
+      rec := splitRules l
+      localApply(rec.lker, rec.lval, rec.rl, s, n)
+
+    localApply(lk, lv, lrule, subject, n) ==
+      for i in 1..n repeat
+        for k in lk for v in lv repeat
+          subject := eval(subject, k, v)
+        subject := app(lrule, subject)
+      subject
+
+    rewrite(f, res, l) ==
+      lk := empty()$List(K)
+      lv := empty()$List(F)
+      for rec in destruct res repeat
+        lk := concat(kernel(rec.key), lk)
+        lv := concat(rec.entry, lv)
+      localUnquote(eval(f, lk, lv), l)
+
+    if R has ConvertibleTo InputForm then
+      localUnquote(f, l) ==
+        empty? l => f
+        eval(f, l)
+    else
+      localUnquote(f, l) == f
+
+    isitwithpred(subject, pat, vars, bad) ==
+      failed?(u := patternMatch(subject, pat, new()$PR)) => u
+      satisfy?(u, pat)::Boolean => u
+      member?(u, bad) => failed()
+      for v in vars repeat addBadValue(v, getMatch(v, u)::F)
+      isitwithpred(subject, pat, vars, concat(u, bad))
+
+    isit(subject, pat) ==
+      hasTopPredicate? pat =>
+        for v in (l := variables pat) repeat resetBadValues v
+        isitwithpred(subject, pat, l, empty())
+      patternMatch(subject, pat, new()$PR)
+
+    app(lrule, subject) ==
+      for r in lrule repeat
+        not failed?(u := isit(subject, pattern r)) =>
+          return rewrite(rhs r, u, quotedOperators r)
+      (k := retractIfCan(subject)@Union(K, "failed")) case K =>
+        operator(k::K) applist(lrule, argument(k::K))
+      (l := isPlus  subject) case List(F) => +/applist(lrule,l::List(F))
+      (l := isTimes subject) case List(F) => */applist(lrule,l::List(F))
+      (e := isPower subject) case Record(val:F, exponent:Integer) =>
+        ee := e::Record(val:F, exponent:Integer)
+        f  := app(lrule, ee.val)
+        positive?(ee.exponent) => f ** (ee.exponent)::NonNegativeInteger
+        recip(f)::F ** (- ee.exponent)::NonNegativeInteger
+      subject
+
+@
+\section{domain RULESET Ruleset}
+<<domain RULESET Ruleset>>=
+)abbrev domain RULESET Ruleset
+++ Sets of rules for the pattern matcher
+++ Author: Manuel Bronstein
+++ Date Created: 20 Mar 1990
+++ Date Last Updated: 29 Jun 1990
+++ Description:
+++   A ruleset is a set of pattern matching rules grouped together.
+++ Keywords: pattern, matching, rule.
+Ruleset(Base, R, F): Exports == Implementation where
+  Base   : SetCategory
+  R      : Join(Ring, PatternMatchable Base, OrderedSet,
+                                 ConvertibleTo Pattern Base)
+  F      : Join(FunctionSpace R, PatternMatchable Base,
+                                 ConvertibleTo Pattern Base)
+
+  RR ==> RewriteRule(Base, R, F)
+
+  Exports ==> Join(SetCategory, Eltable(F, F)) with
+    ruleset: List RR -> $
+      ++ ruleset([r1,...,rn]) creates the rule set \spad{{r1,...,rn}}.
+    rules  : $ -> List RR
+      ++ rules(r) returns the rules contained in r.
+    elt    : ($, F, PositiveInteger) -> F
+      ++ elt(r,f,n) or r(f, n) applies all the rules of r to f at most n times.
+
+  Implementation ==> add
+    import ApplyRules(Base, R, F)
+
+    Rep := Set RR
+
+    ruleset l                        == {l}$Rep
+    coerce(x:$):OutputForm           == coerce(x)$Rep
+    x = y                            == x =$Rep y
+    elt(x:$, f:F)                    == applyRules(rules x, f)
+    elt(r:$, s:F, n:PositiveInteger) == applyRules(rules r, s, n)
+    rules x                          == parts(x)$Rep
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<domain RULE RewriteRule>>
+<<package APPRULE ApplyRules>>
+<<domain RULESET Ruleset>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

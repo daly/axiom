@@ -1,0 +1,331 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra openmath.spad}
+\author{Mike Dewar, Vilya Harvey}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package OMEXPR ExpressionToOpenMath}
+<<package OMEXPR ExpressionToOpenMath>>=
+)abbrev package OMEXPR ExpressionToOpenMath
+++ Author: Mike Dewar & Vilya Harvey
+++ Date Created:
+++ Date Last Updated:
+++ Basic Functions:
+++ Related Constructors:
+++ Also See:
+++ AMS Classifications:
+++ Keywords:
+++ References:
+++ Description: \spadtype{ExpressionToOpenMath} provides support for
+++ converting objects of type \spadtype{Expression} into OpenMath.
+ExpressionToOpenMath(R: Join(OpenMath, OrderedSet, Ring)): with
+  OMwrite  : Expression R -> String
+  OMwrite  : (Expression R, Boolean) -> String
+  OMwrite  : (OpenMathDevice, Expression R) -> Void
+  OMwrite  : (OpenMathDevice, Expression R, Boolean) -> Void
+ == add
+  import Expression R
+  SymInfo ==> Record(cd:String, name:String)
+  import SymInfo
+  import Record(key: Symbol, entry: SymInfo)
+  import AssociationList(Symbol, SymInfo)
+  import OMENC
+
+  ----------------------------
+  -- Local translation tables.
+  ----------------------------
+
+  nullaryFunctionAList : AssociationList(Symbol, SymInfo) := construct [_
+    [pi, ["nums1", "pi"]] ]
+
+  unaryFunctionAList : AssociationList(Symbol, SymInfo) := construct [_
+    [exp,  ["transc1", "exp"]],_
+    [log,  ["transc1", "ln"]],_
+    [sin,  ["transc1", "sin"]],_
+    [cos,  ["transc1", "cos"]],_
+    [tan,  ["transc1", "tan"]],_
+    [cot,  ["transc1", "cot"]],_
+    [sec,  ["transc1", "sec"]],_
+    [csc,  ["transc1", "csc"]],_
+    [asin, ["transc1", "arcsin"]],_
+    [acos, ["transc1", "arccos"]],_
+    [atan, ["transc1", "arctan"]],_
+    [acot, ["transc1", "arccot"]],_
+    [asec, ["transc1", "arcsec"]],_
+    [acsc, ["transc1", "arccsc"]],_
+    [sinh, ["transc1", "sinh"]],_
+    [cosh, ["transc1", "cosh"]],_
+    [tanh, ["transc1", "tanh"]],_
+    [coth, ["transc1", "coth"]],_
+    [sech, ["transc1", "sech"]],_
+    [csch, ["transc1", "csch"]],_
+    [asinh, ["transc1", "arcsinh"]],_
+    [acosh, ["transc1", "arccosh"]],_
+    [atanh, ["transc1", "arctanh"]],_
+    [acoth, ["transc1", "arccoth"]],_
+    [asech, ["transc1", "arcsech"]],_
+    [acsch, ["transc1", "arccsch"]],_
+    [factorial, ["integer1", "factorial"]],_
+    [abs, ["arith1", "abs"]] ]
+
+    -- Still need the following unary functions:
+    --  digamma
+    --  Gamma
+    --  airyAi
+    --  airyBi
+    --  erf
+    --  Ei
+    --  Si
+    --  Ci
+    --  li
+    --  dilog
+
+    -- Still need the following binary functions:
+    --      Gamma(a, x)
+    --      Beta(x,y) 
+    --      polygamma(k,x)
+    --      besselJ(v,x)
+    --      besselY(v,x)
+    --      besselI(v,x)
+    --      besselK(v,x)
+    --      permutation(n, m)
+    --      summation(x:%, n:Symbol) : as opposed to "definite" sum
+    --      product(x:%, n:Symbol)   : ditto
+
+  ------------------------
+  -- Forward declarations.
+  ------------------------
+
+  outputOMExpr  : (OpenMathDevice, Expression R) -> Void
+
+  -------------------------
+  -- Local helper functions
+  -------------------------
+
+  outputOMArith1(dev: OpenMathDevice, sym: String, args: List Expression R): Void ==
+    OMputApp(dev)
+    OMputSymbol(dev, "arith1", sym)
+    for arg in args repeat
+      OMwrite(dev, arg, false)
+    OMputEndApp(dev)
+
+  outputOMLambda(dev: OpenMathDevice, ex: Expression R, var: Expression R): Void ==
+    OMputBind(dev)
+    OMputSymbol(dev, "fns1", "lambda")
+    OMputBVar(dev)
+    OMwrite(dev, var, false)
+    OMputEndBVar(dev)
+    OMwrite(dev, ex, false)
+    OMputEndBind(dev)
+
+  outputOMInterval(dev: OpenMathDevice, lo: Expression R, hi: Expression R): Void ==
+    OMputApp(dev)
+    OMputSymbol(dev, "interval1", "interval")
+    OMwrite(dev, lo, false)
+    OMwrite(dev, hi, false)
+    OMputEndApp(dev)
+
+  outputOMIntInterval(dev: OpenMathDevice, lo: Expression R, hi: Expression R): Void ==
+    OMputApp(dev)
+    OMputSymbol(dev, "interval1", "integer__interval")
+    OMwrite(dev, lo, false)
+    OMwrite(dev, hi, false)
+    OMputEndApp(dev)
+
+  outputOMBinomial(dev: OpenMathDevice, args: List Expression R): Void ==
+    not #args=2 => error "Wrong number of arguments to binomial"
+    OMputApp(dev)
+    OMputSymbol(dev, "combinat1", "binomial")
+    for arg in args repeat
+      OMwrite(dev, arg, false)
+    OMputEndApp(dev)
+
+  outputOMPower(dev: OpenMathDevice, args: List Expression R): Void ==
+    not #args=2 => error "Wrong number of arguments to power"
+    outputOMArith1(dev, "power", args)
+
+  outputOMDefsum(dev: OpenMathDevice, args: List Expression R): Void ==
+    #args ^= 5 => error "Unexpected number of arguments to a defsum"
+    OMputApp(dev)
+    OMputSymbol(dev, "arith1", "sum")
+    outputOMIntInterval(dev, args.4, args.5)
+    outputOMLambda(dev, eval(args.1, args.2, args.3), args.3)
+    OMputEndApp(dev)
+
+  outputOMDefprod(dev: OpenMathDevice, args: List Expression R): Void ==
+    #args ^= 5 => error "Unexpected number of arguments to a defprod"
+    OMputApp(dev)
+    OMputSymbol(dev, "arith1", "product")
+    outputOMIntInterval(dev, args.4, args.5)
+    outputOMLambda(dev, eval(args.1, args.2, args.3), args.3)
+    OMputEndApp(dev)
+
+  outputOMDefint(dev: OpenMathDevice, args: List Expression R): Void ==
+    #args ^= 5 => error "Unexpected number of arguments to a defint"
+    OMputApp(dev)
+    OMputSymbol(dev, "calculus1", "defint")
+    outputOMInterval(dev, args.4, args.5)
+    outputOMLambda(dev, eval(args.1, args.2, args.3), args.3)
+    OMputEndApp(dev)
+
+  outputOMInt(dev: OpenMathDevice, args: List Expression R): Void ==
+    #args ^= 3 => error "Unexpected number of arguments to a defint"
+    OMputApp(dev)
+    OMputSymbol(dev, "calculus1", "int")
+    outputOMLambda(dev, eval(args.1, args.2, args.3), args.3)
+    OMputEndApp(dev)
+
+  outputOMFunction(dev: OpenMathDevice, op: Symbol, args: List Expression R): Void ==
+    nargs := #args
+    zero? nargs =>
+      omOp: Union(SymInfo, "failed") := search(op, nullaryFunctionAList)
+      omOp case "failed" =>
+        error concat ["No OpenMath definition for nullary function ", coerce op]
+      OMputSymbol(dev, omOp.cd, omOp.name)
+--    one? nargs =>
+    (nargs = 1) =>
+      omOp: Union(SymInfo, "failed") := search(op, unaryFunctionAList)
+      omOp case "failed" =>
+        error concat ["No OpenMath definition for unary function ", coerce op]
+      OMputApp(dev)
+      OMputSymbol(dev, omOp.cd, omOp.name)
+      for arg in args repeat
+        OMwrite(dev, arg, false)
+      OMputEndApp(dev)
+    -- Most of the binary operators cannot be handled trivialy like the
+    -- unary ones since they have bound variables of one kind or another.
+    -- The special functions should be straightforward, but we don't have
+    -- a CD for them yet :-)
+    op = %defint  => outputOMDefint(dev, args)
+    op = integral => outputOMInt(dev, args)
+    op = %defsum  => outputOMDefsum(dev, args)
+    op = %defprod => outputOMDefprod(dev, args)
+    op = %power   => outputOMPower(dev, args)
+    op = binomial => outputOMBinomial(dev, args)
+    error concat ["No OpenMath definition for function ", string op]
+ 
+  outputOMExpr(dev: OpenMathDevice, ex: Expression R): Void ==
+    ground? ex => OMwrite(dev, ground ex, false)
+    not((v := retractIfCan(ex)@Union(Symbol,"failed")) case "failed") =>
+      OMputVariable(dev, v)
+    not((w := isPlus ex) case "failed") => outputOMArith1(dev, "plus", w)
+    not((w := isTimes ex) case "failed") => outputOMArith1(dev, "times", w)
+    --not((y := isMult ex) case "failed") =>
+    --  outputOMArith("times", [OMwrite(y.coef)$Integer,
+    --          OMwrite(coerce y.var)])
+    -- At the time of writing we don't need both isExpt and isPower
+    -- here but they may be relevent when we integrate this stuff into
+    -- the main Expression code.  Note that if we don't check that
+    -- the exponent is non-trivial we get thrown into an infinite recursion.
+--    not (((x := isExpt ex) case "failed") or one? x.exponent) =>
+    not (((x := isExpt ex) case "failed") or (x.exponent = 1)) =>
+      not((s := symbolIfCan(x.var)@Union(Symbol,"failed")) case "failed") =>
+        --outputOMPower(dev, [s::Expression(R), (x.exponent)::Expression(R)])
+        OMputApp(dev)
+        OMputSymbol(dev, "arith1", "power")
+        OMputVariable(dev, s)
+        OMputInteger(dev, x.exponent)
+        OMputEndApp(dev)
+      -- TODO: add error handling code here...
+--    not (((z := isPower ex) case "failed") or one? z.exponent) =>
+    not (((z := isPower ex) case "failed") or (z.exponent = 1)) =>
+      outputOMPower(dev, [ z.val, z.exponent::Expression R ])
+      --OMputApp(dev)
+      --OMputSymbol(dev, "arith1", "power")
+      --outputOMExpr(dev, z.val)
+      --OMputInteger(dev, z.exponent)
+      --OMputEndApp(dev)
+    -- Must only be one top-level Kernel by this point
+    k : Kernel Expression R := first kernels ex
+    outputOMFunction(dev, name operator k, argument k)
+
+
+  ----------
+  -- Exports
+  ----------
+
+  OMwrite(ex: Expression R): String ==
+    s: String := ""
+    sp := OM_-STRINGTOSTRINGPTR(s)$Lisp
+    dev: OpenMathDevice := OMopenString(sp pretend String, OMencodingXML())
+    OMputObject(dev)
+    outputOMExpr(dev, ex)
+    OMputEndObject(dev)
+    OMclose(dev)
+    s := OM_-STRINGPTRTOSTRING(sp)$Lisp pretend String
+    s
+
+  OMwrite(ex: Expression R, wholeObj: Boolean): String ==
+    s: String := ""
+    sp := OM_-STRINGTOSTRINGPTR(s)$Lisp
+    dev: OpenMathDevice := OMopenString(sp pretend String, OMencodingXML())
+    if wholeObj then
+      OMputObject(dev)
+    outputOMExpr(dev, ex)
+    if wholeObj then
+      OMputEndObject(dev)
+    OMclose(dev)
+    s := OM_-STRINGPTRTOSTRING(sp)$Lisp pretend String
+    s
+
+  OMwrite(dev: OpenMathDevice, ex: Expression R): Void ==
+    OMputObject(dev)
+    outputOMExpr(dev, ex)
+    OMputEndObject(dev)
+
+  OMwrite(dev: OpenMathDevice, ex: Expression R, wholeObj: Boolean): Void ==
+    if wholeObj then
+      OMputObject(dev)
+    outputOMExpr(dev, ex)
+    if wholeObj then
+      OMputEndObject(dev)
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package OMEXPR ExpressionToOpenMath>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

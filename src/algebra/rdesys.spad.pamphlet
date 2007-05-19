@@ -1,0 +1,362 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra rdesys.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package RDETRS TranscendentalRischDESystem}
+<<package RDETRS TranscendentalRischDESystem>>=
+)abbrev package RDETRS TranscendentalRischDESystem
+++ Risch differential equation system, transcendental case.
+++ Author: Manuel Bronstein
+++ Date Created: 17 August 1992
+++ Date Last Updated: 3 February 1994
+TranscendentalRischDESystem(F, UP): Exports == Implementation where
+  F  : Join(Field, CharacteristicZero, RetractableTo Integer)
+  UP : UnivariatePolynomialCategory F
+ 
+  N   ==> NonNegativeInteger
+  Z   ==> Integer
+  RF  ==> Fraction UP
+  V   ==> Vector UP
+  U   ==> Union(List UP, "failed")
+  REC ==> Record(z1:UP, z2:UP, r1:UP, r2:UP)
+ 
+  Exports ==> with
+    monomRDEsys: (RF, RF, RF, UP -> UP) -> _
+                    Union(Record(a:UP, b:RF, h:UP, c1:RF, c2:RF, t:UP),"failed")
+      ++ monomRDEsys(f,g1,g2,D) returns \spad{[A, B, H, C1, C2, T]} such that
+      ++ \spad{(y1', y2') + ((0, -f), (f, 0)) (y1,y2) = (g1,g2)} has a solution
+      ++ if and only if \spad{y1 = Q1 / T, y2 = Q2 / T},
+      ++ where \spad{B,C1,C2,Q1,Q2} have no normal poles and satisfy
+      ++ A \spad{(Q1', Q2') + ((H, -B), (B, H)) (Q1,Q2) = (C1,C2)}
+      ++ D is the derivation to use.
+    baseRDEsys: (RF, RF, RF)   -> Union(List RF, "failed")
+      ++ baseRDEsys(f, g1, g2) returns fractions \spad{y_1.y_2} such that
+      ++ \spad{(y1', y2') + ((0, -f), (f, 0)) (y1,y2) = (g1,g2)}
+      ++ if \spad{y_1,y_2} exist, "failed" otherwise.
+ 
+  Implementation ==> add
+    import MonomialExtensionTools(F, UP)
+    import SmithNormalForm(UP, V, V, Matrix UP)
+ 
+    diophant: (UP, UP, UP, UP, UP) -> Union(REC, "failed")
+    getBound: (UP, UP, UP, UP, UP) -> Z
+    SPDEsys : (UP, UP, UP, UP, UP, Z, UP -> UP, (F, F, F, UP, UP, Z) -> U) -> U
+    DSPDEsys: (F, UP, UP, UP, UP, Z, UP -> UP) -> U
+    DSPDEmix: (UP, UP, F, F, N, Z, F) -> U
+    DSPDEhdom: (UP, UP, F, F, N, Z) -> U
+    DSPDEbdom: (UP, UP, F, F, N, Z) -> U
+    DSPDEsys0: (F, UP, UP, UP, UP, F, F, Z, UP -> UP, (UP,UP,F,F,N) -> U) -> U
+ 
+-- reduces (y1', y2') + ((0, -f), (f, 0)) (y1,y2) = (g1,g2) to
+-- A (Q1', Q2') + ((H, -B), (B, H)) (Q1,Q2) = (C1,C2), Q1 = y1 T, Q2 = y2 T
+-- where A and H are polynomials, and B,C1,C2,Q1 and Q2 have no normal poles.
+-- assumes that f is weakly normalized (no finite cancellation)
+    monomRDEsys(f, g1, g2, derivation) ==
+      gg := gcd(d := normalDenom(f, derivation),
+                e := lcm(normalDenom(g1,derivation),normalDenom(g2,derivation)))
+      tt := (gcd(e, differentiate e) exquo gcd(gg,differentiate gg))::UP
+      (u := ((tt * (aa := d * tt)) exquo e)) case "failed" => "failed"
+      [aa, tt * d * f, - d * derivation tt, u::UP * e * g1, u::UP * e * g2, tt]
+ 
+-- solve (y1', y2') + ((0, -f), (f, 0)) (y1,y2) = (g1,g2) for y1,y2 in RF
+-- assumes that f is weakly normalized (no finite cancellation) and nonzero
+-- base case: F' = 0
+    baseRDEsys(f, g1, g2) ==
+      zero? f => error "baseRDEsys: f must be nonzero"
+      zero? g1 and zero? g2 => [0, 0]
+      (u := monomRDEsys(f, g1, g2, differentiate)) case "failed" => "failed"
+      n := getBound(u.a, bb := retract(u.b), u.h,
+                    cc1 := retract(u.c1), cc2 := retract(u.c2))
+      (v := SPDEsys(u.a, bb, u.h, cc1, cc2, n, differentiate,
+                    DSPDEsys(#1, #2::UP, #3::UP, #4, #5, #6, differentiate)))
+                          case "failed" => "failed"
+      l := v::List(UP)
+      [first(l) / u.t, second(l) / u.t]
+ 
+-- solve
+--   D1 = A Z1 + B R1 - C R2
+--   D2 = A Z2 + C R1 + B R2
+-- i.e. (D1,D2) = ((A, 0, B, -C), (0, A, C, B)) (Z1, Z2, R1, R2)
+-- for R1, R2 with degree(Ri) < degree(A)
+-- assumes (A,B,C) = (1) and A and C are nonzero
+    diophant(a, b, c, d1, d2) ==
+      (u := diophantineSystem(matrix [[a,0,b,-c], [0,a,c,b]],
+                          vector [d1,d2]).particular) case "failed" => "failed"
+      v := u::V
+      qr1 := divide(v 3, a)
+      qr2 := divide(v 4, a)
+      [v.1 + b * qr1.quotient - c * qr2.quotient,
+       v.2 + c * qr1.quotient + b * qr2.quotient, qr1.remainder, qr2.remainder]
+ 
+-- solve
+-- A (Q1', Q2') + ((H, -B), (B, H)) (Q1,Q2) = (C1,C2)
+-- for polynomials Q1 and Q2 with degree <= n
+-- A and B are nonzero
+-- cancellation at infinity is possible
+    SPDEsys(a, b, h, c1, c2, n, derivation, degradation) ==
+      zero? c1 and zero? c2 => [0, 0]
+      n < 0 => "failed"
+      g := gcd(a, gcd(b, h))
+      ((u1 := c1 exquo g) case "failed") or
+        ((u2 := c2 exquo g) case "failed") => "failed"
+      a := (a exquo g)::UP
+      b := (b exquo g)::UP
+      h := (h exquo g)::UP
+      c1 := u1::UP
+      c2 := u2::UP
+      (da := degree a) > 0 =>
+        (u := diophant(a, h, b, c1, c2)) case "failed" => "failed"
+        rec := u::REC
+        v := SPDEsys(a, b, h + derivation a, rec.z1 - derivation(rec.r1),
+                     rec.z2 - derivation(rec.r2),n-da::Z,derivation,degradation)
+        v case "failed" => "failed"
+        l := v::List(UP)
+        [a * first(l) + rec.r1, a * second(l) + rec.r2]
+      ra := retract(a)@F
+      ((rb := retractIfCan(b)@Union(F, "failed")) case "failed") or
+        ((rh := retractIfCan(h)@Union(F, "failed")) case "failed") =>
+                                DSPDEsys(ra, b, h, c1, c2, n, derivation)
+      degradation(ra, rb::F, rh::F, c1, c2, n)
+ 
+-- solve
+-- a (Q1', Q2') + ((H, -B), (B, H)) (Q1,Q2) = (C1,C2)
+-- for polynomials Q1 and Q2 with degree <= n
+-- a and B are nonzero, either B or H has positive degree
+-- cancellation at infinity is not possible
+    DSPDEsys(a, b, h, c1, c2, n, derivation) ==
+      bb := degree(b)::Z
+      hh:Z :=
+        zero? h => 0
+        degree(h)::Z
+      lb := leadingCoefficient b
+      lh := leadingCoefficient h
+      bb < hh =>
+        DSPDEsys0(a,b,h,c1,c2,lb,lh,n,derivation,DSPDEhdom(#1,#2,#3,#4,#5,hh))
+      bb > hh =>
+        DSPDEsys0(a,b,h,c1,c2,lb,lh,n,derivation,DSPDEbdom(#1,#2,#3,#4,#5,bb))
+      det := lb * lb + lh * lh
+      DSPDEsys0(a,b,h,c1,c2,lb,lh,n,derivation,DSPDEmix(#1,#2,#3,#4,#5,bb,det))
+ 
+    DSPDEsys0(a, b, h, c1, c2, lb, lh, n, derivation, getlc) ==
+      ans1 := ans2 := 0::UP
+      repeat
+        zero? c1 and zero? c2 => return [ans1, ans2]
+        n < 0 or (u := getlc(c1,c2,lb,lh,n::N)) case "failed" => return "failed"
+        lq := u::List(UP)
+        q1 := first lq
+        q2 := second lq
+        c1 := c1 - a * derivation(q1) - h * q1 + b * q2
+        c2 := c2 - a * derivation(q2) - b * q1 - h * q2
+        n := n - 1
+        ans1 := ans1 + q1
+        ans2 := ans2 + q2
+ 
+    DSPDEmix(c1, c2, lb, lh, n, d, det) ==
+      rh1:F :=
+        zero? c1 => 0
+        (d1 := degree(c1)::Z - d) < n => 0
+        d1 > n => return "failed"
+        leadingCoefficient c1
+      rh2:F :=
+        zero? c2 => 0
+        (d2 := degree(c2)::Z - d) < n => 0
+        d2 > n => return "failed"
+        leadingCoefficient c2
+      q1 := (rh1 * lh + rh2 * lb) / det
+      q2 := (rh2 * lh - rh1 * lb) / det
+      [monomial(q1, n), monomial(q2, n)]
+ 
+ 
+    DSPDEhdom(c1, c2, lb, lh, n, d) ==
+      q1:UP :=
+        zero? c1 => 0
+        (d1 := degree(c1)::Z - d) < n => 0
+        d1 > n => return "failed"
+        monomial(leadingCoefficient(c1) / lh, n)
+      q2:UP :=
+        zero? c2 => 0
+        (d2 := degree(c2)::Z - d) < n => 0
+        d2 > n => return "failed"
+        monomial(leadingCoefficient(c2) / lh, n)
+      [q1, q2]
+ 
+    DSPDEbdom(c1, c2, lb, lh, n, d) ==
+      q1:UP :=
+        zero? c2 => 0
+        (d2 := degree(c2)::Z - d) < n => 0
+        d2 > n => return "failed"
+        monomial(leadingCoefficient(c2) / lb, n)
+      q2:UP :=
+        zero? c1 => 0
+        (d1 := degree(c1)::Z - d) < n => 0
+        d1 > n => return "failed"
+        monomial(- leadingCoefficient(c1) / lb, n)
+      [q1, q2]
+ 
+-- return a common bound on the degrees of a solution of
+-- A (Q1', Q2') + ((H, -B), (B, H)) (Q1,Q2) = (C1,C2), Q1 = y1 T, Q2 = y2 T
+-- cancellation at infinity is possible
+-- a and b are nonzero
+-- base case: F' = 0
+    getBound(a, b, h, c1, c2) ==
+      da := (degree a)::Z
+      dc :=
+        zero? c1 => degree(c2)::Z
+        zero? c2 => degree(c1)::Z
+        max(degree c1, degree c2)::Z
+      hh:Z :=
+        zero? h => 0
+        degree(h)::Z
+      db := max(hh, bb := degree(b)::Z)
+      da < db + 1 => dc - db
+      da > db + 1 => max(0, dc - da + 1)
+      bb >= hh => dc - db
+      (n := retractIfCan(leadingCoefficient(h) / leadingCoefficient(a)
+                      )@Union(Z, "failed")) case Z => max(n::Z, dc - db)
+      dc - db
+
+@
+\section{package RDEEFS ElementaryRischDESystem}
+<<package RDEEFS ElementaryRischDESystem>>=
+)abbrev package RDEEFS ElementaryRischDESystem
+++ Risch differential equation, elementary case.
+++ Author: Manuel Bronstein
+++ Date Created: 12 August 1992
+++ Date Last Updated: 17 August 1992
+++ Keywords: elementary, function, integration.
+ElementaryRischDESystem(R, F): Exports == Implementation where
+  R : Join(GcdDomain, OrderedSet, CharacteristicZero,
+           RetractableTo Integer, LinearlyExplicitRingOver Integer)
+  F : Join(TranscendentalFunctionCategory, AlgebraicallyClosedField,
+           FunctionSpace R)
+ 
+  Z   ==> Integer
+  SE  ==> Symbol
+  K   ==> Kernel F
+  P   ==> SparseMultivariatePolynomial(R, K)
+  UP  ==> SparseUnivariatePolynomial F
+  RF  ==> Fraction UP
+  NL  ==> Record(coeff:F,logand:F)
+  RRF ==> Record(mainpart:F,limitedlogs:List NL)
+  U   ==> Union(RRF, "failed")
+  ULF ==> Union(List F, "failed")
+  UEX ==> Union(Record(ratpart:F, coeff:F), "failed")
+ 
+  Exports ==> with
+    rischDEsys: (Z, F, F, F, SE, (F, List F) -> U, (F, F) -> UEX) -> ULF
+      ++ rischDEsys(n, f, g_1, g_2, x,lim,ext) returns \spad{y_1.y_2} such that
+      ++ \spad{(dy1/dx,dy2/dx) + ((0, - n df/dx),(n df/dx,0)) (y1,y2) = (g1,g2)}
+      ++ if \spad{y_1,y_2} exist, "failed" otherwise.
+      ++ lim is a limited integration function,
+      ++ ext is an extended integration function.
+ 
+  Implementation ==> add
+    import IntegrationTools(R, F)
+    import ElementaryRischDE(R, F)
+    import TranscendentalRischDESystem(F, UP)
+    import PolynomialCategoryQuotientFunctions(IndexedExponents K,
+                                                             K, R, P, F)
+ 
+--  sm1 := sqrt(-1::F)
+--  ks1 := retract(sm1)@K
+ 
+--  gcoeffs    : P -> ULF
+--  gets1coeffs: F -> ULF
+--  cheat      : (Z, F, F, F, SE, (F, List F) -> U, (F, F) -> UEX) -> ULF
+    basecase   : (F, F, F, K) -> ULF
+ 
+-- solve (y1',y2') + ((0, -nfp), (nfp, 0)) (y1,y2) = (g1, g2), base case
+    basecase(nfp, g1, g2, k) ==
+      (ans := baseRDEsys(univariate(nfp, k), univariate(g1, k),
+                         univariate(g2, k))) case "failed" => "failed"
+      l := ans::List(RF)
+      [multivariate(first l, k), multivariate(second l, k)]
+ 
+-- returns [x,y] s.t. f = x + y %i
+-- f can be of the form (a + b %i) / (c + d %i)
+--  gets1coeffs f ==
+--    (lnum := gcoeffs(numer f)) case "failed" => "failed"
+--    (lden := gcoeffs(denom f)) case "failed" => "failed"
+--    a := first(lnum::List F)
+--    b := second(lnum::List F)
+--    c := first(lden::List F)
+--    zero?(d := second(lden::List F)) => [a/c, b/c]
+--    cd := c * c + d * d
+--    [(a * c + b * d) / cd, (b * c - a * d) / cd]
+ 
+--  gcoeffs p ==
+--    degree(q := univariate(p, ks1)) > 1 => "failed"
+--    [coefficient(q, 0)::F, coefficient(q, 1)::F]
+ 
+--  cheat(n, f, g1, g2, x, limint, extint) ==
+--    (u := rischDE(n, sm1 * f, g1 + sm1 * g2, x, limint, extint))
+--      case "failed" => "failed"
+--    (l := gets1coeffs(u::F)) case "failed" =>
+--      error "rischDEsys: expect linear result in sqrt(-1)"
+--    l::List F
+ 
+-- solve (y1',y2') + ((0, -n f'), (n f', 0)) (y1,y2) = (g1, g2)
+    rischDEsys(n, f, g1, g2, x, limint, extint) ==
+      zero? g1 and zero? g2 => [0, 0]
+      zero?(nfp := n * differentiate(f, x)) =>
+        ((u1 := limint(g1, empty())) case "failed") or
+          ((u2 := limint(g1, empty())) case "failed") => "failed"
+        [u1.mainpart, u2.mainpart]
+      freeOf?(y1 := g2 / nfp, x) and freeOf?(y2 := - g1 / nfp, x) => [y1, y2]
+      vl := varselect(union(kernels nfp, union(kernels g1, kernels g2)), x)
+      symbolIfCan(k := kmax vl) case SE => basecase(nfp, g1, g2, k)
+--    cheat(n, f, g1, g2, x, limint, extint)
+      error "rischDEsys: can only handle rational functions for now"
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+ 
+<<package RDETRS TranscendentalRischDESystem>>
+<<package RDEEFS ElementaryRischDESystem>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

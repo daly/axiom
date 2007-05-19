@@ -1,0 +1,911 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra intrf.spad}
+\author{Barry Trager, Renaud Rioboo, Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package SUBRESP SubResultantPackage}
+<<package SUBRESP SubResultantPackage>>=
+)abbrev package SUBRESP SubResultantPackage
+++ Subresultants
+++ Author: Barry Trager, Renaud Rioboo
+++ Date Created: 1987
+++ Date Last Updated: August 2000
+++ Description:
+++ This package computes the subresultants of two polynomials which is needed
+++ for the `Lazard Rioboo' enhancement to Tragers integrations formula
+++ For efficiency reasons this has been rewritten to call Lionel Ducos
+++ package which is currently the best one.
+++
+SubResultantPackage(R, UP): Exports == Implementation where
+  R : IntegralDomain
+  UP: UnivariatePolynomialCategory R
+ 
+  Z   ==> Integer
+  N   ==> NonNegativeInteger
+ 
+  Exports ==> with
+    subresultantVector: (UP, UP) -> PrimitiveArray UP
+      ++ subresultantVector(p, q) returns \spad{[p0,...,pn]}
+      ++ where pi is the i-th subresultant of p and q.
+      ++ In particular, \spad{p0 = resultant(p, q)}.
+    if R has EuclideanDomain then
+      primitivePart     : (UP,  R) -> UP
+        ++ primitivePart(p, q) reduces the coefficient of p
+        ++ modulo q, takes the primitive part of the result,
+        ++ and ensures that the leading coefficient of that
+        ++ result is monic.
+ 
+  Implementation ==> add
+
+    Lionel ==> PseudoRemainderSequence(R,UP)
+
+    if R has EuclideanDomain then
+      primitivePart(p, q) ==
+         rec := extendedEuclidean(leadingCoefficient p, q,
+                                  1)::Record(coef1:R, coef2:R)
+         unitCanonical primitivePart map((rec.coef1 * #1) rem q, p)
+ 
+    subresultantVector(p1, p2) ==
+       F : UP -- auxiliary stuff !
+       res : PrimitiveArray(UP) := new(2+max(degree(p1),degree(p2)), 0)
+       --
+       -- kind of stupid interface to Lionel's  Package !!!!!!!!!!!!
+       -- might have been wiser to rewrite the loop ...
+       -- But I'm too lazy. [rr]
+       --
+       l := chainSubResultants(p1,p2)$Lionel
+       --
+       -- this returns the chain of non null subresultants !
+       -- we must  rebuild subresultants from this.
+       -- we really hope Lionel Ducos minded what he wrote
+       -- since we are fully blind !
+       --
+       null l =>
+         -- Hum it seems that Lionel returns [] when min(|p1|,|p2|) = 0
+         zero?(degree(p1)) =>
+           res.degree(p2) := p2
+           if degree(p2) > 0
+           then
+             res.((degree(p2)-1)::NonNegativeInteger) := p1
+             res.0 := (leadingCoefficient(p1)**(degree p2)) :: UP
+           else
+             -- both are of degree 0 the resultant is 1 according to Loos
+             res.0 := 1
+           res
+         zero?(degree(p2)) =>
+           if degree(p1) > 0
+           then
+             res.((degree(p1)-1)::NonNegativeInteger) := p2
+             res.0 := (leadingCoefficient(p2)**(degree p1)) :: UP
+           else
+             -- both are of degree 0 the resultant is 1 according to Loos
+             res.0 := 1
+           res
+         error "SUBRESP: strange Subresultant chain from PRS"
+       Sn := first(l)
+       --
+       -- as of Loos definitions last subresultant should not be defective
+       --
+       l := rest(l)
+       n := degree(Sn)
+       F := Sn
+       null l => error "SUBRESP: strange Subresultant chain from PRS"
+       zero? Sn => error "SUBRESP: strange Subresultant chain from PRS"
+       while (l ^= []) repeat
+         res.(n) := Sn
+         F := first(l)
+         l := rest(l)
+         -- F is potentially defective
+         if degree(F) = n
+         then
+           --
+           -- F is defective
+           --
+           null l => error "SUBRESP: strange Subresultant chain from PRS"
+           Sn := first(l)
+           l := rest(l)
+           n := degree(Sn)
+           res.((n-1)::NonNegativeInteger) := F
+         else
+           --
+           -- F is non defective
+           --
+           degree(F) < n => error "strange result !"
+           Sn := F
+           n := degree(Sn)
+       --
+       -- Lionel forgets about p1 if |p1| > |p2|
+       -- forgets about p2 if |p2| > |p1|
+       -- but he reminds p2 if |p1| = |p2|
+       -- a glance at Loos should correct this !
+       --
+       res.n := Sn
+       --
+       -- Loos definition
+       --
+       if degree(p1) = degree(p2)
+       then
+         res.((degree p1)+1) := p1
+       else
+         if degree(p1) > degree(p2)
+         then
+           res.(degree p1) := p1
+         else
+           res.(degree p2) := p2
+       res
+
+@
+\section{package MONOTOOL MonomialExtensionTools}
+<<package MONOTOOL MonomialExtensionTools>>=
+)abbrev package MONOTOOL MonomialExtensionTools
+++ Tools for handling monomial extensions
+++ Author: Manuel Bronstein
+++ Date Created: 18 August 1992
+++ Date Last Updated: 3 June 1993
+++ Description: Tools for handling monomial extensions.
+MonomialExtensionTools(F, UP): Exports == Implementation where
+  F : Field
+  UP: UnivariatePolynomialCategory F
+
+  RF ==> Fraction UP
+  FR ==> Factored UP
+
+  Exports ==> with
+    split      : (UP, UP -> UP) -> Record(normal:UP, special:UP)
+      ++ split(p, D) returns \spad{[n,s]} such that \spad{p = n s},
+      ++ all the squarefree factors of n are normal w.r.t. D,
+      ++ and s is special w.r.t. D.
+      ++ D is the derivation to use.
+    splitSquarefree: (UP, UP -> UP) -> Record(normal:FR, special:FR)
+      ++ splitSquarefree(p, D) returns
+      ++ \spad{[n_1 n_2\^2 ... n_m\^m, s_1 s_2\^2 ... s_q\^q]} such that
+      ++ \spad{p = n_1 n_2\^2 ... n_m\^m s_1 s_2\^2 ... s_q\^q}, each
+      ++ \spad{n_i} is normal w.r.t. D and each \spad{s_i} is special
+      ++ w.r.t D.
+      ++ D is the derivation to use.
+    normalDenom: (RF, UP -> UP) -> UP
+      ++ normalDenom(f, D) returns the product of all the normal factors
+      ++ of \spad{denom(f)}.
+      ++ D is the derivation to use.
+    decompose  : (RF, UP -> UP) -> Record(poly:UP, normal:RF, special:RF)
+      ++ decompose(f, D) returns \spad{[p,n,s]} such that \spad{f = p+n+s},
+      ++ all the squarefree factors of \spad{denom(n)} are normal w.r.t. D,
+      ++ \spad{denom(s)} is special w.r.t. D,
+      ++ and n and s are proper fractions (no pole at infinity).
+      ++ D is the derivation to use.
+
+  Implementation ==> add
+    normalDenom(f, derivation) == split(denom f, derivation).normal
+
+    split(p, derivation) ==
+      pbar := (gcd(p, derivation p) exquo gcd(p, differentiate p))::UP
+      zero? degree pbar => [p, 1]
+      rec := split((p exquo pbar)::UP, derivation)
+      [rec.normal, pbar * rec.special]
+
+    splitSquarefree(p, derivation) ==
+      s:Factored(UP) := 1
+      n := s
+      q := squareFree p
+      for rec in factors q repeat
+        r := rec.factor
+        g := gcd(r, derivation r)
+        if not ground? g then s := s * sqfrFactor(g, rec.exponent)
+        h := (r exquo g)::UP
+        if not ground? h then n := n * sqfrFactor(h, rec.exponent)
+      [n, unit(q) * s]
+
+    decompose(f, derivation) ==
+      qr := divide(numer f, denom f)
+-- rec.normal * rec.special = denom f
+      rec := split(denom f, derivation)
+-- eeu.coef1 * rec.normal + eeu.coef2 * rec.special = qr.remainder
+-- and degree(eeu.coef1) < degree(rec.special)
+-- and degree(eeu.coef2) < degree(rec.normal)
+-- qr.remainder/denom(f) = eeu.coef1 / rec.special + eeu.coef2 / rec.normal
+      eeu := extendedEuclidean(rec.normal, rec.special,
+                               qr.remainder)::Record(coef1:UP, coef2:UP)
+      [qr.quotient, eeu.coef2 / rec.normal, eeu.coef1 / rec.special]
+
+@
+\section{package INTHERTR TranscendentalHermiteIntegration}
+<<package INTHERTR TranscendentalHermiteIntegration>>=
+)abbrev package INTHERTR TranscendentalHermiteIntegration
+++ Hermite integration, transcendental case
+++ Author: Manuel Bronstein
+++ Date Created: 1987
+++ Date Last Updated: 12 August 1992
+++ Description: Hermite integration, transcendental case.
+TranscendentalHermiteIntegration(F, UP): Exports == Implementation where
+  F  : Field
+  UP : UnivariatePolynomialCategory F
+
+  N   ==> NonNegativeInteger
+  RF  ==> Fraction UP
+  REC ==> Record(answer:RF, lognum:UP, logden:UP)
+  HER ==> Record(answer:RF, logpart:RF, specpart:RF, polypart:UP)
+
+  Exports ==> with
+    HermiteIntegrate: (RF, UP -> UP) -> HER
+         ++ HermiteIntegrate(f, D) returns \spad{[g, h, s, p]}
+         ++ such that \spad{f = Dg + h + s + p},
+         ++ h has a squarefree denominator normal w.r.t. D,
+         ++ and all the squarefree factors of the denominator of s are
+         ++ special w.r.t. D. Furthermore, h and s have no polynomial parts.
+         ++ D is the derivation to use on \spadtype{UP}.
+
+  Implementation ==> add
+    import MonomialExtensionTools(F, UP)
+
+    normalHermiteIntegrate: (RF,UP->UP) -> Record(answer:RF,lognum:UP,logden:UP)
+
+    HermiteIntegrate(f, derivation) ==
+      rec := decompose(f, derivation)
+      hi  := normalHermiteIntegrate(rec.normal, derivation)
+      qr  := divide(hi.lognum, hi.logden)
+      [hi.answer, qr.remainder / hi.logden, rec.special, qr.quotient + rec.poly]
+
+-- Hermite Reduction on f, every squarefree factor of denom(f) is normal wrt D
+-- this is really a "parallel" Hermite reduction, in the sense that
+-- every multiple factor of the denominator gets reduced at each pass
+-- so if the denominator is P1 P2**2 ... Pn**n, this requires O(n)
+-- reduction steps instead of O(n**2), like Mack's algorithm
+-- (D.Mack, On Rational Integration, Univ. of Utah C.S. Tech.Rep. UCP-38,1975)
+-- returns [g, b, d] s.t. f = g' + b/d and d is squarefree and normal wrt D
+    normalHermiteIntegrate(f, derivation) ==
+      a := numer f
+      q := denom f
+      p:UP    := 0
+      mult:UP := 1
+      qhat := (q exquo (g0 := g := gcd(q, differentiate q)))::UP
+      while(degree(qbar := g) > 0) repeat
+        qbarhat := (qbar exquo (g := gcd(qbar, differentiate qbar)))::UP
+        qtil:= - ((qhat * (derivation qbar)) exquo qbar)::UP
+        bc :=
+         extendedEuclidean(qtil, qbarhat, a)::Record(coef1:UP, coef2:UP)
+        qr := divide(bc.coef1, qbarhat)
+        a  := bc.coef2 + qtil * qr.quotient - derivation(qr.remainder)
+               * (qhat exquo qbarhat)::UP
+        p  := p + mult * qr.remainder
+        mult:= mult * qbarhat
+      [p / g0, a, qhat]
+
+@
+\section{package INTTR TranscendentalIntegration}
+<<package INTTR TranscendentalIntegration>>=
+)abbrev package INTTR TranscendentalIntegration
+++ Risch algorithm, transcendental case
+++ Author: Manuel Bronstein
+++ Date Created: 1987
+++ Date Last Updated: 24 October 1995
+++ Description:
+++   This package provides functions for the transcendental
+++   case of the Risch algorithm.
+-- Internally used by the integrator
+TranscendentalIntegration(F, UP): Exports == Implementation where
+  F  : Field
+  UP : UnivariatePolynomialCategory F
+
+  N   ==> NonNegativeInteger
+  Z   ==> Integer
+  Q   ==> Fraction Z
+  GP  ==> LaurentPolynomial(F, UP)
+  UP2 ==> SparseUnivariatePolynomial UP
+  RF  ==> Fraction UP
+  UPR ==> SparseUnivariatePolynomial RF
+  IR  ==> IntegrationResult RF
+  LOG ==> Record(scalar:Q, coeff:UPR, logand:UPR)
+  LLG ==> List Record(coeff:RF, logand:RF)
+  NE  ==> Record(integrand:RF, intvar:RF)
+  NL  ==> Record(mainpart:RF, limitedlogs:LLG)
+  UPF ==> Record(answer:UP, a0:F)
+  RFF ==> Record(answer:RF, a0:F)
+  IRF ==> Record(answer:IR, a0:F)
+  NLF ==> Record(answer:NL, a0:F)
+  GPF ==> Record(answer:GP, a0:F)
+  UPUP==> Record(elem:UP, notelem:UP)
+  GPGP==> Record(elem:GP, notelem:GP)
+  RFRF==> Record(elem:RF, notelem:RF)
+  FF  ==> Record(ratpart:F,  coeff:F)
+  FFR ==> Record(ratpart:RF, coeff:RF)
+  UF  ==> Union(FF,  "failed")
+  UF2 ==> Union(List F, "failed")
+  REC ==> Record(ir:IR, specpart:RF, polypart:UP)
+  PSOL==> Record(ans:F, right:F, sol?:Boolean)
+  FAIL==> error "Sorry - cannot handle that integrand yet"
+
+  Exports ==> with
+    primintegrate  : (RF, UP -> UP, F -> UF)          -> IRF
+      ++ primintegrate(f, ', foo) returns \spad{[g, a]} such that
+      ++ \spad{f = g' + a}, and \spad{a = 0} or \spad{a} has no integral in UP.
+      ++ Argument foo is an extended integration function on F.
+    expintegrate   : (RF, UP -> UP, (Z, F) -> PSOL) -> IRF
+      ++ expintegrate(f, ', foo) returns \spad{[g, a]} such that
+      ++ \spad{f = g' + a}, and \spad{a = 0} or \spad{a} has no integral in F;
+      ++ Argument foo is a Risch differential equation solver on F;
+    tanintegrate   : (RF, UP -> UP, (Z, F, F) -> UF2) -> IRF
+      ++ tanintegrate(f, ', foo) returns \spad{[g, a]} such that
+      ++ \spad{f = g' + a}, and \spad{a = 0} or \spad{a} has no integral in F;
+      ++ Argument foo is a Risch differential system solver on F;
+    primextendedint:(RF, UP -> UP, F->UF, RF) -> Union(RFF,FFR,"failed")
+      ++ primextendedint(f, ', foo, g) returns either \spad{[v, c]} such that
+      ++ \spad{f = v' + c g} and \spad{c' = 0}, or \spad{[v, a]} such that
+      ++ \spad{f = g' + a}, and \spad{a = 0} or \spad{a} has no integral in UP.
+      ++ Returns "failed" if neither case can hold.
+      ++ Argument foo is an extended integration function on F.
+    expextendedint:(RF,UP->UP,(Z,F)->PSOL, RF) -> Union(RFF,FFR,"failed")
+      ++ expextendedint(f, ', foo, g) returns either \spad{[v, c]} such that
+      ++ \spad{f = v' + c g} and \spad{c' = 0}, or \spad{[v, a]} such that
+      ++ \spad{f = g' + a}, and \spad{a = 0} or \spad{a} has no integral in F.
+      ++ Returns "failed" if neither case can hold.
+      ++ Argument foo is a Risch differential equation function on F.
+    primlimitedint:(RF, UP -> UP, F->UF, List RF) -> Union(NLF,"failed")
+      ++ primlimitedint(f, ', foo, [u1,...,un]) returns
+      ++ \spad{[v, [c1,...,cn], a]} such that \spad{ci' = 0},
+      ++ \spad{f = v' + a + reduce(+,[ci * ui'/ui])},
+      ++ and \spad{a = 0} or \spad{a} has no integral in UP.
+      ++ Returns "failed" if no such v, ci, a exist.
+      ++ Argument foo is an extended integration function on F.
+    explimitedint:(RF, UP->UP,(Z,F)->PSOL,List RF) -> Union(NLF,"failed")
+      ++ explimitedint(f, ', foo, [u1,...,un]) returns
+      ++ \spad{[v, [c1,...,cn], a]} such that \spad{ci' = 0},
+      ++ \spad{f = v' + a + reduce(+,[ci * ui'/ui])},
+      ++ and \spad{a = 0} or \spad{a} has no integral in F.
+      ++ Returns "failed" if no such v, ci, a exist.
+      ++ Argument foo is a Risch differential equation function on F.
+    primextintfrac    : (RF, UP -> UP, RF)  -> Union(FFR, "failed")
+      ++ primextintfrac(f, ', g) returns \spad{[v, c]} such that
+      ++ \spad{f = v' + c g} and \spad{c' = 0}.
+      ++ Error: if \spad{degree numer f >= degree denom f} or
+      ++ if \spad{degree numer g >= degree denom g} or
+      ++ if \spad{denom g} is not squarefree.
+    primlimintfrac    : (RF, UP -> UP, List RF) -> Union(NL, "failed")
+      ++ primlimintfrac(f, ', [u1,...,un]) returns \spad{[v, [c1,...,cn]]}
+      ++ such that \spad{ci' = 0} and \spad{f = v' + +/[ci * ui'/ui]}.
+      ++ Error: if \spad{degree numer f >= degree denom f}.
+    primintfldpoly    : (UP, F -> UF, F)    -> Union(UP, "failed")
+      ++ primintfldpoly(p, ', t') returns q such that \spad{p' = q} or
+      ++ "failed" if no such q exists. Argument \spad{t'} is the derivative of
+      ++ the primitive generating the extension.
+    expintfldpoly     : (GP, (Z, F) -> PSOL) -> Union(GP, "failed")
+      ++ expintfldpoly(p, foo) returns q such that \spad{p' = q} or
+      ++ "failed" if no such q exists.
+      ++ Argument foo is a Risch differential equation function on F.
+    monomialIntegrate : (RF, UP -> UP) -> REC
+      ++ monomialIntegrate(f, ') returns \spad{[ir, s, p]} such that
+      ++ \spad{f = ir' + s + p} and all the squarefree factors of the
+      ++ denominator of s are special w.r.t the derivation '.
+    monomialIntPoly   : (UP, UP -> UP) -> Record(answer:UP, polypart:UP)
+      ++ monomialIntPoly(p, ') returns [q, r] such that
+      ++ \spad{p = q' + r} and \spad{degree(r) < degree(t')}.
+      ++ Error if \spad{degree(t') < 2}.
+
+  Implementation ==> add
+    import SubResultantPackage(UP, UP2)
+    import MonomialExtensionTools(F, UP)
+    import TranscendentalHermiteIntegration(F, UP)
+    import CommuteUnivariatePolynomialCategory(F, UP, UP2)
+
+    primintegratepoly  : (UP, F -> UF, F) -> Union(UPF, UPUP)
+    expintegratepoly   : (GP, (Z, F) -> PSOL) -> Union(GPF, GPGP)
+    expextintfrac      : (RF, UP -> UP, RF) -> Union(FFR, "failed")
+    explimintfrac      : (RF, UP -> UP, List RF) -> Union(NL, "failed")
+    limitedLogs        : (RF, RF -> RF, List RF) -> Union(LLG, "failed")
+    logprmderiv        : (RF, UP -> UP)    -> RF
+    logexpderiv        : (RF, UP -> UP, F) -> RF
+    tanintegratespecial: (RF, RF -> RF, (Z, F, F) -> UF2) -> Union(RFF, RFRF)
+    UP2UP2             : UP -> UP2
+    UP2UPR             : UP -> UPR
+    UP22UPR            : UP2 -> UPR
+    notelementary      : REC -> IR
+    kappa              : (UP, UP -> UP) -> UP
+
+    dummy:RF := 0
+
+    logprmderiv(f, derivation) == differentiate(f, derivation) / f
+
+    UP2UP2 p ==
+      map(#1::UP, p)$UnivariatePolynomialCategoryFunctions2(F, UP, UP, UP2)
+
+    UP2UPR p ==
+      map(#1::UP::RF, p)$UnivariatePolynomialCategoryFunctions2(F, UP, RF, UPR)
+
+    UP22UPR p == map(#1::RF, p)$SparseUnivariatePolynomialFunctions2(UP, RF)
+
+-- given p in k[z] and a derivation on k[t] returns the coefficient lifting
+-- in k[z] of the restriction of D to k.
+    kappa(p, derivation) ==
+      ans:UP := 0
+      while p ^= 0 repeat
+        ans := ans + derivation(leadingCoefficient(p)::UP)*monomial(1,degree p)
+        p := reductum p
+      ans
+
+-- works in any monomial extension
+    monomialIntegrate(f, derivation) ==
+      zero? f => [0, 0, 0]
+      r := HermiteIntegrate(f, derivation)
+      zero?(inum := numer(r.logpart)) => [r.answer::IR, r.specpart, r.polypart]
+      iden  := denom(r.logpart)
+      x := monomial(1, 1)$UP
+      resultvec := subresultantVector(UP2UP2 inum -
+                                 (x::UP2) * UP2UP2 derivation iden, UP2UP2 iden)
+      respoly := primitivePart leadingCoefficient resultvec 0
+      rec := splitSquarefree(respoly, kappa(#1, derivation))
+      logs:List(LOG) := [
+              [1, UP2UPR(term.factor),
+               UP22UPR swap primitivePart(resultvec(term.exponent),term.factor)]
+                     for term in factors(rec.special)]
+      dlog :=
+--           one? derivation x => r.logpart
+           ((derivation x) = 1) => r.logpart
+           differentiate(mkAnswer(0, logs, empty()),
+                         differentiate(#1, derivation))
+      (u := retractIfCan(p := r.logpart - dlog)@Union(UP, "failed")) case UP =>
+        [mkAnswer(r.answer, logs, empty), r.specpart, r.polypart + u::UP]
+      [mkAnswer(r.answer, logs, [[p, dummy]]), r.specpart, r.polypart]
+
+-- returns [q, r] such that p = q' + r and degree(r) < degree(dt)
+-- must have degree(derivation t) >= 2
+    monomialIntPoly(p, derivation) ==
+      (d := degree(dt := derivation monomial(1,1))::Z) < 2 =>
+        error "monomIntPoly: monomial must have degree 2 or more"
+      l := leadingCoefficient dt
+      ans:UP := 0
+      while (n := 1 + degree(p)::Z - d) > 0 repeat
+        ans := ans + (term := monomial(leadingCoefficient(p) / (n * l), n::N))
+        p   := p - derivation term      -- degree(p) must drop here
+      [ans, p]
+
+-- returns either
+--   (q in GP, a in F)  st p = q' + a, and a=0 or a has no integral in F
+-- or (q in GP, r in GP) st p = q' + r, and r has no integral elem/UP
+    expintegratepoly(p, FRDE) ==
+      coef0:F := 0
+      notelm := answr := 0$GP
+      while p ^= 0 repeat
+        ans1 := FRDE(n := degree p, a := leadingCoefficient p)
+        answr := answr + monomial(ans1.ans, n)
+        if ~ans1.sol? then         -- Risch d.e. has no complete solution
+               missing := a - ans1.right
+               if zero? n then coef0 := missing
+                          else notelm := notelm + monomial(missing, n)
+        p   := reductum p
+      zero? notelm => [answr, coef0]
+      [answr, notelm]
+
+-- f is either 0 or of the form p(t)/(1 + t**2)**n
+-- returns either
+--   (q in RF, a in F)  st f = q' + a, and a=0 or a has no integral in F
+-- or (q in RF, r in RF) st f = q' + r, and r has no integral elem/UP
+    tanintegratespecial(f, derivation, FRDE) ==
+      ans:RF := 0
+      p := monomial(1, 2)$UP + 1
+      while (n := degree(denom f) quo 2) ^= 0 repeat
+        r := numer(f) rem p
+        a := coefficient(r, 1)
+        b := coefficient(r, 0)
+        (u := FRDE(n, a, b)) case "failed" => return [ans, f]
+        l := u::List(F)
+        term:RF := (monomial(first l, 1)$UP + second(l)::UP) / denom f
+        ans := ans + term
+        f   := f - derivation term    -- the order of the pole at 1+t^2 drops
+      zero?(c0 := retract(retract(f)@UP)@F) or
+        (u := FRDE(0, c0, 0)) case "failed" => [ans, c0]
+      [ans + first(u::List(F))::UP::RF, 0::F]
+
+-- returns (v in RF, c in RF) s.t. f = v' + cg, and c' = 0, or "failed"
+-- g must have a squarefree denominator (always possible)
+-- g must have no polynomial part and no pole above t = 0
+-- f must have no polynomial part and no pole above t = 0
+    expextintfrac(f, derivation, g) ==
+      zero? f => [0, 0]
+      degree numer f >= degree denom f => error "Not a proper fraction"
+      order(denom f,monomial(1,1)) ^= 0 => error "Not integral at t = 0"
+      r := HermiteIntegrate(f, derivation)
+      zero? g =>
+        r.logpart ^= 0 => "failed"
+        [r.answer, 0]
+      degree numer g >= degree denom g => error "Not a proper fraction"
+      order(denom g,monomial(1,1)) ^= 0 => error "Not integral at t = 0"
+      differentiate(c := r.logpart / g, derivation) ^= 0 => "failed"
+      [r.answer, c]
+
+    limitedLogs(f, logderiv, lu) ==
+      zero? f => empty()
+      empty? lu => "failed"
+      empty? rest lu =>
+        logderiv(c0 := f / logderiv(u0 := first lu)) ^= 0 => "failed"
+        [[c0, u0]]
+      num := numer f
+      den := denom f
+      l1:List Record(logand2:RF, contrib:UP) :=
+--        [[u, numer v] for u in lu | one? denom(v := den * logderiv u)]
+        [[u, numer v] for u in lu | (denom(v := den * logderiv u) = 1)]
+      rows := max(degree den,
+                  1 + reduce(max, [degree(u.contrib) for u in l1], 0)$List(N))
+      m:Matrix(F) := zero(rows, cols := 1 + #l1)
+      for i in 0..rows-1 repeat
+        for pp in l1 for j in minColIndex m .. maxColIndex m - 1 repeat
+          qsetelt_!(m, i + minRowIndex m, j, coefficient(pp.contrib, i))
+        qsetelt_!(m,i+minRowIndex m, maxColIndex m, coefficient(num, i))
+      m := rowEchelon m
+      ans := empty()$LLG
+      for i in minRowIndex m .. maxRowIndex m |
+       qelt(m, i, maxColIndex m) ^= 0 repeat
+        OK := false
+        for pp in l1 for j in minColIndex m .. maxColIndex m - 1
+         while not OK repeat
+          if qelt(m, i, j) ^= 0 then
+            OK := true
+            c := qelt(m, i, maxColIndex m) / qelt(m, i, j)
+            logderiv(c0 := c::UP::RF) ^= 0 => return "failed"
+            ans := concat([c0, pp.logand2], ans)
+        not OK => return "failed"
+      ans
+
+-- returns q in UP s.t. p = q', or "failed"
+    primintfldpoly(p, extendedint, t') ==
+      (u := primintegratepoly(p, extendedint, t')) case UPUP => "failed"
+      u.a0 ^= 0 => "failed"
+      u.answer
+
+-- returns q in GP st p = q', or "failed"
+    expintfldpoly(p, FRDE) ==
+      (u := expintegratepoly(p, FRDE)) case GPGP => "failed"
+      u.a0 ^= 0 => "failed"
+      u.answer
+
+-- returns (v in RF, c1...cn in RF, a in F) s.t. ci' = 0,
+-- and f = v' + a + +/[ci * ui'/ui]
+--                                  and a = 0 or a has no integral in UP
+    primlimitedint(f, derivation, extendedint, lu) ==
+      qr := divide(numer f, denom f)
+      (u1 := primlimintfrac(qr.remainder / (denom f), derivation, lu))
+        case "failed" => "failed"
+      (u2 := primintegratepoly(qr.quotient, extendedint,
+               retract derivation monomial(1, 1))) case UPUP => "failed"
+      [[u1.mainpart + u2.answer::RF, u1.limitedlogs], u2.a0]
+
+-- returns (v in RF, c1...cn in RF, a in F) s.t. ci' = 0,
+-- and f = v' + a + +/[ci * ui'/ui]
+--                                   and a = 0 or a has no integral in F
+    explimitedint(f, derivation, FRDE, lu) ==
+      qr := separate(f)$GP
+      (u1 := explimintfrac(qr.fracPart,derivation, lu)) case "failed" =>
+                                                                "failed"
+      (u2 := expintegratepoly(qr.polyPart, FRDE)) case GPGP => "failed"
+      [[u1.mainpart + convert(u2.answer)@RF, u1.limitedlogs], u2.a0]
+
+-- returns [v, c1...cn] s.t. f = v' + +/[ci * ui'/ui]
+-- f must have no polynomial part (degree numer f < degree denom f)
+    primlimintfrac(f, derivation, lu) ==
+      zero? f => [0, empty()]
+      degree numer f >= degree denom f => error "Not a proper fraction"
+      r := HermiteIntegrate(f, derivation)
+      zero?(r.logpart) => [r.answer, empty()]
+      (u := limitedLogs(r.logpart, logprmderiv(#1, derivation), lu))
+        case "failed" => "failed"
+      [r.answer, u::LLG]
+
+-- returns [v, c1...cn] s.t. f = v' + +/[ci * ui'/ui]
+-- f must have no polynomial part (degree numer f < degree denom f)
+-- f must be integral above t = 0
+    explimintfrac(f, derivation, lu) ==
+      zero? f => [0, empty()]
+      degree numer f >= degree denom f => error "Not a proper fraction"
+      order(denom f, monomial(1,1)) > 0 => error "Not integral at t = 0"
+      r  := HermiteIntegrate(f, derivation)
+      zero?(r.logpart) => [r.answer, empty()]
+      eta' := coefficient(derivation monomial(1, 1), 1)
+      (u := limitedLogs(r.logpart, logexpderiv(#1,derivation,eta'), lu))
+        case "failed" => "failed"
+      [r.answer - eta'::UP *
+        +/[((degree numer(v.logand))::Z - (degree denom(v.logand))::Z) *
+                                            v.coeff for v in u], u::LLG]
+
+    logexpderiv(f, derivation, eta') ==
+      (differentiate(f, derivation) / f) -
+            (((degree numer f)::Z - (degree denom f)::Z) * eta')::UP::RF
+
+    notelementary rec ==
+      rec.ir + integral(rec.polypart::RF + rec.specpart, monomial(1,1)$UP :: RF)
+
+-- returns
+--   (g in IR, a in F)  st f = g'+ a, and a=0 or a has no integral in UP
+    primintegrate(f, derivation, extendedint) ==
+      rec := monomialIntegrate(f, derivation)
+      not elem?(i1 := rec.ir) => [notelementary rec, 0]
+      (u2 := primintegratepoly(rec.polypart, extendedint,
+                        retract derivation monomial(1, 1))) case UPUP =>
+             [i1 + u2.elem::RF::IR
+                 + integral(u2.notelem::RF, monomial(1,1)$UP :: RF), 0]
+      [i1 + u2.answer::RF::IR, u2.a0]
+
+-- returns
+--   (g in IR, a in F)  st f = g' + a, and a = 0 or a has no integral in F
+    expintegrate(f, derivation, FRDE) ==
+      rec := monomialIntegrate(f, derivation)
+      not elem?(i1 := rec.ir) => [notelementary rec, 0]
+-- rec.specpart is either 0 or of the form p(t)/t**n
+      special := rec.polypart::GP +
+                   (numer(rec.specpart)::GP exquo denom(rec.specpart)::GP)::GP
+      (u2 := expintegratepoly(special, FRDE)) case GPGP =>
+        [i1 + convert(u2.elem)@RF::IR + integral(convert(u2.notelem)@RF,
+                                                 monomial(1,1)$UP :: RF), 0]
+      [i1 + convert(u2.answer)@RF::IR, u2.a0]
+
+-- returns
+--   (g in IR, a in F)  st f = g' + a, and a = 0 or a has no integral in F
+    tanintegrate(f, derivation, FRDE) ==
+      rec := monomialIntegrate(f, derivation)
+      not elem?(i1 := rec.ir) => [notelementary rec, 0]
+      r := monomialIntPoly(rec.polypart, derivation)
+      t := monomial(1, 1)$UP
+      c := coefficient(r.polypart, 1) / leadingCoefficient(derivation t)
+      derivation(c::UP) ^= 0 =>
+        [i1 + mkAnswer(r.answer::RF, empty(),
+                       [[r.polypart::RF + rec.specpart, dummy]$NE]), 0]
+      logs:List(LOG) :=
+         zero? c => empty()
+         [[1, monomial(1,1)$UPR - (c/(2::F))::UP::RF::UPR, (1 + t**2)::RF::UPR]]
+      c0 := coefficient(r.polypart, 0)
+      (u := tanintegratespecial(rec.specpart, differentiate(#1, derivation),
+       FRDE)) case RFRF =>
+        [i1 + mkAnswer(r.answer::RF + u.elem, logs, [[u.notelem,dummy]$NE]), c0]
+      [i1 + mkAnswer(r.answer::RF + u.answer, logs, empty()), u.a0 + c0]
+
+-- returns either (v in RF, c in RF) s.t. f = v' + cg, and c' = 0
+--             or (v in RF, a in F)  s.t. f = v' + a
+--                                  and a = 0 or a has no integral in UP
+    primextendedint(f, derivation, extendedint, g) ==
+      fqr := divide(numer f, denom f)
+      gqr := divide(numer g, denom g)
+      (u1 := primextintfrac(fqr.remainder / (denom f), derivation,
+                   gqr.remainder / (denom g))) case "failed" => "failed"
+      zero?(gqr.remainder) =>
+      -- the following FAIL cannot occur if the primitives are all logs
+         degree(gqr.quotient) > 0 => FAIL
+         (u3 := primintegratepoly(fqr.quotient, extendedint,
+               retract derivation monomial(1, 1))) case UPUP => "failed"
+         [u1.ratpart + u3.answer::RF, u3.a0]
+      (u2 := primintfldpoly(fqr.quotient - retract(u1.coeff)@UP *
+        gqr.quotient, extendedint, retract derivation monomial(1, 1)))
+          case "failed" => "failed"
+      [u2::UP::RF + u1.ratpart, u1.coeff]
+
+-- returns either (v in RF, c in RF) s.t. f = v' + cg, and c' = 0
+--             or (v in RF, a in F)  s.t. f = v' + a
+--                                   and a = 0 or a has no integral in F
+    expextendedint(f, derivation, FRDE, g) ==
+      qf := separate(f)$GP
+      qg := separate g
+      (u1 := expextintfrac(qf.fracPart, derivation, qg.fracPart))
+         case "failed" => "failed"
+      zero?(qg.fracPart) =>
+      --the following FAIL's cannot occur if the primitives are all logs
+        retractIfCan(qg.polyPart)@Union(F,"failed") case "failed"=> FAIL
+        (u3 := expintegratepoly(qf.polyPart,FRDE)) case GPGP => "failed"
+        [u1.ratpart + convert(u3.answer)@RF, u3.a0]
+      (u2 := expintfldpoly(qf.polyPart - retract(u1.coeff)@UP :: GP
+        * qg.polyPart, FRDE)) case "failed" => "failed"
+      [convert(u2::GP)@RF + u1.ratpart, u1.coeff]
+
+-- returns either
+--   (q in UP, a in F)  st p = q'+ a, and a=0 or a has no integral in UP
+-- or (q in UP, r in UP) st p = q'+ r, and r has no integral elem/UP
+    primintegratepoly(p, extendedint, t') ==
+      zero? p => [0, 0$F]
+      ans:UP := 0
+      while (d := degree p) > 0 repeat
+        (ans1 := extendedint leadingCoefficient p) case "failed" =>
+          return([ans, p])
+        p   := reductum p - monomial(d * t' * ans1.ratpart, (d - 1)::N)
+        ans := ans + monomial(ans1.ratpart, d)
+                              + monomial(ans1.coeff / (d + 1)::F, d + 1)
+      (ans1:= extendedint(rp := retract(p)@F)) case "failed" => [ans,rp]
+      [monomial(ans1.coeff, 1) + ans1.ratpart::UP + ans, 0$F]
+
+-- returns (v in RF, c in RF) s.t. f = v' + cg, and c' = 0
+-- g must have a squarefree denominator (always possible)
+-- g must have no polynomial part (degree numer g < degree denom g)
+-- f must have no polynomial part (degree numer f < degree denom f)
+    primextintfrac(f, derivation, g) ==
+      zero? f => [0, 0]
+      degree numer f >= degree denom f => error "Not a proper fraction"
+      r := HermiteIntegrate(f, derivation)
+      zero? g =>
+        r.logpart ^= 0 => "failed"
+        [r.answer, 0]
+      degree numer g >= degree denom g => error "Not a proper fraction"
+      differentiate(c := r.logpart / g, derivation) ^= 0 => "failed"
+      [r.answer, c]
+
+@
+\section{package INTRAT RationalIntegration}
+<<package INTRAT RationalIntegration>>=
+)abbrev package INTRAT RationalIntegration
+++ Rational function integration
+++ Author: Manuel Bronstein
+++ Date Created: 1987
+++ Date Last Updated: 24 October 1995
+++ Description:
+++   This package provides functions for the base
+++   case of the Risch algorithm.
+-- Used internally bt the integration packages
+RationalIntegration(F, UP): Exports == Implementation where
+  F : Join(Field, CharacteristicZero, RetractableTo Integer)
+  UP: UnivariatePolynomialCategory F
+
+  RF  ==> Fraction UP
+  IR  ==> IntegrationResult RF
+  LLG ==> List Record(coeff:RF, logand:RF)
+  URF ==> Union(Record(ratpart:RF, coeff:RF), "failed")
+  U   ==> Union(Record(mainpart:RF, limitedlogs:LLG), "failed")
+
+  Exports ==> with
+    integrate  : RF -> IR
+      ++ integrate(f) returns g such that \spad{g' = f}.
+    infieldint : RF -> Union(RF, "failed")
+      ++ infieldint(f) returns g such that \spad{g' = f} or "failed"
+      ++ if the integral of f is not a rational function.
+    extendedint: (RF, RF) -> URF
+       ++ extendedint(f, g) returns fractions \spad{[h, c]} such that
+       ++ \spad{c' = 0} and \spad{h' = f - cg},
+       ++ if \spad{(h, c)} exist, "failed" otherwise.
+    limitedint : (RF, List RF) -> U
+       ++ \spad{limitedint(f, [g1,...,gn])} returns
+       ++ fractions \spad{[h,[[ci, gi]]]}
+       ++ such that the gi's are among \spad{[g1,...,gn]}, \spad{ci' = 0}, and
+       ++ \spad{(h+sum(ci log(gi)))' = f}, if possible, "failed" otherwise.
+
+  Implementation ==> add
+    import TranscendentalIntegration(F, UP)
+
+    infieldint f ==
+      rec := baseRDE(0, f)$TranscendentalRischDE(F, UP)
+      rec.nosol => "failed"
+      rec.ans
+
+    integrate f ==
+      rec := monomialIntegrate(f, differentiate)
+      integrate(rec.polypart)::RF::IR + rec.ir
+
+    limitedint(f, lu) ==
+      quorem := divide(numer f, denom f)
+      (u := primlimintfrac(quorem.remainder / (denom f), differentiate,
+        lu)) case "failed" => "failed"
+      [u.mainpart + integrate(quorem.quotient)::RF, u.limitedlogs]
+
+    extendedint(f, g) ==
+      fqr := divide(numer f, denom f)
+      gqr := divide(numer g, denom g)
+      (i1 := primextintfrac(fqr.remainder / (denom f), differentiate,
+                   gqr.remainder / (denom g))) case "failed" => "failed"
+      i2:=integrate(fqr.quotient-retract(i1.coeff)@UP *gqr.quotient)::RF
+      [i2 + i1.ratpart, i1.coeff]
+
+@
+\section{package INTRF RationalFunctionIntegration}
+<<package INTRF RationalFunctionIntegration>>=
+)abbrev package INTRF RationalFunctionIntegration
+++ Integration of rational functions
+++ Author: Manuel Bronstein
+++ Date Created: 1987
+++ Date Last Updated: 29 Mar 1990
+++ Keywords: polynomial, fraction, integration.
+++ Description:
+++   This package provides functions for the integration
+++   of rational functions.
+++ Examples: )r INTRF INPUT
+RationalFunctionIntegration(F): Exports == Implementation where
+  F: Join(IntegralDomain, RetractableTo Integer, CharacteristicZero)
+
+  SE  ==> Symbol
+  P   ==> Polynomial F
+  Q   ==> Fraction P
+  UP  ==> SparseUnivariatePolynomial Q
+  QF  ==> Fraction UP
+  LGQ ==> List Record(coeff:Q, logand:Q)
+  UQ  ==> Union(Record(ratpart:Q, coeff:Q), "failed")
+  ULQ ==> Union(Record(mainpart:Q, limitedlogs:LGQ), "failed")
+
+  Exports ==> with
+    internalIntegrate: (Q, SE) -> IntegrationResult Q
+       ++ internalIntegrate(f, x) returns g such that \spad{dg/dx = f}.
+    infieldIntegrate : (Q, SE) -> Union(Q, "failed")
+       ++ infieldIntegrate(f, x) returns a fraction
+       ++ g such that \spad{dg/dx = f}
+       ++ if g exists, "failed" otherwise.
+    limitedIntegrate : (Q, SE, List Q) -> ULQ
+       ++ \spad{limitedIntegrate(f, x, [g1,...,gn])} returns fractions
+       ++ \spad{[h, [[ci,gi]]]} such that the gi's are among
+       ++ \spad{[g1,...,gn]},
+       ++ \spad{dci/dx = 0}, and  \spad{d(h + sum(ci log(gi)))/dx = f}
+       ++ if possible, "failed" otherwise.
+    extendedIntegrate: (Q, SE, Q) -> UQ
+       ++ extendedIntegrate(f, x, g) returns fractions \spad{[h, c]} such that
+       ++ \spad{dc/dx = 0} and \spad{dh/dx = f - cg}, if \spad{(h, c)} exist,
+       ++ "failed" otherwise.
+
+  Implementation ==> add
+    import RationalIntegration(Q, UP)
+    import IntegrationResultFunctions2(QF, Q)
+    import PolynomialCategoryQuotientFunctions(IndexedExponents SE,
+                                                       SE, F, P, Q)
+
+    infieldIntegrate(f, x) ==
+      map(multivariate(#1, x), infieldint univariate(f, x))
+
+    internalIntegrate(f, x) ==
+      map(multivariate(#1, x), integrate univariate(f, x))
+
+    extendedIntegrate(f, x, g) ==
+      map(multivariate(#1, x),
+          extendedint(univariate(f, x), univariate(g, x)))
+
+    limitedIntegrate(f, x, lu) ==
+      map(multivariate(#1, x),
+          limitedint(univariate(f, x), [univariate(u, x) for u in lu]))
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+ 
+-- SPAD files for the integration world should be compiled in the
+-- following order:
+--
+--   intaux  rderf  INTRF  curve  curvepkg  divisor  pfo
+--   intalg  intaf  efstruc  rdeef  intpm  intef  irexpand  integrat
+ 
+<<package SUBRESP SubResultantPackage>>
+<<package MONOTOOL MonomialExtensionTools>>
+<<package INTHERTR TranscendentalHermiteIntegration>>
+<<package INTTR TranscendentalIntegration>>
+<<package INTRAT RationalIntegration>>
+<<package INTRF RationalFunctionIntegration>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

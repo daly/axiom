@@ -1,0 +1,398 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra defintrf.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package DFINTTLS DefiniteIntegrationTools}
+<<package DFINTTLS DefiniteIntegrationTools>>=
+)abbrev package DFINTTLS DefiniteIntegrationTools
+++ Tools for definite integration
+++ Author: Manuel Bronstein
+++ Date Created: 15 April 1992
+++ Date Last Updated: 24 February 1993
+++ Description:
+++   \spadtype{DefiniteIntegrationTools} provides common tools used
+++   by the definite integration of both rational and elementary functions.
+DefiniteIntegrationTools(R, F): Exports == Implementation where
+  R : Join(GcdDomain, OrderedSet, RetractableTo Integer,
+           LinearlyExplicitRingOver Integer)
+  F : Join(TranscendentalFunctionCategory,
+           AlgebraicallyClosedFunctionSpace R)
+
+  B   ==> Boolean
+  Z   ==> Integer
+  Q   ==> Fraction Z
+  SE  ==> Symbol
+  P   ==> Polynomial R
+  RF  ==> Fraction P
+  UP  ==> SparseUnivariatePolynomial F
+  K   ==> Kernel F
+  OFE ==> OrderedCompletion F
+  UPZ ==> SparseUnivariatePolynomial Z
+  UPQ ==> SparseUnivariatePolynomial Q
+  REC ==> Record(left:Q, right:Q)
+  REC2==> Record(endpoint:Q, dir:Z)
+  U   ==> Union(fin:REC, halfinf:REC2, all:"all", failed:"failed")
+  IGNOR ==> "noPole"
+
+  Exports ==> with
+    ignore?: String -> B
+      ++ ignore?(s) is true if s is the string that tells the integrator
+      ++ to assume that the function has no pole in the integration interval.
+    computeInt: (K, F, OFE, OFE, B) -> Union(OFE, "failed")
+      ++ computeInt(x, g, a, b, eval?) returns the integral of \spad{f} for x
+      ++ between a and b, assuming that g is an indefinite integral of
+      ++ \spad{f} and \spad{f} has no pole between a and b.
+      ++ If \spad{eval?} is true, then \spad{g} can be evaluated safely
+      ++ at \spad{a} and \spad{b}, provided that they are finite values.
+      ++ Otherwise, limits must be computed.
+    checkForZero: (P,  SE, OFE, OFE, B) -> Union(B, "failed")
+      ++ checkForZero(p, x, a, b, incl?) is true if p has a zero for x between
+      ++ a and b, false otherwise, "failed" if this cannot be determined.
+      ++ Check for a and b inclusive if incl? is true, exclusive otherwise.
+    checkForZero: (UP, OFE, OFE, B) -> Union(B, "failed")
+      ++ checkForZero(p, a, b, incl?) is true if p has a zero between
+      ++ a and b, false otherwise, "failed" if this cannot be determined.
+      ++ Check for a and b inclusive if incl? is true, exclusive otherwise.
+
+  Implementation ==> add
+    import RealZeroPackage UPZ
+    import InnerPolySign(F, UP)
+    import ElementaryFunctionSign(R, F)
+    import PowerSeriesLimitPackage(R, F)
+    import UnivariatePolynomialCommonDenominator(Z, Q, UPQ)
+
+    mkLogPos    : F -> F
+    keeprec?    : (Q, REC) -> B
+    negative    : F -> Union(B, "failed")
+    mkKerPos    : K -> Union(F, "positive")
+    posRoot     : (UP, B) -> Union(B, "failed")
+    realRoot    : UP -> Union(B, "failed")
+    var         : UP -> Union(Z, "failed")
+    maprat      : UP -> Union(UPZ, "failed")
+    variation   : (UP, F) -> Union(Z, "failed")
+    infeval     : (UP, OFE) -> Union(F, "failed")
+    checkHalfAx : (UP, F, Z, B) -> Union(B, "failed")
+    findLimit   : (F, K, OFE, String, B) -> Union(OFE, "failed")
+    checkBudan  : (UP, OFE, OFE, B) -> Union(B, "failed")
+    checkDeriv  : (UP, OFE, OFE) -> Union(B, "failed")
+    sameSign    : (UP, OFE, OFE) -> Union(B, "failed")
+    intrat      : (OFE, OFE) -> U
+    findRealZero: (UPZ, U, B) -> List REC
+
+    variation(p, a)      == var p(monomial(1, 1)$UP - a::UP)
+    keeprec?(a, rec)     == (a > rec.right) or (a < rec.left)
+
+    checkHalfAx(p, a, d, incl?) ==
+      posRoot(p(d * (monomial(1, 1)$UP - a::UP)), incl?)
+
+    ignore? str ==
+      str = IGNOR => true
+      error "integrate: last argument must be 'noPole'"
+
+    computeInt(k, f, a, b, eval?) ==
+      is?(f, "integral"::SE) => "failed"
+      if not eval? then f := mkLogPos f
+      ((ib := findLimit(f, k, b, "left", eval?)) case "failed") or
+          ((ia := findLimit(f, k, a, "right", eval?)) case "failed") => "failed"
+      infinite?(ia::OFE) and (ia::OFE = ib::OFE) => "failed"
+      ib::OFE - ia::OFE
+
+    findLimit(f, k, a, dir, eval?) ==
+      r := retractIfCan(a)@Union(F, "failed")
+      r case F =>
+        eval? => mkLogPos(eval(f, k, r::F))::OFE
+        (u := limit(f, equation(k::F, r::F), dir)) case OFE => u::OFE
+        "failed"
+      (u := limit(f, equation(k::F::OFE, a))) case OFE => u::OFE
+      "failed"
+
+    mkLogPos f ==
+      lk := empty()$List(K)
+      lv := empty()$List(F)
+      for k in kernels f | is?(k, "log"::SE) repeat
+        if (v := mkKerPos k) case F then
+          lk := concat(k, lk)
+          lv := concat(v::F, lv)
+      eval(f, lk, lv)
+
+    mkKerPos k ==
+      (u := negative(f := first argument k)) case "failed" =>
+                                                     log(f**2) / (2::F)
+      u::B => log(-f)
+      "positive"
+
+    negative f ==
+      (u := sign f) case "failed" => "failed"
+      u::Z < 0
+
+    checkForZero(p, x, a, b, incl?) ==
+      checkForZero(
+        map(#1::F, univariate(p, x))$SparseUnivariatePolynomialFunctions2(P, F),
+            a, b, incl?)
+
+    checkForZero(q, a, b, incl?) ==
+      ground? q => false
+      (d := maprat q) case UPZ and not((i := intrat(a, b)) case failed) =>
+          not empty? findRealZero(d::UPZ, i, incl?)
+      (u := checkBudan(q, a, b, incl?)) case "failed" =>
+         incl? => checkDeriv(q, a, b)
+         "failed"
+      u::B
+
+    maprat p ==
+      ans:UPQ := 0
+      while p ^= 0 repeat
+        (r := retractIfCan(c := leadingCoefficient p)@Union(Q,"failed"))
+          case "failed"  => return "failed"
+        ans := ans + monomial(r::Q, degree p)
+        p   := reductum p
+      map(numer,(splitDenominator ans).num
+         )$SparseUnivariatePolynomialFunctions2(Q, Z)
+
+    intrat(a, b) ==
+      (n := whatInfinity a) ^= 0 =>
+        (r := retractIfCan(b)@Union(F,"failed")) case "failed" => ["all"]
+        (q := retractIfCan(r::F)@Union(Q, "failed")) case "failed" =>
+          ["failed"]
+        [[q::Q, n]]
+      (q := retractIfCan(retract(a)@F)@Union(Q,"failed")) case "failed"
+        => ["failed"]
+      (n := whatInfinity b) ^= 0 => [[q::Q, n]]
+      (t := retractIfCan(retract(b)@F)@Union(Q,"failed")) case "failed"
+        => ["failed"]
+      [[q::Q, t::Q]]
+
+    findRealZero(p, i, incl?) ==
+      i case fin =>
+        l := realZeros(p, r := i.fin)
+        incl? => l
+        select_!(keeprec?(r.left, #1) and keeprec?(r.right, #1), l)
+      i case all => realZeros p
+      i case halfinf =>
+        empty?(l := realZeros p) => empty()
+        bounds:REC :=
+          i.halfinf.dir > 0 => [i.halfinf.endpoint, "max"/[t.right for t in l]]
+          ["min"/[t.left for t in l], i.halfinf.endpoint]
+        l := [u::REC for t in l | (u := refine(p, t, bounds)) case REC]
+        incl? => l
+        select_!(keeprec?(i.halfinf.endpoint, #1), l)
+      error "findRealZero: should not happpen"
+
+    checkBudan(p, a, b, incl?) ==
+      r := retractIfCan(b)@Union(F, "failed")
+      (n := whatInfinity a) ^= 0 =>
+        r case "failed" => realRoot p
+        checkHalfAx(p, r::F, n, incl?)
+      (za? := zero? p(aa := retract(a)@F)) and incl? => true
+      (n := whatInfinity b) ^= 0 => checkHalfAx(p, aa, n, incl?)
+      (zb? := zero? p(bb := r::F)) and incl? => true
+      (va := variation(p, aa)) case "failed" or
+                   (vb := variation(p, bb)) case "failed" => "failed"
+      m:Z := 0
+      if za? then m := inc m
+      if zb? then m := inc m
+      odd?(v := va::Z - vb::Z) =>          -- p has an odd number of roots
+        incl? or even? m => true
+--        one? v => false
+        (v = 1) => false
+        "failed"
+      zero? v => false                     -- p has no roots
+--      one? m => true                    -- p has an even number > 0 of roots
+      (m = 1) => true                     -- p has an even number > 0 of roots
+      "failed"
+
+    checkDeriv(p, a, b) ==
+      (r := retractIfCan(p)@Union(F, "failed")) case F => zero?(r::F)
+      (s := sameSign(p, a, b)) case "failed" => "failed"
+      s::B =>                  -- p has the same nonzero sign at a and b
+        (u := checkDeriv(differentiate p,a,b)) case "failed" => "failed"
+        u::B => "failed"
+        false
+      true
+
+    realRoot p ==
+      (b := posRoot(p, true)) case "failed" => "failed"
+      b::B => true
+      posRoot(p(p - monomial(1, 1)$UP), true)
+
+    sameSign(p, a, b) ==
+      (ea := infeval(p, a)) case "failed" => "failed"
+      (eb := infeval(p, b)) case "failed" => "failed"
+      (s := sign(ea::F * eb::F)) case "failed" => "failed"
+      s::Z > 0
+
+-- returns true if p has a positive root. Include 0 is incl0? is true
+    posRoot(p, incl0?) ==
+      (z0? := zero?(coefficient(p, 0))) and incl0? => true
+      (v := var p) case "failed" => "failed"
+      odd?(v::Z) =>            -- p has an odd number of positive roots
+        incl0? or not(z0?) => true
+--        one?(v::Z) => false
+        (v::Z) = 1 => false
+        "failed"
+      zero?(v::Z) => false     -- p has no positive roots
+      z0? => true              -- p has an even number > 0 of positive roots
+      "failed"
+
+    infeval(p, a) ==
+      zero?(n := whatInfinity a) => p(retract(a)@F)
+      (u := signAround(p, n, sign)) case "failed" => "failed"
+      u::Z::F
+
+    var q ==
+      i:Z := 0
+      (lastCoef := negative leadingCoefficient q) case "failed" =>
+        "failed"
+      while ((q := reductum q) ^= 0) repeat
+        (next := negative leadingCoefficient q) case "failed" =>
+          return "failed"
+        if ((not(lastCoef::B)) and next::B) or
+                        ((not(next::B)) and lastCoef::B) then i := i + 1
+        lastCoef := next
+      i
+
+@
+\section{package DEFINTRF RationalFunctionDefiniteIntegration}
+<<package DEFINTRF RationalFunctionDefiniteIntegration>>=
+)abbrev package DEFINTRF RationalFunctionDefiniteIntegration
+++ Definite integration of rational functions.
+++ Author: Manuel Bronstein
+++ Date Created: 2 October 1989
+++ Date Last Updated: 2 February 1993
+++ Description:
+++   \spadtype{RationalFunctionDefiniteIntegration} provides functions to
+++   compute definite integrals of rational functions.
+
+
+RationalFunctionDefiniteIntegration(R): Exports == Implementation where
+  R : Join(EuclideanDomain, OrderedSet, CharacteristicZero,
+           RetractableTo Integer, LinearlyExplicitRingOver Integer)
+
+  SE  ==> Symbol
+  RF  ==> Fraction Polynomial R
+  FE  ==> Expression R
+  ORF ==> OrderedCompletion RF
+  OFE ==> OrderedCompletion FE
+  U   ==> Union(f1:OFE, f2:List OFE, fail:"failed", pole:"potentialPole")
+
+  Exports ==> with
+    integrate: (RF, SegmentBinding OFE) -> U
+      ++ integrate(f, x = a..b) returns the integral of
+      ++ \spad{f(x)dx} from a to b.
+      ++ Error: if f has a pole for x between a and b.
+    integrate: (RF, SegmentBinding OFE, String) -> U
+      ++ integrate(f, x = a..b, "noPole") returns the
+      ++ integral of \spad{f(x)dx} from a to b.
+      ++ If it is not possible to check whether f has a pole for x
+      ++ between a and b (because of parameters), then this function
+      ++ will assume that f has no such pole.
+      ++ Error: if f has a pole for x between a and b or
+      ++ if the last argument is not "noPole".
+-- the following two are contained in the above, but they are for the
+-- interpreter... DO NOT COMMENT OUT UNTIL THE INTERPRETER IS BETTER!
+    integrate: (RF, SegmentBinding ORF) -> U
+      ++ integrate(f, x = a..b) returns the integral of
+      ++ \spad{f(x)dx} from a to b.
+      ++ Error: if f has a pole for x between a and b.
+    integrate: (RF, SegmentBinding ORF, String) -> U
+      ++ integrate(f, x = a..b, "noPole") returns the
+      ++ integral of \spad{f(x)dx} from a to b.
+      ++ If it is not possible to check whether f has a pole for x
+      ++ between a and b (because of parameters), then this function
+      ++ will assume that f has no such pole.
+      ++ Error: if f has a pole for x between a and b or
+      ++ if the last argument is not "noPole".
+
+  Implementation ==> add
+    import DefiniteIntegrationTools(R, FE)
+    import IntegrationResultRFToFunction(R)
+    import OrderedCompletionFunctions2(RF, FE)
+
+    int   : (RF, SE, OFE, OFE, Boolean) -> U
+    nopole: (RF, SE, OFE, OFE) -> U
+
+    integrate(f:RF, s:SegmentBinding OFE) ==
+      int(f, variable s, lo segment s, hi segment s, false)
+
+    nopole(f, x, a, b) ==
+      k := kernel(x)@Kernel(FE)
+      (u := integrate(f, x)) case FE =>
+        (v := computeInt(k, u::FE, a, b, true)) case "failed" => ["failed"]
+        [v::OFE]
+      ans := empty()$List(OFE)
+      for g in u::List(FE) repeat
+        (v := computeInt(k, g, a, b, true)) case "failed" => return ["failed"]
+        ans := concat_!(ans, [v::OFE])
+      [ans]
+
+    integrate(f:RF, s:SegmentBinding ORF) ==
+      int(f, variable s, map(#1::FE, lo segment s),
+                         map(#1::FE, hi segment s), false)
+
+    integrate(f:RF, s:SegmentBinding ORF, str:String) ==
+      int(f, variable s, map(#1::FE, lo segment s),
+                         map(#1::FE, hi segment s), ignore? str)
+
+    integrate(f:RF, s:SegmentBinding OFE, str:String) ==
+      int(f, variable s, lo segment s, hi segment s, ignore? str)
+
+    int(f, x, a, b, ignor?) ==
+      a = b => [0::OFE]
+      (z := checkForZero(denom f, x, a, b, true)) case "failed" =>
+        ignor? => nopole(f, x, a, b)
+        ["potentialPole"]
+      z::Boolean => error "integrate: pole in path of integration"
+      nopole(f, x, a, b)
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package DFINTTLS DefiniteIntegrationTools>>
+<<package DEFINTRF RationalFunctionDefiniteIntegration>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

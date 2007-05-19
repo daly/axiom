@@ -1,0 +1,961 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra efstruc.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package SYMFUNC SymmetricFunctions}
+<<package SYMFUNC SymmetricFunctions>>=
+)abbrev package SYMFUNC SymmetricFunctions
+++ The elementary symmetric functions
+++ Author: Manuel Bronstein
+++ Date Created: 13 Feb 1989
+++ Date Last Updated: 28 Jun 1990
+++ Description: Computes all the symmetric functions in n variables.
+SymmetricFunctions(R:Ring): Exports == Implementation where
+  UP  ==> SparseUnivariatePolynomial R
+
+  Exports ==> with
+    symFunc: List R  -> Vector R
+      ++ symFunc([r1,...,rn]) returns the vector of the
+      ++ elementary symmetric functions in the \spad{ri's}:
+      ++ \spad{[r1 + ... + rn, r1 r2 + ... + r(n-1) rn, ..., r1 r2 ... rn]}.
+    symFunc: (R, PositiveInteger) -> Vector R
+      ++ symFunc(r, n) returns the vector of the elementary
+      ++ symmetric functions in \spad{[r,r,...,r]} \spad{n} times.
+
+  Implementation ==> add
+    signFix: (UP, NonNegativeInteger) -> Vector R
+
+    symFunc(x, n) == signFix((monomial(1, 1)$UP - x::UP) ** n, 1 + n)
+
+    symFunc l ==
+      signFix(*/[monomial(1, 1)$UP - a::UP for a in l], 1 + #l)
+
+    signFix(p, n) ==
+      m := minIndex(v := vectorise(p, n)) + 1
+      for i in 0..((#v quo 2) - 1)::NonNegativeInteger repeat
+        qsetelt_!(v, 2*i + m, - qelt(v, 2*i + m))
+      reverse_! v
+
+@
+\section{package TANEXP TangentExpansions}
+<<package TANEXP TangentExpansions>>=
+)abbrev package TANEXP TangentExpansions
+++ Expansions of tangents of sums and quotients
+++ Author: Manuel Bronstein
+++ Date Created: 13 Feb 1989
+++ Date Last Updated: 20 Apr 1990
+++ Description: Expands tangents of sums and scalar products.
+TangentExpansions(R:Field): Exports == Implementation where
+  PI ==> PositiveInteger
+  Z  ==> Integer
+  UP ==> SparseUnivariatePolynomial R
+  QF ==> Fraction UP
+
+  Exports ==> with
+    tanSum: List R -> R
+      ++ tanSum([a1,...,an]) returns \spad{f(a1,...,an)} such that
+      ++ if \spad{ai = tan(ui)} then \spad{f(a1,...,an) = tan(u1 + ... + un)}.
+    tanAn : (R, PI) -> UP
+      ++ tanAn(a, n) returns \spad{P(x)} such that
+      ++ if \spad{a = tan(u)} then \spad{P(tan(u/n)) = 0}.
+    tanNa : (R,  Z) -> R
+      ++ tanNa(a, n) returns \spad{f(a)} such that
+      ++ if \spad{a = tan(u)} then \spad{f(a) = tan(n * u)}.
+
+  Implementation ==> add
+    import SymmetricFunctions(R)
+    import SymmetricFunctions(UP)
+
+    m1toN : Integer -> Integer
+    tanPIa: PI -> QF
+
+    m1toN n     == (odd? n => -1; 1)
+    tanAn(a, n) == a * denom(q := tanPIa n) - numer q
+
+    tanNa(a, n) ==
+      zero? n => 0
+      negative? n => - tanNa(a, -n)
+      (numer(t := tanPIa(n::PI)) a) / ((denom t) a)
+
+    tanSum l ==
+      m := minIndex(v := symFunc l)
+      +/[m1toN(i+1) * v(2*i - 1 + m) for i in 1..(#v quo 2)]
+        / +/[m1toN(i) * v(2*i + m) for i in 0..((#v - 1) quo 2)]
+
+-- tanPIa(n) returns P(a)/Q(a) such that
+-- if a = tan(u) then P(a)/Q(a) = tan(n * u);
+    tanPIa n ==
+      m := minIndex(v := symFunc(monomial(1, 1)$UP, n))
+      +/[m1toN(i+1) * v(2*i - 1 + m) for i in 1..(#v quo 2)]
+        / +/[m1toN(i) * v(2*i + m) for i in 0..((#v - 1) quo 2)]
+
+@
+\section{package EFSTRUC ElementaryFunctionStructurePackage}
+<<package EFSTRUC ElementaryFunctionStructurePackage>>=
+)abbrev package EFSTRUC ElementaryFunctionStructurePackage
+++ Risch structure theorem
+++ Author: Manuel Bronstein
+++ Date Created: 1987
+++ Date Last Updated: 16 August 1995
+++ Description:
+++   ElementaryFunctionStructurePackage provides functions to test the
+++   algebraic independence of various elementary functions, using the
+++   Risch structure theorem (real and complex versions).
+++   It also provides transformations on elementary functions
+++   which are not considered simplifications.
+++ Keywords: elementary, function, structure.
+ElementaryFunctionStructurePackage(R,F): Exports == Implementation where
+  R : Join(IntegralDomain, OrderedSet, RetractableTo Integer,
+           LinearlyExplicitRingOver Integer)
+  F : Join(AlgebraicallyClosedField, TranscendentalFunctionCategory,
+           FunctionSpace R)
+
+  B   ==> Boolean
+  N   ==> NonNegativeInteger
+  Z   ==> Integer
+  Q   ==> Fraction Z
+  SY  ==> Symbol
+  K   ==> Kernel F
+  UP  ==> SparseUnivariatePolynomial F
+  SMP ==> SparseMultivariatePolynomial(R, K)
+  REC ==> Record(func:F, kers: List K, vals:List F)
+  U   ==> Union(vec:Vector Q, func:F, fail: Boolean)
+  POWER ==> "%power"::SY
+  NTHR  ==> "nthRoot"::SY
+
+  Exports ==> with
+    normalize: F -> F
+      ++ normalize(f) rewrites \spad{f} using the least possible number of
+      ++ real algebraically independent kernels.
+    normalize: (F, SY) -> F
+      ++ normalize(f, x) rewrites \spad{f} using the least possible number of
+      ++ real algebraically independent kernels involving \spad{x}.
+    rischNormalize: (F, SY) -> REC
+      ++ rischNormalize(f, x) returns \spad{[g, [k1,...,kn], [h1,...,hn]]}
+      ++ such that \spad{g = normalize(f, x)} and each \spad{ki} was
+      ++ rewritten as \spad{hi} during the normalization.
+    realElementary: F -> F
+      ++ realElementary(f) rewrites \spad{f} in terms of the 4 fundamental real
+      ++ transcendental elementary functions: \spad{log, exp, tan, atan}.
+    realElementary: (F, SY) -> F
+      ++ realElementary(f,x) rewrites the kernels of \spad{f} involving \spad{x}
+      ++ in terms of the 4 fundamental real
+      ++ transcendental elementary functions: \spad{log, exp, tan, atan}.
+    validExponential: (List K, F, SY) -> Union(F, "failed")
+      ++ validExponential([k1,...,kn],f,x) returns \spad{g} if \spad{exp(f)=g}
+      ++ and \spad{g} involves only \spad{k1...kn}, and "failed" otherwise.
+    rootNormalize: (F, K) -> F
+      ++ rootNormalize(f, k) returns \spad{f} rewriting either \spad{k} which
+      ++ must be an nth-root in terms of radicals already in \spad{f}, or some
+      ++ radicals in \spad{f} in terms of \spad{k}.
+    tanQ: (Q, F) -> F
+      ++ tanQ(q,a) is a local function with a conditional implementation.
+
+  Implementation ==> add
+    import TangentExpansions F
+    import IntegrationTools(R, F)
+    import IntegerLinearDependence F
+    import AlgebraicManipulations(R, F)
+    import InnerCommonDenominator(Z, Q, Vector Z, Vector Q)
+
+    k2Elem             : (K, List SY) -> F
+    realElem           : (F, List SY) -> F
+    smpElem            : (SMP, List SY) -> F
+    deprel             : (List K, K, SY) -> U
+    rootDep            : (List K, K)     -> U
+    qdeprel            : (List F, F)     -> U
+    factdeprel         : (List K, K)     -> U
+    toR                : (List K, F) -> List K
+    toY                : List K -> List F
+    toZ                : List K -> List F
+    toU                : List K -> List F
+    toV                : List K -> List F
+    ktoY               : K  -> F
+    ktoZ               : K  -> F
+    ktoU               : K  -> F
+    ktoV               : K  -> F
+    gdCoef?            : (Q, Vector Q) -> Boolean
+    goodCoef           : (Vector Q, List K, SY) ->
+                                 Union(Record(index:Z, ker:K), "failed")
+    tanRN              : (Q, K) -> F
+    localnorm          : F -> F
+    rooteval           : (F, List K, K, Q) -> REC
+    logeval            : (F, List K, K, Vector Q) -> REC
+    expeval            : (F, List K, K, Vector Q) -> REC
+    taneval            : (F, List K, K, Vector Q) -> REC
+    ataneval           : (F, List K, K, Vector Q) -> REC
+    depeval            : (F, List K, K, Vector Q) -> REC
+    expnosimp          : (F, List K, K, Vector Q, List F, F) -> REC
+    tannosimp          : (F, List K, K, Vector Q, List F, F) -> REC
+    rtNormalize        : F -> F
+    rootNormalize0     : F -> REC
+    rootKernelNormalize: (F, List K, K) -> Union(REC, "failed")
+    tanSum             : (F, List F) -> F
+
+    comb?     := F has CombinatorialOpsCategory
+    mpiover2:F := pi()$F / (-2::F)
+
+    realElem(f, l)       == smpElem(numer f, l) / smpElem(denom f, l)
+    realElementary(f, x) == realElem(f, [x])
+    realElementary f     == realElem(f, variables f)
+    toY ker              == [func for k in ker | (func := ktoY k) ^= 0]
+    toZ ker              == [func for k in ker | (func := ktoZ k) ^= 0]
+    toU ker              == [func for k in ker | (func := ktoU k) ^= 0]
+    toV ker              == [func for k in ker | (func := ktoV k) ^= 0]
+    rtNormalize f        == rootNormalize0(f).func
+    toR(ker, x) == select(is?(#1, NTHR) and first argument(#1) = x, ker)
+
+    if R has GcdDomain then
+      tanQ(c, x) ==
+        tanNa(rootSimp zeroOf tanAn(x, denom(c)::PositiveInteger), numer c)
+    else
+      tanQ(c, x) ==
+        tanNa(zeroOf tanAn(x, denom(c)::PositiveInteger), numer c)
+
+    -- tanSum(c, [a1,...,an]) returns f(c, a1,...,an) such that
+    -- if ai = tan(ui) then f(c, a1,...,an) = tan(c + u1 + ... + un).
+    -- MUST BE CAREFUL FOR WHEN c IS AN ODD MULTIPLE of pi/2
+    tanSum(c, l) ==
+      k := c / mpiover2        -- k = - 2 c / pi, check for odd integer
+                               -- tan((2n+1) pi/2 x) = - 1 / tan x
+      (r := retractIfCan(k)@Union(Z, "failed")) case Z and odd?(r::Z) =>
+           - inv tanSum l
+      tanSum concat(tan c, l)
+
+    rootNormalize0 f ==
+      ker := select_!(is?(#1, NTHR) and empty? variables first argument #1,
+                      tower f)$List(K)
+      empty? ker => [f, empty(), empty()]
+      (n := (#ker)::Z - 1) < 1 => [f, empty(), empty()]
+      for i in 1..n for kk in rest ker repeat
+        (u := rootKernelNormalize(f, first(ker, i), kk)) case REC =>
+          rec := u::REC
+          rn  := rootNormalize0(rec.func)
+          return [rn.func, concat(rec.kers, rn.kers), concat(rec.vals, rn.vals)]
+      [f, empty(), empty()]
+
+    deprel(ker, k, x) ==
+      is?(k, "log"::SY) or is?(k, "exp"::SY) =>
+        qdeprel([differentiate(g, x) for g in toY ker],
+                 differentiate(ktoY k, x))
+      is?(k, "atan"::SY) or is?(k, "tan"::SY) =>
+        qdeprel([differentiate(g, x) for g in toU ker],
+                 differentiate(ktoU k, x))
+      is?(k, NTHR) => rootDep(ker, k)
+      comb? and is?(k, "factorial"::SY) =>
+        factdeprel([x for x in ker | is?(x,"factorial"::SY) and x^=k],k)
+      [true]
+
+    ktoY k ==
+      is?(k, "log"::SY) => k::F
+      is?(k, "exp"::SY) => first argument k
+      0
+
+    ktoZ k ==
+      is?(k, "log"::SY) => first argument k
+      is?(k, "exp"::SY) => k::F
+      0
+
+    ktoU k ==
+      is?(k, "atan"::SY) => k::F
+      is?(k,  "tan"::SY) => first argument k
+      0
+
+    ktoV k ==
+      is?(k,  "tan"::SY) => k::F
+      is?(k, "atan"::SY) => first argument k
+      0
+
+    smpElem(p, l) ==
+      map(k2Elem(#1, l), #1::F, p)$PolynomialCategoryLifting(
+                                       IndexedExponents K, K, R, SMP, F)
+
+    k2Elem(k, l) ==
+      ez, iez, tz2: F
+      kf := k::F
+      not(empty? l) and empty? [v for v in variables kf | member?(v, l)] => kf
+      empty?(args :List F := [realElem(a, l) for a in argument k]) => kf
+      z := first args
+      is?(k, POWER)       => (zero? z => 0; exp(last(args) * log z))
+      is?(k, "cot"::SY)   => inv tan z
+      is?(k, "acot"::SY)  => atan inv z
+      is?(k, "asin"::SY)  => atan(z / sqrt(1 - z**2))
+      is?(k, "acos"::SY)  => atan(sqrt(1 - z**2) / z)
+      is?(k, "asec"::SY)  => atan sqrt(1 - z**2)
+      is?(k, "acsc"::SY)  => atan inv sqrt(1 - z**2)
+      is?(k, "asinh"::SY) => log(sqrt(1 + z**2) + z)
+      is?(k, "acosh"::SY) => log(sqrt(z**2 - 1) + z)
+      is?(k, "atanh"::SY) => log((z + 1) / (1 - z)) / (2::F)
+      is?(k, "acoth"::SY) => log((z + 1) / (z - 1)) / (2::F)
+      is?(k, "asech"::SY) => log((inv z) + sqrt(inv(z**2) - 1))
+      is?(k, "acsch"::SY) => log((inv z) + sqrt(1 + inv(z**2)))
+      is?(k, "%paren"::SY) or is?(k, "%box"::SY) =>
+        empty? rest args => z
+        kf
+      if has?(op := operator k, "htrig") then iez  := inv(ez  := exp z)
+      is?(k, "sinh"::SY)  => (ez - iez) / (2::F)
+      is?(k, "cosh"::SY)  => (ez + iez) / (2::F)
+      is?(k, "tanh"::SY)  => (ez - iez) / (ez + iez)
+      is?(k, "coth"::SY)  => (ez + iez) / (ez - iez)
+      is?(k, "sech"::SY)  => 2 * inv(ez + iez)
+      is?(k, "csch"::SY)  => 2 * inv(ez - iez)
+      if has?(op, "trig") then tz2  := tan(z / (2::F))
+      is?(k, "sin"::SY)   => 2 * tz2 / (1 + tz2**2)
+      is?(k, "cos"::SY)   => (1 - tz2**2) / (1 + tz2**2)
+      is?(k, "sec"::SY)   => (1 + tz2**2) / (1 - tz2**2)
+      is?(k, "csc"::SY)   => (1 + tz2**2) / (2 * tz2)
+      op args
+
+--The next 5 functions are used by normalize, once a relation is found
+    depeval(f, lk, k, v) ==
+      is?(k, "log"::SY)  => logeval(f, lk, k, v)
+      is?(k, "exp"::SY)  => expeval(f, lk, k, v)
+      is?(k, "tan"::SY)  => taneval(f, lk, k, v)
+      is?(k, "atan"::SY) => ataneval(f, lk, k, v)
+      is?(k, NTHR) => rooteval(f, lk, k, v(minIndex v))
+      [f, empty(), empty()]
+
+    rooteval(f, lk, k, n) ==
+      nv := nthRoot(x := first argument k, m := retract(n)@Z)
+      l  := [r for r in concat(k, toR(lk, x)) |
+             retract(second argument r)@Z ^= m]
+      lv := [nv ** (n / (retract(second argument r)@Z::Q)) for r in l]
+      [eval(f, l, lv), l, lv]
+
+    ataneval(f, lk, k, v) ==
+      w := first argument k
+      s := tanSum [tanQ(qelt(v,i), x)
+                   for i in minIndex v .. maxIndex v for x in toV lk]
+      g := +/[qelt(v, i) * x for i in minIndex v .. maxIndex v for x in toU lk]
+      h:F :=
+        zero?(d := 1 + s * w) => mpiover2
+        atan((w - s) / d)
+      g := g + h
+      [eval(f, [k], [g]), [k], [g]]
+
+    gdCoef?(c, v) ==
+      for i in minIndex v .. maxIndex v repeat
+        retractIfCan(qelt(v, i) / c)@Union(Z, "failed") case "failed" =>
+          return false
+      true
+
+    goodCoef(v, l, s) ==
+      for i in minIndex v .. maxIndex v for k in l repeat
+        is?(k, s) and
+           ((r:=recip(qelt(v,i))) case Q) and
+            (retractIfCan(r::Q)@Union(Z, "failed") case Z)
+              and gdCoef?(qelt(v, i), v) => return([i, k])
+      "failed"
+
+    taneval(f, lk, k, v) ==
+      u := first argument k
+      fns := toU lk
+      c := u - +/[qelt(v, i) * x for i in minIndex v .. maxIndex v for x in fns]
+      (rec := goodCoef(v, lk, "tan"::SY)) case "failed" =>
+          tannosimp(f, lk, k, v, fns, c)
+      v0 := retract(inv qelt(v, rec.index))@Z
+      lv := [qelt(v, i) for i in minIndex v .. maxIndex v |
+                                                 i ^= rec.index]$List(Q)
+      l  := [kk for kk in lk | kk ^= rec.ker]
+      g := tanSum(-v0 * c, concat(tanNa(k::F, v0),
+           [tanNa(x, - retract(a * v0)@Z) for a in lv for x in toV l]))
+      [eval(f, [rec.ker], [g]), [rec.ker], [g]]
+
+    tannosimp(f, lk, k, v, fns, c) ==
+      every?(is?(#1, "tan"::SY), lk) =>
+        dd := (d := (cd := splitDenominator v).den)::F
+        newt := [tan(u / dd) for u in fns]$List(F)
+        newtan := [tanNa(t, d) for t in newt]$List(F)
+        h := tanSum(c, [tanNa(t, qelt(cd.num, i))
+                        for i in minIndex v .. maxIndex v for t in newt])
+        lk := concat(k, lk)
+        newtan := concat(h, newtan)
+        [eval(f, lk, newtan), lk, newtan]
+      h := tanSum(c, [tanQ(qelt(v, i), x)
+                      for i in minIndex v .. maxIndex v for x in toV lk])
+      [eval(f, [k], [h]), [k], [h]]
+
+    expnosimp(f, lk, k, v, fns, g) ==
+      every?(is?(#1, "exp"::SY), lk) =>
+        dd := (d := (cd := splitDenominator v).den)::F
+        newe := [exp(y / dd) for y in fns]$List(F)
+        newexp := [e ** d for e in newe]$List(F)
+        h := */[e ** qelt(cd.num, i)
+                for i in minIndex v .. maxIndex v for e in newe] * g
+        lk := concat(k, lk)
+        newexp := concat(h, newexp)
+        [eval(f, lk, newexp), lk, newexp]
+      h := */[exp(y) ** qelt(v, i)
+                for i in minIndex v .. maxIndex v for y in fns] * g
+      [eval(f, [k], [h]), [k], [h]]
+
+    logeval(f, lk, k, v) ==
+      z := first argument k
+      c := z / (*/[x**qelt(v, i)
+                   for x in toZ lk for i in minIndex v .. maxIndex v])
+-- CHANGED log ktoZ x TO ktoY x SINCE WE WANT log exp f TO BE REPLACED BY f.
+      g := +/[qelt(v, i) * x
+              for i in minIndex v .. maxIndex v for x in toY lk] + log c
+      [eval(f, [k], [g]), [k], [g]]
+
+    rischNormalize(f, v) ==
+      empty?(ker := varselect(tower f, v)) => [f, empty(), empty()]
+      first(ker) ^= kernel(v)@K => error "Cannot happen"
+      ker := rest ker
+      (n := (#ker)::Z - 1) < 1 => [f, empty(), empty()]
+      for i in 1..n for kk in rest ker repeat
+        klist := first(ker, i)
+        -- NO EVALUATION ON AN EMPTY VECTOR, WILL CAUSE INFINITE LOOP
+        (c := deprel(klist, kk, v)) case vec and not empty?(c.vec) =>
+          rec := depeval(f, klist, kk, c.vec)
+          rn  := rischNormalize(rec.func, v)
+          return [rn.func,
+                   concat(rec.kers, rn.kers), concat(rec.vals, rn.vals)]
+        c case func =>
+          rn := rischNormalize(eval(f, [kk], [c.func]), v)
+          return [rn.func, concat(kk, rn.kers), concat(c.func, rn.vals)]
+      [f, empty(), empty()]
+
+    rootNormalize(f, k) ==
+      (u := rootKernelNormalize(f, toR(tower f, first argument k), k))
+         case "failed" => f
+      (u::REC).func
+
+    rootKernelNormalize(f, l, k) ==
+      (c := rootDep(l, k)) case vec =>
+        rooteval(f, l, k, (c.vec)(minIndex(c.vec)))
+      "failed"
+
+    localnorm f ==
+      for x in variables f repeat
+        f := rischNormalize(f, x).func
+      f
+
+    validExponential(twr, eta, x) ==
+      (c := solveLinearlyOverQ(construct([differentiate(g, x)
+         for g in (fns := toY twr)]$List(F))@Vector(F),
+           differentiate(eta, x))) case "failed" => "failed"
+      v := c::Vector(Q)
+      g := eta - +/[qelt(v, i) * yy
+                        for i in minIndex v .. maxIndex v for yy in fns]
+      */[exp(yy) ** qelt(v, i)
+                for i in minIndex v .. maxIndex v for yy in fns] * exp g
+
+    rootDep(ker, k) ==
+      empty?(ker := toR(ker, first argument k)) => [true]
+      [new(1,lcm(retract(second argument k)@Z,
+       "lcm"/[retract(second argument r)@Z for r in ker])::Q)$Vector(Q)]
+
+    qdeprel(l, v) ==
+      (u := solveLinearlyOverQ(construct(l)@Vector(F), v))
+        case Vector(Q) => [u::Vector(Q)]
+      [true]
+
+    expeval(f, lk, k, v) ==
+      y   := first argument k
+      fns := toY lk
+      g := y - +/[qelt(v, i) * z for i in minIndex v .. maxIndex v for z in fns]
+      (rec := goodCoef(v, lk, "exp"::SY)) case "failed" =>
+        expnosimp(f, lk, k, v, fns, exp g)
+      v0 := retract(inv qelt(v, rec.index))@Z
+      lv := [qelt(v, i) for i in minIndex v .. maxIndex v |
+                                                 i ^= rec.index]$List(Q)
+      l  := [kk for kk in lk | kk ^= rec.ker]
+      h :F := */[exp(z) ** (- retract(a * v0)@Z) for a in lv for z in toY l]
+      h := h * exp(-v0 * g) * (k::F) ** v0
+      [eval(f, [rec.ker], [h]), [rec.ker], [h]]
+
+    if F has CombinatorialOpsCategory then
+      normalize f == rtNormalize localnorm factorials realElementary f
+
+      normalize(f, x) ==
+        rtNormalize(rischNormalize(factorials(realElementary(f,x),x),x).func)
+
+      factdeprel(l, k) ==
+        ((r := retractIfCan(n := first argument k)@Union(Z, "failed"))
+          case Z) and (r::Z > 0) => [factorial(r::Z)::F]
+        for x in l repeat
+          m := first argument x
+          ((r := retractIfCan(n - m)@Union(Z, "failed")) case Z) and
+            (r::Z > 0) => return([*/[(m + i::F) for i in 1..r] * x::F])
+        [true]
+
+    else
+      normalize f     == rtNormalize localnorm realElementary f
+      normalize(f, x) == rtNormalize(rischNormalize(realElementary(f,x),x).func)
+
+@
+\section{package ITRIGMNP InnerTrigonometricManipulations}
+<<package ITRIGMNP InnerTrigonometricManipulations>>=
+)abbrev package ITRIGMNP InnerTrigonometricManipulations
+++ Trigs to/from exps and logs
+++ Author: Manuel Bronstein
+++ Date Created: 4 April 1988
+++ Date Last Updated: 9 October 1993
+++ Description:
+++   This package provides transformations from trigonometric functions
+++   to exponentials and logarithms, and back.
+++   F and FG should be the same type of function space.
+++ Keywords: trigonometric, function, manipulation.
+InnerTrigonometricManipulations(R,F,FG): Exports == Implementation where
+  R  : Join(IntegralDomain, OrderedSet)
+  F  : Join(FunctionSpace R, RadicalCategory,
+            TranscendentalFunctionCategory)
+  FG : Join(FunctionSpace Complex R, RadicalCategory,
+            TranscendentalFunctionCategory)
+
+  Z   ==> Integer
+  SY  ==> Symbol
+  OP  ==> BasicOperator
+  GR  ==> Complex R
+  GF  ==> Complex F
+  KG  ==> Kernel FG
+  PG  ==> SparseMultivariatePolynomial(GR, KG)
+  UP  ==> SparseUnivariatePolynomial PG
+  NTHR  ==> "nthRoot"::SY
+
+  Exports ==> with
+    GF2FG        : GF -> FG
+      ++ GF2FG(a + i b) returns \spad{a + i b} viewed as a function with
+      ++ the \spad{i} pushed down into the coefficient domain.
+    FG2F         : FG -> F
+      ++ FG2F(a + i b) returns \spad{a + sqrt(-1) b}.
+    F2FG         : F  -> FG
+      ++ F2FG(a + sqrt(-1) b) returns \spad{a + i b}.
+    explogs2trigs: FG -> GF
+      ++ explogs2trigs(f) rewrites all the complex logs and
+      ++ exponentials appearing in \spad{f} in terms of trigonometric
+      ++ functions.
+    trigs2explogs: (FG, List KG, List SY) -> FG
+      ++ trigs2explogs(f, [k1,...,kn], [x1,...,xm]) rewrites
+      ++ all the trigonometric functions appearing in \spad{f} and involving
+      ++ one of the \spad{xi's} in terms of complex logarithms and
+      ++ exponentials. A kernel of the form \spad{tan(u)} is expressed
+      ++ using \spad{exp(u)**2} if it is one of the \spad{ki's}, in terms of
+      ++ \spad{exp(2*u)} otherwise.
+
+  Implementation ==> add
+    ker2explogs: (KG, List KG, List SY) -> FG
+    smp2explogs: (PG, List KG, List SY) -> FG
+    supexp     : (UP, GF, GF, Z) -> GF
+    GR2GF      : GR -> GF
+    GR2F       : GR -> F
+    KG2F       : KG -> F
+    PG2F       : PG -> F
+    ker2trigs  : (OP, List GF) -> GF
+    smp2trigs  : PG -> GF
+    sup2trigs  : (UP, GF) -> GF
+
+    nth := R has RetractableTo(Integer) and F has RadicalCategory
+
+    GR2F g        == real(g)::F + sqrt(-(1::F)) * imag(g)::F
+    KG2F k        == map(FG2F, k)$ExpressionSpaceFunctions2(FG, F)
+    FG2F f        == (PG2F numer f) / (PG2F denom f)
+    F2FG f        == map(#1::GR, f)$FunctionSpaceFunctions2(R,F,GR,FG)
+    GF2FG f       == (F2FG real f) + complex(0, 1)$GR ::FG * F2FG imag f
+    GR2GF gr      == complex(real(gr)::F, imag(gr)::F)
+
+-- This expects the argument to have only tan and atans left.
+-- Does a half-angle correction if k is not in the initial kernel list.
+    ker2explogs(k, l, lx) ==
+      empty?([v for v in variables(kf := k::FG) |
+                                         member?(v, lx)]$List(SY)) => kf
+      empty?(args := [trigs2explogs(a, l, lx)
+                                    for a in argument k]$List(FG)) => kf
+      im := complex(0, 1)$GR :: FG
+      z  := first args
+      is?(k, "tan"::Symbol)  =>
+        e := (member?(k, l) => exp(im * z) ** 2;  exp(2 * im * z))
+        - im * (e - 1) /$FG (e + 1)
+      is?(k, "atan"::Symbol) =>
+        im * log((1 -$FG im *$FG z)/$FG (1 +$FG im *$FG z))$FG / (2::FG)
+      (operator k) args
+
+    trigs2explogs(f, l, lx) ==
+      smp2explogs(numer f, l, lx) / smp2explogs(denom f, l, lx)
+
+    -- return op(arg) as f + %i g
+    -- op is already an operator with semantics over R, not GR
+    ker2trigs(op, arg) ==
+      "and"/[zero? imag x for x in arg] =>
+        complex(op [real x for x in arg]$List(F), 0)
+      a := first arg
+      is?(op, "exp"::Symbol)  => exp a
+      is?(op, "log"::Symbol)  => log a
+      is?(op, "sin"::Symbol)  => sin a
+      is?(op, "cos"::Symbol)  => cos a
+      is?(op, "tan"::Symbol)  => tan a
+      is?(op, "cot"::Symbol)  => cot a
+      is?(op, "sec"::Symbol)  => sec a
+      is?(op, "csc"::Symbol)  => csc a
+      is?(op, "asin"::Symbol)  => asin a
+      is?(op, "acos"::Symbol)  => acos a
+      is?(op, "atan"::Symbol)  => atan a
+      is?(op, "acot"::Symbol)  => acot a
+      is?(op, "asec"::Symbol)  => asec a
+      is?(op, "acsc"::Symbol)  => acsc a
+      is?(op, "sinh"::Symbol)  => sinh a
+      is?(op, "cosh"::Symbol)  => cosh a
+      is?(op, "tanh"::Symbol)  => tanh a
+      is?(op, "coth"::Symbol)  => coth a
+      is?(op, "sech"::Symbol)  => sech a
+      is?(op, "csch"::Symbol)  => csch a
+      is?(op, "asinh"::Symbol)  => asinh a
+      is?(op, "acosh"::Symbol)  => acosh a
+      is?(op, "atanh"::Symbol)  => atanh a
+      is?(op, "acoth"::Symbol)  => acoth a
+      is?(op, "asech"::Symbol)  => asech a
+      is?(op, "acsch"::Symbol)  => acsch a
+      is?(op, "abs"::Symbol)    => sqrt(norm a)::GF
+      nth and is?(op, NTHR) => nthRoot(a, retract(second arg)@Z)
+      error "ker2trigs: cannot convert kernel to gaussian function"
+
+    sup2trigs(p, f) ==
+      map(smp2trigs, p)$SparseUnivariatePolynomialFunctions2(PG, GF) f
+
+    smp2trigs p ==
+      map(explogs2trigs(#1::FG),GR2GF, p)$PolynomialCategoryLifting(
+                                    IndexedExponents KG, KG, GR, PG, GF)
+
+    explogs2trigs f ==
+      (m := mainKernel f) case "failed" =>
+        GR2GF(retract(numer f)@GR) / GR2GF(retract(denom f)@GR)
+      op  := operator(operator(k := m::KG))$F
+      arg := [explogs2trigs x for x in argument k]
+      num := univariate(numer f, k)
+      den := univariate(denom f, k)
+      is?(op, "exp"::Symbol) =>
+        e  := exp real first arg
+        y  := imag first arg
+        g  := complex(e *  cos y, e * sin y)$GF
+        gi := complex(cos(y) / e, - sin(y) / e)$GF
+        supexp(num,g,gi,b := (degree num)::Z quo 2)/supexp(den,g,gi,b)
+      sup2trigs(num, g := ker2trigs(op, arg)) / sup2trigs(den, g)
+
+    supexp(p, f1, f2, bse) ==
+      ans:GF := 0
+      while p ^= 0 repeat
+        g := explogs2trigs(leadingCoefficient(p)::FG)
+        if ((d := degree(p)::Z - bse) >= 0) then
+             ans := ans + g * f1 ** d
+        else ans := ans + g * f2 ** (-d)
+        p := reductum p
+      ans
+
+    PG2F p ==
+      map(KG2F, GR2F, p)$PolynomialCategoryLifting(IndexedExponents KG,
+                                                          KG, GR, PG, F)
+
+    smp2explogs(p, l, lx) ==
+      map(ker2explogs(#1, l, lx), #1::FG, p)$PolynomialCategoryLifting(
+                                    IndexedExponents KG, KG, GR, PG, FG)
+
+@
+\section{package TRIGMNIP TrigonometricManipulations}
+<<package TRIGMNIP TrigonometricManipulations>>=
+)abbrev package TRIGMNIP TrigonometricManipulations
+++ Trigs to/from exps and logs
+++ Author: Manuel Bronstein
+++ Date Created: 4 April 1988
+++ Date Last Updated: 14 February 1994
+++ Description:
+++   \spadtype{TrigonometricManipulations} provides transformations from
+++   trigonometric functions to complex exponentials and logarithms, and back.
+++ Keywords: trigonometric, function, manipulation.
+TrigonometricManipulations(R, F): Exports == Implementation where
+  R : Join(GcdDomain, OrderedSet, RetractableTo Integer,
+           LinearlyExplicitRingOver Integer)
+  F : Join(AlgebraicallyClosedField, TranscendentalFunctionCategory,
+           FunctionSpace R)
+
+  Z   ==> Integer
+  SY  ==> Symbol
+  K   ==> Kernel F
+  FG  ==> Expression Complex R
+
+  Exports ==> with
+    complexNormalize: F -> F
+      ++ complexNormalize(f) rewrites \spad{f} using the least possible number
+      ++ of complex independent kernels.
+    complexNormalize: (F, SY) -> F
+      ++ complexNormalize(f, x) rewrites \spad{f} using the least possible
+      ++ number of complex independent kernels involving \spad{x}.
+    complexElementary: F -> F
+      ++ complexElementary(f) rewrites \spad{f} in terms of the 2 fundamental
+      ++ complex transcendental elementary functions: \spad{log, exp}.
+    complexElementary: (F, SY) -> F
+      ++ complexElementary(f, x) rewrites the kernels of \spad{f} involving
+      ++ \spad{x} in terms of the 2 fundamental complex
+      ++ transcendental elementary functions: \spad{log, exp}.
+    trigs  : F -> F
+      ++ trigs(f) rewrites all the complex logs and exponentials
+      ++ appearing in \spad{f} in terms of trigonometric functions.
+    real   : F -> F
+      ++ real(f) returns the real part of \spad{f} where \spad{f} is a complex
+      ++ function.
+    imag   : F -> F
+      ++ imag(f) returns the imaginary part of \spad{f} where \spad{f}
+      ++ is a complex function.
+    real?  : F -> Boolean
+      ++ real?(f) returns \spad{true} if \spad{f = real f}.
+    complexForm: F -> Complex F
+      ++ complexForm(f) returns \spad{[real f, imag f]}.
+
+  Implementation ==> add
+    import ElementaryFunctionSign(R, F)
+    import InnerTrigonometricManipulations(R,F,FG)
+    import ElementaryFunctionStructurePackage(R, F)
+    import ElementaryFunctionStructurePackage(Complex R, FG)
+
+    s1  := sqrt(-1::F)
+    ipi := pi()$F * s1
+
+    K2KG          : K -> Kernel FG
+    kcomplex      : K -> Union(F, "failed")
+    locexplogs    : F -> FG
+    localexplogs  : (F, F, List SY) -> FG
+    complexKernels: F -> Record(ker: List K, val: List F)
+
+    K2KG k           == retract(tan F2FG first argument k)@Kernel(FG)
+    real? f          == empty?(complexKernels(f).ker)
+    real f           == real complexForm f
+    imag f           == imag complexForm f
+
+-- returns [[k1,...,kn], [v1,...,vn]] such that ki should be replaced by vi
+    complexKernels f ==
+      lk:List(K) := empty()
+      lv:List(F) := empty()
+      for k in tower f repeat
+        if (u := kcomplex k) case F then
+           lk := concat(k, lk)
+           lv := concat(u::F, lv)
+      [lk, lv]
+
+-- returns f if it is certain that k is not a real kernel and k = f,
+-- "failed" otherwise
+    kcomplex k ==
+      op := operator k
+      is?(k, "nthRoot"::SY) =>
+        arg := argument k
+        even?(retract(n := second arg)@Z) and ((u := sign(first arg)) case Z)
+          and (u::Z < 0) => op(s1, n / 2::F) * op(- first arg, n)
+        "failed"
+      is?(k, "log"::SY) and ((u := sign(a := first argument k)) case Z)
+          and (u::Z < 0) => op(- a) + ipi
+      "failed"
+
+    complexForm f ==
+      empty?((l := complexKernels f).ker) => complex(f, 0)
+      explogs2trigs locexplogs eval(f, l.ker, l.val)
+
+    locexplogs f ==
+      any?(has?(#1, "rtrig"),
+           operators(g := realElementary f))$List(BasicOperator) =>
+              localexplogs(f, g, variables g)
+      F2FG g
+
+    complexNormalize(f, x) ==
+      any?(has?(operator #1, "rtrig"),
+       [k for k in tower(g := realElementary(f, x))
+               | member?(x, variables(k::F))]$List(K))$List(K) =>
+                   FG2F(rischNormalize(localexplogs(f, g, [x]), x).func)
+      rischNormalize(g, x).func
+
+    complexNormalize f ==
+      l := variables(g := realElementary f)
+      any?(has?(#1, "rtrig"), operators g)$List(BasicOperator) =>
+        h := localexplogs(f, g, l)
+        for x in l repeat h := rischNormalize(h, x).func
+        FG2F h
+      for x in l repeat g := rischNormalize(g, x).func
+      g
+
+    complexElementary(f, x) ==
+      any?(has?(operator #1, "rtrig"),
+       [k for k in tower(g := realElementary(f, x))
+                 | member?(x, variables(k::F))]$List(K))$List(K) =>
+                     FG2F localexplogs(f, g, [x])
+      g
+
+    complexElementary f ==
+      any?(has?(#1, "rtrig"),
+        operators(g := realElementary f))$List(BasicOperator) =>
+          FG2F localexplogs(f, g, variables g)
+      g
+
+    localexplogs(f, g, lx) ==
+      trigs2explogs(F2FG g, [K2KG k for k in tower f
+                          | is?(k, "tan"::SY) or is?(k, "cot"::SY)], lx)
+
+    trigs f ==
+      real? f => f
+      g := explogs2trigs F2FG f
+      real g + s1 * imag g
+
+@
+\section{package CTRIGMNP ComplexTrigonometricManipulations}
+<<package CTRIGMNP ComplexTrigonometricManipulations>>=
+)abbrev package CTRIGMNP ComplexTrigonometricManipulations
+++ Real and Imaginary parts of complex functions
+++ Author: Manuel Bronstein
+++ Date Created: 11 June 1993
+++ Date Last Updated: 14 June 1993
+++ Description:
+++   \spadtype{ComplexTrigonometricManipulations} provides function that
+++   compute the real and imaginary parts of complex functions.
+++ Keywords: complex, function, manipulation.
+ComplexTrigonometricManipulations(R, F): Exports == Implementation where
+  R : Join(IntegralDomain, OrderedSet, RetractableTo Integer)
+  F : Join(AlgebraicallyClosedField, TranscendentalFunctionCategory,
+           FunctionSpace Complex R)
+
+
+  SY  ==> Symbol
+  FR  ==> Expression R
+  K   ==> Kernel F
+
+
+  Exports ==> with
+    complexNormalize: F -> F
+      ++ complexNormalize(f) rewrites \spad{f} using the least possible number
+      ++ of complex independent kernels.
+    complexNormalize: (F, SY) -> F
+      ++ complexNormalize(f, x) rewrites \spad{f} using the least possible
+      ++ number of complex independent kernels involving \spad{x}.
+    complexElementary: F -> F
+      ++ complexElementary(f) rewrites \spad{f} in terms of the 2 fundamental
+      ++ complex transcendental elementary functions: \spad{log, exp}.
+    complexElementary: (F, SY) -> F
+      ++ complexElementary(f, x) rewrites the kernels of \spad{f} involving
+      ++ \spad{x} in terms of the 2 fundamental complex
+      ++ transcendental elementary functions: \spad{log, exp}.
+    real   : F -> FR
+      ++ real(f) returns the real part of \spad{f} where \spad{f} is a complex
+      ++ function.
+    imag   : F -> FR
+      ++ imag(f) returns the imaginary part of \spad{f} where \spad{f}
+      ++ is a complex function.
+    real?  : F -> Boolean
+      ++ real?(f) returns \spad{true} if \spad{f = real f}.
+    trigs  : F -> F
+      ++ trigs(f) rewrites all the complex logs and exponentials
+      ++ appearing in \spad{f} in terms of trigonometric functions.
+    complexForm: F -> Complex FR
+      ++ complexForm(f) returns \spad{[real f, imag f]}.
+
+  Implementation ==> add
+    import InnerTrigonometricManipulations(R, FR, F)
+    import ElementaryFunctionStructurePackage(Complex R, F)
+
+    rreal?: Complex R -> Boolean
+    kreal?: Kernel F -> Boolean
+    localexplogs  : (F, F, List SY) -> F
+
+    real f        == real complexForm f
+    imag f        == imag complexForm f
+    rreal? r      == zero? imag r
+    kreal? k      == every?(real?, argument k)$List(F)
+    complexForm f == explogs2trigs f
+
+    trigs f ==
+      GF2FG explogs2trigs f
+
+    real? f ==
+      every?(rreal?, coefficients numer f)
+        and every?(rreal?, coefficients denom f) and every?(kreal?, kernels f)
+
+    localexplogs(f, g, lx) ==
+      trigs2explogs(g, [k for k in tower f
+                          | is?(k, "tan"::SY) or is?(k, "cot"::SY)], lx)
+
+    complexElementary f ==
+      any?(has?(#1, "rtrig"),
+        operators(g := realElementary f))$List(BasicOperator) =>
+          localexplogs(f, g, variables g)
+      g
+
+    complexElementary(f, x) ==
+      any?(has?(operator #1, "rtrig"),
+       [k for k in tower(g := realElementary(f, x))
+                 | member?(x, variables(k::F))]$List(K))$List(K) =>
+                     localexplogs(f, g, [x])
+      g
+
+    complexNormalize(f, x) ==
+      any?(has?(operator #1, "rtrig"),
+       [k for k in tower(g := realElementary(f, x))
+               | member?(x, variables(k::F))]$List(K))$List(K) =>
+                   (rischNormalize(localexplogs(f, g, [x]), x).func)
+      rischNormalize(g, x).func
+
+    complexNormalize f ==
+      l := variables(g := realElementary f)
+      any?(has?(#1, "rtrig"), operators g)$List(BasicOperator) =>
+        h := localexplogs(f, g, l)
+        for x in l repeat h := rischNormalize(h, x).func
+        h
+      for x in l repeat g := rischNormalize(g, x).func
+      g
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+-- SPAD files for the integration world should be compiled in the
+-- following order:
+--
+--   intaux  rderf  intrf  curve  curvepkg  divisor  pfo
+--   intalg  intaf  EFSTRUC  rdeef  intef  irexpand  integrat
+
+<<package SYMFUNC SymmetricFunctions>>
+<<package TANEXP TangentExpansions>>
+<<package EFSTRUC ElementaryFunctionStructurePackage>>
+<<package ITRIGMNP InnerTrigonometricManipulations>>
+<<package TRIGMNIP TrigonometricManipulations>>
+<<package CTRIGMNP ComplexTrigonometricManipulations>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

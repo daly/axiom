@@ -1,0 +1,207 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra nlode.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package NODE1 NonLinearFirstOrderODESolver}
+<<package NODE1 NonLinearFirstOrderODESolver>>=
+)abbrev package NODE1 NonLinearFirstOrderODESolver
+++ Author: Manuel Bronstein
+++ Date Created: 2 September 1991
+++ Date Last Updated: 14 October 1994
+++ Description: NonLinearFirstOrderODESolver provides a function
+++ for finding closed form first integrals of nonlinear ordinary
+++ differential equations of order 1.
+++ Keywords: differential equation, ODE
+NonLinearFirstOrderODESolver(R, F): Exports == Implementation where
+  R: Join(OrderedSet, EuclideanDomain, RetractableTo Integer,
+          LinearlyExplicitRingOver Integer, CharacteristicZero)
+  F: Join(AlgebraicallyClosedFunctionSpace R, TranscendentalFunctionCategory,
+          PrimitiveFunctionCategory)
+
+  N   ==> NonNegativeInteger
+  Q   ==> Fraction Integer
+  UQ  ==> Union(Q, "failed")
+  OP  ==> BasicOperator
+  SY  ==> Symbol
+  K   ==> Kernel F
+  U   ==> Union(F, "failed")
+  P   ==> SparseMultivariatePolynomial(R, K)
+  REC ==> Record(coef:Q, logand:F)
+  SOL ==> Record(particular: F,basis: List F)
+  BER ==> Record(coef1:F, coefn:F, exponent:N)
+
+  Exports ==> with
+    solve: (F, F, OP, SY) -> U
+      ++ solve(M(x,y), N(x,y), y, x) returns \spad{F(x,y)} such that
+      ++ \spad{F(x,y) = c} for a constant \spad{c} is a first integral
+      ++ of the equation \spad{M(x,y) dx + N(x,y) dy  = 0}, or
+      ++ "failed" if no first-integral can be found.
+
+  Implementation ==> add
+    import ODEIntegration(R, F)
+    import ElementaryFunctionODESolver(R, F)    -- recursive dependency!
+
+    checkBernoulli   : (F, F, K) -> Union(BER, "failed")
+    solveBernoulli   : (BER, OP, SY, F) -> Union(F, "failed")
+    checkRiccati     : (F, F, K) -> Union(List F, "failed")
+    solveRiccati     : (List F, OP, SY, F) -> Union(F, "failed")
+    partSolRiccati   : (List F, OP, SY, F) -> Union(F, "failed")
+    integratingFactor: (F, F, SY, SY) -> U
+
+    unk    := new()$SY
+    kunk:K := kernel unk
+
+    solve(m, n, y, x) ==
+-- first replace the operator y(x) by a new symbol z in m(x,y) and n(x,y)
+      lk:List(K) := [retract(yx := y(x::F))@K]
+      lv:List(F) := [kunk::F]
+      mm := eval(m, lk, lv)
+      nn := eval(n, lk, lv)
+-- put over a common denominator (to balance m and n)
+      d := lcm(denom mm, denom nn)::F
+      mm := d * mm
+      nn := d * nn
+-- look for an integrating factor mu
+      (u := integratingFactor(mm, nn, unk, x)) case F =>
+        mu := u::F
+        mm := mm * mu
+        nn := nn * mu
+        eval(int(mm,x) + int(nn-int(differentiate(mm,unk),x), unk),[kunk],[yx])
+-- check for Bernoulli equation
+      (w := checkBernoulli(m, n, k1 := first lk)) case BER =>
+        solveBernoulli(w::BER, y, x, yx)
+-- check for Riccati equation
+      (v := checkRiccati(m, n, k1)) case List(F) =>
+        solveRiccati(v::List(F), y, x, yx)
+      "failed"
+
+-- look for an integrating factor
+    integratingFactor(m, n, y, x) ==
+-- check first for exactness
+      zero?(d := differentiate(m, y) - differentiate(n, x)) => 1
+-- look for an integrating factor involving x only
+      not member?(y, variables(f := d / n)) => expint(f, x)
+-- look for an integrating factor involving y only
+      not member?(x, variables(f := - d / m)) => expint(f, y)
+-- room for more techniques later on (e.g. Prelle-Singer etc...)
+      "failed"
+
+-- check whether the equation is of the form
+--    dy/dx + p(x)y + q(x)y^N = 0   with N > 1
+-- i.e. whether m/n is of the form  p(x) y + q(x) y^N
+-- returns [p, q, N] if the equation is in that form
+    checkBernoulli(m, n, ky) ==
+      r := denom(f := m / n)::F
+      (not freeOf?(r, y := ky::F))
+          or (d := degree(p := univariate(numer f, ky))) < 2
+            or degree(pp := reductum p) ^= 1 or reductum(pp) ^= 0
+              or (not freeOf?(a := (leadingCoefficient(pp)::F), y))
+                or (not freeOf?(b := (leadingCoefficient(p)::F), y)) => "failed"
+      [a / r, b / r, d]
+
+-- solves the equation dy/dx + rec.coef1 y + rec.coefn y^rec.exponent = 0
+-- the change of variable v = y^{1-n} transforms the above equation to
+--  dv/dx + (1 - n) p v + (1 - n) q = 0
+    solveBernoulli(rec, y, x, yx) ==
+      n1 := 1 - rec.exponent::Integer
+      deq := differentiate(yx, x) + n1 * rec.coef1 * yx + n1 * rec.coefn
+      sol := solve(deq, y, x)::SOL          -- can always solve for order 1
+-- if v = vp + c v0 is the general solution of the linear equation, then
+-- the general first integral for the Bernoulli equation is
+-- (y^{1-n} - vp) / v0  =   c   for any constant c
+      (yx**n1 - sol.particular) / first(sol.basis)
+
+-- check whether the equation is of the form
+--    dy/dx + q0(x) + q1(x)y + q2(x)y^2 = 0
+-- i.e. whether m/n is a quadratic polynomial in y.
+-- returns the list [q0, q1, q2] if the equation is in that form
+    checkRiccati(m, n, ky) ==
+      q := denom(f := m / n)::F
+      (not freeOf?(q, y := ky::F)) or degree(p := univariate(numer f, ky)) > 2
+         or (not freeOf?(a0 := (coefficient(p, 0)::F), y))
+           or (not freeOf?(a1 := (coefficient(p, 1)::F), y))
+             or (not freeOf?(a2 := (coefficient(p, 2)::F), y)) => "failed"
+      [a0 / q, a1 / q, a2 / q]
+
+-- solves the equation dy/dx + l.1 + l.2 y + l.3 y^2 = 0
+    solveRiccati(l, y, x, yx) ==
+-- get first a particular solution
+      (u := partSolRiccati(l, y, x, yx)) case "failed" => "failed"
+-- once a particular solution yp is known, the general solution is of the
+-- form  y = yp + 1/v  where v satisfies the linear 1st order equation
+-- v' - (l.2 + 2 l.3 yp) v = l.3
+      deq := differentiate(yx, x) - (l.2 + 2 * l.3 * u::F) * yx - l.3
+      gsol := solve(deq, y, x)::SOL         -- can always solve for order 1
+-- if v = vp + c v0 is the general solution of the above equation, then
+-- the general first integral for the Riccati equation is
+--  (1/(y - yp) - vp) / v0  =   c   for any constant c
+      (inv(yx - u::F) - gsol.particular) / first(gsol.basis)
+
+-- looks for a particular solution of dy/dx + l.1 + l.2 y + l.3 y^2 = 0
+    partSolRiccati(l, y, x, yx) ==
+-- we first do the change of variable y = z / l.3, which transforms
+-- the equation into  dz/dx + l.1 l.3 + (l.2 - l.3'/l.3) z + z^2 = 0
+      q0 := l.1 * (l3 := l.3)
+      q1 := l.2 - differentiate(l3, x) / l3
+-- the equation dz/dx + q0 + q1 z + z^2 = 0 is transformed by the change
+-- of variable z = w'/w into the linear equation w'' + q1 w' + q0 w = 0
+      lineq := differentiate(yx, x, 2) + q1 * differentiate(yx, x) + q0 * yx
+-- should be made faster by requesting a particular nonzero solution only
+      (not((gsol := solve(lineq, y, x)) case SOL))
+                              or empty?(bas := (gsol::SOL).basis) => "failed"
+      differentiate(first bas, x) / (l3 * first bas)
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+-- Compile order for the differential equation solver:
+-- oderf.spad  odealg.spad  nlode.spad  nlinsol.spad  riccati.spad  odeef.spad
+
+<<package NODE1 NonLinearFirstOrderODESolver>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

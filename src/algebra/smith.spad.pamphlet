@@ -1,0 +1,284 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra smith.spad}
+\author{Patrizia Gianni}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package SMITH SmithNormalForm}
+<<package SMITH SmithNormalForm>>=
+)abbrev package SMITH SmithNormalForm
+++ Author: Patrizia Gianni
+++ Date Created: October 1992
+++ Date Last Updated: 
+++ Basic Operations:
+++ Related Domains: Matrix(R)
+++ Also See:
+++ AMS Classifications:
+++ Keywords: matrix, canonical forms, linear algebra
+++ Examples:
+++ References:
+++ Description:
+++   \spadtype{SmithNormalForm} is a package
+++   which provides some standard canonical forms for matrices.
+
+SmithNormalForm(R,Row,Col,M) : Exports == Implementation where
+
+  R   : EuclideanDomain
+  Row : FiniteLinearAggregate R
+  Col : FiniteLinearAggregate R
+  M   : MatrixCategory(R,Row,Col)
+
+  I            ==> Integer
+  NNI          ==> NonNegativeInteger
+  HermiteForm  ==>   Record(Hermite:M,eqMat:M)
+  SmithForm    ==>   Record(Smith : M, leftEqMat : M, rightEqMat : M) 
+  PartialV     ==> Union(Col, "failed")
+  Both         ==> Record(particular: PartialV, basis: List Col)
+
+  Exports ==  with
+    hermite : M -> M
+      ++ \spad{hermite(m)} returns the Hermite normal form of the
+      ++ matrix m.
+    completeHermite : M -> HermiteForm
+      ++ \spad{completeHermite} returns a record  that contains
+      ++ the Hermite normal form H of the matrix and the equivalence matrix
+      ++ U such that U*m = H
+    smith : M -> M
+      ++ \spad{smith(m)} returns the Smith Normal form of the matrix m.
+    completeSmith : M ->  SmithForm
+      ++ \spad{completeSmith} returns a record  that contains
+      ++ the Smith normal form H of the matrix and the left and right
+      ++ equivalence matrices U and V such that U*m*v = H
+    diophantineSystem : (M,Col) -> Both
+      ++ \spad{diophantineSystem(A,B)} returns a particular integer solution and 
+      ++ an integer  basis  of the equation \spad{AX = B}.
+
+  Implementation == add
+    MATCAT1 ==> MatrixCategoryFunctions2(R,Row,Col,M,QF,Row2,Col2,M2)
+    MATCAT2 ==> MatrixCategoryFunctions2(QF,Row2,Col2,M2,R,Row,Col,M)
+    QF      ==> Fraction R
+    Row2    ==> Vector QF
+    Col2    ==> Vector QF
+    M2      ==> Matrix QF
+
+                 ------  Local Functions -----
+    elRow1       :   (M,I,I)         ->  M
+    elRow2       :  (M,R,I,I)        ->  M
+    elColumn2    :  (M,R,I,I)        ->  M
+    isDiagonal?  :      M            ->  Boolean
+    ijDivide     : (SmithForm ,I,I)  ->  SmithForm 
+    lastStep     :   SmithForm       ->  SmithForm
+    test1        :  (M,Col,NNI)      ->  Union(NNI, "failed")
+    test2        : (M, Col,NNI,NNI)  ->  Union( Col, "failed")
+
+     -- inconsistent system : case  0 = c -- 
+    test1(sm:M,b:Col,m1 : NNI) : Union(NNI , "failed") ==
+      km:=m1
+      while zero? sm(km,km) repeat
+        if not zero?(b(km)) then return "failed"
+        km:= (km - 1) :: NNI
+      km
+
+    if Col has shallowlyMutable then
+
+      test2(sm : M ,b : Col, n1:NNI,dk:NNI) : Union( Col, "failed") ==
+        -- test divisibility --
+        sol:Col := new(n1,0)
+        for k in 1..dk repeat
+          if (c:=(b(k) exquo sm(k,k))) case "failed" then return "failed"
+          sol(k):= c::R
+        sol
+
+     -- test if the matrix is diagonal or pseudo-diagonal --   
+    isDiagonal?(m : M) : Boolean ==
+      m1:= nrows m
+      n1:= ncols m
+      for i in 1..m1 repeat
+        for j in 1..n1 | (j ^= i) repeat
+          if  not zero?(m(i,j)) then return false
+      true
+ 
+       -- elementary operation of first kind: exchange two rows --
+    elRow1(m:M,i:I,j:I) : M ==
+      vec:=row(m,i)
+      setRow!(m,i,row(m,j))
+      setRow!(m,j,vec)
+      m
+
+             -- elementary operation of second kind: add to row i--
+                         -- a*row j  (i^=j) --
+    elRow2(m : M,a:R,i:I,j:I) : M ==
+      vec:= map(a*#1,row(m,j))
+      vec:=map("+",row(m,i),vec)
+      setRow!(m,i,vec)
+      m
+             -- elementary operation of second kind: add to column i --
+                           -- a*column j (i^=j) --
+    elColumn2(m : M,a:R,i:I,j:I) : M ==
+      vec:= map(a*#1,column(m,j))
+      vec:=map("+",column(m,i),vec)
+      setColumn!(m,i,vec)
+      m
+
+       -- modify SmithForm in such a way that the term m(i,i) --
+           -- divides the term m(j,j). m is diagonal --
+    ijDivide(sf : SmithForm , i : I,j : I) : SmithForm ==
+      m:=sf.Smith
+      mii:=m(i,i)
+      mjj:=m(j,j)
+      extGcd:=extendedEuclidean(mii,mjj)
+      d := extGcd.generator
+      mii:=(mii exquo d)::R
+      mjj := (mjj exquo d) :: R
+      -- add to row j extGcd.coef1*row i --
+      lMat:=elRow2(sf.leftEqMat,extGcd.coef1,j,i)
+      -- switch rows i and j --
+      lMat:=elRow1(lMat,i,j)
+      -- add to row j -mii*row i --
+      lMat := elRow2(lMat,-mii,j,i)
+--      lMat := ijModify(mii,mjj,extGcd.coef1,extGcd.coef2,sf.leftEqMat,i,j)
+      m(j,j):= m(i,i) * mjj
+      m(i,i):= d
+      -- add to column i extGcd.coef2 * column j --
+      rMat := elColumn2(sf.rightEqMat,extGcd.coef2,i,j)
+      -- add to column j -mjj*column i --
+      rMat:=elColumn2(rMat,-mjj,j,i)
+      -- multiply by -1 column j --
+      setColumn!(rMat,j,map(-1 * #1,column(rMat,j)))
+      [m,lMat,rMat]
+               
+
+     -- given a diagonal matrix compute its Smith form --
+    lastStep(sf : SmithForm) : SmithForm ==
+      m:=sf.Smith
+      m1:=min(nrows m,ncols m)
+      for i in 1..m1 while (mii:=m(i,i)) ^=0 repeat
+        for j in i+1..m1 repeat
+          if (m(j,j) exquo mii) case "failed" then return
+             lastStep(ijDivide(sf,i,j))
+      sf
+
+    -- given m and t row-equivalent matrices, with t in upper triangular --
+          -- form  compute the matrix u such that u*m=t --
+    findEqMat(m :  M,t : M) : Record(Hermite : M, eqMat : M) ==
+      m1:=nrows m
+      n1:=ncols m
+      "and"/[zero? t(m1,j) for j in 1..n1] => -- there are 0 rows
+         if "and"/[zero? t(1,j) for j in 1..n1] 
+         then return [m,scalarMatrix(m1,1)]  -- m is the zero matrix
+         mm:=horizConcat(m,scalarMatrix(m1,1))
+         mmh:=rowEchelon mm
+         [subMatrix(mmh,1,m1,1,n1), subMatrix(mmh,1,m1,n1+1,n1+m1)]
+      u:M:=zero(m1,m1)
+      j:=1
+      while t(1,j)=0 repeat j:=j+1  -- there are 0 columns
+      t1:=copy t
+      mm:=copy m
+      if j>1 then 
+        t1:=subMatrix(t,1,m1,j,n1)
+        mm:=subMatrix(m,1,m1,j,n1)
+      t11:=t1(1,1)
+      for i in 1..m1 repeat
+        u(i,1) := (mm(i,1) exquo t11) :: R
+        for j in 2..m1 repeat
+          j0:=j
+          while zero?(tjj:=t1(j,j0)) repeat j0:=j0+1
+          u(i,j) :=((mm(i,j0) - ("+"/[u(i,k) * t1(k,j0) for k in 1..(j-1)])) exquo
+                    tjj) :: R
+      u1:M2:= map(#1 :: QF,u)$MATCAT1
+      [t,map(retract$QF,(inverse u1)::M2)$MATCAT2]
+
+                --- Hermite normal form of m ---
+    hermite(m:M) : M == rowEchelon m
+
+     -- Hermite normal form and equivalence matrix --
+    completeHermite(m : M) : Record(Hermite : M, eqMat : M) ==
+      findEqMat(m,rowEchelon m)
+ 
+    smith(m : M) : M == completeSmith(m).Smith
+
+    completeSmith(m : M) : Record(Smith : M, leftEqMat : M, rightEqMat : M) ==
+      cm1:=completeHermite m
+      leftm:=cm1.eqMat
+      m1:=cm1.Hermite
+      isDiagonal? m1 => lastStep([m1,leftm,scalarMatrix(ncols m,1)])
+      nr:=nrows m
+      cm1:=completeHermite transpose m1
+      rightm:= transpose cm1.eqMat
+      m1:=cm1.Hermite
+      isDiagonal? m1 => 
+        cm2:=lastStep([m1,leftm,rightm])
+        nrows(m:=cm2.Smith) = nr => cm2
+        [transpose m,cm2.leftEqMat, cm2.rightEqMat]
+      cm2:=completeSmith m1
+      cm2:=lastStep([cm2.Smith,transpose(cm2.rightEqMat)*leftm,
+                rightm*transpose(cm2.leftEqMat)])
+      nrows(m:=cm2.Smith) = nr => cm2
+      [transpose m, cm2.leftEqMat, cm2.rightEqMat]
+
+    -- Find the solution in R of the linear system mX = b --
+    diophantineSystem(m : M, b : Col) : Both  ==
+      sf:=completeSmith m
+      sm:=sf.Smith
+      m1:=nrows sm
+      lm:=sf.leftEqMat
+      b1:Col:= lm* b
+      (t1:=test1(sm,b1,m1)) case "failed" => ["failed",empty()]
+      dk:=t1 :: NNI
+      n1:=ncols sm
+      (t2:=test2(sm,b1,n1,dk)) case "failed" => ["failed",empty()]
+      rm := sf.rightEqMat
+      sol:=rm*(t2 :: Col)  -- particular solution
+      dk = n1  => [sol,list new(n1,0)]
+      lsol:List Col := [column(rm,i) for i in (dk+1)..n1]
+      [sol,lsol]
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package SMITH SmithNormalForm>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

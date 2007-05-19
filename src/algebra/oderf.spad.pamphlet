@@ -1,0 +1,900 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra oderf.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package BALFACT BalancedFactorisation}
+<<package BALFACT BalancedFactorisation>>=
+)abbrev package BALFACT BalancedFactorisation
+++ Author: Manuel Bronstein
+++ Date Created: 1 March 1991
+++ Date Last Updated: 11 October 1991
+++ Description: This package provides balanced factorisations of polynomials.
+BalancedFactorisation(R, UP): Exports == Implementation where
+  R  : Join(GcdDomain, CharacteristicZero)
+  UP : UnivariatePolynomialCategory R
+
+  Exports ==> with
+    balancedFactorisation: (UP, UP) -> Factored UP
+      ++ balancedFactorisation(a, b) returns
+      ++ a factorisation \spad{a = p1^e1 ... pm^em} such that each
+      ++ \spad{pi} is balanced with respect to b.
+    balancedFactorisation: (UP, List UP) -> Factored UP
+      ++ balancedFactorisation(a, [b1,...,bn]) returns
+      ++ a factorisation \spad{a = p1^e1 ... pm^em} such that each
+      ++ pi is balanced with respect to \spad{[b1,...,bm]}.
+
+  Implementation ==> add
+    balSqfr : (UP, Integer, List UP) -> Factored UP
+    balSqfr1: (UP, Integer,      UP) -> Factored UP
+
+    balancedFactorisation(a:UP, b:UP) == balancedFactorisation(a, [b])
+
+    balSqfr1(a, n, b) ==
+      g := gcd(a, b)
+      fa := sqfrFactor((a exquo g)::UP, n)
+      ground? g => fa
+      fa * balSqfr1(g, n, (b exquo (g ** order(b, g)))::UP)
+
+    balSqfr(a, n, l) ==
+      b := first l
+      empty? rest l => balSqfr1(a, n, b)
+      */[balSqfr1(f.factor, n, b) for f in factors balSqfr(a,n,rest l)]
+
+    balancedFactorisation(a:UP, l:List UP) ==
+      empty?(ll := select(#1 ^= 0, l)) =>
+        error "balancedFactorisation: 2nd argument is empty or all 0"
+      sa := squareFree a
+      unit(sa) * */[balSqfr(f.factor,f.exponent,ll) for f in factors sa])
+
+@
+\section{package BOUNDZRO BoundIntegerRoots}
+<<package BOUNDZRO BoundIntegerRoots>>=
+)abbrev package BOUNDZRO BoundIntegerRoots
+++ Author: Manuel Bronstein
+++ Date Created: 11 March 1991
+++ Date Last Updated: 18 November 1991
+++ Description:
+++   \spadtype{BoundIntegerRoots} provides functions to
+++   find lower bounds on the integer roots of a polynomial.
+BoundIntegerRoots(F, UP): Exports == Implementation where
+  F  : Join(Field, RetractableTo Fraction Integer)
+  UP : UnivariatePolynomialCategory F
+
+  Z   ==> Integer
+  Q   ==> Fraction Z
+  K   ==> Kernel F
+  UPQ ==> SparseUnivariatePolynomial Q
+  ALGOP ==> "%alg"
+
+  Exports ==> with
+    integerBound: UP -> Z
+      ++ integerBound(p) returns a lower bound on the negative integer
+      ++ roots of p, and 0 if p has no negative integer roots.
+
+  Implementation ==> add
+    import RationalFactorize(UPQ)
+    import UnivariatePolynomialCategoryFunctions2(F, UP, Q, UPQ)
+
+    qbound : (UP, UPQ) -> Z
+    zroot1 : UP -> Z
+    qzroot1: UPQ -> Z
+    negint : Q -> Z
+
+-- returns 0 if p has no integer root < 0, its negative integer root otherwise
+    qzroot1 p == negint(- leadingCoefficient(reductum p) / leadingCoefficient p)
+
+-- returns 0 if p has no integer root < 0, its negative integer root otherwise
+    zroot1 p ==
+      z := - leadingCoefficient(reductum p) / leadingCoefficient p
+      (r := retractIfCan(z)@Union(Q, "failed")) case Q => negint(r::Q)
+      0
+
+-- returns 0 if r is not a negative integer, r otherwise
+    negint r ==
+      ((u := retractIfCan(r)@Union(Z, "failed")) case Z) and (u::Z < 0) => u::Z
+      0
+
+    if F has ExpressionSpace then
+      bringDown: F -> Q
+
+-- the random substitution used by bringDown is NOT always a ring-homorphism
+-- (because of potential algebraic kernels), but is ALWAYS a Z-linear map.
+-- this guarantees that bringing down the coefficients of (x + n) q(x) for an
+-- integer n yields a polynomial h(x) which is divisible by x + n
+-- the only problem is that evaluating with random numbers can cause a
+-- division by 0. We should really be able to trap this error later and
+-- reevaluate with a new set of random numbers    MB 11/91
+      bringDown f ==
+        t := tower f
+        retract eval(f, t, [random()$Q :: F for k in t])
+
+      integerBound p ==
+--        one? degree p => zroot1 p
+        (degree p) = 1 => zroot1 p
+        q1 := map(bringDown, p)
+        q2 := map(bringDown, p)
+        qbound(p, gcd(q1, q2))
+
+    else
+      integerBound p ==
+--        one? degree p => zroot1 p
+        (degree p) = 1 => zroot1 p
+        qbound(p, map(retract(#1)@Q, p))
+
+-- we can probably do better here (i.e. without factoring)
+    qbound(p, q) ==
+      bound:Z := 0
+      for rec in factors factor q repeat
+--        if one?(degree(rec.factor)) and ((r := qzroot1(rec.factor)) < bound)
+        if ((degree(rec.factor)) = 1) and ((r := qzroot1(rec.factor)) < bound)
+           and zero? p(r::Q::F) then bound := r
+      bound
+
+@
+\section{package ODEPRIM PrimitiveRatDE}
+<<package ODEPRIM PrimitiveRatDE>>=
+)abbrev package ODEPRIM PrimitiveRatDE
+++ Author: Manuel Bronstein
+++ Date Created: 1 March 1991
+++ Date Last Updated: 1 February 1994
+++ Description:
+++  \spad{PrimitiveRatDE} provides functions for in-field solutions of linear
+++   ordinary differential equations, in the transcendental case.
+++   The derivation to use is given by the parameter \spad{L}.
+PrimitiveRatDE(F, UP, L, LQ): Exports == Implementation where
+  F  : Join(Field, CharacteristicZero, RetractableTo Fraction Integer)
+  UP : UnivariatePolynomialCategory F
+  L  : LinearOrdinaryDifferentialOperatorCategory UP
+  LQ : LinearOrdinaryDifferentialOperatorCategory Fraction UP
+
+  N   ==> NonNegativeInteger
+  Z   ==> Integer
+  RF  ==> Fraction UP
+  UP2 ==> SparseUnivariatePolynomial UP
+  REC ==> Record(center:UP, equation:UP)
+
+  Exports ==> with
+    denomLODE: (L, RF) -> Union(UP, "failed")
+      ++ denomLODE(op, g) returns a polynomial d such that
+      ++ any rational solution of \spad{op y = g}
+      ++ is of the form \spad{p/d} for some polynomial p, and
+      ++ "failed", if the equation has no rational solution.
+    denomLODE: (L, List RF) -> UP
+      ++ denomLODE(op, [g1,...,gm]) returns a polynomial
+      ++ d such that any rational solution of \spad{op y = c1 g1 + ... + cm gm}
+      ++ is of the form \spad{p/d} for some polynomial p.
+    indicialEquations: L -> List REC
+      ++ indicialEquations op returns \spad{[[d1,e1],...,[dq,eq]]} where
+      ++ the \spad{d_i}'s are the affine singularities of \spad{op},
+      ++ and the \spad{e_i}'s are the indicial equations at each \spad{d_i}.
+    indicialEquations: (L, UP) -> List REC
+      ++ indicialEquations(op, p) returns \spad{[[d1,e1],...,[dq,eq]]} where
+      ++ the \spad{d_i}'s are the affine singularities of \spad{op}
+      ++ above the roots of \spad{p},
+      ++ and the \spad{e_i}'s are the indicial equations at each \spad{d_i}.
+    indicialEquation: (L, F) -> UP
+      ++ indicialEquation(op, a) returns the indicial equation of \spad{op}
+      ++ at \spad{a}.
+    indicialEquations: LQ -> List REC
+      ++ indicialEquations op returns \spad{[[d1,e1],...,[dq,eq]]} where
+      ++ the \spad{d_i}'s are the affine singularities of \spad{op},
+      ++ and the \spad{e_i}'s are the indicial equations at each \spad{d_i}.
+    indicialEquations: (LQ, UP) -> List REC
+      ++ indicialEquations(op, p) returns \spad{[[d1,e1],...,[dq,eq]]} where
+      ++ the \spad{d_i}'s are the affine singularities of \spad{op}
+      ++ above the roots of \spad{p},
+      ++ and the \spad{e_i}'s are the indicial equations at each \spad{d_i}.
+    indicialEquation: (LQ, F) -> UP
+      ++ indicialEquation(op, a) returns the indicial equation of \spad{op}
+      ++ at \spad{a}.
+    splitDenominator: (LQ, List RF) -> Record(eq:L, rh:List RF)
+      ++ splitDenominator(op, [g1,...,gm]) returns \spad{op0, [h1,...,hm]}
+      ++ such that the equations \spad{op y = c1 g1 + ... + cm gm} and
+      ++ \spad{op0 y = c1 h1 + ... + cm hm} have the same solutions.
+
+  Implementation ==> add
+    import BoundIntegerRoots(F, UP)
+    import BalancedFactorisation(F, UP)
+    import InnerCommonDenominator(UP, RF, List UP, List RF)
+    import UnivariatePolynomialCategoryFunctions2(F, UP, UP, UP2)
+
+    tau          : (UP, UP, UP, N) -> UP
+    NPbound      : (UP, L, UP) -> N
+    hdenom       : (L, UP, UP) -> UP
+    denom0       : (Z, L, UP, UP, UP) -> UP
+    indicialEq   : (UP, List N, List UP) -> UP
+    separateZeros: (UP, UP) -> UP
+    UPfact       : N -> UP
+    UP2UP2       : UP -> UP2
+    indeq        : (UP, L) -> UP
+    NPmulambda   : (UP, L) -> Record(mu:Z, lambda:List N, func:List UP)
+
+    diff := D()$L
+
+    UP2UP2 p                    == map(#1::UP, p)
+    indicialEquations(op:L)     == indicialEquations(op, leadingCoefficient op)
+    indicialEquation(op:L, a:F) == indeq(monomial(1, 1) - a::UP, op)
+
+    splitDenominator(op, lg) ==
+      cd := splitDenominator coefficients op
+      f  := cd.den / gcd(cd.num)
+      l:L := 0
+      while op ^= 0 repeat
+          l  := l + monomial(retract(f * leadingCoefficient op), degree op)
+          op := reductum op
+      [l, [f * g for g in lg]]
+
+    tau(p, pp, q, n) ==
+      ((pp ** n) * ((q exquo (p ** order(q, p)))::UP)) rem p
+
+    indicialEquations(op:LQ) ==
+      indicialEquations(splitDenominator(op, empty()).eq)
+
+    indicialEquations(op:LQ, p:UP) ==
+      indicialEquations(splitDenominator(op, empty()).eq, p)
+
+    indicialEquation(op:LQ, a:F) ==
+      indeq(monomial(1, 1) - a::UP, splitDenominator(op, empty()).eq)
+
+-- returns z(z-1)...(z-(n-1))
+    UPfact n ==
+      zero? n => 1
+      z := monomial(1, 1)$UP
+      */[z - i::F::UP for i in 0..(n-1)::N]
+
+    indicialEq(c, lamb, lf) ==
+      cp := diff c
+      cc := UP2UP2 c
+      s:UP2 := 0
+      for i in lamb for f in lf repeat
+        s := s + (UPfact i) * UP2UP2 tau(c, cp, f, i)
+      primitivePart resultant(cc, s)
+
+    NPmulambda(c, l) ==
+      lamb:List(N) := [d := degree l]
+      lf:List(UP) := [a := leadingCoefficient l]
+      mup := d::Z - order(a, c)
+      while (l := reductum l) ^= 0 repeat
+          a := leadingCoefficient l
+          if (m := (d := degree l)::Z - order(a, c)) > mup then
+              mup := m
+              lamb := [d]
+              lf := [a]
+          else if (m = mup) then
+              lamb := concat(d, lamb)
+              lf := concat(a, lf)
+      [mup, lamb, lf]
+
+-- e = 0 means homogeneous equation
+    NPbound(c, l, e) ==
+      rec := NPmulambda(c, l)
+      n := max(0, - integerBound indicialEq(c, rec.lambda, rec.func))
+      zero? e => n::N
+      max(n, order(e, c)::Z - rec.mu)::N
+
+    hdenom(l, d, e) ==
+      */[dd.factor ** NPbound(dd.factor, l, e)
+                    for dd in factors balancedFactorisation(d, coefficients l)]
+
+    denom0(n, l, d, e, h) ==
+      hdenom(l, d, e) * */[hh.factor ** max(0, order(e, hh.factor) - n)::N
+                                 for hh in factors balancedFactorisation(h, e)]
+
+-- returns a polynomials whose zeros are the zeros of e which are not
+-- zeros of d
+    separateZeros(d, e) ==
+      ((g := squareFreePart e) exquo gcd(g, squareFreePart d))::UP
+
+    indeq(c, l) ==
+      rec := NPmulambda(c, l)
+      indicialEq(c, rec.lambda, rec.func)
+
+    indicialEquations(op:L, p:UP) ==
+      [[dd.factor, indeq(dd.factor, op)]
+                   for dd in factors balancedFactorisation(p, coefficients op)]
+
+-- cannot return "failed" in the homogeneous case
+    denomLODE(l:L, g:RF) ==
+      d := leadingCoefficient l
+      zero? g => hdenom(l, d, 0)
+      h := separateZeros(d, e := denom g)
+      n := degree l
+      (e exquo (h**(n + 1))) case "failed" => "failed"
+      denom0(n, l, d, e, h)
+
+    denomLODE(l:L, lg:List RF) ==
+      empty? lg => denomLODE(l, 0)::UP
+      d := leadingCoefficient l
+      h := separateZeros(d, e := "lcm"/[denom g for g in lg])
+      denom0(degree l, l, d, e, h)
+
+@
+\section{package UTSODETL UTSodetools}
+<<package UTSODETL UTSodetools>>=
+)abbrev package UTSODETL UTSodetools
+++ Author: Manuel Bronstein
+++ Date Created: 31 January 1994
+++ Date Last Updated: 3 February 1994
+++ Description:
+++  \spad{RUTSodetools} provides tools to interface with the series
+++   ODE solver when presented with linear ODEs.
+UTSodetools(F, UP, L, UTS): Exports == Implementation where
+  F  : Ring
+  UP : UnivariatePolynomialCategory F
+  L  : LinearOrdinaryDifferentialOperatorCategory UP
+  UTS: UnivariateTaylorSeriesCategory F
+
+  Exports ==> with
+      UP2UTS:   UP -> UTS
+          ++ UP2UTS(p) converts \spad{p} to a Taylor series.
+      UTS2UP:   (UTS, NonNegativeInteger) -> UP
+          ++ UTS2UP(s, n) converts the first \spad{n} terms of \spad{s}
+          ++ to a univariate polynomial.
+      LODO2FUN: L -> (List UTS -> UTS)
+          ++ LODO2FUN(op) returns the function to pass to the series ODE
+          ++ solver in order to solve \spad{op y = 0}.
+      if F has IntegralDomain then
+          RF2UTS: Fraction UP -> UTS
+              ++ RF2UTS(f) converts \spad{f} to a Taylor series.
+
+  Implementation ==> add
+      fun: (Vector UTS, List UTS) -> UTS
+
+      UP2UTS p ==
+        q := p(monomial(1, 1) + center(0)::UP)
+        +/[monomial(coefficient(q, i), i)$UTS for i in 0..degree q]
+
+      UTS2UP(s, n) ==
+        xmc     := monomial(1, 1)$UP - center(0)::UP
+        xmcn:UP := 1
+        ans:UP  := 0
+        for i in 0..n repeat
+            ans  := ans + coefficient(s, i) * xmcn
+            xmcn := xmc * xmcn
+        ans
+
+      LODO2FUN op ==
+          a := recip(UP2UTS(- leadingCoefficient op))::UTS
+          n := (degree(op) - 1)::NonNegativeInteger
+          v := [a * UP2UTS coefficient(op, i) for i in 0..n]$Vector(UTS)
+          fun(v, #1)
+
+      fun(v, l) ==
+          ans:UTS := 0
+          for b in l for i in 1.. repeat ans := ans + v.i * b
+          ans
+
+      if F has IntegralDomain then
+          RF2UTS f == UP2UTS(numer f) * recip(UP2UTS denom f)::UTS
+
+@
+\section{package ODERAT RationalLODE}
+<<package ODERAT RationalLODE>>=
+)abbrev package ODERAT RationalLODE
+++ Author: Manuel Bronstein
+++ Date Created: 13 March 1991
+++ Date Last Updated: 13 April 1994
+++ Description:
+++  \spad{RationalLODE} provides functions for in-field solutions of linear
+++   ordinary differential equations, in the rational case.
+RationalLODE(F, UP): Exports == Implementation where
+  F  : Join(Field, CharacteristicZero, RetractableTo Integer,
+                                       RetractableTo Fraction Integer)
+  UP : UnivariatePolynomialCategory F
+
+  N   ==> NonNegativeInteger
+  Z   ==> Integer
+  RF  ==> Fraction UP
+  U   ==> Union(RF, "failed")
+  V   ==> Vector F
+  M   ==> Matrix F
+  LODO ==> LinearOrdinaryDifferentialOperator1 RF
+  LODO2==> LinearOrdinaryDifferentialOperator2(UP, RF)
+
+  Exports ==> with
+    ratDsolve: (LODO, RF) -> Record(particular: U, basis: List RF)
+      ++ ratDsolve(op, g) returns \spad{["failed", []]} if the equation
+      ++ \spad{op y = g} has no rational solution. Otherwise, it returns
+      ++ \spad{[f, [y1,...,ym]]} where f is a particular rational solution
+      ++ and the yi's form a basis for the rational solutions of the
+      ++ homogeneous equation.
+    ratDsolve: (LODO, List RF) -> Record(basis:List RF, mat:Matrix F)
+      ++ ratDsolve(op, [g1,...,gm]) returns \spad{[[h1,...,hq], M]} such
+      ++ that any rational solution of \spad{op y = c1 g1 + ... + cm gm}
+      ++ is of the form \spad{d1 h1 + ... + dq hq} where
+      ++ \spad{M [d1,...,dq,c1,...,cm] = 0}.
+    ratDsolve: (LODO2, RF) -> Record(particular: U, basis: List RF)
+      ++ ratDsolve(op, g) returns \spad{["failed", []]} if the equation
+      ++ \spad{op y = g} has no rational solution. Otherwise, it returns
+      ++ \spad{[f, [y1,...,ym]]} where f is a particular rational solution
+      ++ and the yi's form a basis for the rational solutions of the
+      ++ homogeneous equation.
+    ratDsolve: (LODO2, List RF) -> Record(basis:List RF, mat:Matrix F)
+      ++ ratDsolve(op, [g1,...,gm]) returns \spad{[[h1,...,hq], M]} such
+      ++ that any rational solution of \spad{op y = c1 g1 + ... + cm gm}
+      ++ is of the form \spad{d1 h1 + ... + dq hq} where
+      ++ \spad{M [d1,...,dq,c1,...,cm] = 0}.
+    indicialEquationAtInfinity: LODO -> UP
+      ++ indicialEquationAtInfinity op returns the indicial equation of
+      ++ \spad{op} at infinity.
+    indicialEquationAtInfinity: LODO2 -> UP
+      ++ indicialEquationAtInfinity op returns the indicial equation of
+      ++ \spad{op} at infinity.
+
+  Implementation ==> add
+    import BoundIntegerRoots(F, UP)
+    import RationalIntegration(F, UP)
+    import PrimitiveRatDE(F, UP, LODO2, LODO)
+    import LinearSystemMatrixPackage(F, V, V, M)
+    import InnerCommonDenominator(UP, RF, List UP, List RF)
+
+    nzero?             : V -> Boolean
+    evenodd            : N -> F
+    UPfact             : N -> UP
+    infOrder           : RF -> Z
+    infTau             : (UP, N) -> F
+    infBound           : (LODO2, List RF) -> N
+    regularPoint       : (LODO2, List RF) -> Z
+    infIndicialEquation: (List N, List UP) -> UP
+    makeDot            : (Vector F, List RF) -> RF
+    unitlist           : (N, N) -> List F
+    infMuLambda: LODO2 -> Record(mu:Z, lambda:List N, func:List UP)
+    ratDsolve0: (LODO2, RF) -> Record(particular: U, basis: List RF)
+    ratDsolve1: (LODO2, List RF) -> Record(basis:List RF, mat:Matrix F)
+    candidates: (LODO2,List RF,UP) -> Record(basis:List RF,particular:List RF)
+
+    dummy := new()$Symbol
+
+    infOrder f == (degree denom f) - (degree numer f)
+    evenodd n  == (even? n => 1; -1)
+
+    ratDsolve1(op, lg) ==
+      d := denomLODE(op, lg)
+      rec := candidates(op, lg, d)
+      l := concat([op q for q in rec.basis],
+                  [op(rec.particular.i) - lg.i for i in 1..#(rec.particular)])
+      sys1 := reducedSystem(matrix [l])@Matrix(UP)
+      [rec.basis, reducedSystem sys1]
+
+    ratDsolve0(op, g) ==
+      zero? degree op => [inv(leadingCoefficient(op)::RF) * g, empty()]
+      minimumDegree op > 0 =>
+        sol := ratDsolve0(monicRightDivide(op, monomial(1, 1)).quotient, g)
+        b:List(RF) := [1]
+        for f in sol.basis repeat
+          if (uu := infieldint f) case RF then b := concat(uu::RF, b)
+        sol.particular case "failed" => ["failed", b]
+        [infieldint(sol.particular::RF), b]
+      (u := denomLODE(op, g)) case "failed" => ["failed", empty()]
+      rec := candidates(op, [g], u::UP)
+      l := lb := lsol := empty()$List(RF)
+      for q in rec.basis repeat
+          if zero?(opq := op q) then lsol := concat(q, lsol)
+          else (l := concat(opq, l); lb := concat(q, lb))
+      h:RF := (zero? g => 0; first(rec.particular))
+      empty? l =>
+          zero? g => [0, lsol]
+          [(g = op h => h; "failed"), lsol]
+      m:M
+      v:V
+      if zero? g then
+          m := reducedSystem(reducedSystem(matrix [l])@Matrix(UP))@M
+          v := new(ncols m, 0)$V
+      else
+          sys1 := reducedSystem(matrix [l], vector [g - op h]
+                               )@Record(mat: Matrix UP, vec: Vector UP)
+          sys2 := reducedSystem(sys1.mat, sys1.vec)@Record(mat:M, vec:V)
+          m := sys2.mat
+          v := sys2.vec
+      sol := solve(m, v)
+      part:U :=
+        zero? g => 0
+        sol.particular case "failed" => "failed"
+        makeDot(sol.particular::V, lb) + first(rec.particular)
+      [part,
+       concat_!(lsol, [makeDot(v, lb) for v in sol.basis | nzero? v])]
+
+    indicialEquationAtInfinity(op:LODO2) ==
+      rec := infMuLambda op
+      infIndicialEquation(rec.lambda, rec.func)
+
+    indicialEquationAtInfinity(op:LODO) ==
+      rec := splitDenominator(op, empty())
+      indicialEquationAtInfinity(rec.eq)
+
+    regularPoint(l, lg) ==
+      a := leadingCoefficient(l) * commonDenominator lg
+      coefficient(a, 0) ^= 0 => 0
+      for i in 1.. repeat
+        a(j := i::F) ^= 0 => return i
+        a(-j) ^= 0 => return(-i)
+
+    unitlist(i, q) ==
+      v := new(q, 0)$Vector(F)
+      v.i := 1
+      parts v
+
+    candidates(op, lg, d) ==
+      n := degree d + infBound(op, lg)
+      m := regularPoint(op, lg)
+      uts := UnivariateTaylorSeries(F, dummy, m::F)
+      tools := UTSodetools(F, UP, LODO2, uts)
+      solver := UnivariateTaylorSeriesODESolver(F, uts)
+      dd := UP2UTS(d)$tools
+      f := LODO2FUN(op)$tools
+      q := degree op
+      e := unitlist(1, q)
+      hom := [UTS2UP(dd * ode(f, unitlist(i, q))$solver, n)$tools /$RF d
+                   for i in 1..q]$List(RF)
+      a1 := inv(leadingCoefficient(op)::RF)
+      part := [UTS2UP(dd * ode(RF2UTS(a1 * g)$tools + f #1, e)$solver, n)$tools
+                /$RF d for g in lg | g ^= 0]$List(RF)
+      [hom, part]
+
+    nzero? v ==
+      for i in minIndex v .. maxIndex v repeat
+        not zero? qelt(v, i) => return true
+      false
+
+-- returns z(z+1)...(z+(n-1))
+    UPfact n ==
+      zero? n => 1
+      z := monomial(1, 1)$UP
+      */[z + i::F::UP for i in 0..(n-1)::N]
+
+    infMuLambda l ==
+      lamb:List(N) := [d := degree l]
+      lf:List(UP) := [a := leadingCoefficient l]
+      mup := degree(a)::Z - d
+      while (l := reductum l) ^= 0 repeat
+          a := leadingCoefficient l
+          if (m := degree(a)::Z - (d := degree l)) > mup then
+            mup := m
+            lamb := [d]
+            lf := [a]
+          else if (m = mup) then
+            lamb := concat(d, lamb)
+            lf := concat(a, lf)
+      [mup, lamb, lf]
+
+    infIndicialEquation(lambda, lf) ==
+      ans:UP := 0
+      for i in lambda for f in lf repeat
+        ans := ans + evenodd i * leadingCoefficient f * UPfact i
+      ans
+
+    infBound(l, lg) ==
+      rec := infMuLambda l
+      n := min(- degree(l)::Z - 1,
+               integerBound infIndicialEquation(rec.lambda, rec.func))
+      while not(empty? lg) and zero? first lg repeat lg := rest lg
+      empty? lg => (-n)::N
+      m := infOrder first lg
+      for g in rest lg repeat
+        if not(zero? g) and (mm := infOrder g) < m then m := mm
+      (-min(n, rec.mu - degree(leadingCoefficient l)::Z + m))::N
+
+    makeDot(v, bas) ==
+      ans:RF := 0
+      for i in 1.. for b in bas repeat ans := ans + v.i::UP * b
+      ans
+
+    ratDsolve(op:LODO, g:RF) ==
+      rec := splitDenominator(op, [g])
+      ratDsolve0(rec.eq, first(rec.rh))
+
+    ratDsolve(op:LODO, lg:List RF) ==
+      rec := splitDenominator(op, lg)
+      ratDsolve1(rec.eq, rec.rh)
+
+    ratDsolve(op:LODO2, g:RF) ==
+      unit?(c := content op) => ratDsolve0(op, g)
+      ratDsolve0((op exquo c)::LODO2, inv(c::RF) * g)
+
+    ratDsolve(op:LODO2, lg:List RF) ==
+      unit?(c := content op) => ratDsolve1(op, lg)
+      ratDsolve1((op exquo c)::LODO2, [inv(c::RF) * g for g in lg])
+
+@
+\section{package ODETOOLS ODETools}
+<<package ODETOOLS ODETools>>=
+)abbrev package ODETOOLS ODETools
+++ Author: Manuel Bronstein
+++ Date Created: 20 March 1991
+++ Date Last Updated: 2 February 1994
+++ Description:
+++   \spad{ODETools} provides tools for the linear ODE solver.
+ODETools(F, LODO): Exports == Implementation where
+  N ==> NonNegativeInteger
+  L ==> List F
+  V ==> Vector F
+  M ==> Matrix F
+
+  F:    Field
+  LODO: LinearOrdinaryDifferentialOperatorCategory F
+
+  Exports ==> with
+    wronskianMatrix: L -> M
+      ++ wronskianMatrix([f1,...,fn]) returns the \spad{n x n} matrix m
+      ++ whose i^th row is \spad{[f1^(i-1),...,fn^(i-1)]}.
+    wronskianMatrix: (L, N) -> M
+      ++ wronskianMatrix([f1,...,fn], q, D) returns the \spad{q x n} matrix m
+      ++ whose i^th row is \spad{[f1^(i-1),...,fn^(i-1)]}.
+    variationOfParameters: (LODO, F, L) -> Union(V, "failed")
+      ++ variationOfParameters(op, g, [f1,...,fm])
+      ++ returns \spad{[u1,...,um]} such that a particular solution of the
+      ++ equation \spad{op y = g} is \spad{f1 int(u1) + ... + fm int(um)}
+      ++ where \spad{[f1,...,fm]} are linearly independent and \spad{op(fi)=0}.
+      ++ The value "failed" is returned if \spad{m < n} and no particular
+      ++ solution is found.
+    particularSolution: (LODO, F, L, F -> F) -> Union(F, "failed")
+      ++ particularSolution(op, g, [f1,...,fm], I) returns a particular
+      ++ solution h of the equation \spad{op y = g} where \spad{[f1,...,fm]}
+      ++ are linearly independent and \spad{op(fi)=0}.
+      ++ The value "failed" is returned if no particular solution is found.
+      ++ Note: the method of variations of parameters is used.
+
+  Implementation ==> add
+    import LinearSystemMatrixPackage(F, V, V, M)
+
+    diff := D()$LODO
+
+    wronskianMatrix l == wronskianMatrix(l, #l)
+
+    wronskianMatrix(l, q) ==
+      v:V := vector l
+      m:M := zero(q, #v)
+      for i in minRowIndex m .. maxRowIndex m repeat
+        setRow_!(m, i, v)
+        v := map_!(diff #1, v)
+      m
+
+    variationOfParameters(op, g, b) ==
+      empty? b => "failed"
+      v:V := new(n := degree op, 0)
+      qsetelt_!(v, maxIndex v, g / leadingCoefficient op)
+      particularSolution(wronskianMatrix(b, n), v)
+
+    particularSolution(op, g, b, integration) ==
+      zero? g => 0
+      (sol := variationOfParameters(op, g, b)) case "failed" => "failed"
+      ans:F := 0
+      for f in b for i in minIndex(s := sol::V) .. repeat
+        ans := ans + integration(qelt(s, i)) * f
+      ans
+
+@
+\section{package ODEINT ODEIntegration}
+<<package ODEINT ODEIntegration>>=
+)abbrev package ODEINT ODEIntegration
+++ Author: Manuel Bronstein
+++ Date Created: 4 November 1991
+++ Date Last Updated: 2 February 1994
+++ Description:
+++ \spadtype{ODEIntegration} provides an interface to the integrator.
+++ This package is intended for use
+++ by the differential equations solver but not at top-level.
+ODEIntegration(R, F): Exports == Implementation where
+  R: Join(OrderedSet, EuclideanDomain, RetractableTo Integer,
+          LinearlyExplicitRingOver Integer, CharacteristicZero)
+  F: Join(AlgebraicallyClosedFunctionSpace R, TranscendentalFunctionCategory,
+                                              PrimitiveFunctionCategory)
+
+  Q   ==> Fraction Integer
+  UQ  ==> Union(Q, "failed")
+  SY  ==> Symbol
+  K   ==> Kernel F
+  P   ==> SparseMultivariatePolynomial(R, K)
+  REC ==> Record(coef:Q, logand:F)
+
+  Exports ==> with
+    int   : (F, SY) -> F
+      ++ int(f, x) returns the integral of f with respect to x.
+    expint: (F, SY) -> F
+      ++ expint(f, x) returns e^{the integral of f with respect to x}.
+    diff  : SY -> (F -> F)
+      ++ diff(x) returns the derivation with respect to x.
+
+  Implementation ==> add
+    import FunctionSpaceIntegration(R, F)
+    import ElementaryFunctionStructurePackage(R, F)
+
+    isQ   : List F -> UQ
+    isQlog: F -> Union(REC, "failed")
+    mkprod: List REC -> F
+
+    diff x == differentiate(#1, x)
+
+-- This is the integration function to be used for quadratures
+    int(f, x) ==
+      (u := integrate(f, x)) case F => u::F
+      first(u::List(F))
+
+-- mkprod([q1, f1],...,[qn,fn]) returns */(fi^qi) but groups the
+-- qi having the same denominator together
+    mkprod l ==
+      empty? l => 1
+      rec := first l
+      d := denom(rec.coef)
+      ll := select(denom(#1.coef) = d, l)
+      nthRoot(*/[r.logand ** numer(r.coef) for r in ll], d) *
+        mkprod setDifference(l, ll)
+
+-- computes exp(int(f,x)) in a non-naive way
+    expint(f, x) ==
+      a := int(f, x)
+      (u := validExponential(tower a, a, x)) case F => u::F
+      da := denom a
+      l :=
+        (v := isPlus(na := numer a)) case List(P) => v::List(P)
+        [na]
+      exponent:P := 0
+      lrec:List(REC) := empty()
+      for term in l repeat
+        if (w := isQlog(term / da)) case REC then
+          lrec := concat(w::REC, lrec)
+        else
+          exponent := exponent + term
+      mkprod(lrec) * exp(exponent / da)
+
+-- checks if all the elements of l are rational numbers, returns their product
+    isQ l ==
+      prod:Q := 1
+      for x in l repeat
+        (u := retractIfCan(x)@UQ) case "failed" => return "failed"
+        prod := prod * u::Q
+      prod
+
+-- checks if a non-sum expr is of the form c * log(g) for a rational number c
+    isQlog f ==
+      is?(f, "log"::SY) => [1, first argument(retract(f)@K)]
+      (v := isTimes f) case List(F) and (#(l := v::List(F)) <= 3) =>
+          l := reverse_! sort_! l
+          is?(first l, "log"::SY) and ((u := isQ rest l) case Q) =>
+              [u::Q, first argument(retract(first(l))@K)]
+          "failed"
+      "failed"
+
+@
+\section{package ODECONST ConstantLODE}
+<<package ODECONST ConstantLODE>>=
+)abbrev package ODECONST ConstantLODE
+++ Author: Manuel Bronstein
+++ Date Created: 18 March 1991
+++ Date Last Updated: 3 February 1994
+++ Description: Solution of linear ordinary differential equations, constant coefficient case.
+ConstantLODE(R, F, L): Exports == Implementation where
+  R: Join(OrderedSet, EuclideanDomain, RetractableTo Integer,
+          LinearlyExplicitRingOver Integer, CharacteristicZero)
+  F: Join(AlgebraicallyClosedFunctionSpace R,
+          TranscendentalFunctionCategory, PrimitiveFunctionCategory)
+  L: LinearOrdinaryDifferentialOperatorCategory F
+
+  Z   ==> Integer
+  SY  ==> Symbol
+  K   ==> Kernel F
+  V   ==> Vector F
+  M   ==> Matrix F
+  SUP ==> SparseUnivariatePolynomial F
+
+  Exports ==> with
+    constDsolve: (L, F, SY) -> Record(particular:F, basis:List F)
+      ++ constDsolve(op, g, x) returns \spad{[f, [y1,...,ym]]}
+      ++ where f is a particular solution of the equation \spad{op y = g},
+      ++ and the \spad{yi}'s form a basis for the solutions of \spad{op y = 0}.
+
+  Implementation ==> add
+    import ODETools(F, L)
+    import ODEIntegration(R, F)
+    import ElementaryFunctionSign(R, F)
+    import AlgebraicManipulations(R, F)
+    import FunctionSpaceIntegration(R, F)
+    import FunctionSpaceUnivariatePolynomialFactor(R, F, SUP)
+
+    homoBasis: (L, F) -> List F
+    quadSol  : (SUP, F) -> List F
+    basisSqfr: (SUP, F) -> List F
+    basisSol : (SUP, Z, F) -> List F
+
+    constDsolve(op, g, x) ==
+      b := homoBasis(op, x::F)
+      [particularSolution(op, g, b, int(#1, x))::F, b]
+
+    homoBasis(op, x) ==
+      p:SUP := 0
+      while op ^= 0 repeat
+          p  := p + monomial(leadingCoefficient op, degree op)
+          op := reductum op
+      b:List(F) := empty()
+      for ff in factors ffactor p repeat
+        b := concat_!(b, basisSol(ff.factor, dec(ff.exponent), x))
+      b
+
+    basisSol(p, n, x) ==
+      l := basisSqfr(p, x)
+      zero? n => l
+      ll := copy l
+      xn := x::F
+      for i in 1..n repeat
+        l := concat_!(l, [xn * f for f in ll])
+        xn := x * xn
+      l
+
+    basisSqfr(p, x) ==
+--      one?(d := degree p) =>
+      ((d := degree p) = 1) =>
+        [exp(- coefficient(p, 0) * x / leadingCoefficient p)]
+      d = 2 => quadSol(p, x)
+      [exp(a * x) for a in rootsOf p]
+
+    quadSol(p, x) ==
+      (u := sign(delta := (b := coefficient(p, 1))**2 - 4 *
+        (a := leadingCoefficient p) * (c := coefficient(p, 0))))
+          case Z and negative?(u::Z) =>
+            y := x / (2 * a)
+            r := - b * y
+            i := rootSimp(sqrt(-delta)) * y
+            [exp(r) * cos(i), exp(r) * sin(i)]
+      [exp(a * x) for a in zerosOf p]
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+-- Compile order for the differential equation solver:
+-- oderf.spad  odealg.spad  nlode.spad  nlinsol.spad  riccati.spad  odeef.spad
+
+<<package BALFACT BalancedFactorisation>>
+<<package BOUNDZRO BoundIntegerRoots>>
+<<package ODEPRIM PrimitiveRatDE>>
+<<package UTSODETL UTSodetools>>
+<<package ODERAT RationalLODE>>
+<<package ODETOOLS ODETools>>
+<<package ODEINT ODEIntegration>>
+<<package ODECONST ConstantLODE>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

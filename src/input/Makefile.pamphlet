@@ -1,0 +1,919 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/input Makefile}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{Introduction}
+This creates the mnt/sys/input subdirectory. The files are known
+as ``input'' files which are a list of Axiom commands. Each file
+(say ``foo.input'') can run in an Axiom system with the command:
+\begin{verbatim}
+)read foo.input
+\end{verbatim}
+
+Each of the files in this subdirectory is intended to achieve a 
+three goals. First, the file shows examples of how to use Axiom
+algebra. Second, the file is used as a regression test to show
+that Axiom properly executes the algebra. Third, the file contains
+documentation on known bugs or missing algebra.
+
+It is important to collect as many examples as we can of working
+algebra. In particular, we need machinery to extract algebra from
+other pamphlet files and automatically make them into input files.
+The more algebra we collect, use, and regression test the more
+robust the system will be.
+
+When used to build a shipping system the default stanza ``use''
+will build files that show working algebra examples.
+
+When used for regression testing the stanza ``regress'' is used
+to build all of the working examples, run them, and compare them
+against known good output. Differences are highlighted and need
+to be documented or fixed.
+
+When used for bug testing the stanza ``bug'' is used to build 
+the algebra with known bug chunks included. These are run to check
+that known bugs have been fixed before shipping. Fixed code should
+be moved to the ``regress'' status, new working examples are built
+and the system should be built using ``regress'' to check that the
+build did not break anything.
+
+\subsection{genericRules}
+We use the special .PRECIOUS target to prevent deletion of the
+intermediate .input files which are needed during the processing of
+regress target.
+
+<<genericRules>>=
+
+${OUT}/%.input: ${MID}/%.input
+	@ echo generic 10 making ${OUT}/$*.input from ${MID}/$*.input
+	@ cp ${MID}/$*.input ${OUT}/$*.input
+
+.PRECIOUS: ${MID}/%.input
+
+${MID}/%.input: ${IN}/%.input.pamphlet
+	@ echo generic 11 making ${MID}/$*.input from ${IN}/$*.input.pamphlet
+	@(cd ${MID} ; \
+	  ${TANGLE} ${IN}/$*.input.pamphlet >$*.input )
+
+${OUT}/%.as: ${MID}/%.as
+	@echo generic 12 making ${OUT}/$*.as from ${MID}/$*.as
+	@ cp ${MID}/$*.as ${OUT}/$*.as
+
+${MID}/%.as: ${IN}/%.as.pamphlet
+	@echo generic 13 making ${MID}/$*.as from ${IN}/$*.as.pamphlet
+	@(cd ${MID} ; \
+	  ${TANGLE} ${IN}/$*.as.pamphlet >$*.as)
+
+${DOC}/%.input.dvi: ${IN}/%.input.pamphlet 
+	@ echo generic 14 making ${DOC}/$*.input.dvi from ${IN}/$*.input.pamphlet
+	@ (cd ${DOC} ; \
+	cp ${IN}/$*.input.pamphlet ${DOC} ; \
+	${DOCUMENT} ${NOISE} $*.input ; \
+	rm -f ${DOC}/$*.input.pamphlet ; \
+	rm -f ${DOC}/$*.input.tex ; \
+	rm -f ${DOC}/$*.input )
+
+${DOC}/%.as.dvi: ${IN}/%.as.pamphlet 
+	@ echo generic 15 making ${DOC}/$*.as.dvi from ${IN}/$*.as.pamphlet
+	@ (cd ${DOC} ; \
+	cp ${IN}/$*.as.pamphlet ${DOC} ; \
+	${DOCUMENT} ${NOISE} $*.as ; \
+	rm -f ${DOC}/$*.as.pamphlet ; \
+	rm -f ${DOC}/$*.as.tex ; \
+	rm -f ${DOC}/$*.as )
+
+@
+\section{Testing stanzas (to be added)}
+<<testing>>=
+
+.SUFFIXES: .input .out
+ 
+TESTSYS=  ${OBJ}/${SYS}/bin/interpsys
+ 
+IN=	${SRC}/input
+
+MID=	${INT}/input
+ 
+OUT=	${OBJ}/${SYS}/input
+
+INPUT=  ${MNT}/${SYS}/src/input
+
+DOC=    ${MNT}/${SYS}/doc/src/input
+ 
+all:	
+	@ echo making ${MID}
+	@ cp -p ${IN}/*.input ${MID}
+	@ cp -p ${IN}/axiom.test ${MID}/axiom.input
+	@ cp ${IN}/Makefile.int ${MID}/Makefile
+#	Following now done via doc directory, in a different way
+#	@ (cd ${MID} ; ${SPAD}/bin/hypertex -i `echo ${MNT}/${SYS}/doc/hypertex/pages/*.ht`)
+	@ (cd ${MID} ; \
+	   for i in *.input ;do \
+	    if test ! -f `basename $$i .input`.rec  ;then \
+	     echo aging ${MID}/`basename $$i .input`.rec ; \
+	     ${TOUCH} 0101010189 `basename $$i .input`.rec ;fi ;done)
+	@ (cd ${MID} ; ${MAKE} -f Makefile `echo *.rec` )
+	@ cp ${IN}/Makefile.obj ${OUT}/Makefile
+	@ cp -p ${MID}/*.rec ${OUT}
+	@ cp -p ${IN}/axiom.test ${MID}/axiom.input
+	@ (cd ${OUT} ; \
+	   for i in *.rec ;do \
+	    if test ! -f `basename $$i .rec`.out  ;then \
+	     echo aging ${OUT}/`basename $$i .rec`.out ; \
+	     ${TOUCH} 0101010189 `basename $$i .rec`.out ;fi ;done)
+	@ (cd ${OUT} ; ${MAKE} -f Makefile `echo *.out` )
+#	@ (cd ${OUT} ; maildiff )
+	@ echo done
+
+and yet further stanzas
+
+.SUFFIXES: .input .rec
+ 
+all:    ${OUTS}
+	@ echo done with ${OUTS}
+
+.input.rec:
+	@ echo creating `pwd`/$*.rec
+	@ axiom -rm $*.input
+ 
+and still further stanzas
+
+.SUFFIXES: .rec .out
+
+all:	${OUTS}
+	@ echo obj done with ${OUTS}
+ 
+.rec.out:
+	@ echo running rec file $* from directory `pwd`
+	@ axiom -rv $*.rec
+
+
+@
+\section{The regression testing Makefile}
+This Makefile will be notangled into the [[int]] subdirectory.
+It will run regression tests over all of the input files.
+This will catch things we break but won't catch wrong results
+that were wrong in the past. Every input file that gets regression
+tested is assumed to have been hand-verified before it was added
+to the list.
+<<regression tests>>=
+
+.SUFFIXES: .input .output
+ 
+DAASE=${MNT}/${SYS}
+TESTSYS=${OBJ}/${SYS}/bin/interpsys
+ 
+SKIP= as-eg1.output as-eg2.output    \
+      as-eg3.output    as-eg4.output    as-eg5.output    as-eg6.output    \
+      bern.output      bernpoly.output  \
+      c02aff.output    \
+      c02agf.output    c05adf.output    c05nbf.output    c05pbf.output    \
+      c06eaf.output    c06ebf.output    c06ecf.output    c06ekf.output    \
+      c06fpf.output    c06fqf.output    c06frf.output    c06fuf.output    \
+      c06gbf.output    c06gcf.output    c06gqf.output    c06gsf.output    \
+      cdraw.output     color.output     cone.output      \
+      coordsys.output  \
+      cycloid2.output  cycloid3.output  cycloid.output   \
+      d01ajf.output    d01akf.output    d01alf.output    d01amf.output    \
+      d01anf.output    d01apf.output    d01aqf.output    d01asf.output    \
+      d01bbf.output    d01fcf.output    d01gaf.output    d01gbf.output    \
+      d02bbf.output    d02bhf.output    d02cjf.output    d02ejf.output    \
+      d02gaf.output    d02gbf.output    d02kef.output    d02raf.output    \
+      d03edf.output    d03eef.output    d03faf.output    damped.output    \
+      de2re.output     defs.output      \
+      draw2dSF.output  drawalg.output   drawcfn.output   drawcfun.output  \
+      drawcurv.output  drawcx.output    drawex.output    draw.output      \
+      drawpoly.output  drawx.output     dropt.output     e01baf.output    \
+      e01bef.output    e01bff.output    e01bgf.output    e01bhf.output    \
+      e01daf.output    e01saf.output    e01sbf.output    e01sef.output    \
+      e01sff.output    e02adf.output    e02aef.output    e02agf.output    \
+      e02ahf.output    e02ajf.output    e02akf.output    e02baf.output    \
+      e02bbf.output    e02bcf.output    e02bdf.output    e02bef.output    \
+      e02daf.output    e02dcf.output    e02ddf.output    e02def.output    \
+      e02dff.output    e02gaf.output    e02zaf.output    e04dgf.output    \
+      e04fdf.output    e04gcf.output    e04jaf.output    e04mbf.output    \
+      e04naf.output    e04ucf.output    e04ycf.output    egg.output       \
+      explot2d.output  explot3d.output  \
+      f01brf.output    f01bsf.output    f01maf.output    \
+      f01mcf.output    f01qcf.output    f01qdf.output    f01qef.output    \
+      f01rcf.output    f01rdf.output    f01ref.output    f02aaf.output    \
+      f02abf.output    f02adf.output    f02aef.output    f02aff.output    \
+      f02agf.output    f02ajf.output    f02akf.output    f02awf.output    \
+      f02axf.output    f02bbf.output    f02bjf.output    f02fjf.output    \
+      f02wef.output    f02xef.output    f04adf.output    f04arf.output    \
+      f04asf.output    f04atf.output    f04axf.output    f04faf.output    \
+      f04jgf.output    f04maf.output    f04mbf.output    f04mcf.output    \
+      f04qaf.output    f07adf.output    f07aef.output    f07fdf.output    \
+      f07fef.output    folium.output    gary1.output     gnarly1.output   \
+      graphics.output  grdef.output     helix.output     \
+      images1a.output  images1.output   images2a.output  images2.output   \
+      images3a.output  images3.output   images5a.output  images5.output   \
+      images6a.output  images6.output   images7a.output  images7.output   \
+      images8a.output  images8.output   knot.output      knownbugs.output \
+      liss1.output     liss2.output     lump.output      matrox.output    \
+      mountain.output  mult2d.output    mult3d.output    multKnot.output  \
+      ntube.output     palette.output   parpcurv.output  parscurv.output  \
+      parsurf.output   pinch.output     plotfile.output  \
+      plotlist.output  pollevel.output  ribbon.output    \
+      ribbons.output   ribbonsNew.output rk4draw.output  \
+      s01eaf.output    s13aaf.output    s13acf.output    s13adf.output    \
+      s14aaf.output    s14abf.output    s14baf.output    s15adf.output    \
+      s15aef.output    s17acf.output    s17adf.output    s17aef.output    \
+      s17aff.output    s17agf.output    s17ahf.output    s17ajf.output    \
+      s17akf.output    s17dcf.output    s17def.output    s17dgf.output    \
+      s17dhf.output    s17dlf.output    s18acf.output    s18adf.output    \
+      s18aef.output    s18aff.output    s18dcf.output    s18def.output    \
+      s19aaf.output    s19abf.output    s19acf.output    s19adf.output    \
+      s20acf.output    s20adf.output    s21baf.output    s21bbf.output    \
+      s21bcf.output    s21bdf.output    saddle.output    \
+      sininv.output    sinsin2.output   sinsin.output    spiral.output    \
+      tetra.output     tknot.output     tschirn.output   typo.output      \
+      vectors.output   wester.output    wiggle.output    zimmer.output    
+
+# Error ASEC is invalid as a function.
+ASEC=errortrap.output 
+
+# Error: FLUSH is invalid as a function
+# Error signalled by newGoGet
+FLUSH=regset.output 
+
+# Error: The function WRAPPED is undefined.
+WRAPPED=loop.output      
+
+# Error: Value stack overflow.
+VALUESTACK=tutchap67.output  test.output
+
+# Broken at |MODOP;ELT;$2M;6|.  Type :H for Help.
+MODOP=function.output  
+
+# Broken at |MATCAT-;*;3S;29|.  Type :H for Help.
+MATCAT=linalg.output    
+
+# Broken at |STAGG-;ELT;AIS;5|.  Type :H for Help.
+STAGG=reductio.output
+
+# Broken at |GSERIES;INTEGRATE;2$;6|.  Type :H for Help.
+GSERIES=fixed.output     
+
+# never finishes
+INFINITELOOP=lextripk.output  
+
+OUTS= ffrac.output     \
+      huang.output     \
+      intlf.output     \
+      lexp.output      lib.output       \
+      marcbench.output \
+      synonym2.output  \
+      synonym.output   \
+      tsetcatbutcher.output tsetcatchemical.output \
+      tree.output      \
+      tutchap2.output  tutchap3.output  tutchap4.output  \
+      up.output        \
+      vector.output    viewdef.output   \
+      wutset.output    xpbwpoly.output  \
+      xpoly.output     xpr.output       \
+      zdsolve.output   zimmer.output    zlindep.output 
+
+# new algebra tests based on documentation
+ALGEBRA=INTHEORY.output VIEW2D.output TESTFR.output
+
+REGRES= algaggr.regress algbrbf.regress  algfacob.regress alist.regress  \
+    allfact.regress   antoine.regress \
+    arith.regress     array1.regress   array2.regress \
+    arrows.regress    assign.regress   atansqrt.regress \
+    bags.regress      bbtree.regress \
+    binary.regress    bop.regress      bstree.regress   bouquet.regress \
+    bug10069.regress \
+    bugs.regress      bug10312.regress bug6357.regress  bug9057.regress \
+    calculus2.regress calculus.regress cardinal.regress card.regress \
+    carten.regress    cclass.regress   char.regress     ch.regress \
+    clifford.regress  clif.regress     coercels.regress collect.regress \
+    complex.regress   conformal.regress \
+    constant.regress  contfrac.regress contfrc.regress \
+    curl.regress      cycles1.regress  cycles.regress   cyfactor.regress \
+    danzwill.regress  decimal.regress  defintef.regress defintrf.regress \
+    derham.regress    dfloat.regress   dhtri.regress    divisor.regress \
+    dmp.regress       dpol.regress     easter.regress   efi.regress \
+    eigen.regress     elemfun.regress  elemnum.regress  elfuts.regress \
+    elt.regress       eq.regress       eqtbl.regress    equation2.regress \
+    equation.regress  evalex.regress   eval.regress     exdiff.regress \
+    exint.regress     exit.regress     exlap.regress    exlimit.regress \
+    expexpan.regress  explim.regress   expr1.regress    exprode.regress \
+    expr.regress      exseries.regress exsum.regress    exprpoly.regress \
+    farray.regress    ffdemo.regress   fferr.regress    ffx72.regress \
+    fib.regress       file.regress     float1.regress   float2.regress \
+    float.regress     fname1.regress   fname.regress    fnla.regress \
+    fns.regress       fparfrac.regress fparfrc.regress  fr1.regress \
+    fr2.regress       frac.regress     fr.regress       galois.regress \
+    gbf.regress       genups.regress   gonshor.regress  grpthry.regress \
+    gstbl.regress     heap.regress     heat.regress     help.regress \
+    herm.regress      hexadec.regress  ico.regress      ideal.regress \
+    ifact.regress     infprod.regress  intaf.regress    intdeq.regress \
+    intef2.regress    intef.regress    intg0.regress    intheory.regress \
+    intmix2.regress   intmix.regress   int.regress      intrf.regress \
+    ipftest.regress   is.regress       isprime.regress  kafile.regress \
+    kernel.regress    knot2.regress    kovacic.regress  kuipers.regress \
+    laplace.regress   leg.regress      limit.regress    lindep.regress \
+    list.regress      lode.regress     lodesys.regress  lodo1.regress \
+    lodo2.regress     lodo3.regress    lodof.regress    lodo.regress \
+    lpoly.regress     lupfact.regress  lword.regress    macbug.regress \
+    macros.regress    magma.regress    mapleok.regress  mappkg1.regress \
+    matbug.regress    matrix1.regress  matrix22.regress matrix.regress \
+    mfinfact.regress  mkfunc.regress   mpoly.regress    mset2.regress \
+    mset.regress      multfact.regress multiple.regress ndftip.regress \
+    negfloats.regress nepip.regress    newlodo.regress  newton.regress \
+    nlode.regress     none.regress     noonburg.regress noptip.regress \
+    nqip.regress      nsfip.regress    numbers.regress  octonion.regress \
+    oct.regress       ode.regress      odpol.regress    op1.regress \
+    opalg.regress     operator.regress op.regress       ovar.regress \
+    padic.regress     parabola.regress pascal1.regress  pascal.regress \
+    patmatch.regress  pat.regress      perman.regress   perm.regress \
+    pfr1.regress      pfr.regress      page.regress     pmint.regress \
+    poly1.regress     polycoer.regress poly.regress     psgenfcn.regress \
+    quat1.regress     quat.regress     r20abugs.regress r20bugs.regress \
+    r21bugsbig.regress r21bugs.regress radff.regress    radix.regress \
+    realclos.regress  reclos.regress   repa6.regress    robidoux.regress \
+    roman.regress     roots.regress    ruleset.regress  rules.regress \
+    scherk.regress    scope.regress    segbind.regress  seg.regress \
+    series2.regress   series.regress   sersolve.regress set.regress \
+    sinCosEx.regress  sint.regress     skew.regress     slowint.regress \
+    solvetra.regress  space3.regress   sqmatrix.regress sregset.regress \
+    stbl.regress      stream2.regress  stream.regress   streams.regress \
+    string.regress    strtbl.regress   symbol.regress   t111293.regress \
+    table.regress     tanatan.regress  textfile.regress torus.regress \
+    triglim.regress   tsetcatvermeer.regress            tutchap1.regress \
+    void.regress      uniseg.regress
+
+IN=     ${SRC}/input
+MID=	${INT}/input
+
+all: ${OUTS} ${ALGEBRA} ${REGRES}
+	@ echo 1 finished ${INT}/input
+ 
+%.input: ${IN}/%.input.pamphlet
+	@ echo generic 16 making ${MID}/$*.input from ${IN}/$*.input.pamphlet
+	@(cd ${MID} ; \
+	  ${TANGLE} ${IN}/$*.input.pamphlet >$*.input )
+
+@
+The curious use of {\tt egrep} in the pipeline is to remove the
+spurious differences caused by the Version and Timestamp lines
+in the standard Axiom banner. These cause mismatches in otherwise
+identical output.
+<<regression tests>>=
+%.output: %.input
+	@ echo running test file $* 
+	@ echo ')set message test on' > tmp.input 
+	@ echo ')set message auto off' >> tmp.input 
+	@ echo ')read $*' >> tmp.input 
+	@ echo ')lisp (bye)' >> tmp.input 
+	@ echo 'systemCommand "read tmp.input"' | ${TESTSYS} \
+                | egrep -v '(Timestamp|Version)' | tee $*.output 
+	@ rm tmp.input 
+
+%.regress: %.input
+	@ echo regression testing $*
+	@ rm -f $*.output
+	@ echo ')read $*.input' | ${TESTSYS} 
+	@ rm $*.input
+	@ echo ')lisp (regress "$*.output")' | ${TESTSYS} \
+                | egrep -v '(Timestamp|Version)' | tee $*.regress
+
+@
+\section{The Makefile}
+This Makefile will be notangled into the [[input]] subdirectory.
+<<*>>=
+
+IN=${SRC}/input
+MID=${INT}/input
+OUT=${MNT}/${SYS}/input
+DOC=${MNT}/${SYS}/doc/src/input
+ 
+
+ASFILES=${OUT}/aseg6.as   ${OUT}/aseg7.as  ${OUT}/ecfact.as \
+        ${OUT}/hilbert.as ${OUT}/matops.as ${OUT}/pdecomp0.as \
+        ${OUT}/romnum.as
+
+NAGLIB=${OUT}/c02aff.input   ${OUT}/c02agf.input     ${OUT}/c05adf.input \
+       ${OUT}/c05nbf.input   ${OUT}/c05pbf.input     ${OUT}/c06eaf.input \
+       ${OUT}/c06ebf.input   ${OUT}/c06ecf.input     ${OUT}/c06ekf.input \
+       ${OUT}/c06fpf.input   ${OUT}/c06fqf.input     ${OUT}/c06frf.input \
+       ${OUT}/c06fuf.input   ${OUT}/c06gbf.input     ${OUT}/c06gcf.input \
+       ${OUT}/c06gqf.input   ${OUT}/c06gsf.input     \
+       ${OUT}/d01ajf.input   ${OUT}/d01akf.input     ${OUT}/d01alf.input \
+       ${OUT}/d01amf.input   ${OUT}/d01anf.input     ${OUT}/d01apf.input \
+       ${OUT}/d01aqf.input   ${OUT}/d01asf.input     ${OUT}/d01bbf.input \
+       ${OUT}/d01fcf.input   ${OUT}/d01gaf.input     ${OUT}/d01gbf.input \
+       ${OUT}/d02bbf.input   ${OUT}/d02bhf.input     ${OUT}/d02cjf.input \
+       ${OUT}/d02ejf.input   ${OUT}/d02gaf.input     ${OUT}/d02gbf.input \
+       ${OUT}/d02kef.input   ${OUT}/d02raf.input     ${OUT}/d03edf.input \
+       ${OUT}/d03eef.input   ${OUT}/d03faf.input     \
+       ${OUT}/e01baf.input   ${OUT}/e01bef.input     ${OUT}/e01bff.input \
+       ${OUT}/e01bgf.input   ${OUT}/e01bhf.input     ${OUT}/e01daf.input \
+       ${OUT}/e01saf.input   ${OUT}/e01sbf.input     ${OUT}/e01sef.input \
+       ${OUT}/e01sff.input   ${OUT}/e02adf.input     ${OUT}/e02aef.input \
+       ${OUT}/e02agf.input   ${OUT}/e02ahf.input     ${OUT}/e02ajf.input \
+       ${OUT}/e02akf.input   ${OUT}/e02baf.input     ${OUT}/e02bbf.input \
+       ${OUT}/e02bcf.input   ${OUT}/e02bdf.input     ${OUT}/e02bef.input \
+       ${OUT}/e02daf.input   ${OUT}/e02dcf.input     ${OUT}/e02ddf.input \
+       ${OUT}/e02def.input   ${OUT}/e02dff.input     ${OUT}/e02gaf.input \
+       ${OUT}/e02zaf.input   ${OUT}/e04dgf.input     ${OUT}/e04fdf.input \
+       ${OUT}/e04gcf.input   ${OUT}/e04jaf.input     ${OUT}/e04mbf.input \
+       ${OUT}/e04naf.input   ${OUT}/e04ucf.input     ${OUT}/e04ycf.input \
+       ${OUT}/f01brf.input   ${OUT}/f01bsf.input     ${OUT}/f01maf.input \
+       ${OUT}/f01mcf.input   ${OUT}/f01qcf.input     ${OUT}/f01qdf.input \
+       ${OUT}/f01qef.input   ${OUT}/f01rcf.input     ${OUT}/f01rdf.input \
+       ${OUT}/f01ref.input   ${OUT}/f02aaf.input     ${OUT}/f02abf.input \
+       ${OUT}/f02adf.input   ${OUT}/f02aef.input     ${OUT}/f02aff.input \
+       ${OUT}/f02agf.input   ${OUT}/f02ajf.input     ${OUT}/f02akf.input \
+       ${OUT}/f02awf.input   ${OUT}/f02axf.input     ${OUT}/f02bbf.input \
+       ${OUT}/f02bjf.input   ${OUT}/f02fjf.input     ${OUT}/f02wef.input \
+       ${OUT}/f02xef.input   ${OUT}/f04adf.input     ${OUT}/f04arf.input \
+       ${OUT}/f04asf.input   ${OUT}/f04atf.input     ${OUT}/f04axf.input \
+       ${OUT}/f04faf.input   ${OUT}/f04jgf.input     ${OUT}/f04maf.input \
+       ${OUT}/f04mbf.input   ${OUT}/f04mcf.input     ${OUT}/f04qaf.input \
+       ${OUT}/f07adf.input   ${OUT}/f07aef.input     ${OUT}/f07fdf.input \
+       ${OUT}/f07fef.input   \
+       ${OUT}/s01eaf.input   ${OUT}/s13aaf.input     ${OUT}/s13acf.input \
+       ${OUT}/s13adf.input   ${OUT}/s14aaf.input     ${OUT}/s14abf.input \
+       ${OUT}/s14baf.input   ${OUT}/s15adf.input     ${OUT}/s15aef.input \
+       ${OUT}/s17acf.input   ${OUT}/s17adf.input     ${OUT}/s17aef.input \
+       ${OUT}/s17aff.input   ${OUT}/s17agf.input     ${OUT}/s17ahf.input \
+       ${OUT}/s17ajf.input   ${OUT}/s17akf.input     ${OUT}/s17dcf.input \
+       ${OUT}/s17def.input   ${OUT}/s17dgf.input     ${OUT}/s17dhf.input \
+       ${OUT}/s17dlf.input   ${OUT}/s18acf.input     ${OUT}/s18adf.input \
+       ${OUT}/s18aef.input   ${OUT}/s18aff.input     ${OUT}/s18dcf.input \
+       ${OUT}/s18def.input   ${OUT}/s19aaf.input     ${OUT}/s19abf.input \
+       ${OUT}/s19acf.input   ${OUT}/s19adf.input     ${OUT}/s20acf.input \
+       ${OUT}/s20adf.input   ${OUT}/s21baf.input     ${OUT}/s21bbf.input \
+       ${OUT}/s21bcf.input   ${OUT}/s21bdf.input     
+
+FILES= ${OUT}/algaggr.input  ${OUT}/algbrbf.input    ${OUT}/algfacob.input \
+       ${OUT}/alist.input    ${OUT}/allfact.input    ${OUT}/antoine.input  \
+       ${OUT}/array1.input   ${OUT}/array2.input     ${OUT}/arrows.input \
+       ${OUT}/assign.input   ${OUT}/atansqrt.input   ${OUT}/axiom.input \
+       ${OUT}/bags.input     ${OUT}/bbtree.input     ${OUT}/bern.input \
+       ${OUT}/bernpoly.input ${OUT}/binary.input     ${OUT}/bop.input \
+       ${OUT}/bouquet.input  ${OUT}/bstree.input     ${OUT}/bug6357.input \
+       ${OUT}/bug9057.input  ${OUT}/bug10069.input   ${OUT}/bug10312.input \
+       ${OUT}/calculus.input \
+       ${OUT}/cardinal.input ${OUT}/card.input       ${OUT}/carten.input \
+       ${OUT}/cclass.input   ${OUT}/cdraw.input      ${OUT}/char.input \
+       ${OUT}/ch.input       ${OUT}/clifford.input   ${OUT}/clif.input \
+       ${OUT}/coercels.input ${OUT}/collect.input    ${OUT}/color.input \
+       ${OUT}/complex.input  ${OUT}/cone.input       ${OUT}/conformal.input \
+       ${OUT}/constant.input \
+       ${OUT}/contfrac.input ${OUT}/contfrc.input    ${OUT}/coordsys.input \
+       ${OUT}/curl.input     \
+       ${OUT}/cycles.input   ${OUT}/cycles1.input    ${OUT}/cycloid.input  \
+       ${OUT}/cycloid2.input \
+       ${OUT}/cycloid3.input ${OUT}/cyfactor.input   ${OUT}/damped.input \
+       ${OUT}/danzwill.input ${OUT}/decimal.input    ${OUT}/defs.input \
+       ${OUT}/defintef.input ${OUT}/defintrf.input   ${OUT}/derham.input \
+       ${OUT}/de2re.input \
+       ${OUT}/dfloat.input   ${OUT}/dhtri.input      ${OUT}/divisor.input \
+       ${OUT}/dmp.input      ${OUT}/dpol.input       ${OUT}/draw2dSF.input \
+       ${OUT}/drawalg.input  ${OUT}/drawcfn.input \
+       ${OUT}/drawcfun.input ${OUT}/drawcurv.input \
+       ${OUT}/draw.input     ${OUT}/drawcx.input     ${OUT}/drawex.input \
+       ${OUT}/drawpoly.input ${OUT}/drawx.input    \
+       ${OUT}/easter.input   ${OUT}/efi.input        ${OUT}/egg.input      \
+       ${OUT}/eigen.input \
+       ${OUT}/elemfun.input  ${OUT}/elemnum.input    ${OUT}/elfuts.input \
+       ${OUT}/elt.input \
+       ${OUT}/eq.input       ${OUT}/eqtbl.input      ${OUT}/equation.input \
+       ${OUT}/errortrap.input \
+       ${OUT}/eval.input     ${OUT}/exit.input       ${OUT}/expexpan.input \
+       ${OUT}/explim.input   ${OUT}/explot2d.input   ${OUT}/explot3d.input \
+       ${OUT}/expr1.input    ${OUT}/exprpoly.input \
+       ${OUT}/farray.input   ${OUT}/ffdemo.input \
+       ${OUT}/fferr.input    ${OUT}/ffrac.input      ${OUT}/ffx72.input \
+       ${OUT}/fib.input      ${OUT}/fixed.input \
+       ${OUT}/file.input     ${OUT}/float2.input \
+       ${OUT}/float.input    ${OUT}/float1.input     ${OUT}/fname.input \
+       ${OUT}/fname1.input   ${OUT}/fnla.input       ${OUT}/folium.input   \
+       ${OUT}/fparfrac.input \
+       ${OUT}/fparfrc.input  ${OUT}/fr2.input        ${OUT}/frac.input \
+       ${OUT}/fr.input       ${OUT}/fr1.input        ${OUT}/gary1.input \
+       ${OUT}/gbf.input      ${OUT}/genups.input     ${OUT}/gnarly1.input \
+       ${OUT}/gonshor.input  ${OUT}/grdef.input    \
+       ${OUT}/gstbl.input \
+       ${OUT}/heap.input     ${OUT}/heat.input       ${OUT}/helix.input \
+       ${OUT}/herm.input     ${OUT}/hexadec.input    ${OUT}/huang.input \
+       ${OUT}/ico.input      ${OUT}/ideal.input      ${OUT}/ifact.input \
+       ${OUT}/images1.input  ${OUT}/images1a.input   ${OUT}/images3a.input \
+       ${OUT}/images3.input  ${OUT}/images6.input    ${OUT}/images6a.input \
+       ${OUT}/images7.input  ${OUT}/images7a.input   ${OUT}/infprod.input \
+       ${OUT}/intaf.input    ${OUT}/intdeq.input     ${OUT}/intef.input \
+       ${OUT}/intg0.input    ${OUT}/intheory.input   ${OUT}/int.input \
+       ${OUT}/intlf.input    ${OUT}/intmix.input     ${OUT}/intrf.input \
+       ${OUT}/ipftest.input  ${OUT}/is.input         ${OUT}/isprime.input \
+       ${OUT}/kafile.input   ${OUT}/kernel.input     ${OUT}/knot.input \
+       ${OUT}/kovacic.input  ${OUT}/kuipers.input  \
+       ${OUT}/laplace.input  ${OUT}/leg.input        ${OUT}/lexp.input \
+       ${OUT}/lextripk.input ${OUT}/lib.input        ${OUT}/limit.input \
+       ${OUT}/lindep.input   ${OUT}/liss1.input      ${OUT}/liss2.input \
+       ${OUT}/list.input     ${OUT}/lode.input       ${OUT}/lodesys.input \
+       ${OUT}/lodo1.input    ${OUT}/lodo2.input      ${OUT}/lodof.input \
+       ${OUT}/lodo.input     ${OUT}/lodo3.input      ${OUT}/lpoly.input \
+       ${OUT}/lump.input \
+       ${OUT}/lupfact.input  ${OUT}/lword.input      ${OUT}/macbug.input \
+       ${OUT}/macros.input   ${OUT}/marcbench.input  ${OUT}/magma.input \
+       ${OUT}/mapleok.input  ${OUT}/mappkg1.input    ${OUT}/matbug.input \
+       ${OUT}/matrix22.input ${OUT}/matrix.input     ${OUT}/matrix1.input \
+       ${OUT}/mfinfact.input ${OUT}/mkfunc.input     ${OUT}/mountain.input \
+       ${OUT}/mpoly.input    ${OUT}/mset.input       ${OUT}/mset2.input \
+       ${OUT}/multfact.input ${OUT}/multKnot.input   ${OUT}/mult3d.input \
+       ${OUT}/multiple.input \
+       ${OUT}/ndftip.input   ${OUT}/newlodo.input \
+       ${OUT}/negfloats.input \
+       ${OUT}/nepip.input    ${OUT}/newton.input \
+       ${OUT}/nlode.input    ${OUT}/none.input       ${OUT}/noonburg.input \
+       ${OUT}/noptip.input   ${OUT}/nqip.input       ${OUT}/nsfip.input \
+       ${OUT}/ntube.input    ${OUT}/oct.input      ${OUT}/ode.input \
+       ${OUT}/octonion.input ${OUT}/odpol.input \
+       ${OUT}/opalg.input    ${OUT}/operator.input   ${OUT}/op.input \
+       ${OUT}/op1.input      ${OUT}/ovar.input \
+       ${OUT}/padic.input    ${OUT}/palette.input \
+       ${OUT}/parpcurv.input ${OUT}/parscurv.input   ${OUT}/parsurf.input \
+       ${OUT}/pascal1.input \
+       ${OUT}/pascal.input   ${OUT}/patmatch.input   ${OUT}/perman.input \
+       ${OUT}/perm.input     ${OUT}/pfr.input        ${OUT}/pfr1.input \
+       ${OUT}/pinch.input    ${OUT}/plotfile.input   ${OUT}/pollevel.input \
+       ${OUT}/pmint.input    ${OUT}/polycoer.input \
+       ${OUT}/poly1.input    ${OUT}/psgenfcn.input   \
+       ${OUT}/quat.input     ${OUT}/quat1.input      ${OUT}/ribbon.input   \
+       ${OUT}/ribbons.input  ${OUT}/ribbonsNew.input ${OUT}/rk4draw.input  \
+       ${OUT}/r20abugs.input \
+       ${OUT}/r20bugs.input  ${OUT}/r21bugsbig.input \
+       ${OUT}/r21bugs.input \
+       ${OUT}/radff.input    ${OUT}/radix.input      ${OUT}/realclos.input \
+       ${OUT}/reclos.input   ${OUT}/regset.input     \
+       ${OUT}/robidoux.input ${OUT}/roman.input      ${OUT}/roots.input \
+       ${OUT}/ruleset.input  ${OUT}/rules.input      ${OUT}/saddle.input \
+       ${OUT}/scherk.input   ${OUT}/scope.input \
+       ${OUT}/segbind.input  ${OUT}/seg.input        ${OUT}/series2.input \
+       ${OUT}/series.input   ${OUT}/sersolve.input   ${OUT}/set.input \
+       ${OUT}/sinCosEx.input ${OUT}/sininv.input     ${OUT}/sinsin.input \
+       ${OUT}/sinsin2.input  ${OUT}/sint.input       ${OUT}/skew.input \
+       ${OUT}/slowint.input  ${OUT}/solvetra.input   ${OUT}/space3.input \
+       ${OUT}/spiral.input \
+       ${OUT}/sqmatrix.input ${OUT}/sregset.input    ${OUT}/stbl.input \
+       ${OUT}/stream2.input  ${OUT}/stream.input     ${OUT}/streams.input \
+       ${OUT}/string.input   ${OUT}/strtbl.input     ${OUT}/symbol.input \
+       ${OUT}/synonym.input  ${OUT}/t111293.input \
+       ${OUT}/table.input    ${OUT}/tanatan.input    ${OUT}/test.input \
+       ${OUT}/tetra.input    ${OUT}/textfile.input   ${OUT}/tknot.input \
+       ${OUT}/tree.input \
+       ${OUT}/triglim.input  ${OUT}/tschirn.input ${OUT}/tsetcatbutcher.input \
+       ${OUT}/tsetcatchemical.input ${OUT}/tsetcatvermeer.input \
+       ${OUT}/tutchap1.input ${OUT}/tutchap2.input   ${OUT}/tutchap3.input \
+       ${OUT}/tutchap4.input ${OUT}/tutchap67.input  ${OUT}/typo.input     \
+       ${OUT}/uniseg.input   ${OUT}/up.input \
+       ${OUT}/vector.input   ${OUT}/vectors.input    ${OUT}/viewdef.input \
+       ${OUT}/void.input     ${OUT}/wiggle.input   \
+       ${OUT}/wutset.input \
+       ${OUT}/xpbwpoly.input ${OUT}/xpoly.input      ${OUT}/xpr.input \
+       ${OUT}/zdsolve.input  ${OUT}/zimmer.input     ${OUT}/zlindep.input
+
+FILES2=${OUT}/arith.input    ${OUT}/bugs.input \
+       ${OUT}/calculus2.input \
+       ${OUT}/curl.input     \
+       ${OUT}/equation2.input ${OUT}/evalex.input \
+       ${OUT}/exdiff.input   ${OUT}/exint.input      ${OUT}/exlap.input \
+       ${OUT}/exlimit.input  \
+       ${OUT}/expr.input     ${OUT}/exprode.input    ${OUT}/exseries.input \
+       ${OUT}/exsum.input    ${OUT}/fns.input        \
+       ${OUT}/function.input ${OUT}/galois.input     \
+       ${OUT}/grpthry.input \
+       ${OUT}/help.input       ${OUT}/intef2.input \
+       ${OUT}/intmix2.input  ${OUT}/knot2.input      ${OUT}/linalg.input \
+       ${OUT}/loop.input \
+       ${OUT}/numbers.input \
+       ${OUT}/parabola.input ${OUT}/pat.input        \
+       ${OUT}/poly.input     ${OUT}/reductio.input   ${OUT}/repa6.input \
+       ${OUT}/spadprof.input \
+       ${OUT}/synonym2.input ${OUT}/torus.input      
+
+BROKEN=${OUT}/as-eg1.input   ${OUT}/as-eg2.input     ${OUT}/as-eg3.input \
+       ${OUT}/as-eg4.input   ${OUT}/as-eg5.input     ${OUT}/as-eg6.input 
+
+#   This viewport has already been closed!
+VIEWPORT=${OUT}/graphics.input 
+
+# Error: Value stack overflow.
+VALUESTACK=${OUT}/images2a.input ${OUT}/images2.input  ${OUT}/images5a.input \
+           ${OUT}/images5.input  ${OUT}/images8a.input ${OUT}/images8.input  \
+           ${OUT}/mult2d.input   ${OUT}/plotlist.input 
+
+# documented test cases 
+DOCFILES= \
+  ${DOC}/algaggr.input.dvi     ${DOC}/algbrbf.input.dvi    \
+  ${DOC}/algfacob.input.dvi    ${DOC}/alist.input.dvi      \
+  ${DOC}/allfact.input.dvi     ${DOC}/antoine.input.dvi    \
+  ${DOC}/arith.input.dvi       ${DOC}/array1.input.dvi     \
+  ${DOC}/array2.input.dvi      ${DOC}/arrows.input.dvi     \
+  ${DOC}/as-eg1.input.dvi      ${DOC}/as-eg2.input.dvi     \
+  ${DOC}/as-eg3.input.dvi      ${DOC}/as-eg4.input.dvi     \
+  ${DOC}/as-eg5.input.dvi      ${DOC}/aseg6.as.dvi         \
+  ${DOC}/as-eg6.input.dvi      ${DOC}/aseg7.as.dvi         \
+  ${DOC}/assign.input.dvi      ${DOC}/atansqrt.input.dvi   \
+  ${DOC}/axiom.input.dvi       ${DOC}/bags.input.dvi       \
+  ${DOC}/bbtree.input.dvi      ${DOC}/bern.input.dvi       \
+  ${DOC}/bernpoly.input.dvi    ${DOC}/binary.input.dvi     \
+  ${DOC}/bop.input.dvi         ${DOC}/bouquet.input.dvi    \
+  ${DOC}/bstree.input.dvi      ${DOC}/bug10069.input.dvi   \
+  ${DOC}/bug10312.input.dvi    ${DOC}/bug6357.input.dvi    \
+  ${DOC}/bug9057.input.dvi     ${DOC}/bugs.input.dvi       \
+  ${DOC}/c02aff.input.dvi      ${DOC}/c02agf.input.dvi     \
+  ${DOC}/c05adf.input.dvi      ${DOC}/c05nbf.input.dvi     \
+  ${DOC}/c05pbf.input.dvi      ${DOC}/c06eaf.input.dvi     \
+  ${DOC}/c06ebf.input.dvi      ${DOC}/c06ecf.input.dvi     \
+  ${DOC}/c06ekf.input.dvi      ${DOC}/c06fpf.input.dvi     \
+  ${DOC}/c06fqf.input.dvi      ${DOC}/c06frf.input.dvi     \
+  ${DOC}/c06fuf.input.dvi      ${DOC}/c06gbf.input.dvi     \
+  ${DOC}/c06gcf.input.dvi      ${DOC}/c06gqf.input.dvi     \
+  ${DOC}/c06gsf.input.dvi      ${DOC}/calculus2.input.dvi  \
+  ${DOC}/calculus.input.dvi    ${DOC}/cardinal.input.dvi   \
+  ${DOC}/card.input.dvi        ${DOC}/carten.input.dvi     \
+  ${DOC}/cclass.input.dvi      ${DOC}/cdraw.input.dvi      \
+  ${DOC}/char.input.dvi        ${DOC}/ch.input.dvi         \
+  ${DOC}/clifford.input.dvi    ${DOC}/clif.input.dvi       \
+  ${DOC}/coercels.input.dvi    ${DOC}/collect.input.dvi    \
+  ${DOC}/color.input.dvi       ${DOC}/complex.input.dvi    \
+  ${DOC}/cone.input.dvi        ${DOC}/conformal.input.dvi  \
+  ${DOC}/constant.input.dvi    ${DOC}/contfrac.input.dvi   \
+  ${DOC}/contfrc.input.dvi     ${DOC}/coordsys.input.dvi   \
+  ${DOC}/curl.input.dvi        ${DOC}/cycles1.input.dvi    \
+  ${DOC}/cycles.input.dvi      ${DOC}/cycloid2.input.dvi   \
+  ${DOC}/cycloid3.input.dvi    ${DOC}/cycloid.input.dvi    \
+  ${DOC}/cyfactor.input.dvi    ${DOC}/d01ajf.input.dvi     \
+  ${DOC}/d01akf.input.dvi      ${DOC}/d01alf.input.dvi     \
+  ${DOC}/d01amf.input.dvi      ${DOC}/d01anf.input.dvi     \
+  ${DOC}/d01apf.input.dvi      ${DOC}/d01aqf.input.dvi     \
+  ${DOC}/d01asf.input.dvi      ${DOC}/d01bbf.input.dvi     \
+  ${DOC}/d01fcf.input.dvi      ${DOC}/d01gaf.input.dvi     \
+  ${DOC}/d01gbf.input.dvi      ${DOC}/d02bbf.input.dvi     \
+  ${DOC}/d02bhf.input.dvi      ${DOC}/d02cjf.input.dvi     \
+  ${DOC}/d02ejf.input.dvi      ${DOC}/d02gaf.input.dvi     \
+  ${DOC}/d02gbf.input.dvi      ${DOC}/d02kef.input.dvi     \
+  ${DOC}/d02raf.input.dvi      ${DOC}/d03edf.input.dvi     \
+  ${DOC}/d03eef.input.dvi      ${DOC}/d03faf.input.dvi     \
+  ${DOC}/damped.input.dvi      ${DOC}/danzwill.input.dvi   \
+  ${DOC}/de2re.input.dvi       ${DOC}/decimal.input.dvi    \
+  ${DOC}/defintef.input.dvi    ${DOC}/defintrf.input.dvi   \
+  ${DOC}/defs.input.dvi        ${DOC}/derham.input.dvi     \
+  ${DOC}/dfloat.input.dvi      ${DOC}/dhtri.input.dvi      \
+  ${DOC}/divisor.input.dvi     ${DOC}/dmp.input.dvi        \
+  ${DOC}/dpol.input.dvi        \
+  ${DOC}/draw2dSF.input.dvi    ${DOC}/drawalg.input.dvi    \
+  ${DOC}/drawcfn.input.dvi     ${DOC}/drawcfun.input.dvi   \
+  ${DOC}/drawcurv.input.dvi    ${DOC}/drawcx.input.dvi     \
+  ${DOC}/drawex.input.dvi      ${DOC}/draw.input.dvi       \
+  ${DOC}/drawpoly.input.dvi    ${DOC}/drawx.input.dvi      \
+  ${DOC}/dropt.input.dvi       ${DOC}/e01baf.input.dvi     \
+  ${DOC}/e01bef.input.dvi      ${DOC}/e01bff.input.dvi     \
+  ${DOC}/e01bgf.input.dvi      ${DOC}/e01bhf.input.dvi     \
+  ${DOC}/e01daf.input.dvi      ${DOC}/e01saf.input.dvi     \
+  ${DOC}/e01sbf.input.dvi      ${DOC}/e01sef.input.dvi     \
+  ${DOC}/e01sff.input.dvi      ${DOC}/e02adf.input.dvi     \
+  ${DOC}/e02aef.input.dvi      ${DOC}/e02agf.input.dvi     \
+  ${DOC}/e02ahf.input.dvi      ${DOC}/e02ajf.input.dvi     \
+  ${DOC}/e02akf.input.dvi      ${DOC}/e02baf.input.dvi     \
+  ${DOC}/e02bbf.input.dvi      ${DOC}/e02bcf.input.dvi     \
+  ${DOC}/e02bdf.input.dvi      ${DOC}/e02bef.input.dvi     \
+  ${DOC}/e02daf.input.dvi      ${DOC}/e02dcf.input.dvi     \
+  ${DOC}/e02ddf.input.dvi      ${DOC}/e02def.input.dvi     \
+  ${DOC}/e02dff.input.dvi      ${DOC}/e02gaf.input.dvi     \
+  ${DOC}/e02zaf.input.dvi      ${DOC}/e04dgf.input.dvi     \
+  ${DOC}/e04fdf.input.dvi      ${DOC}/e04gcf.input.dvi     \
+  ${DOC}/e04jaf.input.dvi      ${DOC}/e04mbf.input.dvi     \
+  ${DOC}/e04naf.input.dvi      ${DOC}/e04ucf.input.dvi     \
+  ${DOC}/e04ycf.input.dvi      ${DOC}/easter.input.dvi     \
+  ${DOC}/ecfact.as.dvi         ${DOC}/efi.input.dvi        \
+  ${DOC}/egg.input.dvi         ${DOC}/eigen.input.dvi      \
+  ${DOC}/elemfun.input.dvi     ${DOC}/elemnum.input.dvi    \
+  ${DOC}/elfuts.input.dvi      ${DOC}/elt.input.dvi        \
+  ${DOC}/eq.input.dvi          ${DOC}/eqtbl.input.dvi      \
+  ${DOC}/equation2.input.dvi   ${DOC}/equation.input.dvi   \
+  ${DOC}/errortrap.input.dvi   ${DOC}/evalex.input.dvi     \
+  ${DOC}/eval.input.dvi        ${DOC}/exdiff.input.dvi     \
+  ${DOC}/exint.input.dvi       ${DOC}/exit.input.dvi       \
+  ${DOC}/exlap.input.dvi       ${DOC}/exlimit.input.dvi    \
+  ${DOC}/expexpan.input.dvi    ${DOC}/explim.input.dvi     \
+  ${DOC}/explot2d.input.dvi    ${DOC}/explot3d.input.dvi   \
+  ${DOC}/expr1.input.dvi       ${DOC}/expr.input.dvi       \
+  ${DOC}/exprode.input.dvi     ${DOC}/exprpoly.input.dvi   \
+  ${DOC}/exseries.input.dvi    ${DOC}/exsum.input.dvi      \
+  ${DOC}/f01brf.input.dvi      ${DOC}/f01bsf.input.dvi     \
+  ${DOC}/f01maf.input.dvi      ${DOC}/f01mcf.input.dvi     \
+  ${DOC}/f01qcf.input.dvi      ${DOC}/f01qdf.input.dvi     \
+  ${DOC}/f01qef.input.dvi      ${DOC}/f01rcf.input.dvi     \
+  ${DOC}/f01rdf.input.dvi      ${DOC}/f01ref.input.dvi     \
+  ${DOC}/f02aaf.input.dvi      ${DOC}/f02abf.input.dvi     \
+  ${DOC}/f02adf.input.dvi      ${DOC}/f02aef.input.dvi     \
+  ${DOC}/f02aff.input.dvi      ${DOC}/f02agf.input.dvi     \
+  ${DOC}/f02ajf.input.dvi      ${DOC}/f02akf.input.dvi     \
+  ${DOC}/f02awf.input.dvi      ${DOC}/f02axf.input.dvi     \
+  ${DOC}/f02bbf.input.dvi      ${DOC}/f02bjf.input.dvi     \
+  ${DOC}/f02fjf.input.dvi      ${DOC}/f02wef.input.dvi     \
+  ${DOC}/f02xef.input.dvi      ${DOC}/f04adf.input.dvi     \
+  ${DOC}/f04arf.input.dvi      ${DOC}/f04asf.input.dvi     \
+  ${DOC}/f04atf.input.dvi      ${DOC}/f04axf.input.dvi     \
+  ${DOC}/f04faf.input.dvi      ${DOC}/f04jgf.input.dvi     \
+  ${DOC}/f04maf.input.dvi      ${DOC}/f04mbf.input.dvi     \
+  ${DOC}/f04mcf.input.dvi      ${DOC}/f04qaf.input.dvi     \
+  ${DOC}/f07adf.input.dvi      ${DOC}/f07aef.input.dvi     \
+  ${DOC}/f07fdf.input.dvi      ${DOC}/f07fef.input.dvi     \
+  ${DOC}/farray.input.dvi      ${DOC}/ffdemo.input.dvi     \
+  ${DOC}/fferr.input.dvi       ${DOC}/ffrac.input.dvi      \
+  ${DOC}/ffx72.input.dvi       ${DOC}/fib.input.dvi        \
+  ${DOC}/file.input.dvi        ${DOC}/fixed.input.dvi      \
+  ${DOC}/float1.input.dvi      ${DOC}/float2.input.dvi     \
+  ${DOC}/float.input.dvi       ${DOC}/fname1.input.dvi     \
+  ${DOC}/fname.input.dvi       ${DOC}/fnla.input.dvi       \
+  ${DOC}/fns.input.dvi         ${DOC}/folium.input.dvi     \
+  ${DOC}/fparfrac.input.dvi    ${DOC}/fparfrc.input.dvi    \
+  ${DOC}/fr1.input.dvi         ${DOC}/fr2.input.dvi        \
+  ${DOC}/frac.input.dvi        ${DOC}/fr.input.dvi         \
+  ${DOC}/function.input.dvi    ${DOC}/galois.input.dvi     \
+  ${DOC}/gary1.input.dvi       ${DOC}/gbf.input.dvi        \
+  ${DOC}/genups.input.dvi      ${DOC}/gnarly1.input.dvi    \
+  ${DOC}/gonshor.input.dvi     ${DOC}/graphics.input.dvi   \
+  ${DOC}/grdef.input.dvi       ${DOC}/grpthry.input.dvi    \
+  ${DOC}/gstbl.input.dvi       ${DOC}/heap.input.dvi       \
+  ${DOC}/heat.input.dvi        ${DOC}/helix.input.dvi      \
+  ${DOC}/help.input.dvi        ${DOC}/herm.input.dvi       \
+  ${DOC}/hexadec.input.dvi     ${DOC}/hilbert.as.dvi       \
+  ${DOC}/huang.input.dvi       ${DOC}/ico.input.dvi        \
+  ${DOC}/ideal.input.dvi       ${DOC}/ifact.input.dvi      \
+  ${DOC}/images1a.input.dvi    ${DOC}/images1.input.dvi    \
+  ${DOC}/images2a.input.dvi    ${DOC}/images2.input.dvi    \
+  ${DOC}/images3a.input.dvi    ${DOC}/images3.input.dvi    \
+  ${DOC}/images5a.input.dvi    ${DOC}/images5.input.dvi    \
+  ${DOC}/images6a.input.dvi    ${DOC}/images6.input.dvi    \
+  ${DOC}/images7a.input.dvi    ${DOC}/images7.input.dvi    \
+  ${DOC}/images8a.input.dvi    ${DOC}/images8.input.dvi    \
+  ${DOC}/infprod.input.dvi     ${DOC}/intaf.input.dvi      \
+  ${DOC}/intdeq.input.dvi      ${DOC}/intef2.input.dvi     \
+  ${DOC}/intef.input.dvi       ${DOC}/intg0.input.dvi      \
+  ${DOC}/intheory.input.dvi    ${DOC}/int.input.dvi        \
+  ${DOC}/intlf.input.dvi       ${DOC}/intmix2.input.dvi    \
+  ${DOC}/intmix.input.dvi      ${DOC}/intrf.input.dvi      \
+  ${DOC}/ipftest.input.dvi     ${DOC}/is.input.dvi         \
+  ${DOC}/isprime.input.dvi     ${DOC}/kafile.input.dvi     \
+  ${DOC}/kernel.input.dvi      ${DOC}/knot2.input.dvi      \
+  ${DOC}/knot.input.dvi        ${DOC}/knownbugs.input.dvi  \
+  ${DOC}/kovacic.input.dvi     ${DOC}/kuipers.input.dvi    \
+  ${DOC}/laplace.input.dvi     ${DOC}/leg.input.dvi        \
+  ${DOC}/lexp.input.dvi        ${DOC}/lextripk.input.dvi   \
+  ${DOC}/lib.input.dvi         ${DOC}/limit.input.dvi      \
+  ${DOC}/linalg.input.dvi      ${DOC}/lindep.input.dvi     \
+  ${DOC}/liss1.input.dvi       ${DOC}/liss2.input.dvi      \
+  ${DOC}/list.input.dvi        ${DOC}/lode.input.dvi       \
+  ${DOC}/lodesys.input.dvi     ${DOC}/lodo1.input.dvi      \
+  ${DOC}/lodo2.input.dvi       ${DOC}/lodo3.input.dvi      \
+  ${DOC}/lodof.input.dvi       ${DOC}/lodo.input.dvi       \
+  ${DOC}/loop.input.dvi        ${DOC}/lpoly.input.dvi      \
+  ${DOC}/lump.input.dvi        ${DOC}/lupfact.input.dvi    \
+  ${DOC}/lword.input.dvi       ${DOC}/macbug.input.dvi     \
+  ${DOC}/macros.input.dvi      ${DOC}/magma.input.dvi      \
+  ${DOC}/mapleok.input.dvi     ${DOC}/mappkg1.input.dvi    \
+  ${DOC}/marcbench.input.dvi   ${DOC}/matbug.input.dvi     \
+  ${DOC}/matops.as.dvi         ${DOC}/matrix1.input.dvi    \
+  ${DOC}/matrix22.input.dvi    ${DOC}/matrix.input.dvi     \
+  ${DOC}/matrox.input.dvi      ${DOC}/mfinfact.input.dvi   \
+  ${DOC}/mkfunc.input.dvi      ${DOC}/mountain.input.dvi   \
+  ${DOC}/mpoly.input.dvi       ${DOC}/mset2.input.dvi      \
+  ${DOC}/mset.input.dvi        ${DOC}/mult2d.input.dvi     \
+  ${DOC}/mult3d.input.dvi      ${DOC}/multfact.input.dvi   \
+  ${DOC}/multiple.input.dvi    ${DOC}/multKnot.input.dvi   \
+  ${DOC}/ndftip.input.dvi      ${DOC}/negfloats.input.dvi  \
+  ${DOC}/nepip.input.dvi       ${DOC}/newlodo.input.dvi    \
+  ${DOC}/newton.input.dvi      ${DOC}/nlode.input.dvi      \
+  ${DOC}/none.input.dvi        ${DOC}/noonburg.input.dvi   \
+  ${DOC}/noptip.input.dvi      ${DOC}/nqip.input.dvi       \
+  ${DOC}/nsfip.input.dvi       ${DOC}/ntube.input.dvi      \
+  ${DOC}/numbers.input.dvi     ${DOC}/oct.input.dvi        \
+  ${DOC}/octonion.input.dvi    ${DOC}/ode.input.dvi        \
+  ${DOC}/odpol.input.dvi       ${DOC}/op1.input.dvi        \
+  ${DOC}/opalg.input.dvi       ${DOC}/operator.input.dvi   \
+  ${DOC}/op.input.dvi          ${DOC}/ovar.input.dvi       \
+  ${DOC}/padic.input.dvi       ${DOC}/palette.input.dvi    \
+  ${DOC}/parabola.input.dvi    ${DOC}/parpcurv.input.dvi   \
+  ${DOC}/parscurv.input.dvi    ${DOC}/parsurf.input.dvi    \
+  ${DOC}/pascal1.input.dvi     ${DOC}/pascal.input.dvi     \
+  ${DOC}/pat.input.dvi         ${DOC}/patmatch.input.dvi   \
+  ${DOC}/pdecomp0.as.dvi       ${DOC}/perman.input.dvi     \
+  ${DOC}/perm.input.dvi        ${DOC}/pfr1.input.dvi       \
+  ${DOC}/pfr.input.dvi         ${DOC}/pinch.input.dvi      \
+  ${DOC}/plotfile.input.dvi    ${DOC}/plotlist.input.dvi   \
+  ${DOC}/pollevel.input.dvi    ${DOC}/poly1.input.dvi      \
+  ${DOC}/polycoer.input.dvi    ${DOC}/poly.input.dvi       \
+  ${DOC}/psgenfcn.input.dvi    ${DOC}/quat1.input.dvi      \
+  ${DOC}/quat.input.dvi        ${DOC}/r20abugs.input.dvi   \
+  ${DOC}/r20bugs.input.dvi     ${DOC}/r21bugsbig.input.dvi \
+  ${DOC}/r21bugs.input.dvi     ${DOC}/radff.input.dvi      \
+  ${DOC}/radix.input.dvi       ${DOC}/realclos.input.dvi   \
+  ${DOC}/reclos.input.dvi      ${DOC}/reductio.input.dvi   \
+  ${DOC}/regset.input.dvi      ${DOC}/repa6.input.dvi      \
+  ${DOC}/ribbon.input.dvi      ${DOC}/ribbons.input.dvi    \
+  ${DOC}/ribbonsNew.input.dvi  ${DOC}/rk4draw.input.dvi    \
+  ${DOC}/robidoux.input.dvi    ${DOC}/roman.input.dvi      \
+  ${DOC}/romnum.as.dvi         ${DOC}/roots.input.dvi      \
+  ${DOC}/ruleset.input.dvi     ${DOC}/rules.input.dvi      \
+  ${DOC}/s01eaf.input.dvi      ${DOC}/s13aaf.input.dvi     \
+  ${DOC}/s13acf.input.dvi      ${DOC}/s13adf.input.dvi     \
+  ${DOC}/s14aaf.input.dvi      ${DOC}/s14abf.input.dvi     \
+  ${DOC}/s14baf.input.dvi      ${DOC}/s15adf.input.dvi     \
+  ${DOC}/s15aef.input.dvi      ${DOC}/s17acf.input.dvi     \
+  ${DOC}/s17adf.input.dvi      ${DOC}/s17aef.input.dvi     \
+  ${DOC}/s17aff.input.dvi      ${DOC}/s17agf.input.dvi     \
+  ${DOC}/s17ahf.input.dvi      ${DOC}/s17ajf.input.dvi     \
+  ${DOC}/s17akf.input.dvi      ${DOC}/s17dcf.input.dvi     \
+  ${DOC}/s17def.input.dvi      ${DOC}/s17dgf.input.dvi     \
+  ${DOC}/s17dhf.input.dvi      ${DOC}/s17dlf.input.dvi     \
+  ${DOC}/s18acf.input.dvi      ${DOC}/s18adf.input.dvi     \
+  ${DOC}/s18aef.input.dvi      ${DOC}/s18aff.input.dvi     \
+  ${DOC}/s18dcf.input.dvi      ${DOC}/s18def.input.dvi     \
+  ${DOC}/s19aaf.input.dvi      ${DOC}/s19abf.input.dvi     \
+  ${DOC}/s19acf.input.dvi      ${DOC}/s19adf.input.dvi     \
+  ${DOC}/s20acf.input.dvi      ${DOC}/s20adf.input.dvi     \
+  ${DOC}/s21baf.input.dvi      ${DOC}/s21bbf.input.dvi     \
+  ${DOC}/s21bcf.input.dvi      ${DOC}/s21bdf.input.dvi     \
+  ${DOC}/saddle.input.dvi      ${DOC}/scherk.input.dvi     \
+  ${DOC}/scope.input.dvi       ${DOC}/segbind.input.dvi    \
+  ${DOC}/seg.input.dvi         ${DOC}/series2.input.dvi    \
+  ${DOC}/series.input.dvi      ${DOC}/sersolve.input.dvi   \
+  ${DOC}/set.input.dvi         ${DOC}/sinCosEx.input.dvi   \
+  ${DOC}/sininv.input.dvi      ${DOC}/sinsin2.input.dvi    \
+  ${DOC}/sinsin.input.dvi      ${DOC}/sint.input.dvi       \
+  ${DOC}/skew.input.dvi        ${DOC}/slowint.input.dvi    \
+  ${DOC}/solvetra.input.dvi    ${DOC}/space3.input.dvi     \
+  ${DOC}/spadprof.input.dvi    ${DOC}/spiral.input.dvi     \
+  ${DOC}/sqmatrix.input.dvi    ${DOC}/sregset.input.dvi    \
+  ${DOC}/stbl.input.dvi        ${DOC}/stream2.input.dvi    \
+  ${DOC}/stream.input.dvi      ${DOC}/streams.input.dvi    \
+  ${DOC}/string.input.dvi      ${DOC}/strtbl.input.dvi     \
+  ${DOC}/symbol.input.dvi      ${DOC}/synonym2.input.dvi   \
+  ${DOC}/synonym.input.dvi     ${DOC}/t111293.input.dvi    \
+  ${DOC}/table.input.dvi       ${DOC}/tanatan.input.dvi    \
+  ${DOC}/test.input.dvi        ${DOC}/tetra.input.dvi      \
+  ${DOC}/textfile.input.dvi    ${DOC}/tknot.input.dvi      \
+  ${DOC}/torus.input.dvi       ${DOC}/tree.input.dvi       \
+  ${DOC}/triglim.input.dvi     ${DOC}/tschirn.input.dvi    \
+  ${DOC}/tsetcatbutcher.input.dvi    \
+  ${DOC}/tsetcatchemical.input.dvi   \
+  ${DOC}/tsetcatvermeer.input.dvi    \
+  ${DOC}/tutchap1.input.dvi    ${DOC}/tutchap2.input.dvi   \
+  ${DOC}/tutchap3.input.dvi    ${DOC}/tutchap4.input.dvi   \
+  ${DOC}/tutchap67.input.dvi   ${DOC}/typo.input.dvi       \
+  ${DOC}/uniseg.input.dvi      ${DOC}/up.input.dvi         \
+  ${DOC}/vector.input.dvi      ${DOC}/vectors.input.dvi    \
+  ${DOC}/viewdef.input.dvi     ${DOC}/void.input.dvi       \
+  ${DOC}/wester.input.dvi      ${DOC}/wiggle.input.dvi     \
+  ${DOC}/wutset.input.dvi      ${DOC}/xpbwpoly.input.dvi   \
+  ${DOC}/xpoly.input.dvi       ${DOC}/xpr.input.dvi        \
+  ${DOC}/zdsolve.input.dvi     ${DOC}/zimmer.input.dvi     \
+  ${DOC}/zlindep.input.dvi  
+
+all: ${FILES} ${FILES2} ${ASFILES} regress ${DOCFILES} 
+	@echo 1 finished ${IN}
+
+<<genericRules>>
+
+use:
+	@echo 2 making ${OUT} from ${IN}
+
+regress:
+	@echo 3 making ${MID}
+	@ (cd ${MID} ; \
+	${TANGLE} -t8 -R"regression tests" ${IN}/Makefile.pamphlet >Makefile ; \
+	${ENV} ${MAKE} )
+
+bug:
+	@echo 4 making ${OUT} from ${IN}
+
+document:
+	@echo 5 documenting ${OUT}
+
+clean:
+	@echo 6 cleaning ${MID}
+	@rm -rf ${MID}
+	@echo 7 cleaning ${OUT}
+	@rm -rf ${OUT}
+	@rm -f Makefile Makefile.dvi
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

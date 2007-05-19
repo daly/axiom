@@ -1,0 +1,232 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra fparfrac.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{domain FPARFRAC FullPartialFractionExpansion}
+<<domain FPARFRAC FullPartialFractionExpansion>>=
+)abbrev domain FPARFRAC FullPartialFractionExpansion
+++ Full partial fraction expansion of rational functions
+++ Author: Manuel Bronstein
+++ Date Created: 9 December 1992
+++ Date Last Updated: 6 October 1993
+++ References: M.Bronstein & B.Salvy,
+++             Full Partial Fraction Decomposition of Rational Functions,
+++             in Proceedings of ISSAC'93, Kiev, ACM Press.
+FullPartialFractionExpansion(F, UP): Exports == Implementation where
+  F  : Join(Field, CharacteristicZero)
+  UP : UnivariatePolynomialCategory F
+
+  N   ==> NonNegativeInteger
+  Q   ==> Fraction Integer
+  O   ==> OutputForm
+  RF  ==> Fraction UP
+  SUP ==> SparseUnivariatePolynomial RF
+  REC ==> Record(exponent: N, center: UP, num: UP)
+  ODV ==> OrderlyDifferentialVariable Symbol
+  ODP ==> OrderlyDifferentialPolynomial UP
+  ODF ==> Fraction ODP
+  FPF ==> Record(polyPart: UP, fracPart: List REC)
+
+  Exports ==> Join(SetCategory, ConvertibleTo RF)  with
+    "+":                 (UP, $) -> $
+      ++ p + x returns the sum of p and x
+    fullPartialFraction: RF -> $
+      ++ fullPartialFraction(f) returns \spad{[p, [[j, Dj, Hj]...]]} such that
+      ++ \spad{f = p(x) + \sum_{[j,Dj,Hj] in l} \sum_{Dj(a)=0} Hj(a)/(x - a)\^j}.
+    polyPart:            $ -> UP
+      ++ polyPart(f) returns the polynomial part of f.
+    fracPart:            $  -> List REC
+      ++ fracPart(f) returns the list of summands of the fractional part of f.
+    construct:           List REC -> $
+      ++ construct(l) is the inverse of fracPart.
+    differentiate:       $ -> $
+      ++ differentiate(f) returns the derivative of f.
+    D:                    $ -> $
+      ++ D(f) returns the derivative of f.
+    differentiate:       ($, N) -> $
+      ++ differentiate(f, n) returns the n-th derivative of f.
+    D: ($, NonNegativeInteger) -> $
+      ++ D(f, n) returns the n-th derivative of f.
+
+  Implementation ==> add
+    Rep := FPF
+
+    fullParFrac: (UP, UP, UP, N) -> List REC
+    outputexp  : (O, N) -> O
+    output     : (N, UP, UP) -> O
+    REC2RF     : (UP, UP, N) -> RF
+    UP2SUP     : UP -> SUP
+    diffrec    : REC -> REC
+    FP2O       : List REC -> O
+
+-- create a differential variable
+    u  := new()$Symbol
+    u0 := makeVariable(u, 0)$ODV
+    alpha := u::O
+    x  := monomial(1, 1)$UP
+    xx := x::O
+    zr := (0$N)::O
+
+    construct l     == [0, l]
+    D r             == differentiate r
+    D(r, n)         == differentiate(r,n)
+    polyPart f      == f.polyPart
+    fracPart f      == f.fracPart
+    p:UP + f:$      == [p + polyPart f, fracPart f]
+
+    differentiate f ==
+      differentiate(polyPart f) + construct [diffrec rec for rec in fracPart f]
+
+    differentiate(r, n) ==
+      for i in 1..n repeat r := differentiate r
+      r
+
+-- diffrec(sum_{rec.center(a) = 0} rec.num(a) / (x - a)^e) =
+--         sum_{rec.center(a) = 0} -e rec.num(a) / (x - a)^{e+1}
+--                where e = rec.exponent
+    diffrec rec ==
+      e := rec.exponent
+      [e + 1, rec.center, - e * rec.num]
+
+    convert(f:$):RF ==
+      ans := polyPart(f)::RF
+      for rec in fracPart f repeat
+        ans := ans + REC2RF(rec.center, rec.num, rec.exponent)
+      ans
+
+    UP2SUP p ==
+      map(#1::UP::RF, p)$UnivariatePolynomialCategoryFunctions2(F, UP, RF, SUP)
+
+    -- returns Trace_k^k(a) (h(a) / (x - a)^n)  where d(a) = 0
+    REC2RF(d, h, n) ==
+--      one?(m := degree d) =>
+      ((m := degree d) = 1) =>
+        a   := - (leadingCoefficient reductum d) / (leadingCoefficient d)
+        h(a)::UP / (x - a::UP)**n
+      dd  := UP2SUP d
+      hh  := UP2SUP h
+      aa  := monomial(1, 1)$SUP
+      p   := (x::RF::SUP - aa)**n rem dd
+      rec := extendedEuclidean(p, dd, hh)::Record(coef1:SUP, coef2:SUP)
+      t   := rec.coef1     -- we want Trace_k^k(a)(t) now
+      ans := coefficient(t, 0)
+      for i in 1..degree(d)-1 repeat
+        t   := (t * aa) rem dd
+        ans := ans + coefficient(t, i)
+      ans
+
+    fullPartialFraction f ==
+      qr := divide(numer f, d := denom f)
+      qr.quotient + construct concat
+                     [fullParFrac(qr.remainder, d, rec.factor, rec.exponent::N)
+                                         for rec in factors squareFree denom f]
+
+    fullParFrac(a, d, q, n) ==
+      ans:List REC := empty()
+      em := e := d quo (q ** n)
+      rec := extendedEuclidean(e, q, 1)::Record(coef1:UP,coef2:UP)
+      bm := b := rec.coef1                  -- b = inverse of e modulo q
+      lvar:List(ODV) := [u0]
+      um := 1::ODP
+      un := (u1 := u0::ODP)**n
+      lval:List(UP)  := [q1 := q := differentiate(q0 := q)]
+      h:ODF := a::ODP / (e * un)
+      rec := extendedEuclidean(q1, q0, 1)::Record(coef1:UP,coef2:UP)
+      c := rec.coef1                        -- c = inverse of q' modulo q
+      cm := 1::UP
+      cn  := (c ** n) rem q0
+      for m in 1..n repeat
+        p    := retract(em * un * um * h)@ODP
+        pp   := retract(eval(p, lvar, lval))@UP
+        h    := inv(m::Q) * differentiate h
+        q    := differentiate q
+        lvar := concat(makeVariable(u, m), lvar)
+        lval := concat(inv((m+1)::F) * q, lval)
+        qq   := q0 quo gcd(pp, q0)                    -- new center
+        if (degree(qq) > 0) then
+          ans  := concat([(n + 1 - m)::N, qq, (pp * bm * cn * cm) rem qq], ans)
+        cm   := (c * cm) rem q0     -- cm = c**m modulo q now
+        um   := u1 * um             -- um = u**m now
+        em   := e * em              -- em = e**{m+1} now
+        bm   := (b * bm) rem q0     -- bm = b**{m+1} modulo q now
+      ans
+
+    coerce(f:$):O ==
+      ans := FP2O(l := fracPart f)
+      zero?(p := polyPart f) =>
+        empty? l => (0$N)::O
+        ans
+      p::O + ans
+
+    FP2O l ==
+      empty? l => empty()
+      rec := first l
+      ans := output(rec.exponent, rec.center, rec.num)
+      for rec in rest l repeat
+        ans := ans + output(rec.exponent, rec.center, rec.num)
+      ans
+
+    output(n, d, h) ==
+--      one? degree d =>
+      (degree d) = 1 =>
+        a := - leadingCoefficient(reductum d) / leadingCoefficient(d)
+        h(a)::O / outputexp((x - a::UP)::O, n)
+      sum(outputForm(makeSUP h, alpha) / outputexp(xx - alpha, n),
+          outputForm(makeSUP d, alpha) = zr)
+
+    outputexp(f, n) ==
+--      one? n => f
+      (n = 1) => f
+      f ** (n::O)
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<domain FPARFRAC FullPartialFractionExpansion>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

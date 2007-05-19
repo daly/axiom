@@ -1,0 +1,964 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra outform.spad}
+\author{Stephen M. Watt}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package NUMFMT NumberFormats}
+<<package NUMFMT NumberFormats>>=
+)abbrev package NUMFMT NumberFormats
+++ SMW March 88
+++ Keywords: string manipulation, roman numerals, format
+++ Description:
+++ NumberFormats provides function to format and read arabic and
+++ roman numbers, to convert numbers to strings and to read
+++ floating-point numbers.
+
+NumberFormats(): NFexports == NFimplementation where
+    PI ==> PositiveInteger
+    I  ==> Integer
+    C  ==> Character
+    F  ==> Float
+    S  ==> String
+    V  ==> PrimitiveArray
+
+    NFexports ==> with
+        FormatArabic: PI -> S
+            ++ FormatArabic(n) forms an Arabic numeral
+            ++ string from an integer n.
+        ScanArabic:   S -> PI
+            ++ ScanArabic(s) forms an integer from an Arabic numeral string s.
+        FormatRoman:  PI -> S
+            ++ FormatRoman(n) forms a Roman numeral string from an integer n.
+        ScanRoman:    S -> PI
+            ++ ScanRoman(s) forms an integer from a Roman numeral string s.
+        ScanFloatIgnoreSpaces: S -> F
+            ++ ScanFloatIgnoreSpaces(s) forms a floating point number from
+            ++ the string s ignoring any spaces. Error is generated if the
+            ++ string is not recognised as a floating point number.
+        ScanFloatIgnoreSpacesIfCan: S -> Union(F, "failed")
+            ++ ScanFloatIgnoreSpacesIfCan(s) tries to form a floating point number from
+            ++ the string s ignoring any spaces.
+
+
+    NFimplementation ==> add
+        import SExpression
+        import Symbol
+        replaceD: C -> C
+        replaced: C -> C
+        contract: S -> S
+        check: S ->Boolean
+        replaceD c ==
+          if c = char "D" then char "E" else c
+        replaced c ==
+          if c = char "d" then char "E" else c
+        contract s ==
+          s:= map(replaceD,s)
+          s:= map(replaced,s)
+          ls:List S := split(s,char " ")$String
+          s:= concat ls
+        check s ==
+          NUMBERP(READ_-FROM_-STRING(s)$Lisp)$Lisp and
+           -- if there is an "E" then there must be a "."
+           -- this is not caught by code above
+           -- also if the exponent is v.big the above returns false
+           not (any?(#1=char "E",s) and not any?(#1=char ".",s) )
+
+--        Original interpreter function:
+--        )lis (defun scanstr(x) (spadcomp::|parseFromString| x))
+        sexfloat:SExpression:=convert(coerce("Float")@Symbol)$SExpression
+        ScanFloatIgnoreSpaces s ==
+          s := contract s
+          not check s => error "Non-numeric value"
+          sex := interpret(packageTran(ncParseFromString(s)$Lisp)$Lisp)$Lisp
+          sCheck := car(car(sex))
+          if (sCheck=sexfloat) = true then
+             f := (cdr cdr sex) pretend Float
+          else
+             if integer?(cdr sex) = true then
+                f := (cdr sex) pretend Integer
+                f::F
+             else
+                error "Non-numeric value"
+
+        ScanFloatIgnoreSpacesIfCan s ==
+          s := contract s
+	  not check s => "failed"
+          sex := interpret(packageTran(ncParseFromString(s)$Lisp)$Lisp)$Lisp
+          sCheck := car(car(sex))
+          if (sCheck=sexfloat) = true then
+             f := (cdr cdr sex) pretend Float
+          else
+             if integer?(cdr sex) = true then
+                f := (cdr sex) pretend Integer
+                f::F
+             else
+                "failed"
+
+        units:V S :=
+           construct ["","I","II","III","IV","V","VI","VII","VIII","IX"]
+        tens :V S :=
+           construct ["","X","XX","XXX","XL","L","LX","LXX","LXXX","XC"]
+        hunds:V S :=
+           construct ["","C","CC","CCC","CD","D","DC","DCC","DCCC","CM"]
+        umin := minIndex units
+        tmin := minIndex tens
+        hmin := minIndex hunds
+        romval:V I := new(256, -1)
+        romval ord char(" ")$C := 0
+        romval ord char("I")$C := 1
+        romval ord char("V")$C := 5
+        romval ord char("X")$C := 10
+        romval ord char("L")$C := 50
+        romval ord char("C")$C := 100
+        romval ord char("D")$C := 500
+        romval ord char("M")$C := 1000
+        thou:C  := char "M"
+        plen:C  := char "("
+        pren:C  := char ")"
+        ichar:C := char "I"
+
+        FormatArabic n == STRINGIMAGE(n)$Lisp
+        ScanArabic   s == PARSE_-INTEGER(s)$Lisp
+
+        FormatRoman pn ==
+            n := pn::Integer
+            -- Units
+            d := (n rem 10) + umin
+            n := n quo 10
+            s := units.d
+            zero? n => s
+            -- Tens
+            d := (n rem 10) + tmin
+            n := n quo 10
+            s := concat(tens.d, s)
+            zero? n => s
+            -- Hundreds
+            d := (n rem 10) + hmin
+            n := n quo 10
+            s := concat(hunds.d, s)
+            zero? n => s
+            -- Thousands
+            d := n rem 10
+            n := n quo 10
+            s := concat(new(d::NonNegativeInteger, thou), s)
+            zero? n => s
+            -- Ten thousand and higher
+            for i in 2.. while not zero? n repeat
+                -- Coefficient of 10**(i+2)
+                d := n rem 10
+                n := n quo 10
+                zero? d => "iterate"
+                m0:String := concat(new(i,plen),concat("I",new(i,pren)))
+                mm := concat([m0 for j in 1..d]$List(String))
+                -- strictly speaking the blank is gratuitous
+                if #s > 0 then s := concat(" ", s)
+                s  := concat(mm, s)
+            s
+
+        -- ScanRoman
+        --
+        -- The Algorithm:
+        --    Read number from right to left.  When the current
+        --    numeral is lower in magnitude than the previous maximum
+        --    then subtract otherwise add.
+        --    Shift left and repeat until done.
+
+        ScanRoman s ==
+            s      := upperCase s
+            tot: I := 0
+            Max: I := 0
+            i:   I := maxIndex s
+            while i >= minIndex s repeat
+                -- Read a single roman digit
+                c := s.i; i := i-1
+                n := romval ord c
+                -- (I)=1000, ((I))=10000, (((I)))=100000, etc
+                if n < 0 then
+                    c ^= pren =>
+                       error ["Improper character in Roman numeral: ",c]
+                    nprens: PI := 1
+                    while c = pren and i >= minIndex s repeat
+                       c := s.i; i := i-1
+                       if c = pren then nprens := nprens+1
+                    c ^= ichar =>
+                       error "Improper Roman numeral: (x)"
+                    for k in 1..nprens while i >= minIndex s repeat
+                       c := s.i; i := i-1
+                       c ^= plen =>
+                          error "Improper Roman numeral: unbalanced ')'"
+                    n := 10**(nprens + 2)
+                if n < Max then
+                    tot := tot - n
+                else
+                    tot := tot + n
+                    Max := n
+            tot < 0 => error ["Improper Roman numeral: ", tot]
+            tot::PI
+
+@
+\section{domain OUTFORM OutputForm}
+<<domain OUTFORM OutputForm>>=
+)abbrev domain OUTFORM OutputForm
+++ Keywords: output, I/O, expression
+++ SMW March/88
+++ Description:
+++ This domain is used to create and manipulate mathematical expressions
+++ for output.  It is intended to provide an insulating layer between
+++ the expression rendering software (e.g.FORTRAN, TeX, or Script) and
+++ the output coercions in the various domains.
+
+OutputForm(): SetCategory with
+        --% Printing
+        print  : $ -> Void
+          ++ print(u) prints the form u.
+        message: String -> $
+          ++ message(s) creates an form with no string quotes
+          ++ from string s.
+        messagePrint: String -> Void
+          ++ messagePrint(s) prints s without string quotes. Note:
+          ++ \spad{messagePrint(s)} is equivalent to \spad{print message(s)}.
+        --% Creation of atomic forms
+        outputForm: Integer -> $
+          ++ outputForm(n) creates an form for integer n.
+        outputForm: Symbol  -> $
+          ++ outputForm(s) creates an form for symbol s.
+        outputForm: String  -> $
+          ++ outputForm(s) creates an form for string s.
+        outputForm: DoubleFloat  -> $
+          ++ outputForm(sf) creates an form for small float sf.
+        empty   : () -> $
+          ++ empty() creates an empty form.
+
+        --% Sizings
+        width: $ -> Integer
+          ++ width(f) returns the width of form f (an integer).
+        height: $ -> Integer
+          ++ height(f) returns the height of form f (an integer).
+        width: -> Integer
+          ++ width() returns the width of the display area (an integer).
+        height: -> Integer
+          ++ height() returns the height of the display area (an integer).
+        subHeight: $ -> Integer
+          ++ subHeight(f) returns the height of form f below the base line.
+        superHeight: $ -> Integer
+          ++ superHeight(f) returns the height of form f above the base line.
+         --% Space manipulations
+        hspace: Integer -> $  ++ hspace(n) creates white space of width n.
+        vspace: Integer -> $  ++ vspace(n) creates white space of height n.
+        rspace: (Integer,Integer) -> $
+          ++ rspace(n,m) creates rectangular white space, n wide by m high.
+        --% Area adjustments
+        left: ($,Integer) -> $
+          ++ left(f,n) left-justifies form f within space of width n.
+        right: ($,Integer) -> $
+          ++ right(f,n) right-justifies form f within space of width n.
+        center: ($,Integer) -> $
+          ++ center(f,n) centers form f within space of width n.
+        left: $ -> $
+          ++ left(f) left-justifies form f in total space.
+        right: $ -> $
+          ++ right(f) right-justifies form f in total space.
+        center:   $ -> $
+          ++ center(f) centers form f in total space.
+
+        --% Area manipulations
+        hconcat:  ($,$) -> $
+          ++ hconcat(f,g) horizontally concatenate forms f and g.
+        vconcat:  ($,$) -> $
+          ++ vconcat(f,g) vertically concatenates forms f and g.
+        hconcat:  List $ -> $
+          ++ hconcat(u) horizontally concatenates all forms in list u.
+        vconcat:  List $ -> $
+          ++ vconcat(u) vertically concatenates all forms in list u.
+
+        --% Application formers
+        prefix:  ($, List $) -> $
+          ++ prefix(f,l) creates a form depicting the n-ary prefix
+          ++ application of f to a tuple of arguments given by list l.
+        infix:   ($, List $) -> $
+          ++ infix(f,l) creates a form depicting the n-ary application
+          ++ of infix operation f to a tuple of arguments l.
+        infix:   ($, $, $) -> $
+          ++ infix(op, a, b) creates a form which prints as: a op b.
+        postfix: ($, $)    -> $
+          ++ postfix(op, a)  creates a form which prints as: a op.
+        infix?: $ -> Boolean
+          ++ infix?(op) returns true if op is an infix operator,
+          ++ and false otherwise.
+        elt:     ($, List $) -> $
+          ++ elt(op,l) creates a form for application of op
+          ++ to list of arguments l.
+
+        --% Special forms
+        string:  $ -> $
+          ++ string(f) creates f with string quotes.
+        label:   ($, $) -> $
+          ++ label(n,f) gives form f an equation label n.
+        box:     $ -> $
+          ++ box(f) encloses f in a box.
+        matrix:  List List $ -> $
+          ++ matrix(llf) makes llf (a list of lists of forms) into
+          ++ a form which displays as a matrix.
+        zag:     ($, $) -> $
+          ++ zag(f,g) creates a form for the continued fraction form for f over g.
+        root:    $ -> $
+          ++ root(f) creates a form for the square root of form f.
+        root:    ($, $) -> $
+          ++ root(f,n) creates a form for the nth root of form f.
+        over:    ($, $) -> $
+          ++ over(f,g) creates a form for the vertical fraction of f over g.
+        slash:   ($, $) -> $
+          ++ slash(f,g) creates a form for the horizontal fraction of f over g.
+        assign:  ($, $) -> $
+          ++ assign(f,g) creates a form for the assignment \spad{f := g}.
+        rarrow:  ($, $) -> $
+          ++ rarrow(f,g) creates a form for the mapping \spad{f -> g}.
+        differentiate: ($, NonNegativeInteger) -> $
+          ++ differentiate(f,n) creates a form for the nth derivative of f,
+          ++ e.g. \spad{f'}, \spad{f''}, \spad{f'''},
+          ++ "f super \spad{iv}".
+        binomial: ($, $) -> $
+          ++ binomial(n,m) creates a form for the binomial coefficient of n and m.
+
+        --% Scripts
+        sub:     ($, $) -> $
+          ++ sub(f,n) creates a form for f subscripted by n.
+        super:   ($, $) -> $
+          ++ super(f,n) creates a form for f superscripted by n.
+        presub:  ($, $) -> $
+          ++ presub(f,n) creates a form for f presubscripted by n.
+        presuper:($, $) -> $
+          ++ presuper(f,n) creates a form for f presuperscripted by n.
+        scripts: ($, List $) -> $
+            ++ \spad{scripts(f, [sub, super, presuper, presub])}
+            ++  creates a form for f with scripts on all 4 corners.
+        supersub:($, List $) -> $
+            ++ supersub(a,[sub1,super1,sub2,super2,...])
+            ++ creates a form with each subscript aligned
+            ++ under each superscript.
+
+        --% Diacritical marks
+        quote:   $ -> $
+          ++ quote(f) creates the form f with a prefix quote.
+        dot:     $ -> $
+          ++ dot(f) creates the form with a one dot overhead.
+        dot:     ($, NonNegativeInteger) -> $
+          ++ dot(f,n) creates the form f with n dots overhead.
+        prime:   $ -> $
+          ++ prime(f) creates the form f followed by a suffix prime (single quote).
+        prime:   ($, NonNegativeInteger) -> $
+          ++ prime(f,n) creates the form f followed by n primes.
+        overbar: $ -> $
+          ++ overbar(f) creates the form f with an overbar.
+        overlabel: ($, $) -> $
+          ++ overlabel(x,f) creates the form f with "x overbar" over the top.
+
+        --% Plexes
+        sum:     ($)       -> $
+          ++ sum(expr) creates the form prefixing expr by a capital sigma.
+        sum:     ($, $)    -> $
+          ++ sum(expr,lowerlimit) creates the form prefixing expr by
+          ++ a capital sigma with a lowerlimit.
+        sum:     ($, $, $) -> $
+          ++ sum(expr,lowerlimit,upperlimit) creates the form prefixing expr by
+          ++ a capital sigma with both a lowerlimit and upperlimit.
+        prod:    ($)       -> $
+          ++ prod(expr) creates the form prefixing expr by a capital pi.
+        prod:    ($, $)    -> $
+          ++ prod(expr,lowerlimit) creates the form prefixing expr by
+          ++ a capital pi with a lowerlimit.
+        prod:    ($, $, $) -> $
+          ++ prod(expr,lowerlimit,upperlimit) creates the form prefixing expr by
+          ++ a capital pi with both a lowerlimit and upperlimit.
+        int:     ($)       -> $
+          ++ int(expr) creates the form prefixing expr with an integral sign.
+        int:     ($, $)    -> $
+          ++ int(expr,lowerlimit) creates the form prefixing expr by an
+          ++ integral sign with a lowerlimit.
+        int:     ($, $, $) -> $
+          ++ int(expr,lowerlimit,upperlimit) creates the form prefixing expr by
+          ++ an integral sign with both a lowerlimit and upperlimit.
+
+        --% Matchfix forms
+        brace:   $ -> $
+          ++ brace(f) creates the form enclosing f in braces (curly brackets).
+        brace:   List $ -> $
+          ++ brace(lf) creates the form separating the elements of lf
+          ++ by commas and encloses the result in curly brackets.
+        bracket: $ -> $
+          ++ bracket(f) creates the form enclosing f in square brackets.
+        bracket: List $ -> $
+          ++ bracket(lf) creates the form separating the elements of lf
+          ++ by commas and encloses the result in square brackets.
+        paren:   $ -> $
+          ++ paren(f) creates the form enclosing f in parentheses.
+        paren:   List $ -> $
+          ++ paren(lf) creates the form separating the elements of lf
+          ++ by commas and encloses the result in parentheses.
+
+        --% Separators for aggregates
+        pile:     List $ -> $
+          ++ pile(l) creates the form consisting of the elements of l which
+          ++ displays as a pile, i.e. the elements begin on a new line and
+          ++ are indented right to the same margin.
+
+        commaSeparate: List $ -> $
+          ++ commaSeparate(l) creates the form separating the elements of l
+          ++ by commas.
+        semicolonSeparate:  List $ -> $
+          ++ semicolonSeparate(l) creates the form separating the elements of l
+          ++ by semicolons.
+        blankSeparate: List $ -> $
+          ++ blankSeparate(l) creates the form separating the elements of l
+          ++ by blanks.
+        --% Specific applications
+        "=":     ($, $) -> $
+          ++ f = g creates the equivalent infix form.
+        "^=":    ($, $) -> $
+          ++ f ^= g creates the equivalent infix form.
+        "<":     ($, $) -> $
+          ++ f < g creates the equivalent infix form.
+        ">":     ($, $) -> $
+          ++ f > g creates the equivalent infix form.
+        "<=":    ($, $) -> $
+          ++ f <= g creates the equivalent infix form.
+        ">=":    ($, $) -> $
+          ++ f >= g creates the equivalent infix form.
+        "+":     ($, $) -> $
+          ++ f + g creates the equivalent infix form.
+        "-":     ($, $) -> $
+          ++ f - g creates the equivalent infix form.
+        "-":     ($)    -> $
+          ++ - f creates the equivalent prefix form.
+        "*":     ($, $) -> $
+          ++ f * g creates the equivalent infix form.
+        "/":     ($, $) -> $
+          ++ f / g creates the equivalent infix form.
+        "**":    ($, $) -> $
+          ++ f ** g creates the equivalent infix form.
+        "div":   ($, $) -> $
+          ++ f div g creates the equivalent infix form.
+        "rem":   ($, $) -> $
+          ++ f rem g creates the equivalent infix form.
+        "quo":   ($, $) -> $
+          ++ f quo g creates the equivalent infix form.
+        "exquo": ($, $) -> $
+          ++ exquo(f,g) creates the equivalent infix form.
+        "and":   ($, $) -> $
+          ++ f and g creates the equivalent infix form.
+        "or":    ($, $) -> $
+          ++ f or g creates the equivalent infix form.
+        "not":   ($)    -> $
+          ++ not f creates the equivalent prefix form.
+        SEGMENT: ($,$)  -> $
+          ++ SEGMENT(x,y) creates the infix form: \spad{x..y}.
+        SEGMENT: ($)    -> $
+          ++ SEGMENT(x) creates the prefix form: \spad{x..}.
+
+    == add
+        import NumberFormats
+
+        -- Todo:
+        --   program forms, greek letters
+        --   infix, prefix, postfix, matchfix support in OUT BOOT
+        --   labove rabove, corresponding overs.
+        --   better super script, overmark, undermark
+        --   bug in product, paren blankSeparate []
+        --   uniformize integrals, products, etc as plexes.
+
+        cons ==> CONS$Lisp
+        car  ==> CAR$Lisp
+        cdr  ==> CDR$Lisp
+
+        Rep := List $
+
+        a, b: $
+        l: List $
+        s: String
+        e: Symbol
+        n: Integer
+        nn:NonNegativeInteger
+
+        sform:    String  -> $
+        eform:    Symbol  -> $
+        iform:    Integer -> $
+
+        print x              == mathprint(x)$Lisp
+        message s            == (empty? s => empty(); s pretend $)
+        messagePrint s       == print message s
+        (a:$ = b:$):Boolean  == EQUAL(a, b)$Lisp
+        (a:$ = b:$):$        == [sform "=",     a, b]
+        coerce(a):OutputForm  == a pretend OutputForm
+        outputForm n          == n pretend $
+        outputForm e          == e pretend $
+        outputForm(f:DoubleFloat) == f pretend $
+        sform s               == s pretend $
+        eform e               == e pretend $
+        iform n               == n pretend $
+
+        outputForm s ==
+          sform concat(quote()$Character, concat(s, quote()$Character))
+
+        width(a) == outformWidth(a)$Lisp
+        height(a) == height(a)$Lisp
+        subHeight(a) == subspan(a)$Lisp
+        superHeight(a) == superspan(a)$Lisp
+        height() == 20
+        width() == 66
+
+        center(a,w)   == hconcat(hspace((w - width(a)) quo 2),a)
+        left(a,w)     == hconcat(a,hspace((w - width(a))))
+        right(a,w)    == hconcat(hspace(w - width(a)),a)
+        center(a)     == center(a,width())
+        left(a)       == left(a,width())
+        right(a)      == right(a,width())
+
+        vspace(n) ==
+          n = 0 => empty()
+          vconcat(sform " ",vspace(n - 1))
+
+        hspace(n) ==
+          n = 0 => empty()
+          sform(fillerSpaces(n)$Lisp)
+
+        rspace(n, m) ==
+          n = 0 or m = 0 => empty()
+          vconcat(hspace n, rspace(n, m - 1))
+
+        matrix ll ==
+            lv:$ := [LIST2VEC$Lisp l for l in ll]
+            CONS(eform MATRIX, LIST2VEC$Lisp lv)$Lisp
+
+        pile l              == cons(eform SC, l)
+        commaSeparate l     == cons(eform AGGLST,  l)
+        semicolonSeparate l == cons(eform AGGSET,  l)
+        blankSeparate l     ==
+           c:=eform CONCATB
+           l1:$:=[]
+           for u in reverse l repeat
+               if EQCAR(u,c)$Lisp
+                  then l1:=[:cdr u,:l1]
+                  else l1:=[u,:l1]
+           cons(c, l1)
+
+        brace a        == [eform BRACE,   a]
+        brace l        == brace commaSeparate l
+        bracket a      == [eform BRACKET, a]
+        bracket l      == bracket commaSeparate l
+        paren a        == [eform PAREN,   a]
+        paren l        == paren commaSeparate l
+
+        sub     (a,b)  == [eform SUB, a, b]
+        super   (a, b) == [eform SUPERSUB,a,sform " ",b]
+        presub(a,b) == [eform SUPERSUB,a,sform " ",sform " ",sform " ",b]
+        presuper(a, b) == [eform SUPERSUB,a,sform " ",sform " ",b]
+        scripts (a, l) ==
+            null l => a
+            null rest l => sub(a, first l)
+            cons(eform SUPERSUB, cons(a, l))
+        supersub(a, l) ==
+            if odd?(#l) then l := append(l, [empty()])
+            cons(eform ALTSUPERSUB, cons(a, l))
+
+        hconcat(a,b)  == [eform CONCAT, a, b]
+        hconcat l     == cons(eform CONCAT, l)
+        vconcat(a,b)  == [eform VCONCAT, a, b]
+        vconcat l     == cons(eform VCONCAT, l)
+
+        a ^= b      == [sform "^=",    a, b]
+        a < b       == [sform "<",     a, b]
+        a > b       == [sform ">",     a, b]
+        a <= b      == [sform "<=",    a, b]
+        a >= b      == [sform ">=",    a, b]
+
+        a + b       == [sform "+",     a, b]
+        a - b       == [sform "-",     a, b]
+        - a         == [sform "-",     a]
+        a * b       == [sform "*",     a, b]
+        a / b       == [sform "/",     a, b]
+        a ** b      == [sform "**",    a, b]
+        a div b     == [sform "div",   a, b]
+        a rem b     == [sform "rem",   a, b]
+        a quo b     == [sform "quo",   a, b]
+        a exquo b   == [sform "exquo", a, b]
+        a and b     == [sform "and",   a, b]
+        a or b      == [sform "or",    a, b]
+        not a       == [sform "not",   a]
+        SEGMENT(a,b)== [eform SEGMENT, a, b]
+        SEGMENT(a)  == [eform SEGMENT, a]
+        binomial(a,b)==[eform BINOMIAL, a, b]
+
+        empty() == [eform NOTHING]
+
+        infix? a ==
+            e:$ :=
+                IDENTP$Lisp a => a
+                STRINGP$Lisp a => INTERN$Lisp a
+                return false
+            if GET(e,QUOTE(INFIXOP$Lisp)$Lisp)$Lisp then true else false
+
+        elt(a, l) ==
+            cons(a, l)
+        prefix(a,l)   ==
+            not infix? a => cons(a, l)
+            hconcat(a, paren commaSeparate l)
+        infix(a, l) ==
+            null l => empty()
+            null rest l => first l
+            infix? a => cons(a, l)
+            hconcat [first l, a, infix(a, rest l)]
+        infix(a,b,c)  ==
+            infix? a => [a, b, c]
+            hconcat [b, a, c]
+        postfix(a, b) ==
+            hconcat(b, a)
+
+        string a   == [eform STRING,  a]
+        quote  a   == [eform QUOTE,   a]
+        overbar a  == [eform OVERBAR, a]
+        dot a      == super(a, sform ".")
+        prime a    == super(a, sform ",")
+        dot(a,nn)   == (s := new(nn, char "."); super(a, sform s))
+        prime(a,nn) == (s := new(nn, char ","); super(a, sform s))
+
+        overlabel(a,b) == [eform OVERLABEL, a, b]
+        box a      == [eform BOX,     a]
+        zag(a,b)   == [eform ZAG,     a, b]
+        root a     == [eform ROOT,    a]
+        root(a,b)  == [eform ROOT,    a, b]
+        over(a,b)  == [eform OVER,    a, b]
+        slash(a,b) == [eform SLASH,   a, b]
+        assign(a,b)== [eform LET,     a, b]
+
+        label(a,b) == [eform EQUATNUM, a, b]
+        rarrow(a,b)== [eform TAG, a, b]
+        differentiate(a, nn)==
+            zero? nn => a
+            nn < 4 => prime(a, nn)
+            r := FormatRoman(nn::PositiveInteger)
+            s := lowerCase(r::String)
+            super(a, paren sform s)
+
+        sum(a)     == [eform SIGMA,  empty(), a]
+        sum(a,b)   == [eform SIGMA,  b, a]
+        sum(a,b,c) == [eform SIGMA2, b, c, a]
+        prod(a)    == [eform PI,     empty(), a]
+        prod(a,b)  == [eform PI,     b, a]
+        prod(a,b,c)== [eform PI2,    b, c, a]
+        int(a)     == [eform INTSIGN,empty(), empty(), a]
+        int(a,b)   == [eform INTSIGN,b, empty(), a]
+        int(a,b,c) == [eform INTSIGN,b, c, a]
+
+@
+\section{OUTFORM.lsp BOOTSTRAP} 
+{\bf OUTFORM} depends on itself.
+We need to break this cycle to build the algebra. So we keep a
+cached copy of the translated {\bf OUTFORM} category which we can write
+into the {\bf MID} directory. We compile the lisp code and copy the
+{\bf OUTFORM.o} file to the {\bf OUT} directory.  This is eventually
+forcibly replaced by a recompiled version.
+
+Note that this code is not included in the generated catdef.spad file.
+
+<<OUTFORM.lsp BOOTSTRAP>>=
+
+(|/VERSIONCHECK| 2) 
+
+(PUT (QUOTE |OUTFORM;print;$V;1|) (QUOTE |SPADreplace|) (QUOTE |mathprint|)) 
+
+(DEFUN |OUTFORM;print;$V;1| (|x| |$|) (|mathprint| |x|)) 
+
+(DEFUN |OUTFORM;message;S$;2| (|s| |$|) (COND ((SPADCALL |s| (QREFELT |$| 11)) (SPADCALL (QREFELT |$| 12))) ((QUOTE T) |s|))) 
+
+(DEFUN |OUTFORM;messagePrint;SV;3| (|s| |$|) (SPADCALL (SPADCALL |s| (QREFELT |$| 13)) (QREFELT |$| 8))) 
+
+(PUT (QUOTE |OUTFORM;=;2$B;4|) (QUOTE |SPADreplace|) (QUOTE EQUAL)) 
+
+(DEFUN |OUTFORM;=;2$B;4| (|a| |b| |$|) (EQUAL |a| |b|)) 
+
+(DEFUN |OUTFORM;=;3$;5| (|a| |b| |$|) (LIST (|OUTFORM;sform| "=" |$|) |a| |b|)) 
+
+(PUT (QUOTE |OUTFORM;coerce;2$;6|) (QUOTE |SPADreplace|) (QUOTE (XLAM (|a|) |a|))) 
+
+(DEFUN |OUTFORM;coerce;2$;6| (|a| |$|) |a|) 
+
+(PUT (QUOTE |OUTFORM;outputForm;I$;7|) (QUOTE |SPADreplace|) (QUOTE (XLAM (|n|) |n|))) 
+
+(DEFUN |OUTFORM;outputForm;I$;7| (|n| |$|) |n|) 
+
+(PUT (QUOTE |OUTFORM;outputForm;S$;8|) (QUOTE |SPADreplace|) (QUOTE (XLAM (|e|) |e|))) 
+
+(DEFUN |OUTFORM;outputForm;S$;8| (|e| |$|) |e|) 
+
+(PUT (QUOTE |OUTFORM;outputForm;Df$;9|) (QUOTE |SPADreplace|) (QUOTE (XLAM (|f|) |f|))) 
+
+(DEFUN |OUTFORM;outputForm;Df$;9| (|f| |$|) |f|) 
+
+(PUT (QUOTE |OUTFORM;sform|) (QUOTE |SPADreplace|) (QUOTE (XLAM (|s|) |s|))) 
+
+(DEFUN |OUTFORM;sform| (|s| |$|) |s|) 
+
+(PUT (QUOTE |OUTFORM;eform|) (QUOTE |SPADreplace|) (QUOTE (XLAM (|e|) |e|))) 
+
+(DEFUN |OUTFORM;eform| (|e| |$|) |e|) 
+
+(PUT (QUOTE |OUTFORM;iform|) (QUOTE |SPADreplace|) (QUOTE (XLAM (|n|) |n|))) 
+
+(DEFUN |OUTFORM;iform| (|n| |$|) |n|) 
+
+(DEFUN |OUTFORM;outputForm;S$;13| (|s| |$|) (|OUTFORM;sform| (SPADCALL (SPADCALL (QREFELT |$| 26)) (SPADCALL |s| (SPADCALL (QREFELT |$| 26)) (QREFELT |$| 27)) (QREFELT |$| 28)) |$|)) 
+
+(PUT (QUOTE |OUTFORM;width;$I;14|) (QUOTE |SPADreplace|) (QUOTE |outformWidth|)) 
+
+(DEFUN |OUTFORM;width;$I;14| (|a| |$|) (|outformWidth| |a|)) 
+
+(PUT (QUOTE |OUTFORM;height;$I;15|) (QUOTE |SPADreplace|) (QUOTE |height|)) 
+
+(DEFUN |OUTFORM;height;$I;15| (|a| |$|) (|height| |a|)) 
+
+(PUT (QUOTE |OUTFORM;subHeight;$I;16|) (QUOTE |SPADreplace|) (QUOTE |subspan|)) 
+
+(DEFUN |OUTFORM;subHeight;$I;16| (|a| |$|) (|subspan| |a|)) 
+
+(PUT (QUOTE |OUTFORM;superHeight;$I;17|) (QUOTE |SPADreplace|) (QUOTE |superspan|)) 
+
+(DEFUN |OUTFORM;superHeight;$I;17| (|a| |$|) (|superspan| |a|)) 
+
+(PUT (QUOTE |OUTFORM;height;I;18|) (QUOTE |SPADreplace|) (QUOTE (XLAM NIL 20))) 
+
+(DEFUN |OUTFORM;height;I;18| (|$|) 20) 
+
+(PUT (QUOTE |OUTFORM;width;I;19|) (QUOTE |SPADreplace|) (QUOTE (XLAM NIL 66))) 
+
+(DEFUN |OUTFORM;width;I;19| (|$|) 66) 
+
+(DEFUN |OUTFORM;center;$I$;20| (|a| |w| |$|) (SPADCALL (SPADCALL (QUOTIENT2 (|-| |w| (SPADCALL |a| (QREFELT |$| 30))) 2) (QREFELT |$| 36)) |a| (QREFELT |$| 37))) 
+
+(DEFUN |OUTFORM;left;$I$;21| (|a| |w| |$|) (SPADCALL |a| (SPADCALL (|-| |w| (SPADCALL |a| (QREFELT |$| 30))) (QREFELT |$| 36)) (QREFELT |$| 37))) 
+
+(DEFUN |OUTFORM;right;$I$;22| (|a| |w| |$|) (SPADCALL (SPADCALL (|-| |w| (SPADCALL |a| (QREFELT |$| 30))) (QREFELT |$| 36)) |a| (QREFELT |$| 37))) 
+
+(DEFUN |OUTFORM;center;2$;23| (|a| |$|) (SPADCALL |a| (SPADCALL (QREFELT |$| 35)) (QREFELT |$| 38))) 
+
+(DEFUN |OUTFORM;left;2$;24| (|a| |$|) (SPADCALL |a| (SPADCALL (QREFELT |$| 35)) (QREFELT |$| 39))) 
+
+(DEFUN |OUTFORM;right;2$;25| (|a| |$|) (SPADCALL |a| (SPADCALL (QREFELT |$| 35)) (QREFELT |$| 40))) 
+
+(DEFUN |OUTFORM;vspace;I$;26| (|n| |$|) (COND ((EQL |n| 0) (SPADCALL (QREFELT |$| 12))) ((QUOTE T) (SPADCALL (|OUTFORM;sform| " " |$|) (SPADCALL (|-| |n| 1) (QREFELT |$| 44)) (QREFELT |$| 45))))) 
+
+(DEFUN |OUTFORM;hspace;I$;27| (|n| |$|) (COND ((EQL |n| 0) (SPADCALL (QREFELT |$| 12))) ((QUOTE T) (|OUTFORM;sform| (|fillerSpaces| |n|) |$|)))) 
+
+(DEFUN |OUTFORM;rspace;2I$;28| (|n| |m| |$|) (COND ((OR (EQL |n| 0) (EQL |m| 0)) (SPADCALL (QREFELT |$| 12))) ((QUOTE T) (SPADCALL (SPADCALL |n| (QREFELT |$| 36)) (SPADCALL |n| (|-| |m| 1) (QREFELT |$| 46)) (QREFELT |$| 45))))) 
+
+(DEFUN |OUTFORM;matrix;L$;29| (|ll| |$|) (PROG (#1=#:G82748 |l| #2=#:G82749 |lv|) (RETURN (SEQ (LETT |lv| (PROGN (LETT #1# NIL |OUTFORM;matrix;L$;29|) (SEQ (LETT |l| NIL |OUTFORM;matrix;L$;29|) (LETT #2# |ll| |OUTFORM;matrix;L$;29|) G190 (COND ((OR (ATOM #2#) (PROGN (LETT |l| (CAR #2#) |OUTFORM;matrix;L$;29|) NIL)) (GO G191))) (SEQ (EXIT (LETT #1# (CONS (LIST2VEC |l|) #1#) |OUTFORM;matrix;L$;29|))) (LETT #2# (CDR #2#) |OUTFORM;matrix;L$;29|) (GO G190) G191 (EXIT (NREVERSE0 #1#)))) |OUTFORM;matrix;L$;29|) (EXIT (CONS (|OUTFORM;eform| (QUOTE MATRIX) |$|) (LIST2VEC |lv|))))))) 
+
+(DEFUN |OUTFORM;pile;L$;30| (|l| |$|) (CONS (|OUTFORM;eform| (QUOTE SC) |$|) |l|)) 
+
+(DEFUN |OUTFORM;commaSeparate;L$;31| (|l| |$|) (CONS (|OUTFORM;eform| (QUOTE AGGLST) |$|) |l|)) 
+
+(DEFUN |OUTFORM;semicolonSeparate;L$;32| (|l| |$|) (CONS (|OUTFORM;eform| (QUOTE AGGSET) |$|) |l|)) 
+
+(DEFUN |OUTFORM;blankSeparate;L$;33| (|l| |$|) (PROG (|c| |u| #1=#:G82757 |l1|) (RETURN (SEQ (LETT |c| (|OUTFORM;eform| (QUOTE CONCATB) |$|) |OUTFORM;blankSeparate;L$;33|) (LETT |l1| NIL |OUTFORM;blankSeparate;L$;33|) (SEQ (LETT |u| NIL |OUTFORM;blankSeparate;L$;33|) (LETT #1# (SPADCALL |l| (QREFELT |$| 53)) |OUTFORM;blankSeparate;L$;33|) G190 (COND ((OR (ATOM #1#) (PROGN (LETT |u| (CAR #1#) |OUTFORM;blankSeparate;L$;33|) NIL)) (GO G191))) (SEQ (EXIT (COND ((EQCAR |u| |c|) (LETT |l1| (SPADCALL (CDR |u|) |l1| (QREFELT |$| 54)) |OUTFORM;blankSeparate;L$;33|)) ((QUOTE T) (LETT |l1| (CONS |u| |l1|) |OUTFORM;blankSeparate;L$;33|))))) (LETT #1# (CDR #1#) |OUTFORM;blankSeparate;L$;33|) (GO G190) G191 (EXIT NIL)) (EXIT (CONS |c| |l1|)))))) 
+
+(DEFUN |OUTFORM;brace;2$;34| (|a| |$|) (LIST (|OUTFORM;eform| (QUOTE BRACE) |$|) |a|)) 
+
+(DEFUN |OUTFORM;brace;L$;35| (|l| |$|) (SPADCALL (SPADCALL |l| (QREFELT |$| 51)) (QREFELT |$| 56))) 
+
+(DEFUN |OUTFORM;bracket;2$;36| (|a| |$|) (LIST (|OUTFORM;eform| (QUOTE BRACKET) |$|) |a|)) 
+
+(DEFUN |OUTFORM;bracket;L$;37| (|l| |$|) (SPADCALL (SPADCALL |l| (QREFELT |$| 51)) (QREFELT |$| 58))) 
+
+(DEFUN |OUTFORM;paren;2$;38| (|a| |$|) (LIST (|OUTFORM;eform| (QUOTE PAREN) |$|) |a|)) 
+
+(DEFUN |OUTFORM;paren;L$;39| (|l| |$|) (SPADCALL (SPADCALL |l| (QREFELT |$| 51)) (QREFELT |$| 60))) 
+
+(DEFUN |OUTFORM;sub;3$;40| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE SUB) |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;super;3$;41| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE SUPERSUB) |$|) |a| (|OUTFORM;sform| " " |$|) |b|)) 
+
+(DEFUN |OUTFORM;presub;3$;42| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE SUPERSUB) |$|) |a| (|OUTFORM;sform| " " |$|) (|OUTFORM;sform| " " |$|) (|OUTFORM;sform| " " |$|) |b|)) 
+
+(DEFUN |OUTFORM;presuper;3$;43| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE SUPERSUB) |$|) |a| (|OUTFORM;sform| " " |$|) (|OUTFORM;sform| " " |$|) |b|)) 
+
+(DEFUN |OUTFORM;scripts;$L$;44| (|a| |l| |$|) (COND ((SPADCALL |l| (QREFELT |$| 66)) |a|) ((SPADCALL (SPADCALL |l| (QREFELT |$| 67)) (QREFELT |$| 66)) (SPADCALL |a| (SPADCALL |l| (QREFELT |$| 68)) (QREFELT |$| 62))) ((QUOTE T) (CONS (|OUTFORM;eform| (QUOTE SUPERSUB) |$|) (CONS |a| |l|))))) 
+
+(DEFUN |OUTFORM;supersub;$L$;45| (|a| |l| |$|) (SEQ (COND ((ODDP (SPADCALL |l| (QREFELT |$| 71))) (LETT |l| (SPADCALL |l| (LIST (SPADCALL (QREFELT |$| 12))) (QREFELT |$| 73)) |OUTFORM;supersub;$L$;45|))) (EXIT (CONS (|OUTFORM;eform| (QUOTE ALTSUPERSUB) |$|) (CONS |a| |l|))))) 
+
+(DEFUN |OUTFORM;hconcat;3$;46| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE CONCAT) |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;hconcat;L$;47| (|l| |$|) (CONS (|OUTFORM;eform| (QUOTE CONCAT) |$|) |l|)) 
+
+(DEFUN |OUTFORM;vconcat;3$;48| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE VCONCAT) |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;vconcat;L$;49| (|l| |$|) (CONS (|OUTFORM;eform| (QUOTE VCONCAT) |$|) |l|)) 
+
+(DEFUN |OUTFORM;^=;3$;50| (|a| |b| |$|) (LIST (|OUTFORM;sform| "^=" |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;<;3$;51| (|a| |b| |$|) (LIST (|OUTFORM;sform| "<" |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;>;3$;52| (|a| |b| |$|) (LIST (|OUTFORM;sform| ">" |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;<=;3$;53| (|a| |b| |$|) (LIST (|OUTFORM;sform| "<=" |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;>=;3$;54| (|a| |b| |$|) (LIST (|OUTFORM;sform| ">=" |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;+;3$;55| (|a| |b| |$|) (LIST (|OUTFORM;sform| "+" |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;-;3$;56| (|a| |b| |$|) (LIST (|OUTFORM;sform| "-" |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;-;2$;57| (|a| |$|) (LIST (|OUTFORM;sform| "-" |$|) |a|)) 
+
+(DEFUN |OUTFORM;*;3$;58| (|a| |b| |$|) (LIST (|OUTFORM;sform| "*" |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;/;3$;59| (|a| |b| |$|) (LIST (|OUTFORM;sform| "/" |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;**;3$;60| (|a| |b| |$|) (LIST (|OUTFORM;sform| "**" |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;div;3$;61| (|a| |b| |$|) (LIST (|OUTFORM;sform| "div" |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;rem;3$;62| (|a| |b| |$|) (LIST (|OUTFORM;sform| "rem" |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;quo;3$;63| (|a| |b| |$|) (LIST (|OUTFORM;sform| "quo" |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;exquo;3$;64| (|a| |b| |$|) (LIST (|OUTFORM;sform| "exquo" |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;and;3$;65| (|a| |b| |$|) (LIST (|OUTFORM;sform| "and" |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;or;3$;66| (|a| |b| |$|) (LIST (|OUTFORM;sform| "or" |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;not;2$;67| (|a| |$|) (LIST (|OUTFORM;sform| "not" |$|) |a|)) 
+
+(DEFUN |OUTFORM;SEGMENT;3$;68| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE SEGMENT) |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;SEGMENT;2$;69| (|a| |$|) (LIST (|OUTFORM;eform| (QUOTE SEGMENT) |$|) |a|)) 
+
+(DEFUN |OUTFORM;binomial;3$;70| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE BINOMIAL) |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;empty;$;71| (|$|) (LIST (|OUTFORM;eform| (QUOTE NOTHING) |$|))) 
+
+(DEFUN |OUTFORM;infix?;$B;72| (|a| |$|) (PROG (#1=#:G82802 |e|) (RETURN (SEQ (EXIT (SEQ (LETT |e| (COND ((IDENTP |a|) |a|) ((STRINGP |a|) (INTERN |a|)) ((QUOTE T) (PROGN (LETT #1# (QUOTE NIL) |OUTFORM;infix?;$B;72|) (GO #1#)))) |OUTFORM;infix?;$B;72|) (EXIT (COND ((GET |e| (QUOTE INFIXOP)) (QUOTE T)) ((QUOTE T) (QUOTE NIL)))))) #1# (EXIT #1#))))) 
+
+(PUT (QUOTE |OUTFORM;elt;$L$;73|) (QUOTE |SPADreplace|) (QUOTE CONS)) 
+
+(DEFUN |OUTFORM;elt;$L$;73| (|a| |l| |$|) (CONS |a| |l|)) 
+
+(DEFUN |OUTFORM;prefix;$L$;74| (|a| |l| |$|) (COND ((NULL (SPADCALL |a| (QREFELT |$| 98))) (CONS |a| |l|)) ((QUOTE T) (SPADCALL |a| (SPADCALL (SPADCALL |l| (QREFELT |$| 51)) (QREFELT |$| 60)) (QREFELT |$| 37))))) 
+
+(DEFUN |OUTFORM;infix;$L$;75| (|a| |l| |$|) (COND ((SPADCALL |l| (QREFELT |$| 66)) (SPADCALL (QREFELT |$| 12))) ((SPADCALL (SPADCALL |l| (QREFELT |$| 67)) (QREFELT |$| 66)) (SPADCALL |l| (QREFELT |$| 68))) ((SPADCALL |a| (QREFELT |$| 98)) (CONS |a| |l|)) ((QUOTE T) (SPADCALL (LIST (SPADCALL |l| (QREFELT |$| 68)) |a| (SPADCALL |a| (SPADCALL |l| (QREFELT |$| 101)) (QREFELT |$| 102))) (QREFELT |$| 75))))) 
+
+(DEFUN |OUTFORM;infix;4$;76| (|a| |b| |c| |$|) (COND ((SPADCALL |a| (QREFELT |$| 98)) (LIST |a| |b| |c|)) ((QUOTE T) (SPADCALL (LIST |b| |a| |c|) (QREFELT |$| 75))))) 
+
+(DEFUN |OUTFORM;postfix;3$;77| (|a| |b| |$|) (SPADCALL |b| |a| (QREFELT |$| 37))) 
+
+(DEFUN |OUTFORM;string;2$;78| (|a| |$|) (LIST (|OUTFORM;eform| (QUOTE STRING) |$|) |a|)) 
+
+(DEFUN |OUTFORM;quote;2$;79| (|a| |$|) (LIST (|OUTFORM;eform| (QUOTE QUOTE) |$|) |a|)) 
+
+(DEFUN |OUTFORM;overbar;2$;80| (|a| |$|) (LIST (|OUTFORM;eform| (QUOTE OVERBAR) |$|) |a|)) 
+
+(DEFUN |OUTFORM;dot;2$;81| (|a| |$|) (SPADCALL |a| (|OUTFORM;sform| "." |$|) (QREFELT |$| 63))) 
+
+(DEFUN |OUTFORM;prime;2$;82| (|a| |$|) (SPADCALL |a| (|OUTFORM;sform| "," |$|) (QREFELT |$| 63))) 
+
+(DEFUN |OUTFORM;dot;$Nni$;83| (|a| |nn| |$|) (PROG (|s|) (RETURN (SEQ (LETT |s| (|MAKE-FULL-CVEC| |nn| (SPADCALL "." (QREFELT |$| 110))) |OUTFORM;dot;$Nni$;83|) (EXIT (SPADCALL |a| (|OUTFORM;sform| |s| |$|) (QREFELT |$| 63))))))) 
+
+(DEFUN |OUTFORM;prime;$Nni$;84| (|a| |nn| |$|) (PROG (|s|) (RETURN (SEQ (LETT |s| (|MAKE-FULL-CVEC| |nn| (SPADCALL "," (QREFELT |$| 110))) |OUTFORM;prime;$Nni$;84|) (EXIT (SPADCALL |a| (|OUTFORM;sform| |s| |$|) (QREFELT |$| 63))))))) 
+
+(DEFUN |OUTFORM;overlabel;3$;85| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE OVERLABEL) |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;box;2$;86| (|a| |$|) (LIST (|OUTFORM;eform| (QUOTE BOX) |$|) |a|)) 
+
+(DEFUN |OUTFORM;zag;3$;87| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE ZAG) |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;root;2$;88| (|a| |$|) (LIST (|OUTFORM;eform| (QUOTE ROOT) |$|) |a|)) 
+
+(DEFUN |OUTFORM;root;3$;89| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE ROOT) |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;over;3$;90| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE OVER) |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;slash;3$;91| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE SLASH) |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;assign;3$;92| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE LET) |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;label;3$;93| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE EQUATNUM) |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;rarrow;3$;94| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE TAG) |$|) |a| |b|)) 
+
+(DEFUN |OUTFORM;differentiate;$Nni$;95| (|a| |nn| |$|) (PROG (#1=#:G82832 |r| |s|) (RETURN (SEQ (COND ((ZEROP |nn|) |a|) ((|<| |nn| 4) (SPADCALL |a| |nn| (QREFELT |$| 112))) ((QUOTE T) (SEQ (LETT |r| (SPADCALL (PROG1 (LETT #1# |nn| |OUTFORM;differentiate;$Nni$;95|) (|check-subtype| (|>| #1# 0) (QUOTE (|PositiveInteger|)) #1#)) (QREFELT |$| 125)) |OUTFORM;differentiate;$Nni$;95|) (LETT |s| (SPADCALL |r| (QREFELT |$| 126)) |OUTFORM;differentiate;$Nni$;95|) (EXIT (SPADCALL |a| (SPADCALL (|OUTFORM;sform| |s| |$|) (QREFELT |$| 60)) (QREFELT |$| 63)))))))))) 
+
+(DEFUN |OUTFORM;sum;2$;96| (|a| |$|) (LIST (|OUTFORM;eform| (QUOTE SIGMA) |$|) (SPADCALL (QREFELT |$| 12)) |a|)) 
+
+(DEFUN |OUTFORM;sum;3$;97| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE SIGMA) |$|) |b| |a|)) 
+
+(DEFUN |OUTFORM;sum;4$;98| (|a| |b| |c| |$|) (LIST (|OUTFORM;eform| (QUOTE SIGMA2) |$|) |b| |c| |a|)) 
+
+(DEFUN |OUTFORM;prod;2$;99| (|a| |$|) (LIST (|OUTFORM;eform| (QUOTE PI) |$|) (SPADCALL (QREFELT |$| 12)) |a|)) 
+
+(DEFUN |OUTFORM;prod;3$;100| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE PI) |$|) |b| |a|)) 
+
+(DEFUN |OUTFORM;prod;4$;101| (|a| |b| |c| |$|) (LIST (|OUTFORM;eform| (QUOTE PI2) |$|) |b| |c| |a|)) 
+
+(DEFUN |OUTFORM;int;2$;102| (|a| |$|) (LIST (|OUTFORM;eform| (QUOTE INTSIGN) |$|) (SPADCALL (QREFELT |$| 12)) (SPADCALL (QREFELT |$| 12)) |a|)) 
+
+(DEFUN |OUTFORM;int;3$;103| (|a| |b| |$|) (LIST (|OUTFORM;eform| (QUOTE INTSIGN) |$|) |b| (SPADCALL (QREFELT |$| 12)) |a|)) 
+
+(DEFUN |OUTFORM;int;4$;104| (|a| |b| |c| |$|) (LIST (|OUTFORM;eform| (QUOTE INTSIGN) |$|) |b| |c| |a|)) 
+
+(DEFUN |OutputForm| NIL (PROG NIL (RETURN (PROG (#1=#:G82846) (RETURN (COND ((LETT #1# (HGET |$ConstructorCache| (QUOTE |OutputForm|)) |OutputForm|) (|CDRwithIncrement| (CDAR #1#))) ((QUOTE T) (|UNWIND-PROTECT| (PROG1 (CDDAR (HPUT |$ConstructorCache| (QUOTE |OutputForm|) (LIST (CONS NIL (CONS 1 (|OutputForm;|)))))) (LETT #1# T |OutputForm|)) (COND ((NOT #1#) (HREM |$ConstructorCache| (QUOTE |OutputForm|)))))))))))) 
+
+(DEFUN |OutputForm;| NIL (PROG (|dv$| |$| |pv$|) (RETURN (PROGN (LETT |dv$| (QUOTE (|OutputForm|)) . #1=(|OutputForm|)) (LETT |$| (GETREFV 138) . #1#) (QSETREFV |$| 0 |dv$|) (QSETREFV |$| 3 (LETT |pv$| (|buildPredVector| 0 0 NIL) . #1#)) (|haddProp| |$ConstructorCache| (QUOTE |OutputForm|) NIL (CONS 1 |$|)) (|stuffDomainSlots| |$|) (QSETREFV |$| 6 (|List| |$|)) |$|)))) 
+
+(MAKEPROP (QUOTE |OutputForm|) (QUOTE |infovec|) (LIST (QUOTE #(NIL NIL NIL NIL NIL NIL (QUOTE |Rep|) (|Void|) |OUTFORM;print;$V;1| (|Boolean|) (|String|) (0 . |empty?|) |OUTFORM;empty;$;71| |OUTFORM;message;S$;2| |OUTFORM;messagePrint;SV;3| |OUTFORM;=;2$B;4| |OUTFORM;=;3$;5| (|OutputForm|) |OUTFORM;coerce;2$;6| (|Integer|) |OUTFORM;outputForm;I$;7| (|Symbol|) |OUTFORM;outputForm;S$;8| (|DoubleFloat|) |OUTFORM;outputForm;Df$;9| (|Character|) (5 . |quote|) (9 . |concat|) (15 . |concat|) |OUTFORM;outputForm;S$;13| |OUTFORM;width;$I;14| |OUTFORM;height;$I;15| |OUTFORM;subHeight;$I;16| |OUTFORM;superHeight;$I;17| |OUTFORM;height;I;18| |OUTFORM;width;I;19| |OUTFORM;hspace;I$;27| |OUTFORM;hconcat;3$;46| |OUTFORM;center;$I$;20| |OUTFORM;left;$I$;21| |OUTFORM;right;$I$;22| |OUTFORM;center;2$;23| |OUTFORM;left;2$;24| |OUTFORM;right;2$;25| |OUTFORM;vspace;I$;26| |OUTFORM;vconcat;3$;48| |OUTFORM;rspace;2I$;28| (|List| 49) |OUTFORM;matrix;L$;29| (|List| |$|) |OUTFORM;pile;L$;30| |OUTFORM;commaSeparate;L$;31| |OUTFORM;semicolonSeparate;L$;32| (21 . |reverse|) (26 . |append|) |OUTFORM;blankSeparate;L$;33| |OUTFORM;brace;2$;34| |OUTFORM;brace;L$;35| |OUTFORM;bracket;2$;36| |OUTFORM;bracket;L$;37| |OUTFORM;paren;2$;38| |OUTFORM;paren;L$;39| |OUTFORM;sub;3$;40| |OUTFORM;super;3$;41| |OUTFORM;presub;3$;42| |OUTFORM;presuper;3$;43| (32 . |null|) (37 . |rest|) (42 . |first|) |OUTFORM;scripts;$L$;44| (|NonNegativeInteger|) (47 . |#|) (|List| |$$|) (52 . |append|) |OUTFORM;supersub;$L$;45| |OUTFORM;hconcat;L$;47| |OUTFORM;vconcat;L$;49| |OUTFORM;^=;3$;50| |OUTFORM;<;3$;51| |OUTFORM;>;3$;52| |OUTFORM;<=;3$;53| |OUTFORM;>=;3$;54| |OUTFORM;+;3$;55| |OUTFORM;-;3$;56| |OUTFORM;-;2$;57| |OUTFORM;*;3$;58| |OUTFORM;/;3$;59| |OUTFORM;**;3$;60| |OUTFORM;div;3$;61| |OUTFORM;rem;3$;62| |OUTFORM;quo;3$;63| |OUTFORM;exquo;3$;64| |OUTFORM;and;3$;65| |OUTFORM;or;3$;66| |OUTFORM;not;2$;67| |OUTFORM;SEGMENT;3$;68| |OUTFORM;SEGMENT;2$;69| |OUTFORM;binomial;3$;70| |OUTFORM;infix?;$B;72| |OUTFORM;elt;$L$;73| |OUTFORM;prefix;$L$;74| (58 . |rest|) |OUTFORM;infix;$L$;75| |OUTFORM;infix;4$;76| |OUTFORM;postfix;3$;77| |OUTFORM;string;2$;78| |OUTFORM;quote;2$;79| |OUTFORM;overbar;2$;80| |OUTFORM;dot;2$;81| |OUTFORM;prime;2$;82| (63 . |char|) |OUTFORM;dot;$Nni$;83| |OUTFORM;prime;$Nni$;84| |OUTFORM;overlabel;3$;85| |OUTFORM;box;2$;86| |OUTFORM;zag;3$;87| |OUTFORM;root;2$;88| |OUTFORM;root;3$;89| |OUTFORM;over;3$;90| |OUTFORM;slash;3$;91| |OUTFORM;assign;3$;92| |OUTFORM;label;3$;93| |OUTFORM;rarrow;3$;94| (|PositiveInteger|) (|NumberFormats|) (68 . |FormatRoman|) (73 . |lowerCase|) |OUTFORM;differentiate;$Nni$;95| |OUTFORM;sum;2$;96| |OUTFORM;sum;3$;97| |OUTFORM;sum;4$;98| |OUTFORM;prod;2$;99| |OUTFORM;prod;3$;100| |OUTFORM;prod;4$;101| |OUTFORM;int;2$;102| |OUTFORM;int;3$;103| |OUTFORM;int;4$;104| (|SingleInteger|))) (QUOTE #(|~=| 78 |zag| 84 |width| 90 |vspace| 99 |vconcat| 104 |supersub| 115 |superHeight| 121 |super| 126 |sum| 132 |subHeight| 150 |sub| 155 |string| 161 |slash| 166 |semicolonSeparate| 172 |scripts| 177 |rspace| 183 |root| 189 |right| 200 |rem| 211 |rarrow| 217 |quote| 223 |quo| 228 |prod| 234 |print| 252 |prime| 257 |presuper| 268 |presub| 274 |prefix| 280 |postfix| 286 |pile| 292 |paren| 297 |overlabel| 307 |overbar| 313 |over| 318 |outputForm| 324 |or| 344 |not| 350 |messagePrint| 355 |message| 360 |matrix| 365 |left| 370 |latex| 381 |label| 386 |int| 392 |infix?| 410 |infix| 415 |hspace| 428 |height| 433 |hconcat| 442 |hash| 453 |exquo| 458 |empty| 464 |elt| 468 |dot| 474 |div| 485 |differentiate| 491 |commaSeparate| 497 |coerce| 502 |center| 507 |bracket| 518 |brace| 528 |box| 538 |blankSeparate| 543 |binomial| 548 |assign| 554 |and| 560 |^=| 566 SEGMENT 572 |>=| 583 |>| 589 |=| 595 |<=| 607 |<| 613 |/| 619 |-| 625 |+| 636 |**| 642 |*| 648)) (QUOTE NIL) (CONS (|makeByteWordVec2| 1 (QUOTE (0 0 0))) (CONS (QUOTE #(|SetCategory&| |BasicType&| NIL)) (CONS (QUOTE #((|SetCategory|) (|BasicType|) (|CoercibleTo| 17))) (|makeByteWordVec2| 137 (QUOTE (1 10 9 0 11 0 25 0 26 2 10 0 0 25 27 2 10 0 25 0 28 1 6 0 0 53 2 6 0 0 0 54 1 6 9 0 66 1 6 0 0 67 1 6 2 0 68 1 6 70 0 71 2 72 0 0 0 73 1 72 0 0 101 1 25 0 10 110 1 124 10 123 125 1 10 0 0 126 2 0 9 0 0 1 2 0 0 0 0 115 0 0 19 35 1 0 19 0 30 1 0 0 19 44 1 0 0 49 76 2 0 0 0 0 45 2 0 0 0 49 74 1 0 19 0 33 2 0 0 0 0 63 2 0 0 0 0 129 3 0 0 0 0 0 130 1 0 0 0 128 1 0 19 0 32 2 0 0 0 0 62 1 0 0 0 105 2 0 0 0 0 119 1 0 0 49 52 2 0 0 0 49 69 2 0 0 19 19 46 1 0 0 0 116 2 0 0 0 0 117 1 0 0 0 43 2 0 0 0 19 40 2 0 0 0 0 89 2 0 0 0 0 122 1 0 0 0 106 2 0 0 0 0 90 3 0 0 0 0 0 133 1 0 0 0 131 2 0 0 0 0 132 1 0 7 0 8 2 0 0 0 70 112 1 0 0 0 109 2 0 0 0 0 65 2 0 0 0 0 64 2 0 0 0 49 100 2 0 0 0 0 104 1 0 0 49 50 1 0 0 49 61 1 0 0 0 60 2 0 0 0 0 113 1 0 0 0 107 2 0 0 0 0 118 1 0 0 10 29 1 0 0 23 24 1 0 0 21 22 1 0 0 19 20 2 0 0 0 0 93 1 0 0 0 94 1 0 7 10 14 1 0 0 10 13 1 0 0 47 48 1 0 0 0 42 2 0 0 0 19 39 1 0 10 0 1 2 0 0 0 0 121 3 0 0 0 0 0 136 2 0 0 0 0 135 1 0 0 0 134 1 0 9 0 98 2 0 0 0 49 102 3 0 0 0 0 0 103 1 0 0 19 36 0 0 19 34 1 0 19 0 31 1 0 0 49 75 2 0 0 0 0 37 1 0 137 0 1 2 0 0 0 0 91 0 0 0 12 2 0 0 0 49 99 2 0 0 0 70 111 1 0 0 0 108 2 0 0 0 0 88 2 0 0 0 70 127 1 0 0 49 51 1 0 17 0 18 1 0 0 0 41 2 0 0 0 19 38 1 0 0 0 58 1 0 0 49 59 1 0 0 49 57 1 0 0 0 56 1 0 0 0 114 1 0 0 49 55 2 0 0 0 0 97 2 0 0 0 0 120 2 0 0 0 0 92 2 0 0 0 0 77 1 0 0 0 96 2 0 0 0 0 95 2 0 0 0 0 81 2 0 0 0 0 79 2 0 0 0 0 16 2 0 9 0 0 15 2 0 0 0 0 80 2 0 0 0 0 78 2 0 0 0 0 86 1 0 0 0 84 2 0 0 0 0 83 2 0 0 0 0 82 2 0 0 0 0 87 2 0 0 0 0 85)))))) (QUOTE |lookupComplete|))) 
+
+(MAKEPROP (QUOTE |OutputForm|) (QUOTE NILADIC) T) 
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package NUMFMT NumberFormats>>
+<<domain OUTFORM OutputForm>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

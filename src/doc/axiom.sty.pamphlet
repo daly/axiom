@@ -1,0 +1,1996 @@
+% -*- mode: Noweb; noweb-code-mode: tex-mode -*-
+\documentclass[twoside]{article}
+\usepackage{noweb}
+\pagestyle{noweb}
+\noweboptions{longchunks,smallcode}
+
+\title{{\TeX} and {\LaTeX} support for {\tt noweb}}
+\author{Norman Ramsey, Timothy Daly, Leslie Lamport}
+\providecommand{\stylehook}{\marginpar{\raggedright\sl Style hook}}
+
+\begin{document}
+\maketitle
+\tableofcontents
+@
+
+This document describes the {\TeX} code that supports {\tt noweave}
+and {\tt noweb}. It also defines the {\TeX} support for {\tt Axiom}.
+Those interested in customizing their output should
+focus on Section~\ref{section:sty}.  
+Hooks you can easily use (apart from those provided by
+[[\noweboptions]]) are indicated by marginal notes.
+This file contains both plain {\TeX} and {\LaTeX} support:
+<<nwmac.tex>>=
+% nwmac.tex -- plain TeX support for noweb
+% DON'T edit this file!  Use src/doc/axiom.sty.pamphlet instead.
+<<axiom.sty>>=
+% axiom.sty -- LaTeX support for noweb
+% DON'T edit this file!  Use src/doc/axiom.sty.pamphlet instead.
+@
+
+\section{Basic {\TeX} support for {\tt noweb}}
+
+This basic code is used for both {\TeX} and {\LaTeX}.
+The first step is to define [[\codehsize]], which is the width in
+which code is set, and [[\codemargin]], which is the amount by which
+it is indented.\stylehook
+<<kernel>>=
+% make \hsize in code sufficient for 88 columns
+\setbox0=\hbox{\tt m}
+\newdimen\codehsize
+\codehsize=91\wd0 % 88 columns wasn't enough; I don't know why
+\newdimen\codemargin
+\codemargin=0pt
+@ 
+[[\defspace]] is the space we would like on the right of navigational info
+that appears on definition lines, so that it lines up with the text above
+and below.
+<<kernel>>=
+\newdimen\nwdefspace
+\nwdefspace=\codehsize
+% need to use \textwidth in {\LaTeX} to handle styles with
+% non-standard margins (David Bruce).  Don't know why we sometimes
+% wanted \hsize.  27 August 1997.
+%% \advance\nwdefspace by -\hsize\relax
+\ifx\textwidth\undefined
+  \advance\nwdefspace by -\hsize\relax
+\else
+  \advance\nwdefspace by -\textwidth\relax
+\fi
+@
+Most code is set in an environment in which [[\setupcode]] has been
+executed.
+In this environment, only [[\]], [[{]], and [[}]] have their usual
+categories; every other character represents itself.
+Appropriate [[\chardef]]s ensure that the special characters can be
+escaped with a backslash.
+<<kernel>>=
+\chardef\other=12
+\def\setupcode{%
+  \chardef\\=`\\
+  \chardef\{=`\{
+  \chardef\}=`\}
+  \catcode`\$=\other
+  \catcode`\&=\other
+  \catcode`\#=\other
+  \catcode`\%=\other
+  \catcode`\~=\other
+  \catcode`\_=\other
+  \catcode`\^=\other
+  \catcode`\"=\other	% fixes problem with german.sty
+  \obeyspaces\Tt
+}
+\let\nwlbrace=\{
+\let\nwrbrace=\}
+@ 
+[[\nwendquote]] is called after quoted code.
+It resets the spacefactor
+<<kernel>>=
+\def\nwendquote{\relax\ifhmode\spacefactor=1000 \fi}
+@ 
+[[\eatline]] is used to consume newlines that should be ignored,
+for example, the newlines at the end of [[@ %def ]]{\em identifiers} lines.
+I can't remember what [[\startline]] or [[\newlines]] are for; I don't
+think {\tt noweave} ever emits them.
+<<kernel>>=
+{\catcode`\^^M=\active % make CR an active character
+  \gdef\newlines{\catcode`\^^M=\active % make CR an active character
+         \def^^M{\par\startline}}%
+  \gdef\eatline#1^^M{\relax}%
+}
+%%% DON'T   \gdef^^M{\par\startline}}% in case ^^M appears in a \write
+\def\startline{\noindent\hskip\parindent\ignorespaces}
+\def\nwnewline{\ifvmode\else\hfil\break\leavevmode\hbox{}\fi}
+@ 
+
+Within a code environment, it may be necessary to restore the 
+category codes in order to set a module (chunk) name.
+This hack doesn't properly restore [["]] for use in {\tt german.sty}.
+<<kernel>>=
+\def\setupmodname{%
+  \catcode`\$=3
+  \catcode`\&=4
+  \catcode`\#=6
+  \catcode`\%=14
+  \catcode`\~=13
+  \catcode`\_=8
+  \catcode`\^=7
+  \catcode`\ =10
+  \catcode`\^^M=5
+  \let\{\nwlbrace
+  \let\}\nwrbrace
+  % bad news --- don't know what catcode to give "
+  \Rm}
+@ \sublabel{ref:fred}
+@
+Setting up the space code has to be done differently for {\TeX} and
+{\LaTeX}, so as not to screw up {\LaTeX}'s \texttt{verbatim} package.
+(Fix from Rafael Laboissiere.)
+<<nwmac.tex>>=
+{\obeyspaces\global\let =\ } % from texbook, p 381
+<<axiom.sty>>=
+{\obeyspaces\AtBeginDocument{\global\let =\ }} % from texbook, p 381
+@ 
+
+{\tt noweave} brackets uses of chunk names with [[\LA]] and [[\RA]], which
+handle the angle brackets, font, and environment.
+
+As it stands, chunk names can be broken across lines (or pages).  This
+could result in unnecessary page breaks in code
+(c.f.~p.~\pageref{sec:pagebreaking}).  [[\let\\maybehbox=\mbox]] to
+\stylehook
+avoid breaking them
+(or to make them work in math mode); this is done in code chunks, but could be done
+in general.
+<<kernel>>=
+\def\LA{\begingroup\maybehbox\bgroup\setupmodname\It$\langle$}
+\def\RA{\/$\rangle$\egroup\endgroup}
+\def\code{\leavevmode\begingroup\setupcode\newlines}
+\def\edoc{\endgroup}
+\let\maybehbox\relax
+@ 
+
+[[\equivbox]] and [[\plusequivbox]] are used to set the
+``\unhcopy\equivbox''
+and ``\unhcopy\plusequivbox'' that open a chunk definition or its
+continuation.
+{\tt noweave} brackets definitions of chunk names with [[\moddef]] and
+either [[\endmoddef]] or [[\plusendmoddef]].
+<<kernel>>=
+\newbox\equivbox
+\setbox\equivbox=\hbox{$\equiv$}
+\newbox\plusequivbox
+\setbox\plusequivbox=\hbox{$\mathord{+}\mathord{\equiv}$}
+% \moddef can't have an argument because there might be \code...\edoc
+\def\moddef{\leavevmode\kern-\codemargin\LA}
+\def\endmoddef{\RA\ifmmode\equiv\else\unhcopy\equivbox\fi
+               \nobreak\hfill\nobreak}
+\def\plusendmoddef{\RA\ifmmode\mathord{+}\mathord{\equiv}\else\unhcopy\plusequivbox\fi
+               \nobreak\hfill\nobreak}
+@
+Within a code environment, margin tags might be used to mark sub-page
+numbers in the margins, separated by [[\nwmarginglue]].\stylehook
+The interaction with [[\moddef]] involves tricky kerning.
+The tag itself is displayed using [[\nwthemargintag]]
+<<axiom.sty>>=
+\def\nwopt@nomargintag{\let\nwmargintag=\@gobble}
+\def\nwopt@margintag{%
+  \def\nwmargintag##1{\leavevmode\llap{##1\kern\nwmarginglue\kern\codemargin}}}
+\def\nwopt@margintag{%
+  \def\nwmargintag##1{\leavevmode\kern-\codemargin\nwthemargintag{##1}\kern\codemargin}}
+\def\nwthemargintag#1{\llap{#1\kern\nwmarginglue}}
+\nwopt@margintag
+\newdimen\nwmarginglue
+\nwmarginglue=0.3in
+@ 
+\iffalse
+<<man page: [[\noweboptions]]>>=
+.TP
+.B margintag
+Put the sub-page number (tag) of each code-chunk definition in the
+left margin. (Default)
+.TP
+.B nomargintag
+Don't use margin tags.
+@ \fi
+[[\nwtagstyle]] determines the style in which tags are displayed.\stylehook
+<<axiom.sty>>=
+\def\nwtagstyle{\footnotesize\Rm}
+@
+<<kernel>>=
+\def\chunklist{%
+\errhelp{I changed \chunklist to \nowebchunks.  
+I'll try to avoid such incompatible changes in the future.}%
+\errmessage{Use \string\nowebchunks\space instead of \string\chunklist}}
+\def\nowebchunks{\message{<Warning: You need noweave -x to use \string\nowebchunks>}}
+\def\nowebindex{\message{<Warning: You need noweave -index to use \string\nowebindex>}}
+@ We have to be careful with font-changing in the presence of
+different font-selection schemes.  In the \LaTeX{} New Font Selection
+Scheme something like [[\it\tt]] will attempt to use an italic
+typewriter font.  Thus we define new commands like [[\Tt]] which will
+work with both the Plain and old and new \LaTeX{} schemes.  (Note that
+NFSS will be standard in the next version of \LaTeX.)  A problem with
+these definitions arises with NFSS: in math mode the won't work
+unless the {\tt oldlfont} backwards-compatibility option is in effect.
+For the moment, you can get round this by using [[\mbox]].
+
+If you wanted code set in a different font, you could re-define
+[[\Tt]].\stylehook{}  [\LaTeX2e actually behaves like OFSS, but the
+extra [[\reset@font]] does no harm.]
+<<kernel>>=
+% here is support for the new-style (capitalized) font-changing commands
+% thanks to Dave Love
+\ifx\documentstyle\undefined
+  \let\Rm=\rm \let\It=\it \let\Tt=\tt       % plain
+\else\ifx\selectfont\undefined
+  \let\Rm=\rm \let\It=\it \let\Tt=\tt       % LaTeX OFSS
+\else                                       % LaTeX NFSS
+  \def\Rm{\reset@font\rm}
+  \def\It{\reset@font\it}
+  \def\Tt{\reset@font\tt}
+  \def\Bf{\reset@font\bf}
+\fi\fi
+\ifx\reset@font\undefined \let\reset@font=\relax \fi
+@
+\clearpage
+
+\section{The {\tt noweb} document-style option for {\LaTeX}}
+\label{section:sty}
+
+{\LaTeX} support begins with the kernel shown above.
+<<axiom.sty>>=
+<<kernel>>
+@
+
+\subsection{Support for noweb options}
+
+<<axiom.sty>>=
+\def\noweboptions#1{%
+  \def\@nwoptionlist{#1}%
+  \@for\@nwoption:=\@nwoptionlist\do{%
+    \@ifundefined{nwopt@\@nwoption}{%
+        \@latexerr{There is no such noweb option as '\@nwoption'}\@eha}{%
+        \csname nwopt@\@nwoption\endcsname}}}
+@ 
+
+\subsection{Adjusting placement of code on the page}
+
+{\LaTeX} requires a larger [[\codehsize]] because 
+code is indented by [[\codemargin]].\stylehook
+<<axiom.sty>>=
+\codemargin=10pt
+\advance\codehsize by \codemargin       % make room for indentation of code
+\advance\nwdefspace by \codemargin	% and fix adjustment for def/use
+\def\setcodemargin#1{%
+  \advance\codehsize by -\codemargin       % make room for indentation of code
+  \advance\nwdefspace by -\codemargin	% and fix adjustment for def/use
+  \codemargin=#1
+  \advance\codehsize by \codemargin       % make room for indentation of code
+  \advance\nwdefspace by \codemargin	% and fix adjustment for
+					% def/use
+}
+@
+[[\noweboptions{shift}]] is used to shift the whole page left to make room for
+the wide code lines.
+It may be emitted by {\tt noweave -shift}, or it might be given by a user.
+<<axiom.sty>>=
+\def\nwopt@shift{%
+  \dimen@=-0.8in
+  \if@twoside                 % Values for two-sided printing:
+     \advance\evensidemargin by \dimen@
+  \else                       % Values for one-sided printing:
+     \advance\evensidemargin by \dimen@
+     \advance\oddsidemargin by \dimen@
+  \fi
+%  \advance \marginparwidth -\dimen@
+}
+\let\nwopt@noshift\@empty
+@ 
+
+\iffalse
+<<man page: [[\noweboptions]]>>=
+.TP
+.B shift
+Shift text to the left so that long code lines won't extend
+off the right-hand side of the page.
+@ \fi
+
+\subsection{Page-breaking strategy}\label{sec:pagebreaking}
+
+We want to insert penalties aiming for:
+\begin{enumerate}
+\item 
+No page breaks in the middle of a code chunk unless necessary to avoid
+an overfull vbox;
+\item 
+Documentation immediately preceding a code chunk should appear on
+the same page as that code chunk unless doing so would violate rule 1.
+\end{enumerate}
+[[\filbreak]] is useful for this sort of thing (see {\em The \TeX
+  book\/}) and is used to encourage breaks at the right places between
+chunks.  Appropriate penalties are inserted elsewhere, between code
+lines in particular.
+
+\subsection{Environments for setting code}
+
+[[\nwbegincode]] and [[\nwendcode]] are used by {\tt noweave} to bracket
+code chunks.
+The [[webcode]] environment is intended for users who want to paste
+{\tt noweave} output into papers.
+
+The definition of [[\nwbegincode]] is based on the verbatim
+implementation in {\tt verbatim.sty}, which will, presumably be in the
+next version of \LaTeX\@.  One thing it does differently, apart from
+the catcode changes is setting [[\linewidth]]; this will avoid some
+overfull hboxen when the code lines are too long, but the lines won't
+be broken anyhow (even within chunk names because of the
+[[\maybehbox]] definition).
+<<axiom.sty>>=
+\def\nwbegincode#1{%
+  \begingroup
+  <<[[\nwbegincode]] separation and penalties>>
+  \@begincode }
+\def\nwendcode{\endtrivlist \endgroup \filbreak} % keeps code on 1 page
+
+\newenvironment{webcode}{%
+  \@begincode
+}{%
+  \endtrivlist}
+@ This is just common code between [[\nwbegincode]] and [[webcode]].
+<<axiom.sty>>=
+\def\@begincode{%
+  <<[[\trivlist]] clich\'e (\`a la {\Tt verbatim})>>
+  \linewidth\codehsize
+  <<[[\obeylines]] setup>>
+  <<zap ligatures, fix spaces>>
+  \nowebsize \setupcode
+  \let\maybehbox\mbox }
+@ \iffalse
+<<man page: [[\noweboptions]]>>=
+.TP
+.B smallcode
+Set code in 
+.I LaTeX
+.B "\\\\small"
+font instead of 
+.B "\\\\normalsize."
+Similar options exist for all the 
+.I LaTeX
+size-changing commands.
+@ \fi
+@ [[\nowebsize]] governs the size at which code is set; users who want
+to minimize code can [[\let\nowebsize=\small]].  
+Slitex users should try
+\begin{quote}
+[[\def\nowebsize{\normalsize\baselineskip=20pt \parskip=5pt }]]
+\end{quote}
+to avoid code lines that are too far apart.
+[[\nwcodetopsep]] is
+the glue placed before code chunks.\stylehook
+<<axiom.sty>>=
+  \newskip\nwcodetopsep \nwcodetopsep = 3pt plus 1.2pt minus 1pt
+  \let\nowebsize=\normalsize
+  \def\nwopt@tinycode{\let\nowebsize=\tiny}
+  \def\nwopt@footnotesizecode{\let\nowebsize=\footnotesize}
+  \def\nwopt@scriptsizecode{\let\nowebsize=\scriptsize}
+  \def\nwopt@smallcode{\let\nowebsize=\small}
+  \def\nwopt@normalsizecode{\let\nowebsize=\normalsize}
+  \def\nwopt@largecode{\let\nowebsize=\large}
+  \def\nwopt@Largecode{\let\nowebsize=\Large}
+  \def\nwopt@LARGEcode{\let\nowebsize=\LARGE}
+  \def\nwopt@hugecode{\let\nowebsize=\huge}
+  \def\nwopt@Hugecode{\let\nowebsize=\Huge}
+@ Maybe the penalties ought to be parameters\dots
+<<[[\nwbegincode]] separation and penalties>>=
+  \topsep \nwcodetopsep
+  \@beginparpenalty \@highpenalty
+  \@endparpenalty -\@highpenalty
+@ 
+The [[\trivlist]] clich\'e isn't quite a clich\'e because we adjust
+[[\leftskip]] for indentation by [[\codemargin]] and adjust
+[[\rightskip]] to allow lines up to [[\codehsize]] long without
+overfull boxen
+($\mbox{[[\codehsize]]}=\mbox{[[\hsize]]}+\mbox{[[\rightskip]]}$).
+Note that [[\hsize]] isn't altered.
+<<[[\trivlist]] clich\'e (\`a la {\Tt verbatim})>>=
+  \trivlist \item[]%
+  \leftskip\@totalleftmargin \advance\leftskip\codemargin
+  \rightskip\hsize \advance\rightskip -\codehsize
+  \parskip\z@ \parindent\z@ \parfillskip\@flushglue
+@ The penalty inserted between verbatim lines would normally be
+[[\interlinepenalty]], but we want to prohibit breaks there.
+@
+Note the bug lurking somewhere in this code, as reported by Steven Ooms:
+\begin{quote}
+I have some lay-out
+problems in the documentation chunks.  When using the (La)TeX commands
+[[\hline]] or [[\vtop]] the right margin is always extended far beyond the page
+margin after the first code chunk has been typeset.  I'm still looking for
+the exact cause of it, but to me it seems that LaTeX supposes for those
+commands that the line width for the documentation chunk is as large as that
+for code chunks, which isn't true in reality.
+\end{quote}
+@
+<<[[\obeylines]] setup>>=
+  \@@par
+  \def\par{\leavevmode\null \@@par \penalty\nwcodepenalty}%
+  \obeylines
+@ [[\nwcodepenalty]] is the penalty for breaking between lines in a
+code chunk.  If you set it to 10000, code will never be broken across
+pages.\stylehook{}  I guess this should be settable in [[\noweboptions]].
+<<axiom.sty>>=
+\newcount\nwcodepenalty  \nwcodepenalty=\@highpenalty
+@ 
+The cursing chunk accounts for the addition of a mess of characters
+to those reset by [[\@noligs]] in \LaTeX2e.
+<<zap ligatures, fix spaces>>=
+  \@noligs <<make all those damn active characters ``other''>>
+  \setupcode \frenchspacing \@vobeyspaces
+@
+We can't make [[`]] ``other,'' because then we'll get ligatures.
+(Why Don put these ligatures in the [[\tt]] font I wish I knew.)
+But we'll step on all the others.
+<<make all those damn active characters ``other''>>=
+  \ifx\verbatim@nolig@list\undefined\else
+    \let\do=\nw@makeother \verbatim@nolig@list \do@noligs\`
+  \fi
+<<axiom.sty>>=
+\def\nw@makeother#1{\catcode`#1=12 }
+@
+{\tt noweave} uses [[\nwbegindocs{nnn}]] and [[\nwenddocs]] to bracket
+documentation chunks.
+If a documentation chunk does not continue the current paragraph, 
+{\tt noweave} inserts [[\nwdocspar]], which uses
+[[\filbreak]] in an attempt to keep the documentation chunk on the
+same page as the code chunk that follows it.  (The code chunk will
+have another [[\filbreak]] after it---see [[\nwbegincode]].)
+[[\nwbegindocs]] doesn't start a
+new paragraph if the previous chunk didn't end one, i.e.\ didn't enter
+vmode; if it does start a new one, it's only indented by the use of
+[[\nwdocspar]].
+<<axiom.sty>>=
+\def\nwbegindocs#1{\ifvmode\noindent\fi}
+\let\nwenddocs=\relax
+\let\nwdocspar=\filbreak
+@ 
+The page-breaking strategy implies ragged bottom pages, so we should
+turn it on in general (this is relevant for the {\tt report} style):
+<<axiom.sty>>=
+\raggedbottom
+<<nwmac.tex>>=
+\def\nwdocspar{\par\semifilbreak}
+@
+
+{\tt noweave} doesn't bracket quoted code with [[\code]] and [[\edoc]] any more.
+It probably should do something nifty, just to make {\TeX} hackers happy, but it doesn't.
+<<axiom.sty>>=
+\def\code{\leavevmode\begingroup\setupcode\@vobeyspaces\obeylines}
+\let\edoc=\endgroup
+@
+
+\subsection{The {\tt noweb} page style}
+
+Headers contain file name, date, and page number.
+{\tt noweave} emits [[\nwfilename{]]{\em name}[[}]] for each new file.
+In the {\tt noweb} page style, new files cause page breaks;
+otherwise they are ignored.
+<<axiom.sty>>=
+\newdimen\@original@textwidth
+\def\ps@noweb{%
+  \@original@textwidth=\textwidth
+  \let\@mkboth\@gobbletwo
+  \def\@oddfoot{}\def\@evenfoot{}%       No feet.
+  \if@twoside         % If two-sided printing.
+    \def\@evenhead{\hbox to \@original@textwidth{%
+           \Rm \thepage\qquad{\Tt\leftmark}\hfil\today}}%        Left heading.
+    \def\@oddhead{\hbox to \@original@textwidth{%
+           \Rm \today\hfil{\Tt\leftmark}\qquad\thepage}}% Right heading.
+  \else               % If one-sided printing.
+    \def\@oddhead{\hbox to \@original@textwidth{%
+           \Rm \today\hfil{\Tt\leftmark}\qquad\thepage}}% Right heading.
+    \let\@evenhead\@oddhead
+  \fi
+  \let\chaptermark\@gobble
+  \let\sectionmark\@gobble
+  \let\subsectionmark\@gobble
+  \let\subsubsectionmark\@gobble
+  \let\paragraphmark\@gobble
+  \let\subparagraphmark\@gobble
+  \def\nwfilename{\begingroup\let\do\@makeother\dospecials
+                \catcode`\{=1 \catcode`\}=2 \nw@filename}
+  \def\nw@filename##1{\endgroup\markboth{##1}{##1}\let\nw@filename=\nw@laterfilename}%
+}
+\def\nw@laterfilename#1{\endgroup\clearpage \markboth{#1}{#1}}
+\let\nwfilename=\@gobble
+@
+
+\subsection{Chunk cross-reference}
+
+[[\nwalsodefined]], [[\nwused]], and [[\nwnotused]] are emitted by the {\tt
+noweb} cross-referencers. (What arguments?)
+If unused chunks are output chunks, a filter can slip in
+[[\let\nwnotused\nwoutput]].
+The style uses [[\nwcodecomment]] for all annotations that follow code
+chunks.
+Fiddling with it can change the appearance of the output.
+Note that [[\nwcodecomment]] is used after [[\nwbegincode]], with
+[[\obeylines]] in efect.  Since linebreaking can occur here, we need
+to change the [[\interlinepenalty]].
+A little vertical space ([[\nwcodecommentsep]]\stylehook) appears before the first
+comment.
+
+We firkled with [[\rightskip]] in [[\nwbegincode]] above; now we want to
+reset it so that paragraphs are the normal width ([[\textwidth]],
+possibly less [[\codemargin]]) and set ragged right.  This is done as
+usuall by making [[\rightskip]] naturally zero but stretchable.
+<<axiom.sty>>=
+\def\nwcodecomment#1{\@@par\penalty\nwcodepenalty
+    <<add [[\nwcodecommentsep]] if this is the first [[\nwcodecomment]]>>%
+    \hspace{-\codemargin}{%
+        \rightskip=0pt plus1in
+        \interlinepenalty\nwcodepenalty
+        \let\\\relax\footnotesize\Rm #1\@@par\penalty\nwcodepenalty}}
+@ 
+This stuff is used at the end of a chunk.
+<<axiom.sty>>=
+\def\@nwalsodefined#1{\nwcodecomment{\@nwlangdepdef\ \nwpageprep\ \@pagesl{#1}.}}
+\def\@nwused#1{\nwcodecomment{\@nwlangdepcud\ \nwpageprep\ \@pagesl{#1}.}}
+\def\@nwnotused#1{\nwcodecomment{\@nwlangdeprtc.}}
+\def\nwoutput#1{\nwcodecomment{\@nwlangdepcwf\ {\Tt \@stripstar#1*\stripped}.}}
+\def\@stripstar#1*#2\stripped{#1}
+<<add [[\nwcodecommentsep]] if this is the first [[\nwcodecomment]]>>=
+\if@firstnwcodecomment
+  \vskip\nwcodecommentsep\penalty\nwcodepenalty\@firstnwcodecommentfalse
+\fi
+@
+This stuff on the definition line.
+Note the hooks\stylehook{} for pointer styles.
+<<axiom.sty>>=
+\providecommand{\nwprevdefptr}[1]{%
+  \mbox{$\mathord{\triangleleft}\,\mathord{\mbox{\subpageref{#1}}}$}}
+\providecommand{\nwnextdefptr}[1]{%
+  \mbox{$\mathord{\mbox{\subpageref{#1}}}\,\mathord{\triangleright}$}}
+
+\providecommand{\@nwprevnextdefs}[2]{%
+  {\nwtagstyle
+  \ifx\relax#1\else ~~\nwprevdefptr{#1}\fi
+  \ifx\relax#2\else ~~\nwnextdefptr{#2}\fi}}
+\providecommand{\@nwusesondefline}[1]{{\nwtagstyle~~(\@pagenumsl{#1})}}
+\providecommand{\@nwstartdeflinemarkup}{\nobreak\hskip 1.5em plus 1fill\nobreak}
+\providecommand{\@nwenddeflinemarkup}{\nobreak\hskip \nwdefspace minus\nwdefspace\nobreak}
+@
+And here are the options we use to choose one, the other, or neither.
+<<axiom.sty>>=
+\def\nwopt@longxref{%
+  \let\nwalsodefined\@nwalsodefined
+  \let\nwused\@nwused
+  \let\nwnotused\@nwnotused
+  \let\nwprevnextdefs\@gobbletwo
+  \let\nwusesondefline\@gobble
+  \let\nwstartdeflinemarkup\relax
+  \let\nwenddeflinemarkup\relax
+}
+\def\nwopt@shortxref{%
+  \let\nwalsodefined\@gobble
+  \let\nwused\@gobble
+  \let\nwnotused\@gobble
+  \let\nwprevnextdefs\@nwprevnextdefs
+  \let\nwusesondefline\@nwusesondefline
+  \let\nwstartdeflinemarkup\@nwstartdeflinemarkup
+  \let\nwenddeflinemarkup\@nwenddeflinemarkup
+}
+\def\nwopt@noxref{%
+  \let\nwalsodefined\@gobble
+  \let\nwused\@gobble
+  \let\nwnotused\@gobble
+  \let\nwprevnextdefs\@gobbletwo
+  \let\nwusesondefline\@gobble
+  \let\nwstartdeflinemarkup\relax
+  \let\nwenddeflinemarkup\relax
+}
+\nwopt@shortxref % to hell with backward compatibility!
+@ \iffalse
+<<man page: [[\noweboptions]]>>=
+.TP
+.B longxref, shortxref, noxref
+Choose a style for chunk cross-reference.
+Long style uses  small paragraphs after each chunk, as in Knuth.
+Short style uses symbols on the definition line, as in Hanson.
+.B noxref
+provides no chunk cross-reference. 
+Defaults to 
+.B shortxref.
+@ \fi
+<<axiom.sty>>=
+\newskip\nwcodecommentsep \nwcodecommentsep=3pt plus 1pt minus 1pt
+\newif\if@firstnwcodecomment\@firstnwcodecommenttrue
+@
+
+\subsection{Page ranges}
+
+The goal is to combine sub-page numbers in a way that makes sense.
+Multiple sub-pages of one page become that page, and individual
+pages are combined into ranges.
+(A range may be only one page.)
+<<axiom.sty>>=
+\newcount\@nwlopage\newcount\@nwhipage  % range lo..hi-1
+\newcount\@nwlosub              % subpage of lo
+\newcount\@nwhisub              % subpage of hi
+\def\@nwfirstpage#1#2#3{% subpage page xref-tag
+  \@nwlopage=#2 \@nwlosub=#1
+  \def\@nwloxreftag{#3}%
+  \advance\@nwpagecount by \@ne
+  <<$\mbox{[[\@nwhipage]]} := \mbox{[[\@nwlopage]]}+1$>>}
+\def\@nwnextpage#1#2#3{% subpage page xref-tag
+  \ifnum\@nwhipage=#2 
+    \advance\@nwhipage by \@ne 
+    \advance\@nwpagecount by \@ne
+    \@nwhisub=#1 
+    \def\@nwhixreftag{#3}\else
+  \ifnum#2<\@nwlopage <<new range starting with [[#2]]>>\else
+  \ifnum#2>\@nwhipage <<new range starting with [[#2]]>>\else
+    \@nwlosub=0 \@nwhisub=0
+  \fi\fi\fi
+  }
+<<new range starting with [[#2]]>>=
+<<add range to range list>>\@nwfirstpage{#1}{#2}{#3}
+<<$\mbox{[[\@nwhipage]]} := \mbox{[[\@nwlopage]]}+1$>>=
+\@nwhipage=\@nwlopage\advance\@nwhipage by \@ne 
+<<add range to range list>>=
+<<set [[\@tempa]] to page range(s), marked with [[\\]]>>%
+\edef\@tempa{\noexpand\nwix@cons\noexpand\nw@pages{\@tempa}}\@tempa
+<<set [[\@tempa]] to page range(s), marked with [[\\]]>>=
+\advance\@nwhipage by \m@ne
+\ifnum\@nwhipage=\@nwlopage
+     \edef\@tempa{\noexpand\noexpand\noexpand\\%
+                       {{\nwthepagenum{\number\@nwlosub}{\number\@nwlopage}}%
+                        {\@nwloxreftag}}}%
+\else
+  \count@=\@nwhipage \advance\count@ by \m@ne
+  \ifnum\count@=\@nwlopage % consecutive pages
+      \edef\@tempa{\noexpand\noexpand\noexpand\\%
+                       {{\nwthepagenum{\number\@nwlosub}{\number\@nwlopage}}%
+                        {\@nwloxreftag}}%
+                    \noexpand\noexpand\noexpand\\%
+                       {{\nwthepagenum{\number\@nwhisub}{\number\@nwhipage}}
+                        {\@nwhixreftag}}}%
+  \else <<use rules from Chicago style manual>>%
+  \fi
+\fi
+<<use rules from Chicago style manual>>=
+\ifnum\@nwlopage<110 <<normal range>>\else
+  \count@=\@nwlopage \divide\count@ by 100 \multiply\count@ by 100
+  \ifnum\count@=\@nwlopage <<normal range>>\else
+    \count@=\@nwlopage \divide\count@ by 100
+    \@nwpagetemp=\@nwhipage \divide\@nwpagetemp by 100
+    \ifnum\count@=\@nwpagetemp %  lo--least 2 digits of hi
+      \multiply\@nwpagetemp by 100
+      \advance \@nwhipage by -\@nwpagetemp
+      <<normal range>>%
+    \else <<normal range>>%
+    \fi
+  \fi
+\fi
+<<normal range>>=  
+\edef\@tempa{\noexpand\noexpand\noexpand\\{{\number\@nwlopage--\number\@nwhipage}{}}}
+<<axiom.sty>>=
+\newcount\@nwpagetemp
+@
+The sequence [[\@pagesl]] makes a range of pages from a list of labels.
+[[\subpages]] works from a list of [[{{subpage}{page}}]].
+<<axiom.sty>>=
+\newcount\@nwpagecount
+\def\@nwfirstpagel#1{% label
+  \@ifundefined{r@#1}{<<warn of undefined reference to [[#1]] and add page ??>>}{%
+    \edef\@tempa{\noexpand\@nwfirstpage\subpagepair{#1}{#1}}\@tempa}}
+\def\@nwnextpagel#1{% label
+  \@ifundefined{r@#1}{<<warn of undefined reference to [[#1]] and add page ??>>}{%
+    \edef\@tempa{\noexpand\@nwnextpage\subpagepair{#1}{#1}}\@tempa}}
+<<axiom.sty>>=
+\def\@pagesl#1{%  list of labels
+  \gdef\nw@pages{}\@nwpagecount=0
+  \def\\##1{\@nwfirstpagel{##1}\let\\=\@nwnextpagel}#1%
+  <<add range to range list>>\def\\##1{\@nwhyperpagenum##1}%
+  \ifnum\@nwpagecount=1 \nwpageword \else \nwpagesword\fi~\commafy{\nw@pages}}
+\def\@nwhyperpagenum#1#2{\nwhyperreference{#2}{#1}}
+
+\def\@pagenumsl#1{%  list of labels -- doesn't include word `pages', commas, or `and'
+  \gdef\nw@pages{}\@nwpagecount=0
+  \def\\##1{\@nwfirstpagel{##1}\let\\=\@nwnextpagel}#1%
+  <<add range to range list>>%
+  \def\\##1{\@nwhyperpagenum##1\let\\=\@nwpagenumslrest}\nw@pages}
+\def\@nwpagenumslrest#1{~\@nwhyperpagenum#1}
+<<axiom.sty>>=
+\def\subpages#1{% list of {{subpage}{page}}
+  \gdef\nw@pages{}\@nwpagecount=0
+  \def\\##1{\edef\@tempa{\noexpand\@nwfirstpage##1{}}\@tempa
+            \def\\####1{\edef\@tempa{\noexpand\@nwnextpage####1}\@tempa}}#1%
+  <<add range to range list>>\def\\##1{\@firstoftwo##1}%
+  \ifnum\@nwpagecount=1 \nwpageword \else \nwpagesword\fi~\commafy{\nw@pages}}
+\def\@nwaddrange{<<add range to range list>>}
+@
+[[\nwpageword]], [[\nwpagesword]], and [[\nwpageprep]] let you change
+the wording of the cross-reference  information.
+<<axiom.sty>>=
+\def\nwpageword{\@nwlangdepchk}  % chunk, was page
+\def\nwpagesword{\@nwlangdepchks}  % chunk, was page
+\def\nwpageprep{\@nwlangdepin}     % in, was on
+<<warn of undefined reference to [[#1]] and add page ??>>=
+<<warn of undefined reference to [[#1]]>>%
+\nwix@cons\nw@pages{\\{\bf ??}}
+@
+
+\subsection{Sub-page references}
+
+This is the wonderful code that Dave Love provided to make page
+references like 7a, 7b, and so on.
+
+This code
+provides a mechanism for defining `page
+sub-references' using [[\sublabel{foo}]] referenced with
+[[\subpageref{foo}]].  Sub-references will be numbered like these real
+examples: \subpageref{ref:foo}, \subpageref{ref:bar},
+\subpageref{ref:baz}\sublabel{ref:foo}\sublabel{ref:bar}\sublabel{ref:baz}
+etc.\ unless there is only one on the page, in which case the letter
+will be dropped like this: \subpageref{ref:fred}.
+
+To be able to use [[\subpageref]] we must define the label with
+[[\sublabel]], used like label.  (Using
+[[\ref]] with a label defined by [[\sublabel]] will
+produce the sub-reference number, by the way, and [[\pageref]]
+works as expected.)  Note that
+[[\subpageref]] is robust and [[\ref]] and [[\pageref]] are redefined to be
+robust also, as they will be in future \LaTeX{} releases.
+Incidentally, these expand to the relevant text plus [[\null]]---you
+might want to strip this off, e.g.\ for sorting lists.
+
+
+There are various ways we could attack this task (which is made
+non-trivial by the well-known asynchrony of (La)\TeX's output
+routine), but
+they all must depend on hacks in the [[.aux]] file or a similar one.
+Joachim Schrod's [[fnpag.sty]] does the same sort of thing differently
+to this \LaTeX-specific approach.  See [[latex.tex]] for enlightenment
+on the cross-referencing mechanism and the \LaTeX{} internals used
+below.  [DL: The internals change in \LaTeX2e compared with
+\LaTeX~2.09.  The code here still works, though.]
+@
+The new-style {\LaTeX} page-reference macros all work the same way: 
+if the thing is undefined, barf.  Otherwise, do the specified thing.
+We need to handle the fact that the expansion of the label may be two
+items or five items, depending on whether hypertext is used.
+Since we're only ever interested in the first two items, we use a
+hack---the ``do the specified thing'' must be defined as
+\mbox{[[\def\dome#1#2#3\\{...}]]} where [[...]] uses only the first two parameters.
+<<axiom.sty>>=
+\providecommand\nw@genericref[2]{% what to do, name of ref
+  \expandafter\nw@g@nericref\csname r@#2\endcsname#1{#2}}
+\providecommand\nw@g@nericref[3]{% control sequence, what to do, name
+  \ifx#1\relax
+    \ref{#3}% trigger the standard `undefined ref' mechanisms
+  \else
+    \expandafter#2#1.\\%
+  \fi}
+@ Much of what we want can be done by pulling out the first, second,
+or first and second elements of a ref.
+<<axiom.sty>>=
+\def\nw@selectone#1#2#3\\{#1}
+\def\nw@selecttwo#1#2#3\\{#2}
+\def\nw@selectonetwo#1#2#3\\{{#1}{#2}}
+@
+The [[\subpageref]] macro first does a normal [[\pageref]].  If the
+reference is actually defined, it then goes on to check whether the
+control sequence [[2on]]\LA{}{page referenced}\RA{} is defined and sets the
+[[\ref]] value to get [[a]] etc.\ if so.  The magic, of course, is in
+defining the [[2on]] bit appropriately.
+[[\subpageref]] also tries to include the right hyperstuff for xhdvi.
+<<axiom.sty>>=
+\providecommand{\subpageref}[1]{%
+  \nwhyperreference{#1}{\nw@genericref\@subpageref{#1}}}
+\def\@subpageref#1#2#3\\{%
+  \@ifundefined{2on#2}{#2}{\nwthepagenum{#1}{#2}}}
+@ 
+[[\subpagepair]] produces a [[{subpage}{page}]] pair.
+<<axiom.sty>>=
+\providecommand{\subpagepair}[1]{%  % produces {subpage}{page}
+  \@ifundefined{r@#1}%
+    {{0}{0}}%
+    {\nw@genericref\@subpagepair{#1}}}
+\def\@subpagepair#1#2#3\\{%
+  \@ifundefined{2on#2}{{0}{#2}}{{#1}{#2}}}
+@
+[[\sublabel]] is like the [[\label]] command, except that it writes
+[[\newsublabel]] onto the [[.aux]] file rather than [[\newlabel]].
+For hyperreferencing, all labels must be hypertext 
+anchors, for which we use [[\nwblindhyperanchor]].
+<<axiom.sty>>=
+\providecommand{\sublabel}[1]{%
+  \@bsphack
+  \nwblindhyperanchor{#1}%
+  \if@filesw {\let\thepage\relax
+   \def\protect{\noexpand\noexpand\noexpand}%
+   \edef\@tempa{\write\@auxout{\string
+      \newsublabel{#1}{{}{\thepage}}}}%
+   \expandafter}\@tempa
+   \if@nobreak \ifvmode\nobreak\fi\fi\fi\@esphack}
+@ 
+[[\nosublabel]] creates a label with a sub-page part of~0.
+<<axiom.sty>>=
+\providecommand{\nosublabel}[1]{%
+  \@bsphack\if@filesw {\let\thepage\relax
+   \def\protect{\noexpand\noexpand\noexpand}%
+   \edef\@tempa{\write\@auxout{\string
+      \newlabel{#1}{{0}{\thepage}}}}%
+   \expandafter}\@tempa
+   \if@nobreak \ifvmode\nobreak\fi\fi\fi\@esphack}
+@
+[[\newsublabel]] is the macro that does the important work.  It is called with the
+same sort of arguments as [[\newlabel]]: the first argument is the
+label name and the second is  [[{<<ref value>>}{<<page number>>}]].
+(Note that the only definition here which needs to be
+global is the one which is, and that [[\global]] is redefined by
+[[\enddocument]], which will bite you if you use it\dots)
+<<axiom.sty>>=
+<<definition of [[\newsublabel]]>>
+@
+Before we create a [[\newsublabel]] for the first time, we set the
+proper trailers.
+<<definition of [[\newsublabel]]>>=
+\providecommand\newsublabel{%
+  \nw@settrailers
+  \global\let\newsublabel\@newsublabel
+  \@newsublabel}
+@ First we extract the page number into [[\this@page]].
+<<definition of [[\newsublabel]]>>=
+\providecommand{\@newsublabel}[2]{%
+  \edef\this@page{\@cdr#2\@nil}%
+@
+Then we see whether it's changed from the value of [[\last@page]]
+which was stashed away by the last [[\newsublabel]] (or is [[\relax]] if
+this is the first one).  If the page has changed, we reset the
+counter [[\sub@page]] telling us how many sub-labels there have been
+on the page.
+<<definition of [[\newsublabel]]>>=
+  \ifx\this@page\last@page\else
+    \sub@page=\z@
+  \fi
+  \edef\last@page{\this@page}
+  \advance\sub@page by \@ne
+@
+If we've had at least two on the page, we define the 
+[[2on]]\LA{}{page no.}\RA{} macro to indicate the fact.
+<<definition of [[\newsublabel]]>>=
+  \ifnum\sub@page=\tw@
+    \global\@namedef{2on\this@page}{}%
+  \fi
+@
+\nextchunklabel{cl1}\nextchunklabel{cl2}
+Then we write a normal [[\newlabel]] with the sub-reference as the
+normal reference value in the second argument.
+Unfortunately, if we want hypertext support, the second argument of
+[[\newlabel]] gets complicated.
+It is either
+\begin{itemize}
+\item
+[[{<<ref value>>}{<<page number>>}]], when normal {\LaTeX} is
+running, or
+\item
+[[{<<ref value>>}{<<page number>>}{<<text>>}}{<<hyper category>>}{<<URL>>}]],
+when the \texttt{hyperref} package is running.
+(We actually detect this by looking for the \texttt{nameref} package,
+because that's the one that changes the use of labels.)
+\end{itemize}
+We unify these two things by producing
+[[{<<ref value>>}{<<page number>>}\nw@labeltrailers]]
+
+We may have pending labels in support of [[\nextchunklabel]], as defined in
+chunk~\subpageref{chunklabel}. 
+Because we want to define all of the ``pending sublabels'' in exactly
+the same way, we do something a bit odd---we make the current label a
+pending label as well.
+<<definition of [[\newsublabel]]>>=
+  \pendingsublabel{#1}%
+  \edef\@tempa##1{\noexpand\newlabel{##1}%
+    {{\number\sub@page}{\this@page}\nw@labeltrailers}}%
+  \pending@sublabels
+  \def\pending@sublabels{}}
+@ 
+We can't use [[\@ifpackageloaded]] to see if \texttt{nameref} is
+loaded, because that is restricted to the preamble, and
+[[\newsublabel]] goes into the [[.aux]] file, which is executed after
+the whole document is processed.
+We therefore test for [[\@secondoffive]].
+This is lame, but what else can we do?
+<<axiom.sty>>=
+\providecommand\nw@settrailers{% -- won't work on first run
+  \@ifpackageloaded{nameref}%
+     {\gdef\nw@labeltrailers{{}{}{}}}%
+     {\gdef\nw@labeltrailers{}}}
+\renewcommand\nw@settrailers{% 
+  \@ifundefined{@secondoffive}%
+     {\gdef\nw@labeltrailers{}}%
+     {\gdef\nw@labeltrailers{{}{}{}}}}
+@ 
+Now we keep track of those pending guys.\nextchunklabel{chunklabel}
+The goal here is to save them up until they're all equivalent to the
+label on the next chunk.
+We have to control expansion so chunks like \subpageref{cl1}
+(\subpageref{cl2}) can be labelled twice.
+<<axiom.sty>>=
+\providecommand{\nextchunklabel}[1]{%
+  \nwblindhyperanchor{#1}%   % looks slightly bogus --- nr
+  \@bsphack\if@filesw {\let\thepage\relax
+      \edef\@tempa{\write\@auxout{\string\pendingsublabel{#1}}}%
+      \expandafter}\@tempa
+   \if@nobreak \ifvmode\nobreak\fi\fi\fi\@esphack}
+\providecommand\pendingsublabel[1]{%
+  \def\@tempa{\noexpand\@tempa}%
+  \edef\pending@sublabels{\noexpand\@tempa{#1}\pending@sublabels}}
+\def\pending@sublabels{}
+<<man page: noweb style control sequences>>=
+.PP \" .TP will not work with the backslashes on the next line. Period.
+\fB\\nextchunklabel{l}\fP
+.RS
+Associates label \fBl\fP
+with the sub-page reference of the next code chunk.
+Can be used in for concise chunk cross-reference with, e.g.,
+\fBchunk~\\subpageref{l}\fP.
+.RE
+@
+We need to define these.
+<<axiom.sty>>=
+\def\last@page{\relax}
+\newcount\sub@page
+@
+We no longer use Rainer's new expandable definitions of [[\ref]] and
+[[\pageref]] to minimise the risk of nasty surprises; enough time has
+elapsed that this should no longer be necessary.
+<<old noweb.sty>>=
+% RmS 92/08/14: made \ref and \pageref robust
+\def\ref#1{\@ifundefined{r@#1}{{\bf ??}<<warn of undefined reference to [[#1]]>>}%
+    {\expandafter\expandafter\expandafter
+     \@car\csname r@#1\endcsname\@nil\null}}
+\def\pageref#1{\@ifundefined{r@#1}{{\bf ??}<<warn of undefined reference to [[#1]]>>}%
+     {\expandafter\expandafter\expandafter
+      \@cdr\csname r@#1\endcsname\@nil\null}}
+\def\@refpair#1{\@ifundefined{r@#1}{{0}{0}<<warn of undefined reference to [[#1]]>>}%
+    {\@nameuse{r@#1}}}
+<<warn of undefined reference to [[#1]]>>=
+\@warning{Reference `#1' on page \thepage \space undefined}
+@
+
+Here a a couple of hooks for formatting sub-page numbers,
+which can be alphabetic, numeric, or omitted.\stylehook
+<<axiom.sty>>=
+\def\@alphasubpagenum#1#2{#2\ifnum#1=0 \else\@alph{#1}\fi}
+\def\@nosubpagenum#1#2{#2}
+\def\@numsubpagenum#1#2{#2\ifnum#1=0 \else.\@arabic{#1}\fi}
+\def\nwopt@nosubpage{\let\nwthepagenum=\@nosubpagenum\nwopt@nomargintag}
+\def\nwopt@numsubpage{\let\nwthepagenum=\@numsubpagenum}
+\def\nwopt@alphasubpage{\let\nwthepagenum=\@alphasubpagenum}
+\nwopt@alphasubpage
+@ 
+In rare cases, there may be more than 26 chunks on a page.
+In such a case, we need a sub-page numbering scheme that can go beyond
+``a to z.''
+The scheme I have chosen is ``a to z, then aa to zz, then aaa to zzz,
+etc.''
+The conversion requires a bit of thought because it is \emph{not} an
+ordinary conversion of integer to string as we usually think of such
+things.
+The problem is that the meaning of the letters depends on the
+position; the letter~a acts like a zero in some positions or a one in
+others.
+
+The solution I have implemented uses a variable [[bound]] which is
+always equal to $26^k$ for some~$k$.
+If we write the recurrence $B_k = B_{k-1} + 26^k$, with $B_0 = 0$, we
+then use a string of~$k$ letters to represent numbers between
+$B_{k-1}$~and~$B_k$.
+Within that string, a's are 0's, and so on up to z's which are 25's,
+and we use standard integer-conversion methods to encode $n-B_{k-1}$.
+
+The following Icon implementation may be more perspicuous than the
+{\TeX} code actually used.
+Here the variable [[bound]] is $26^k$, with $k=1$ initially, and
+[[n]]~is $n-B_{k-1}$.
+The first loop finds the right~$k$, and the second does the usual
+string conversion.
+<<Icon code for subpage numbering>>=
+procedure alphastring(n)
+  bound := 26
+
+  while n >= bound do {
+    # invariant: bound = 26^(k+1) & n is initial n - B_k
+    n -:= bound
+    bound *:= 26
+  }
+  
+  while bound > 1 do {
+    bound /:= 26
+    d := integer(n / bound)
+    n -:= d * bound
+    writes(&lcase[d+1])
+  }
+end
+@ 
+Here's {\TeX} code to achieve the same end.
+The entire macro body is enclosed in braces, so that it can be used
+with [[\loop]] without picking up the wrong [[\repeat]].
+<<axiom.sty>>=
+\newcount\@nwalph@n
+\let\@nwalph@d\@tempcnta
+\let\@nwalph@bound\@tempcntb
+\def\@nwlongalph#1{{%
+  \@nwalph@n=#1\advance\@nwalph@n by-1
+  \@nwalph@bound=26
+  \loop\ifnum\@nwalph@n<\@nwalph@bound\else
+     \advance\@nwalph@n by -\@nwalph@bound
+     \multiply\@nwalph@bound by 26
+  \repeat
+  \loop\ifnum\@nwalph@bound>1
+    \divide\@nwalph@bound by 26
+    \@nwalph@d=\@nwalph@n\divide\@nwalph@d by \@nwalph@bound
+    % d := d * bound ; n -:= d; d := d / bound --- saves a temporary
+    \multiply\@nwalph@d by \@nwalph@bound
+    \advance\@nwalph@n by -\@nwalph@d
+    \divide\@nwalph@d by \@nwalph@bound
+    \advance\@nwalph@d by 1 \@alph{\@nwalph@d}%
+  \repeat
+}}
+@ 
+\iffalse
+<<man page: [[\noweboptions]]>>=
+.TP
+.B alphasubpage, numsubpage, nosubpage
+Number chunks by the number of the page on which they appear,
+followed by an alphabetic (numeric, not used) ``sub-page'' indicator.
+Defaults to 
+.B alphasubpage.
+.B nosubpage
+implies
+.B nomargintag.
+@ \fi
+@
+
+\subsection{{\tt WEB}-like chunk numbering}
+
+Here's a righteous hack: we get the effect of WEB-like chunk numbers
+just by redefining [[\sublabel]] to use a counter instead of the current page number.
+Since the numbers are all distinct, no sub-page number is ever used.
+<<axiom.sty>>=
+\newcount\nw@chunkcount
+\nw@chunkcount=\@ne
+\providecommand{\weblabel}[1]{%
+  \@bsphack
+  \nwblindhyperanchor{#1}%
+  \if@filesw {\let\thepage\relax
+   \def\protect{\noexpand\noexpand\noexpand}%
+   \edef\@tempa{\write\@auxout{\string
+      \newsublabel{#1}{{}{\number\nw@chunkcount}}}}%
+   \expandafter}\@tempa
+   \global\advance\nw@chunkcount by \@ne
+   \if@nobreak \ifvmode\nobreak\fi\fi\fi\@esphack}
+\def\nwopt@webnumbering{%
+  \let\sublabel=\weblabel
+  \def\nwpageword{chunk}\def\nwpagesword{chunks}%
+  \def\nwpageprep{in}}
+@ 
+\iffalse
+<<man page: [[\noweboptions]]>>=
+.TP
+.B webnumbering
+Number chunks consecutively, in 
+.I WEB
+style, instead of using sub-page numbers.
+@ \fi
+@
+
+\subsection{Indexing (identifier cross-reference) support}
+
+\subsubsection{Tracking definitions and uses}
+All index definitions and uses are associated with 
+a label defined with [[\sublabel]] or [[\nosublabel]].
+Either the label is the [[\sublabel]] of the code chunk in which the definition or use
+appears, or it is a [[\nosublabel]] appearing in the middle of a
+documentation chunk.
+<<axiom.sty>>=
+% \nwindexdefn{printable name}{identifying label}{label of chunk}
+% \nwindexuse{printable name}{identifying label}{label of chunk}
+
+\def\nwindexdefn#1#2#3{\@auxix{\protect\nwixd}{#2}{#3}}
+\def\nwindexuse#1#2#3{\@auxix{\protect\nwixu}{#2}{#3}}
+
+\def\@auxix#1#2#3{% {marker}{id label}{subpage label}
+   \@bsphack\if@filesw {\let\nwixd\relax\let\nwixu\relax
+   \def\protect{\noexpand\noexpand\noexpand}%
+   \edef\@tempa{\write\@auxout{\string\nwixadd{#1}{#2}{#3}}}%
+   \expandafter}\@tempa
+   \if@nobreak \ifvmode\nobreak\fi\fi\fi\@esphack}
+<<axiom.sty>>=
+% \nwixadd{marker}{idlabel}{subpage label}
+\def\nwixadd#1#2#3{%
+  \@ifundefined{nwixl@#2}%
+    {\global\@namedef{nwixl@#2}{#1{#3}}}%
+    {\expandafter\nwix@cons\csname nwixl@#2\endcsname{#1{#3}}}}
+@
+\subsubsection{Subscripted identifiers}
+We use either explicit subscripts or hyperlinks to point identifiers
+to their definitions.
+<<axiom.sty>>=
+\def\@nwsubscriptident#1#2{\mbox{$\mbox{#1}_{\mathrm{\subpageref{#2}}}$}}
+\def\@nwnosubscriptident#1#2{#1}
+\def\@nwhyperident#1#2{\leavevmode\nwhyperreference{#2}{#1}}
+@ 
+We can use subscripts, hyperlinks, or nothing on all identifiers.
+<<axiom.sty>>=
+\def\nwopt@subscriptidents{%
+  \let\nwlinkedidentq\@nwsubscriptident
+  \let\nwlinkedidentc\@nwsubscriptident
+}
+\def\nwopt@nosubscriptidents{%
+  \let\nwlinkedidentq\@nwnosubscriptident
+  \let\nwlinkedidentc\@nwnosubscriptident
+}
+\def\nwopt@hyperidents{%
+  \let\nwlinkedidentq\@nwhyperident
+  \let\nwlinkedidentc\@nwhyperident
+}
+\def\nwopt@nohyperidents{%
+  \let\nwlinkedidentq\@nwnosubscriptident
+  \let\nwlinkedidentc\@nwnosubscriptident
+}
+@ 
+We can change only identifiers appearing in quoted code.
+<<axiom.sty>>=
+\def\nwopt@subscriptquotedidents{%
+  \let\nwlinkedidentq\@nwsubscriptident
+}
+\def\nwopt@nosubscriptquotedidents{%
+  \let\nwlinkedidentq\@nwnosubscriptident
+}
+\def\nwopt@hyperquotedidents{%
+  \let\nwlinkedidentq\@nwhyperident
+}
+\def\nwopt@nohyperquotedidents{%
+  \let\nwlinkedidentq\@nwnosubscriptident
+}
+@ 
+The default is to hyperlink everything.
+<<axiom.sty>>=
+\nwopt@hyperidents
+@ 
+\iffalse
+<<man page: [[\noweboptions]]>>=
+.TP
+.B subscriptidents, nosubscriptidents, hyperidents, nohyperidents
+Controls subscripting of identifiers in code, including quoted code.
+Selecting
+.B subscriptidents
+means an identifier appearing in a code chunk (or in quoted code
+within a documentation 
+chunk) will be subscripted with the chunk number of its definition.
+.B hyperidents
+means such identifiers will be hyperlinked to their definitions,
+provided of course that a hypertext package like
+.B hyperref
+is loaded.
+.B nosubscriptidents
+and 
+.B nohyperidents
+are equivalent, and they turn off such markings.
+The default is
+.B hyperidents.
+.TP
+.B subscriptquotedidents, nosubscriptquotedidents, hyperquotedidents, nohyperquotedidents
+Controls linking of identifiers as above, but applies only to uses of
+identifiers
+in quoted code.
+@ \fi
+@
+\subsubsection{Writing lists with commas and ``and''}
+You get one of
+\begin{itemize}
+\item ``$a$''
+\item ``$a$ and $b$''
+\item ``$a$, $\ldots$, $b$, and $c$''
+\end{itemize}
+Plus [[\\]] is applied to each element of the list.
+<<axiom.sty>>=
+\newcount\@commacount
+\def\commafy#1{%
+  {\nwix@listcount{#1}\@commacount=\nwix@counter
+   \let\@comma@each=\\%
+   \ifcase\@commacount\let\\=\@comma@each\or\let\\=\@comma@each\or
+     \def\\{\def\\{ \@nwlangdepand\ \@comma@each}\@comma@each}\else
+     \def\\{\def\\{, %
+                   \advance\@commacount by \m@ne
+                   \ifnum\@commacount=1 \@nwlangdepand~\fi\@comma@each}\@comma@each}\fi
+   #1}}
+@ 
+
+\subsubsection{New, improved index code}
+There are two kinds of lists.
+One kind is a generic list in which elements are preceded by [[\\]].
+If the elements are index elements, they are {\em[[{]]printable
+identifier[[}{]]label[[}]]} pairs.
+The other kind is a list of sub-page labels, in which each 
+element is preceded by either [[\nwixd]] or [[\nwixu]].
+<<axiom.sty>>=
+\def\nwix@cons#1#2{% {list}{\marker{element}}
+  {\toks0=\expandafter{#1}\def\@tempa{#2}\toks2=\expandafter{\@tempa}%
+   \xdef#1{\the\toks0 \the\toks2 }}}
+@ 
+The reference list for an identifier labelled {\em id}
+is always called [[\nwixl@]]{\em id}.
+Most applications will work with reference lists by applying [[\\]]
+either to the defs or to the uses.
+<<axiom.sty>>=
+\def\nwix@uses#1{% {label}
+  \def\nwixu{\\}\let\nwixd\@gobble\@nameuse{nwixl@#1}}
+\def\nwix@defs#1{% {label}
+  \def\nwixd{\\}\let\nwixu\@gobble\@nameuse{nwixl@#1}}
+@ 
+
+Some applications count uses to see whether there is any need to
+display information.
+<<axiom.sty>>=
+\newcount\nwix@counter
+\def\nwix@listcount#1{% {list with \\}
+  {\count@=0
+   \def\\##1{\advance\count@ by \@ne }%
+   #1\global\nwix@counter=\count@ }}
+\def\nwix@usecount#1{\nwix@listcount{\nwix@uses{#1}}}
+\def\nwix@defcount#1{\nwix@listcount{\nwix@defs{#1}}}
+@
+\subsubsection{Supporting a mini-index at the end of each chunk}
+When displaying identifiers used, show the identifier and its
+definitions.
+<<axiom.sty>>=
+\def\nwix@id@defs#1{% index pair
+  {{\Tt \@car#1\@nil}%
+  \def\\##1{~\subpageref{##1}}\nwix@defs{\@cdr#1\@nil}}}
+\def\nwidentuses#1{% list of index pairs
+  \nwcodecomment{\@nwlangdepuss\ \let\\=\nwix@id@defs\commafy{#1}.}}
+@ 
+The definitions section is a bit more complex, because it is omitted
+if none of the identifiers defined is ever used.
+<<axiom.sty>>=
+\def\nwix@totaluses#1{% list of index pairs
+  {\count@=0
+   \def\\##1{\nwix@usecount{\@cdr##1\@nil}\advance\count@ by\nwix@counter}%
+   #1\global\nwix@counter\count@ }}
+\def\nwix@id@uses#1#2{% {ident}{label}
+  \nwix@usecount{#2}\ifnum\nwix@counter>0
+    {\advance\leftskip by \codemargin
+     \nwcodecomment{{\Tt #1}, \@nwlangdepusd\ \nwpageprep\ \@pagesl{\nwix@uses{#2}}.}}%
+  \else
+    \ifnw@hideunuseddefs\else
+      {\advance\leftskip by \codemargin \nwcodecomment{{\Tt #1}, \@nwlangdepnvu.}}%
+    \fi
+  \fi}
+\def\nwidentdefs#1{% list of index pairs
+  \ifnw@hideunuseddefs\nwix@totaluses{#1}\else\nwix@listcount{#1}\fi
+  \ifnum\nwix@counter>0
+    \nwcodecomment{\@nwlangdepdfs:}%
+    {\def\\##1{\nwix@id@uses ##1}#1}%
+  \fi}
+<<axiom.sty>>=
+\newif\ifnw@hideunuseddefs\nw@hideunuseddefsfalse
+\def\nwopt@hideunuseddefs{\nw@hideunuseddefstrue}
+@ 
+\iffalse
+<<man page: [[\noweboptions]]>>=
+.TP
+.B hideunuseddefs
+Omit defined but unused identifiers from
+the local identifier cross-reference (Preston Briggs).
+@ \fi
+<<axiom.sty>>=
+\def\nwopt@noidentxref{%
+  \let\nwidentdefs\@gobble
+  \let\nwidentuses\@gobble}
+@ 
+\iffalse
+<<man page: [[\noweboptions]]>>=
+.TP
+.B noidentxref
+Omit the local identifier cross-reference which follows each code chunk.
+@ \fi
+
+\subsubsection{Support for chunk and identifier indices}
+The index in the back shows absolutely all the pages.
+<<axiom.sty>>=
+\def\nw@underlinedefs{% {list with \nwixd, \nwixu}
+  \let\\=\relax\def\nw@comma{, }
+  \def\nwixd##1{\\\underline{\subpageref{##1}}\let\\\nw@comma}%
+  \def\nwixu##1{\\\subpageref{##1}\let\\\nw@comma}}
+
+\def\nw@indexline#1#2{%
+   {\indent {\Tt #1}: \nw@underlinedefs\@nameuse{nwixl@#2}\par}}
+
+\newenvironment{thenowebindex}{\parindent=-10pt \parskip=\z@ 
+        \advance\leftskip by 10pt 
+        \advance\rightskip by 0pt plus1in\par\@afterindenttrue
+    \def\\##1{\nw@indexline##1}}{}
+@
+The information comes from the list [[nwisx@i]].
+<<axiom.sty>>=
+\def\nowebindex{%
+  \@ifundefined{nwixs@i}%
+     {\@warning{The \string\nowebindex\space is empty}}%
+     {\begin{thenowebindex}\@nameuse{nwixs@i}\end{thenowebindex}}}
+@
+Here's a more efficient version for the external case:
+<<axiom.sty>>=
+\def\nowebindex@external{%
+  {\let\nwixadds@c=\@gobble
+   \def\nwixadds@i##1{\nw@indexline##1}%
+   \def\nwixaddsx##1##2{\@nameuse{nwixadds@##1}{##2}}%
+   \begin{thenowebindex}\@input{\jobname.nwi}\end{thenowebindex}}}
+@ 
+That list ([[nwisx@i]]) is created by calls to [[\nwixlogsorted{i}]].
+<<axiom.sty>>=
+\def\nwixlogsorted#1#2{% list data
+   \@bsphack\if@filesw 
+     \toks0={#2}\immediate\write\@auxout{\string\nwixadds{#1}{\the\toks0}}
+   \if@nobreak \ifvmode\nobreak\fi\fi\fi\@esphack}
+@ 
+[[nwixs@c]] and [[nwixs@i]] are sorted lists of chunks and identifiers, respectively.
+<<axiom.sty>>=
+\def\nwixadds#1#2{%
+  \@ifundefined{nwixs@#1}%
+    {\global\@namedef{nwixs@#1}{\\{#2}}}%
+    {\expandafter\nwix@cons\csname nwixs@#1\endcsname{\\{#2}}}}
+\let\nwixaddsx=\@gobbletwo
+@
+If an external index is used, we need a [[.nwi]] file,
+[[\nwixadds]] is to be ignored, and we use [[\nwixaddsx]].
+<<axiom.sty>>=
+\def\nwopt@externalindex{%
+  \ifx\nwixadds\@gobbletwo % already called
+  \else
+    \let\nwixaddsx=\nwixadds \let\nwixadds=\@gobbletwo
+    \let\nowebindex=\nowebindex@external
+    \let\nowebchunks=\nowebchunks@external
+  \fi}
+@ 
+\iffalse
+<<man page: [[\noweboptions]]>>=
+.TP
+.B externalindex
+Use an index generated with 
+.I noindex(1)
+(q.v.).
+@ \fi
+@
+<<axiom.sty>>=
+\def\nowebchunks{%
+  \@ifundefined{nwixs@c}%
+     {\@warning{The are no \string\nowebchunks}}%
+     {\begin{thenowebchunks}\@nameuse{nwixs@c}\end{thenowebchunks}}}
+\def\nowebchunks@external{%
+  {\let\nwixadds@i=\@gobble
+   \def\nwixadds@c##1{\nw@onechunk##1}%
+   \def\nwixaddsx##1##2{\@nameuse{nwixadds@##1}{##2}}%
+   \begin{thenowebchunks}\@input{\jobname.nwi}\end{thenowebchunks}}}
+    \@namedef{r@nw@notdef}{{0}{(\@nwlangdepnvd)}}
+<<axiom.sty>>=
+\def\nw@chunkunderlinedefs{% {list of labels with \nwixd, \nwixu}
+  \let\\=\relax\def\nw@comma{, }
+  \def\nwixd##1{\\\underline{\subpageref{##1}}\let\\\nw@comma}%
+  \def\nwixu##1{\\\subpageref{##1}\let\\\nw@comma}}
+<<axiom.sty>>=
+\def\nw@onechunk#1#2#3{% {name}{label of first definition}{list with \nwixd, \nwixu}
+  \@ifundefined{r@#2}{}{%
+    \indent\LA #1~{\nwtagstyle\subpageref{#2}}\RA 
+    \if@nwlongchunks{~\nw@chunkunderlinedefs#3}\fi\par}}
+<<axiom.sty>>=
+\newenvironment{thenowebchunks}{\vskip3pt
+  \parskip=\z@\parindent=-10pt \advance\leftskip by 10pt
+  \advance\rightskip by 0pt plus10pt \@afterindenttrue
+  \def\\##1{\nw@onechunk##1}}{}
+<<axiom.sty>>=
+\newif\if@nwlongchunks
+\@nwlongchunksfalse
+\let\nwopt@longchunks\@nwlongchunkstrue
+@ \iffalse
+<<man page: [[\noweboptions]]>>=
+.TP
+.B longchunks
+When expanding 
+.B "\\\\nowebchunks,"
+show page numbers of definitions and uses of each chunk.
+@ \fi
+
+@
+
+\subsection{Support for hypertext}
+
+There are two sets of support for hypertext.
+ Balasubramanian Narasimhan wrote initial support for \texttt{hyper.sty}.
+<<axiom.sty>>=
+\providecommand\@nw@hyper@ref{\hyperreference} % naras
+\providecommand\@nw@hyper@anc{\blindhyperanchor} % naras
+@ Norman Ramsey wrote support for the \texttt{hyperrref} package (May
+ 1998).
+<<axiom.sty>>=
+\providecommand\@nw@hyperref@ref[2]{\hyperlink{noweb.#1}{#2}}  % nr
+\providecommand\@nw@hyperref@anc[1]{\hypertarget{noweb.#1}{\relax}}  % nr
+%%\renewcommand\@nw@hyperref@ref[2]{{#2}}  % nr
+%%\renewcommand\@nw@hyperref@anc[1]{}  % nr
+@ We define the independent macros [[\nwhyperreference]] and
+ [[\nwblindhyperanchor]],
+which test for the presence of one of these two packages, 
+redefine themselve accordingly, and re-invoke themselves.
+<<axiom.sty>>=
+\providecommand\nwhyperreference{%
+  \@ifundefined{hyperlink}
+    {\@ifundefined{hyperreference}
+       {\global\let\nwhyperreference\@gobble}
+       {\global\let\nwhyperreference\@nw@hyper@ref}}
+    {\global\let\nwhyperreference\@nw@hyperref@ref}%
+  \nwhyperreference
+}
+
+\providecommand\nwblindhyperanchor{%
+  \@ifundefined{hyperlink}
+    {\@ifundefined{hyperreference}
+       {\global\let\nwblindhyperanchor\@gobble}
+       {\global\let\nwblindhyperanchor\@nw@hyper@anc}}
+    {\global\let\nwblindhyperanchor\@nw@hyperref@anc}%
+  \nwblindhyperanchor
+}
+@ 
+
+\subsection{Support for hypertext translation to HTML}
+
+<<axiom.sty>>=
+\providecommand\nwanchorto{%
+  \begingroup\let\do\@makeother\dospecials
+     \catcode`\{=1 \catcode`\}=2 \nw@anchorto}
+\providecommand\nw@anchorto[1]{\endgroup\def\nw@next{#1}\nw@anchortofin}
+\providecommand\nw@anchortofin[1]{#1\footnote{See URL \texttt{\nw@next}.}}
+\let\nwanchorname\@gobble
+<<man page: noweb style control sequences>>=
+.PP
+.B "\\\\nwanchorto{URL}{anchor text}"
+.RS
+Creates a link to the given URL with the given anchor text.
+Implemented in 
+.I latex(1)
+using footnotes, but 
+.I sl2h(1)
+translates this to
+.B "<a href=URL>anchor text</a>"
+.RE
+.PP
+.B "\\\\nwanchorname{name}{anchor text}"
+.RS
+Creates an anchor point for a hyperlink.
+Implemented in 
+.I latex(1)
+using 
+.B "\\\\label",
+but
+.I sl2h(1)
+translates this to
+.B "<a name=name>anchor text</a>"
+.RE
+@
+This lets us hide stuff intended for use only when converting to HTML:
+<<axiom.sty>>=
+\newif\ifhtml
+\htmlfalse
+<<man page: noweb style control sequences>>=
+.PP
+.B "\\\\ifhtml ... \\\\fi"
+.RS
+Text between
+.B "\\\\ifhtml"
+and
+.B "\\\\fi"
+is ignored by 
+.I latex(1),
+but 
+.I sl2h(1)
+and the 
+.I l2h 
+noweb filter translate the text into HTML.
+.RE
+@ 
+
+\subsection{Support for Prettyprinting}
+
+The following macro can be redefined to allow custom typesetting of
+identifiers in the index and mini-indices.
+<<axiom.sty>>=
+\let\nwixident=\relax
+@ 
+@
+The following macros can be redefined to typeset `[[\]]', `[[{]]' and
+`[[}]]' correctly in non-typewriter fonts. 
+The problem is that the built-in {\LaTeX} [[\{]] tries to produce a
+math symbol, which doesn't exist in the typewriter font, so we get a
+brace in the wrong font and a warning.  Most unpleasant.
+Noweave therefore attempts to emit [[\nwlbrace]] and [[\nwrbrace]]
+wherever it believes braces should appear.
+The standard noweb style is to set code in typewriter font, and so the
+standard definitions just select the proper characters from that font.
+ People setting code in
+fonts other than typewriter are responsible for redefining those
+macros to work in their environment.
+<<axiom.sty>>=
+\def\nwbackslash{\char92}
+\def\nwlbrace{\char123}
+\def\nwrbrace{\char125}
+<<nwmac.tex>>=
+\def\nwbackslash{\char92}
+\def\nwlbrace{\char123}
+\def\nwrbrace{\char125}
+@
+
+\subsection{Language-dependent macros} 
+
+Miguel Filgueiras
+(DCC-FCUP \& LIACC, Universidade do Porto) provided some changes to
+add multilingual support for the words Noweb uses in indexing and
+cross-reference.
+He inserted macros that are defined by, e.g., [[\noweboptions{english}]].
+The Noweb package uses the
+(apparently standard) {\LaTeX} macro [[\languagename]] to select a
+language at load time.
+If the \texttt{babel} package is
+loaded (with the appropriate language name) before Noweb is loaded, 
+the Noweb package will select language appropriately, provided the
+language is one of those Noweb supports.
+Mr.~Filgueiras provided support for English,
+Portuguese, German, and French. 
+He notes that the French is
+faulty; the translations may be poort, and there are
+bugs in the implementation that he could not solve.
+
+\label{subsection:langdeps}
+
+The language-dependent macros are defined here in each supported
+language in a different subsubsection.
+
+The choice of language depends on testing the [[\languagename]]
+macro. There must be a more elegant way of coding the tests below\ldots
+<<axiom.sty>>=
+<<language support>>
+\ifx\languagename\undefined % default is English
+  \noweboptions{english}
+\else
+  \@ifundefined{nwopt@\languagename}
+     {\noweboptions{english}}
+     {\expandafter\noweboptions\expandafter{\languagename}}
+\fi
+% Final names for the system and its components were in doubt so
+% Language is used throughout the book to specify what the system is named.
+\providecommand{\Language}{AXIOM}
+
+% HyperName was used to specify the name of the browser
+\providecommand{\HyperName}{HyperDoc}
+
+% This is nothing more than inline math mode in Tex but has additional
+% meaning within the browser.
+\providecommand{\spad}[1]{${#1}$}
+
+% This is a way to say 8th, 100th, etc.
+% We use providecommand so it doesn't clash with amsmath package
+\providecommand{\eth}[1]{{#1}-th}
+
+
+@ 
+\subsubsection{Support for English}
+
+This describes the original English text.
+<<language support>>=
+\def\nwopt@english{%
+  \def\@nwlangdepdef{This definition is continued}%
+  \def\@nwlangdepcud{This code is used}%
+  \def\@nwlangdeprtc{Root chunk (not used in this document)}%
+  \def\@nwlangdepcwf{This code is written to file}%
+  \def\@nwlangdepchk{chunk}%
+  \def\@nwlangdepchks{chunks}%
+  \def\@nwlangdepin{in}%
+  \def\@nwlangdepand{and}%
+  \def\@nwlangdepuss{Uses}%
+  \def\@nwlangdepusd{used}%
+  \def\@nwlangdepnvu{never used}%
+  \def\@nwlangdepdfs{Defines}%
+  \def\@nwlangdepnvd{never defined}%
+}
+\let\nwopt@american\nwopt@english
+@ 
+
+@
+\subsubsection{Support for Portuguese}
+
+This contains the text in Portuguese.
+<<language support>>=
+\def\nwopt@portuges{%
+  \def\@nwlangdepdef{Defini\c{c}\~ao continuada em}%
+  % This definition is continued
+  \def\@nwlangdepcud{C\'odigo usado em}%
+  % This code is used
+  \def\@nwlangdeprtc{Fragmento de topo (sem uso no documento)}%
+  % Root chunk (not used in this document)
+  \def\@nwlangdepcwf{Este c\'odigo foi escrito no ficheiro}%
+  % This code is written to file
+  \def\@nwlangdepchk{fragmento}%
+  % chunk
+  \def\@nwlangdepchks{fragmentos}%
+  % chunks
+  \def\@nwlangdepin{no(s)}%
+  % in
+  \def\@nwlangdepand{e}%
+  % and
+  \def\@nwlangdepuss{Usa}%
+  % Uses
+  \def\@nwlangdepusd{usado}%
+  % used
+  \def\@nwlangdepnvu{nunca usado}%
+  % never used
+  \def\@nwlangdepdfs{Define}%
+  % Defines
+  \def\@nwlangdepnvd{nunca definido}%
+  % never defined
+}
+@
+\subsubsection{Support for French}
+
+This is a tentative translation to French.
+Although NR has made some corrections, it should probably be
+reviewed by a native speaker.
+
+There are problems with using accents: on the [[\@nwlangdepnvd]] macro
+(which apparently is not used in the context of [[\nwcodecomment]]),
+and in some other macros (\LaTeX{} complains about missing
+[[\endcsname]]). This should be fixed by someone with experience in
+using \TeX\ldots
+<<language support>>=
+\def\nwopt@frenchb{%
+  \def\@nwlangdepdef{Cette d\'efinition suit}%
+  % This definition is continued
+  \def\@nwlangdepcud{Ce code est employ\'e}%
+  % This code is used
+  \def\@nwlangdeprtc{Morceau racine (pas employ\'e dans ce document)}%
+  % Root chunk (not used in this document)
+  \def\@nwlangdepcwf{Ce code est \'ecrit aux fichier}%
+  % This code is written to file
+  \def\@nwlangdepchk{le morceau}%
+  % chunk
+  \def\@nwlangdepchks{les morceaux}%
+  % chunks
+  \def\@nwlangdepin{dans}%
+  % in
+  \def\@nwlangdepand{et}%
+  % and
+  \def\@nwlangdepuss{Il emploie}%
+  % Uses
+  \def\@nwlangdepusd{employ\'{e}}%
+  % used
+  \def\@nwlangdepnvu{jamais employ\'{e}}%
+  % never used
+  \def\@nwlangdepdfs{Il d\'{e}fine}%
+  % Defines
+  % Cannot use the accent here: \def\@nwlangdepnvd{jamais d\'{e}fini}%
+  \def\@nwlangdepnvd{jamais defini}%
+  % never defined
+}
+\let\nwopt@french\nwopt@frenchb
+@
+\subsubsection{Support for German}
+
+This is a translation to German by Sabine Broda (DCC-FCUP \& LIACC,
+Universidade do Porto).
+<<language support>>=
+\def\nwopt@german{%
+  \def\@nwlangdepdef{Diese Definition wird fortgesetzt}%
+  % This definition is continued
+  \def\@nwlangdepcud{Dieser Code wird benutzt}%
+  % This code is used
+  \def\@nwlangdeprtc{Hauptteil (nicht in diesem Dokument benutzt)}%
+  % Root chunk (not used in this document)
+  \def\@nwlangdepcwf{Dieser Code schreibt man zum File}%
+  % This code is written to file
+  \def\@nwlangdepchk{Teil}%
+  % chunk
+  \def\@nwlangdepchks{Teils}%
+  % chunks
+  \def\@nwlangdepin{im}%
+  % in
+  \def\@nwlangdepand{und}%
+  % and
+  \def\@nwlangdepuss{Benutztt}%
+  % Uses
+  \def\@nwlangdepusd{benutzt}%
+  % used
+  \def\@nwlangdepnvu{nicht benutzt}%
+  % never used
+  \def\@nwlangdepdfs{Definiert}%
+  % Defines
+  \def\@nwlangdepnvd{nicht definiert}%
+  % never defined
+}
+\let\nwopt@ngerman\nwopt@german
+@
+@ \iffalse
+<<man page: [[\noweboptions]]>>=
+.TP
+.B english, french, german, portuges
+Write cross-reference information in the language specified.
+Defaults to 
+.B english.
+@ \fi
+@
+\clearpage
+
+\section{The {\tt nwmac} macros for use with plain {\TeX}}
+
+First we make [[@]] a letter so that we can use `private' macro names.
+<<nwmac.tex>>=
+\catcode`\@=11
+<<nwmac.tex>>=
+% scale cmbx10 instead of using cmbx12 because {\LaTeX} does, so fonts exist
+\font\twlbf=cmbx10 scaled \magstep1
+\font\frtbf=cmbx10 scaled \magstep2
+% These fonts don't work with xdvi!
+
+\advance\hoffset 0.5 true in
+\advance\hsize -1.5 true in
+\newdimen\textsize
+\textsize=\hsize
+\def\today{\ifcase\month\or
+  January\or February\or March\or April\or May\or June\or
+  July\or August\or September\or October\or November\or December\fi
+  \space\number\day, \number\year}
+<<nwmac.tex>>=
+\long\def\ifundefined#1#2#3{%
+   \expandafter\ifx\csname#1\endcsname\relax
+       #2%
+   \else#3%
+   \fi}
+
+\ifundefined{myheadline}
+    {\headline={\hbox to \textsize{\tentt\firstmark\hfil\tenrm\today\hbox
+                to 4em{\hss\folio}}\hss}}
+    {\expandafter\headline\expandafter{\myheadline}}
+
+\ifundefined{myfootline}
+    {\footline={\hfil}}
+    {\expandafter\footline\expandafter{\myfootline}}
+<<nwmac.tex>>=
+\def\semifilbreak{\vskip0pt plus1.5in\penalty-200\vskip0pt plus -1.5in}
+\raggedbottom
+<<nwmac.tex>>=
+%
+% \chapcenter macro to produce nice centered chapter titles
+%
+\def\chapcenter{\leftskip=0.5 true in plus 4em minus 0.5 true in
+    \rightskip=\leftskip
+    \parfillskip=0pt \spaceskip=.3333em \xspaceskip=.5em
+    \pretolerance=9999 \tolerance=9999
+    \hyphenpenalty=9999 \exhyphenpenalty=9999}
+<<nwmac.tex>>=
+% \startsection{LEVEL}{INDENT}{BEFORESKIP}{AFTERSKIP}{STYLE}{HEADING}
+%               #1     #2      #3          #4         #5     #6
+%
+%       LEVEL:          depth; e.g. part=0 chapter=1 sectino=2...
+%       INDENT:         indentation of heading from left margin
+%       BEFORESKIP:     skip before header
+%       AFTERSKIP:      skip after header
+%       STYLE:          style of heading; e.g.\bf
+%       HEADING:        heading of the sectino
+%
+\def\startsection#1#2#3#4#5#6{\par\vskip#3 plus 2in
+        \penalty-200\vskip 0pt plus -2in
+    \noindent{\leftskip=#2 \rightskip=0.5true in plus 4em minus 0.5 true in
+              \hyphenpenalty=9999 \exhyphenpenalty=9999
+              #5#6\par}\vskip#4%
+    {\def\code##1{[[}\def\edoc##1{]]}\message{[#6]}}
+    \settocparms{#1}
+    \def\themodtitle{#6}
+%%%%    {\def\code{\string\code}\def\edoc{\string\edoc}%
+    \edef\next{\noexpand\write\cont{\tocskip
+        \tocline{\hskip\tocindent\tocstyle\relax\themodtitle}
+                {\noexpand\the\pageno}}}\next % write to toc
+    %}
+}
+<<nwmac.tex>>=
+\def\settocparms#1{
+        \count@=#1
+        \ifnum\count@<1
+            \def\tocskip{\vskip3ptplus1in\penalty-100
+                        \vskip0ptplus-1in}%
+            \def\tocstyle{\bf}
+            \def\tocindent{0pt}
+        \else
+            \def\tocskip{}
+            \def\tocstyle{\rm}
+            \dimen@=2em \advance\count@ by \m@ne \dimen@=\count@\dimen@
+            \edef\tocindent{\the\dimen@}
+        \fi
+}
+<<nwmac.tex>>=
+\def\tocline#1#2{\line{{\ignorespaces#1}\leaders\hbox to .5em{.\hfil}\hfil
+     \hbox to1.5em{\hss#2}}}
+<<nwmac.tex>>=
+\def\section#1{\par \vskip3ex\noindent {\bf #1}\par\nobreak\vskip1ex\nobreak}
+\def\chapter#1{\vfil\eject\startsection{0}{0pt}{6ex}{3ex}{\frtbf\chapcenter}{#1}}
+\def\section#1{\startsection{1}{0pt}{4ex}{2ex}{\twlbf}{#1}}
+\def\subsection#1{\startsection{2}{0pt}{2ex}{1ex}{\bf}{#1}}
+\def\subsubsection#1{\startsection{3}{0pt}{1ex}{0.5ex}{\it}{#1}}
+\def\paragraph#1{\startsection{4}{0pt}{1.5ex}{0ex}{\it}{#1}}
+
+<<kernel>>
+
+\def\nwfilename#1{\vfil\eject\mark{#1}}
+
+\def\nwbegindocs#1{\filbreak}
+\def\nwenddocs{\par}
+\def\nwbegincode#1{\par\nobreak
+  \begingroup\setupcode\newlines\parindent=0pt\parskip=0pt
+  \let\oendmoddef=\endmoddef \let\oplusendmoddef=\plusendmoddef
+  \def\endmoddef{\oendmoddef\par}\def\plusendmoddef{\oplusendmoddef\par}%
+  \hsize=\codehsize\noindent\bchack}
+\def\nwendcode{\endgroup}
+{\catcode`\^^M=\active % make CR an active character
+  \gdef\bchack#1^^M{\relax#1}%
+}
+<<nwmac.tex>>=
+\edef\contentsfile{\jobname.toc } % file that gets table of contents info
+\def\readcontents{\expandafter\input \contentsfile}
+
+\newwrite\cont
+\openout\cont=\contentsfile
+\write\cont{\string\catcode`\string\@=11}% a hack to make contents
+<<nwmac.tex>>=
+                                 % take stuff in plain.tex
+\def\bye{%
+    \write\cont{}% ensure that the contents file isn't empty
+    \closeout\cont
+    \vfil\eject\pageno=-1 % new page causes contents to be really closed
+    \topofcontents\readcontents\botofcontents
+    \vfil\eject\end}
+\def\topofcontents{\vfil\mark{{\bf Contents}}}
+\def\botofcontents{}
+<<nwmac.tex>>=
+\let\em=\it
+% used to produce an itemized (bulleted) list in plain {\TeX}
+% such lists can be nested
+% mostly useful with WEB
+
+% Usage:
+% \itemize
+% \item First thing
+% \item second thing
+% \enditemize
+
+\newcount\listlevel
+\listlevel=0
+\newdimen\itemwidth
+\itemwidth=3em
+
+\def\itemize{\begingroup\advance\listlevel by1
+    \def\item{\par\noindent
+         \raise2pt\llap{$\scriptstyle\bullet$\ }\ignorespaces}%
+    \def\nameditem##1{\par\noindent
+       p  \llap{\rlap{##1}\hskip\itemwidth}\ignorespaces}%
+    \par\advance\leftskip by\itemwidth\advance\rightskip by0.5\itemwidth}
+\def\enditemize{\par\endgroup\noindent\ignorespaces}
+
+\let\begindocument=\relax
+@ 
+Finally we make [[@]] `other' again.
+<<nwmac.tex>>=
+\catcode`\@=12
+@
+
+\section{Chunks} \nowebchunks
+@
+
+\section{Markups for the Axiom Textbook}
+
+<<axiom.sty>>=
+% spadcommands are the actual text that you type at the axiom prompt
+\providecommand{\spadcommand}[1]%
+{\begin{flushleft}{\tt #1}\end{flushleft}\vskip .1cm }
+
+% spadgraph are the actual text that you type at the axiom prompt for draw
+\providecommand{\spadgraph}[1]%
+{\begin{flushleft}{\tt #1}\end{flushleft}\vskip .1cm }
+
+%% spadsig gives the standard -> notation for signatures
+\providecommand{\spadsig}[2]{{\sf #1 $\rightarrow$ #2}}
+
+% returnType is the type signature returned by the axiom interpreter
+\providecommand{\returnType}[1]%
+{\begin{flushright}{\tt #1}\end{flushright}\vskip .1cm}
+
+%%% Axiom commands are set off in a special boxed area. 
+%%% This is used to draw a line around that boxed area.
+\providecommand\boxed[2]{%
+\begin{center}
+\begin{tabular}{|c|}
+\hline
+\begin{minipage}{#1}
+\normalsize
+{#2}
+\end{minipage}\\
+\hline
+\end{tabular}
+\end{center}}
+
+% The book begins with some introductory material that is not really
+% listed as a chapter. This creates a header similar to \chapter.
+\providecommand{\pseudoChapter}[1]%
+{\vskip .5in \noindent {\Huge{\bf #1}}\vskip .5in}
+
+% The book begins with some introductory material that is not really
+% listed as a section. This creates a header similar to \section.
+\providecommand{\pseudoSection}[1]%
+{\vskip .25in \noindent {\large{\bf #1}}\vskip .25in}
+
+% spadofFrom records the operation in the index and the domain in the index
+\providecommand{\spadopFrom}[2]{\index{library!operations!#1 @\begingroup \string\tt{} #1 \endgroup}\index{#2}``{\tt #1}''}
+
+% spadfunFrom records the function name and domain in the index
+\providecommand{\spadfunFrom}[2]{{\bf #1}\index{#1 @\begingroup \string\bf{} #1 \endgroup}\index{#2}}
+
+% These are special markers within the text for Hypertex keywords
+% They have no particular meaning in the book form.
+\providecommand{\spadfun}[1]{{\it #1}}
+\providecommand{\spadgloss}[1]{{\it #1}}
+\providecommand{\spadkey}[1]{\index{#1 @\begingroup \string\tt{} #1 \endgroup}}
+ 
+% spadtype records the domain in the index
+\providecommand{\spadtype}[1]{{\bf #1}\index{#1 @\begingroup \string\bf{} #1 \endgroup}}
+
+% This is used to create a caption on an included image
+\providecommand{\simpleCaption}[1]{\def\thefigure{\@arabic\c@figure}\caption{#1}}
+
+% This is the name of the ``glossy'' pages in the physical book.
+\providecommand{\Gallery}{\Language{} Images}
+
+% spadofFrom records the operation in the index and the domain in the index
+\providecommand{\spadopFrom}[2]{\index{library!operations!#1 @\begingroup \string\tt{} #1 \endgroup}\index{#2}``{\tt #1}''}
+
+@
+
+\section{More Macros for Pamphlet Files}
+
+This section defines additional macros for use in pamphlet files.
+More specifically, it provides support for typesetting file names,
+tool names, etc.
+<<axiom.sty>>=
+%% typeset e.g. and i.e.
+\providecommand{\eg}{\emph{e.g.}}
+\providecommand{\ie}{\emph{i.e.}}
+
+%% Typeset in-line code.
+\providecommand{\Code}[1]{\texttt{#1}}
+
+%% Typeset a file name
+\providecommand{\File}[1]{{\itshape{#1}}}
+
+%% Typeset a tool name, e.g. Axiom
+\providecommand{\Tool}[1]{{\bfseries\sffamily{#1}}}
+@
+
+\section{Computer Algebra names support for CATS test suite}
+
+We need to be able to mark the various computer algebra sections
+that follow each test case. In order to do that we define our own commands.
+If we were more of a tex hacker we'd generalize these to take an argument
+that was the system name.
+<<axiom.sty>>=
+\providecommand\AXIOM{\vskip\parindent\indent{\bf AXIOM}\vskip\parindent\noindent\ignorespaces}
+\providecommand\maxima{\vskip\parindent\noindent{\bf MAXIMA}\vskip\parindent\noindent\ignorespaces}
+\providecommand\yacas{\vskip\parindent\noindent{\bf YACAS}\vskip\parindent\noindent\ignorespaces}
+@
+\twocolumn[\section{Index}]
+\nowebindex*
+\end{document}

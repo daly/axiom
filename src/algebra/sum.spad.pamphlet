@@ -1,0 +1,390 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra sum.spad}
+\author{Stephen M. Watt, Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package ISUMP InnerPolySum}
+<<package ISUMP InnerPolySum>>=
+)abbrev package ISUMP InnerPolySum
+++ Summation of polynomials
+++ Author: SMW
+++ Date Created: ???
+++ Date Last Updated: 19 April 1991
+++ Description: tools for the summation packages.
+InnerPolySum(E, V, R, P): Exports == Impl where
+    E: OrderedAbelianMonoidSup
+    V: OrderedSet
+    R: IntegralDomain
+    P: PolynomialCategory(R, E, V)
+
+    Z   ==> Integer
+    Q   ==> Fraction Z
+    SUP ==> SparseUnivariatePolynomial
+
+    Exports ==> with
+        sum: (P, V, Segment P) -> Record(num:P, den:Z)
+            ++ sum(p(n), n = a..b) returns \spad{p(a) + p(a+1) + ... + p(b)}.
+        sum: (P, V) -> Record(num:P, den: Z)
+            ++ sum(p(n), n) returns \spad{P(n)},
+            ++ the indefinite sum of \spad{p(n)} with respect to
+            ++ upward difference on n, i.e. \spad{P(n+1) - P(n) = a(n)};
+
+    Impl ==> add
+        import PolynomialNumberTheoryFunctions()
+        import UnivariatePolynomialCommonDenominator(Z, Q, SUP Q)
+
+        pmul: (P, SUP Q) -> Record(num:SUP P, den:Z)
+
+        pmul(c, p) ==
+            pn := (rec := splitDenominator p).num
+            [map(numer(#1) * c,
+                pn)$SparseUnivariatePolynomialFunctions2(Q, P), rec.den]
+
+        sum(p, v, s) ==
+          indef := sum(p, v)
+          [eval(indef.num, v, 1 + hi s) - eval(indef.num, v, lo s),
+           indef.den]
+
+        sum(p, v) ==
+            up := univariate(p, v)
+            lp := nil()$List(SUP P)
+            ld := nil()$List(Z)
+            while up ^= 0 repeat
+                ud  := degree up; uc := leadingCoefficient up
+                up  := reductum up
+                rec := pmul(uc, 1 / (ud+1) * bernoulli(ud+1))
+                lp  := concat(rec.num, lp)
+                ld  := concat(rec.den, ld)
+            d := lcm ld
+            vp := +/[(d exquo di)::Z * pi for di in ld for pi in lp]
+            [multivariate(vp, v), d]
+
+@
+\section{package GOSPER GosperSummationMethod}
+<<package GOSPER GosperSummationMethod>>=
+)abbrev package GOSPER GosperSummationMethod
+++ Gosper's summation algorithm
+++ Author: SMW
+++ Date Created: ???
+++ Date Last Updated: 19 August 1991
+++ Description: Gosper's summation algorithm.
+GosperSummationMethod(E, V, R, P, Q): Exports == Impl where
+    E: OrderedAbelianMonoidSup
+    V: OrderedSet
+    R: IntegralDomain
+    P: PolynomialCategory(R, E, V)
+    Q: Join(RetractableTo Fraction Integer, Field with
+              (coerce: P -> %; numer : % -> P; denom : % -> P))
+
+    I   ==> Integer
+    RN  ==> Fraction I
+    PQ  ==> SparseMultivariatePolynomial(RN, V)
+    RQ  ==> Fraction PQ
+
+    Exports ==> with
+        GospersMethod: (Q, V, () -> V) -> Union(Q, "failed")
+            ++ GospersMethod(b, n, new) returns a rational function
+            ++ \spad{rf(n)} such that \spad{a(n) * rf(n)} is the indefinite
+            ++ sum of \spad{a(n)}
+            ++ with respect to upward difference on \spad{n}, i.e.
+            ++ \spad{a(n+1) * rf(n+1) - a(n) * rf(n) = a(n)},
+            ++ where \spad{b(n) = a(n)/a(n-1)} is a rational function.
+            ++ Returns "failed" if no such rational function \spad{rf(n)}
+            ++ exists.
+            ++ Note: \spad{new} is a nullary function returning a new
+            ++ V every time.
+            ++ The condition on \spad{a(n)} is that \spad{a(n)/a(n-1)}
+            ++ is a rational function of \spad{n}.
+            --++  \spad{sum(a(n), n) = rf(n) * a(n)}.
+
+    Impl ==> add
+      import PolynomialCategoryQuotientFunctions(E, V, R, P, Q)
+      import LinearSystemMatrixPackage(RQ,Vector RQ,Vector RQ,Matrix RQ)
+
+      InnerGospersMethod: (RQ, V, () -> V) -> Union(RQ, "failed")
+      GosperPQR:   (PQ, PQ, V, () -> V)       -> List PQ
+      GosperDegBd: (PQ, PQ, PQ, V, () -> V)    -> I
+      GosperF:     (I, PQ, PQ, PQ, V, () -> V) -> Union(RQ, "failed")
+      linearAndNNIntRoot: (PQ, V) -> Union(I, "failed")
+      deg0:    (PQ, V) -> I       -- degree with deg 0 = -1.
+      pCoef:   (PQ, PQ) -> PQ  -- pCoef(p, a*b**2)
+      RF2QIfCan: Q -> Union(RQ, "failed")
+      UP2QIfCan: P -> Union(PQ,"failed")
+      RFQ2R    : RQ -> Q
+      PQ2R     : PQ -> Q
+      rat?     : R  -> Boolean
+
+      deg0(p, v) == (zero? p => -1; degree(p, v))
+      rat? x     == retractIfCan(x::P::Q)@Union(RN, "failed") case RN
+      RFQ2R f    == PQ2R(numer f) / PQ2R(denom f)
+
+      PQ2R p ==
+        map(#1::P::Q, #1::Q, p)$PolynomialCategoryLifting(
+                                       IndexedExponents V, V, RN, PQ, Q)
+
+      GospersMethod(aquo, n, newV) ==
+        ((q := RF2QIfCan aquo) case "failed") or
+          ((u := InnerGospersMethod(q::RQ, n, newV)) case "failed") =>
+             "failed"
+        RFQ2R(u::RQ)
+
+      RF2QIfCan f ==
+        (n := UP2QIfCan numer f) case "failed" => "failed"
+        (d := UP2QIfCan denom f) case "failed" => "failed"
+        n::PQ / d::PQ
+
+      UP2QIfCan p ==
+        every?(rat?, coefficients p) =>
+          map(#1::PQ, (retractIfCan(#1::P::Q)@Union(RN, "failed"))::RN::PQ,
+              p)$PolynomialCategoryLifting(E, V, R, P, PQ)
+        "failed"
+
+      InnerGospersMethod(aquo, n, newV) ==
+            -- 1. Define coprime polys an,anm1 such that
+            --      an/anm1=a(n)/a(n-1)
+            an   := numer aquo
+            anm1 := denom aquo
+
+            -- 2. Define p,q,r such that
+            --      a(n)/a(n-1) = (p(n)/p(n-1)) * (q(n)/r(n))
+            --    and
+            --      gcd(q(n), r(n+j)) = 1, for all j: NNI.
+            pqr:= GosperPQR(an, anm1, n, newV)
+            pn := first pqr; qn := second pqr; rn := third pqr
+
+            -- 3. If the sum is a rational fn, there is a poly f with
+            --      sum(a(n), n) = q(n+1)/p(n) * a(n) * f(n).
+
+            -- 4. Bound the degree of f(n).
+            (k := GosperDegBd(pn, qn, rn, n, newV)) < 0 => "failed"
+
+            -- 5. Find a polynomial f of degree at most k, satisfying
+            --      p(n) = q(n+1)*f(n) - r(n)*f(n-1)
+            (ufn := GosperF(k, pn, qn, rn, n, newV)) case "failed" =>
+              "failed"
+            fn  := ufn::RQ
+
+            -- 6. The sum is q(n-1)/p(n)*f(n) * a(n). We leave out a(n).
+            --qnm1 := eval(qn,n,n::PQ - 1)
+            --qnm1/pn * fn
+            qn1 := eval(qn,n,n::PQ + 1)
+            qn1/pn * fn
+
+      GosperF(k, pn, qn, rn, n, newV) ==
+            mv := newV(); mp := mv::PQ; np := n::PQ
+            fn:       PQ := +/[mp**(i+1) * np**i for i in 0..k]
+            fnminus1: PQ := eval(fn, n, np-1)
+            qnplus1        := eval(qn, n, np+1)
+            zro  := qnplus1 * fn - rn * fnminus1 - pn
+            zron := univariate(zro, n)
+            dz  := degree zron
+            mat: Matrix RQ := zero(dz+1, (k+1)::NonNegativeInteger)
+            vec: Vector RQ := new(dz+1, 0)
+            while zron ^= 0 repeat
+                cz := leadingCoefficient zron
+                dz := degree zron
+                zron := reductum zron
+                mz := univariate(cz, mv)
+                while mz ^= 0 repeat
+                    cmz := leadingCoefficient(mz)::RQ
+                    dmz := degree mz
+                    mz := reductum mz
+                    dmz = 0 => vec(dz + minIndex vec) := -cmz
+                    qsetelt_!(mat, dz + minRowIndex mat,
+                                 dmz + minColIndex(mat) - 1, cmz)
+            (soln := particularSolution(mat, vec)) case "failed" => "failed"
+            vec := soln::Vector RQ
+            (+/[np**i * vec(i + minIndex vec) for i in 0..k])@RQ
+
+      GosperPQR(an, anm1, n, newV) ==
+            np := n::PQ   -- polynomial version of n
+            -- Initial guess.
+            pn: PQ := 1
+            qn: PQ := an
+            rn: PQ := anm1
+            -- Find all j: NNI giving common factors to q(n) and r(n+j).
+            j     := newV()
+            rnj   := eval(rn, n, np + j::PQ)
+            res   := resultant(qn, rnj, n)
+            fres  := factor(res)$MRationalFactorize(IndexedExponents V,
+                                                    V, I, PQ)
+            js    := [rt::I for fe in factors fres
+                       | (rt := linearAndNNIntRoot(fe.factor,j)) case I]
+            -- For each such j, change variables to remove the gcd.
+            for rt in js repeat
+                rtp:= rt::PQ  -- polynomial version of rt
+                gn := gcd(qn, eval(rn,n,np+rtp))
+                qn := (qn exquo gn)::PQ
+                rn := (rn exquo eval(gn, n, np-rtp))::PQ
+                pn := pn * */[eval(gn, n, np-i::PQ) for i in 0..rt-1]
+            [pn, qn, rn]
+
+        -- Find a degree bound for the polynomial f(n) which satisfies
+        --   p(n) = q(n+1)*f(n) - r(n)*f(n-1).
+      GosperDegBd(pn, qn, rn, n, newV) ==
+            np := n::PQ
+            qnplus1  := eval(qn, n, np+1)
+            lplus  := deg0(qnplus1 + rn,  n)
+            lminus := deg0(qnplus1 - rn, n)
+            degp   := deg0(pn, n)
+            k := degp - max(lplus-1, lminus)
+            lplus <= lminus => k
+            -- Find L(k), such that
+            --   p(n) = L(k)*c[k]*n**(k + lplus - 1) + ...
+            -- To do this, write f(n) and f(n-1) symbolically.
+            --   f(n)  = c[k]*n**k + c[k-1]*n**(k-1) +O(n**(k-2))
+            --   f(n-1)=c[k]*n**k + (c[k-1]-k*c[k])*n**(k-1)+O(n**(k-2))
+            kk := newV()::PQ
+            ck := newV()::PQ
+            ckm1 := newV()::PQ
+            nkm1:= newV()::PQ
+            nk := np*nkm1
+            headfn   := ck*nk +         ckm1*nkm1
+            headfnm1 := ck*nk + (ckm1-kk*ck)*nkm1
+            -- Then p(n) = q(n+1)*f(n) - r(n)*f(n-1) gives L(k).
+            pk   := qnplus1 * headfn - rn * headfnm1
+            lcpk := pCoef(pk, ck*np*nkm1)
+            -- The degree bd is now given by k, and the root of L.
+            k0 := linearAndNNIntRoot(lcpk, mainVariable(kk)::V)
+            k0 case "failed" => k
+            max(k0::I, k)
+
+      pCoef(p, nom) ==
+            not monomial? nom =>
+              error "pCoef requires a monomial 2nd arg"
+            vlist := variables nom
+            for v in vlist while p ^= 0 repeat
+                unom:= univariate(nom,v)
+                pow:=degree unom
+                nom:=leadingCoefficient unom
+                up  := univariate(p, v)
+                p   := coefficient(up, pow)
+            p
+
+      linearAndNNIntRoot(mp, v) ==
+            p := univariate(mp, v)
+            degree p ^= 1 => "failed"
+            (p1 := retractIfCan(coefficient(p, 1))@Union(RN,"failed"))
+             case "failed" or
+              (p0 := retractIfCan(coefficient(p, 0))@Union(RN,"failed"))
+               case "failed" => "failed"
+            rt := -(p0::RN)/(p1::RN)
+            rt < 0 or denom rt ^= 1 => "failed"
+            numer rt
+
+@
+\section{package SUMRF RationalFunctionSum}
+<<package SUMRF RationalFunctionSum>>=
+)abbrev package SUMRF RationalFunctionSum
+++ Summation of rational functions
+++ Author: Manuel Bronstein
+++ Date Created: ???
+++ Date Last Updated: 19 April 1991
+++ Description: Computes sums of rational functions;
+RationalFunctionSum(R): Exports == Impl where
+    R: Join(IntegralDomain, OrderedSet, RetractableTo Integer)
+
+    P   ==> Polynomial R
+    RF  ==> Fraction P
+    FE  ==> Expression R
+    SE  ==> Symbol
+
+    Exports ==> with
+        sum: (P, SE) -> RF
+            ++ sum(a(n), n) returns \spad{A} which
+            ++ is the indefinite sum of \spad{a} with respect to
+            ++ upward difference on \spad{n}, i.e. \spad{A(n+1) - A(n) = a(n)}.
+        sum: (RF, SE) -> Union(RF, FE)
+            ++ sum(a(n), n) returns \spad{A} which
+            ++ is the indefinite sum of \spad{a} with respect to
+            ++ upward difference on \spad{n}, i.e. \spad{A(n+1) - A(n) = a(n)}.
+        sum: (P, SegmentBinding P) -> RF
+            ++ sum(f(n), n = a..b) returns \spad{f(a) + f(a+1) + ... f(b)}.
+        sum: (RF, SegmentBinding RF) -> Union(RF, FE)
+            ++ sum(f(n), n = a..b) returns \spad{f(a) + f(a+1) + ... f(b)}.
+
+    Impl ==> add
+      import RationalFunction R
+      import GosperSummationMethod(IndexedExponents SE, SE, R, P, RF)
+
+      innersum    : (RF, SE) -> Union(RF, "failed")
+      innerpolysum: (P, SE) -> RF
+
+      sum(f:RF, s:SegmentBinding RF) ==
+        (indef := innersum(f, v := variable s)) case "failed" =>
+          summation(f::FE,map(#1::FE,s)$SegmentBindingFunctions2(RF,FE))
+        eval(indef::RF, v, 1 + hi segment s)
+          - eval(indef::RF, v,lo segment s)
+
+      sum(an:RF, n:SE) ==
+        (u := innersum(an, n)) case "failed" => summation(an::FE, n)
+        u::RF
+
+      sum(p:P, s:SegmentBinding P) ==
+        f := sum(p, v := variable s)
+        eval(f, v, (1 + hi segment s)::RF) - eval(f,v,lo(segment s)::RF)
+
+      innersum(an, n) ==
+        (r := retractIfCan(an)@Union(P, "failed")) case "failed" =>
+           an1 := eval(an, n, -1 + n::RF)
+           (u := GospersMethod(an/an1, n, new$SE)) case "failed" =>
+             "failed"
+           an1 * eval(u::RF, n, -1 + n::RF)
+        sum(r::P, n)
+
+      sum(p:P, n:SE) ==
+        rec := sum(p, n)$InnerPolySum(IndexedExponents SE, SE, R, P)
+        rec.num / (rec.den :: P)
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package ISUMP InnerPolySum>>
+<<package GOSPER GosperSummationMethod>>
+<<package SUMRF RationalFunctionSum>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

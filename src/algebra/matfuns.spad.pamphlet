@@ -1,0 +1,803 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra matfuns.spad}
+\author{Clifton J. Williamson, Patrizia Gianni}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package IMATLIN InnerMatrixLinearAlgebraFunctions}
+<<package IMATLIN InnerMatrixLinearAlgebraFunctions>>=
+)abbrev package IMATLIN InnerMatrixLinearAlgebraFunctions
+++ Author: Clifton J. Williamson, P.Gianni
+++ Date Created: 13 November 1989
+++ Date Last Updated: September 1993
+++ Basic Operations:
+++ Related Domains: IndexedMatrix(R,minRow,minCol), Matrix(R),
+++    RectangularMatrix(n,m,R), SquareMatrix(n,R)
+++ Also See:
+++ AMS Classifications:
+++ Keywords: matrix, canonical forms, linear algebra
+++ Examples:
+++ References:
+++ Description:
+++   \spadtype{InnerMatrixLinearAlgebraFunctions} is an internal package
+++   which provides standard linear algebra functions on domains in
+++   \spad{MatrixCategory}
+InnerMatrixLinearAlgebraFunctions(R,Row,Col,M):_
+             Exports == Implementation where
+  R   : Field
+  Row : FiniteLinearAggregate R
+  Col : FiniteLinearAggregate R
+  M   : MatrixCategory(R,Row,Col)
+  I ==> Integer
+
+  Exports ==> with
+    rowEchelon: M -> M
+      ++ \spad{rowEchelon(m)} returns the row echelon form of the matrix m.
+    rank: M -> NonNegativeInteger
+      ++ \spad{rank(m)} returns the rank of the matrix m.
+    nullity: M -> NonNegativeInteger
+      ++ \spad{nullity(m)} returns the mullity of the matrix m. This is the
+      ++ dimension of the null space of the matrix m.
+    if Col has shallowlyMutable then
+      nullSpace: M -> List Col
+        ++ \spad{nullSpace(m)} returns a basis for the null space of the
+        ++ matrix m.
+    determinant: M -> R
+      ++ \spad{determinant(m)} returns the determinant of the matrix m.
+      ++ an error message is returned if the matrix is not square.
+    generalizedInverse: M -> M
+      ++ \spad{generalizedInverse(m)} returns the generalized (Moore--Penrose)
+      ++ inverse of the matrix m, i.e. the matrix h such that
+      ++ m*h*m=h, h*m*h=m, m*h and h*m are both symmetric matrices.
+    inverse: M -> Union(M,"failed")
+      ++ \spad{inverse(m)} returns the inverse of the matrix m.
+      ++ If the matrix is not invertible, "failed" is returned.
+      ++ Error: if the matrix is not square.
+
+  Implementation ==> add
+
+    rowAllZeroes?: (M,I) -> Boolean
+    rowAllZeroes?(x,i) ==
+      -- determines if the ith row of x consists only of zeroes
+      -- internal function: no check on index i
+      for j in minColIndex(x)..maxColIndex(x) repeat
+        qelt(x,i,j) ^= 0 => return false
+      true
+
+    colAllZeroes?: (M,I) -> Boolean
+    colAllZeroes?(x,j) ==
+      -- determines if the ith column of x consists only of zeroes
+      -- internal function: no check on index j
+      for i in minRowIndex(x)..maxRowIndex(x) repeat
+        qelt(x,i,j) ^= 0 => return false
+      true
+
+    rowEchelon y ==
+      -- row echelon form via Gaussian elimination
+      x := copy y
+      minR := minRowIndex x; maxR := maxRowIndex x
+      minC := minColIndex x; maxC := maxColIndex x
+      i := minR
+      n: I := minR - 1
+      for j in minC..maxC repeat
+        i > maxR => return x
+        n := minR - 1
+        -- n = smallest k such that k >= i and x(k,j) ^= 0
+        for k in i..maxR repeat
+          if qelt(x,k,j) ^= 0 then leave (n := k)
+        n = minR - 1 => "no non-zeroes"
+        -- put nth row in ith position
+        if i ^= n then swapRows_!(x,i,n)
+        -- divide ith row by its first non-zero entry
+        b := inv qelt(x,i,j)
+        qsetelt_!(x,i,j,1)
+        for k in (j+1)..maxC repeat qsetelt_!(x,i,k,b * qelt(x,i,k))
+        -- perform row operations so that jth column has only one 1
+        for k in minR..maxR repeat
+          if k ^= i and qelt(x,k,j) ^= 0 then
+            for k1 in (j+1)..maxC repeat
+              qsetelt_!(x,k,k1,qelt(x,k,k1) - qelt(x,k,j) * qelt(x,i,k1))
+            qsetelt_!(x,k,j,0)
+        -- increment i
+        i := i + 1
+      x
+
+    rank x ==
+      y :=
+        (rk := nrows x) > (rh := ncols x) =>
+          rk := rh
+          transpose x
+        copy x
+      y := rowEchelon y; i := maxRowIndex y
+      while rk > 0 and rowAllZeroes?(y,i) repeat
+        i := i - 1
+        rk := (rk - 1) :: NonNegativeInteger
+      rk :: NonNegativeInteger
+
+    nullity x == (ncols x - rank x) :: NonNegativeInteger
+
+    if Col has shallowlyMutable then
+
+      nullSpace y ==
+        x := rowEchelon y
+        minR := minRowIndex x; maxR := maxRowIndex x
+        minC := minColIndex x; maxC := maxColIndex x
+        nrow := nrows x; ncol := ncols x
+        basis : List Col := nil()
+        rk := nrow; row := maxR
+        -- compute rank = # rows - # rows of all zeroes
+        while rk > 0 and rowAllZeroes?(x,row) repeat
+          rk := (rk - 1) :: NonNegativeInteger
+          row := (row - 1) :: NonNegativeInteger
+        -- if maximal rank, return zero vector
+        ncol <= nrow and rk = ncol => [new(ncol,0)]
+        -- if rank = 0, return standard basis vectors
+        rk = 0 =>
+          for j in minC..maxC repeat
+            w : Col := new(ncol,0)
+            qsetelt_!(w,j,1)
+            basis := cons(w,basis)
+          basis
+        -- v contains information about initial 1's in the rows of x
+        -- if the ith row has an initial 1 in the jth column, then
+        -- v.j = i; v.j = minR - 1, otherwise
+        v : IndexedOneDimensionalArray(I,minC) := new(ncol,minR - 1)
+        for i in minR..(minR + rk - 1) repeat
+          for j in minC.. while qelt(x,i,j) = 0 repeat j
+          qsetelt_!(v,j,i)
+        j := maxC; l := minR + ncol - 1
+        while j >= minC repeat
+          w : Col := new(ncol,0)
+          -- if there is no row with an initial 1 in the jth column,
+          -- create a basis vector with a 1 in the jth row
+          if qelt(v,j) = minR - 1 then
+            colAllZeroes?(x,j) =>
+              qsetelt_!(w,l,1)
+              basis := cons(w,basis)
+            for k in minC..(j-1) for ll in minR..(l-1) repeat
+              if qelt(v,k) ^= minR - 1 then
+                qsetelt_!(w,ll,-qelt(x,qelt(v,k),j))
+            qsetelt_!(w,l,1)
+            basis := cons(w,basis)
+          j := j - 1; l := l - 1
+        basis
+
+    determinant y ==
+      (ndim := nrows y) ^= (ncols y) =>
+        error "determinant: matrix must be square"
+      -- Gaussian Elimination
+      ndim = 1 => qelt(y,minRowIndex y,minColIndex y)
+      x := copy y
+      minR := minRowIndex x; maxR := maxRowIndex x
+      minC := minColIndex x; maxC := maxColIndex x
+      ans : R := 1
+      for i in minR..(maxR - 1) for j in minC..(maxC - 1) repeat
+        if qelt(x,i,j) = 0 then
+          rown := minR - 1
+          for k in (i+1)..maxR repeat
+            qelt(x,k,j) ^= 0 => leave (rown := k)
+          if rown = minR - 1 then return 0
+          swapRows_!(x,i,rown); ans := -ans
+        ans := qelt(x,i,j) * ans; b := -inv qelt(x,i,j)
+        for l in (j+1)..maxC repeat qsetelt_!(x,i,l,b * qelt(x,i,l))
+        for k in (i+1)..maxR repeat
+          if (b := qelt(x,k,j)) ^= 0 then
+            for l in (j+1)..maxC repeat
+              qsetelt_!(x,k,l,qelt(x,k,l) + b * qelt(x,i,l))
+      qelt(x,maxR,maxC) * ans
+
+    generalizedInverse(x) ==
+      SUP:=SparseUnivariatePolynomial R
+      FSUP := Fraction SUP
+      VFSUP := Vector FSUP
+      MATCAT2 := MatrixCategoryFunctions2(R, Row, Col, M,
+                   FSUP, VFSUP, VFSUP, Matrix FSUP)
+      MATCAT22 := MatrixCategoryFunctions2(FSUP, VFSUP, VFSUP, Matrix FSUP,
+                   R, Row, Col, M)
+      y:= map(coerce(coerce(#1)$SUP)$(Fraction SUP),x)$MATCAT2
+      ty:=transpose y
+      yy:=ty*y
+      nc:=ncols yy
+      var:=monomial(1,1)$SUP ::(Fraction SUP)
+      yy:=inverse(yy+scalarMatrix(ncols yy,var))::Matrix(FSUP)*ty
+      map(elt(#1,0),yy)$MATCAT22
+
+    inverse x ==
+      (ndim := nrows x) ^= (ncols x) =>
+        error "inverse: matrix must be square"
+      ndim = 2 =>
+         ans2 : M := zero(ndim, ndim)
+         zero?(det :=  x(1,1)*x(2,2)-x(1,2)*x(2,1)) => "failed"
+         detinv := inv det
+         ans2(1,1) := x(2,2)*detinv
+         ans2(1,2) := -x(1,2)*detinv
+         ans2(2,1) := -x(2,1)*detinv
+         ans2(2,2) := x(1,1)*detinv
+         ans2
+      AB : M := zero(ndim,ndim + ndim)
+      minR := minRowIndex x; maxR := maxRowIndex x
+      minC := minColIndex x; maxC := maxColIndex x
+      kmin := minRowIndex AB; kmax := kmin + ndim - 1
+      lmin := minColIndex AB; lmax := lmin + ndim - 1
+      for i in minR..maxR for k in kmin..kmax repeat
+        for j in minC..maxC for l in lmin..lmax repeat
+          qsetelt_!(AB,k,l,qelt(x,i,j))
+        qsetelt_!(AB,k,lmin + ndim + k - kmin,1)
+      AB := rowEchelon AB
+      elt(AB,kmax,lmax) = 0 => "failed"
+      subMatrix(AB,kmin,kmax,lmin + ndim,lmax + ndim)
+
+@
+\section{package MATCAT2 MatrixCategoryFunctions2}
+<<package MATCAT2 MatrixCategoryFunctions2>>=
+)abbrev package MATCAT2 MatrixCategoryFunctions2
+++ Author: Clifton J. Williamson
+++ Date Created: 21 November 1989
+++ Date Last Updated: 21 March 1994
+++ Basic Operations:
+++ Related Domains: IndexedMatrix(R,minRow,minCol), Matrix(R),
+++    RectangularMatrix(n,m,R), SquareMatrix(n,R)
+++ Also See:
+++ AMS Classifications:
+++ Keywords:
+++ Keywords: matrix, map, reduce
+++ Examples:
+++ References:
+++ Description:
+++   \spadtype{MatrixCategoryFunctions2} provides functions between two matrix
+++   domains.  The functions provided are \spadfun{map} and \spadfun{reduce}.
+MatrixCategoryFunctions2(R1,Row1,Col1,M1,R2,Row2,Col2,M2):_
+         Exports == Implementation where
+  R1   : Ring
+  Row1 : FiniteLinearAggregate R1
+  Col1 : FiniteLinearAggregate R1
+  M1   : MatrixCategory(R1,Row1,Col1)
+  R2   : Ring
+  Row2 : FiniteLinearAggregate R2
+  Col2 : FiniteLinearAggregate R2
+  M2   : MatrixCategory(R2,Row2,Col2)
+
+  Exports ==> with
+    map: (R1 -> R2,M1) -> M2
+      ++ \spad{map(f,m)} applies the function f to the elements of the matrix m.
+    map: (R1 -> Union(R2,"failed"),M1) -> Union(M2,"failed")
+      ++ \spad{map(f,m)} applies the function f to the elements of the matrix m.
+    reduce: ((R1,R2) -> R2,M1,R2) -> R2
+      ++ \spad{reduce(f,m,r)} returns a matrix n where
+      ++ \spad{n[i,j] = f(m[i,j],r)} for all indices i and j.
+
+  Implementation ==> add
+    minr ==> minRowIndex
+    maxr ==> maxRowIndex
+    minc ==> minColIndex
+    maxc ==> maxColIndex
+
+    map(f:(R1->R2),m:M1):M2 ==
+      ans : M2 := new(nrows m,ncols m,0)
+      for i in minr(m)..maxr(m) for k in minr(ans)..maxr(ans) repeat
+        for j in minc(m)..maxc(m) for l in minc(ans)..maxc(ans) repeat
+          qsetelt_!(ans,k,l,f qelt(m,i,j))
+      ans
+
+    map(f:(R1 -> (Union(R2,"failed"))),m:M1):Union(M2,"failed") ==
+      ans : M2 := new(nrows m,ncols m,0)
+      for i in minr(m)..maxr(m) for k in minr(ans)..maxr(ans) repeat
+        for j in minc(m)..maxc(m) for l in minc(ans)..maxc(ans) repeat
+          (r := f qelt(m,i,j)) = "failed" => return "failed"
+          qsetelt_!(ans,k,l,r::R2)
+      ans
+
+    reduce(f,m,ident) ==
+      s := ident
+      for i in minr(m)..maxr(m) repeat
+       for j in minc(m)..maxc(m) repeat
+         s := f(qelt(m,i,j),s)
+      s
+
+@
+\section{package RMCAT2 RectangularMatrixCategoryFunctions2}
+<<package RMCAT2 RectangularMatrixCategoryFunctions2>>=
+)abbrev package RMCAT2 RectangularMatrixCategoryFunctions2
+++ Author: Clifton J. Williamson
+++ Date Created: 21 November 1989
+++ Date Last Updated: 12 June 1991
+++ Basic Operations:
+++ Related Domains: IndexedMatrix(R,minRow,minCol), Matrix(R),
+++    RectangularMatrix(n,m,R), SquareMatrix(n,R)
+++ Also See:
+++ AMS Classifications:
+++ Keywords:
+++ Keywords: matrix, map, reduce
+++ Examples:
+++ References:
+++ Description:
+++ \spadtype{RectangularMatrixCategoryFunctions2} provides functions between
+++ two matrix domains.  The functions provided are \spadfun{map} and \spadfun{reduce}.
+
+RectangularMatrixCategoryFunctions2(m,n,R1,Row1,Col1,M1,R2,Row2,Col2,M2):_
+         Exports == Implementation where
+  m,n  : NonNegativeInteger
+  R1   : Ring
+  Row1 : DirectProductCategory(n, R1)
+  Col1 : DirectProductCategory(m, R1)
+  M1   : RectangularMatrixCategory(m,n,R1,Row1,Col1)
+  R2   : Ring
+  Row2 : DirectProductCategory(n, R2)
+  Col2 : DirectProductCategory(m, R2)
+  M2   : RectangularMatrixCategory(m,n,R2,Row2,Col2)
+
+  Exports ==> with
+    map: (R1 -> R2,M1) -> M2
+      ++ \spad{map(f,m)} applies the function \spad{f} to the elements of the
+      ++ matrix \spad{m}.
+    reduce: ((R1,R2) -> R2,M1,R2) -> R2
+      ++ \spad{reduce(f,m,r)} returns a matrix \spad{n} where
+      ++ \spad{n[i,j] = f(m[i,j],r)} for all indices spad{i} and \spad{j}.
+
+  Implementation ==> add
+    minr ==> minRowIndex
+    maxr ==> maxRowIndex
+    minc ==> minColIndex
+    maxc ==> maxColIndex
+
+    map(f,mat) ==
+      ans : M2 := new(m,n,0)$Matrix(R2) pretend M2
+      for i in minr(mat)..maxr(mat) for k in minr(ans)..maxr(ans) repeat
+        for j in minc(mat)..maxc(mat) for l in minc(ans)..maxc(ans) repeat
+          qsetelt_!(ans pretend Matrix R2,k,l,f qelt(mat,i,j))
+      ans
+
+    reduce(f,mat,ident) ==
+      s := ident
+      for i in minr(mat)..maxr(mat) repeat
+       for j in minc(mat)..maxc(mat) repeat
+         s := f(qelt(mat,i,j),s)
+      s
+
+@
+\section{package IMATQF InnerMatrixQuotientFieldFunctions}
+<<package IMATQF InnerMatrixQuotientFieldFunctions>>=
+)abbrev package IMATQF InnerMatrixQuotientFieldFunctions
+++ Author: Clifton J. Williamson
+++ Date Created: 22 November 1989
+++ Date Last Updated: 22 November 1989
+++ Basic Operations:
+++ Related Domains: IndexedMatrix(R,minRow,minCol), Matrix(R), RectangularMatrix(n,m,R), SquareMatrix(n,R)
+++ Also See:
+++ AMS Classifications:
+++ Keywords: matrix, inverse, integral domain
+++ Examples:
+++ References:
+++ Description:
+++   \spadtype{InnerMatrixQuotientFieldFunctions} provides functions on matrices
+++   over an integral domain which involve the quotient field of that integral
+++   domain.  The functions rowEchelon and inverse return matrices with
+++   entries in the quotient field.
+InnerMatrixQuotientFieldFunctions(R,Row,Col,M,QF,Row2,Col2,M2):_
+         Exports == Implementation where
+  R    : IntegralDomain
+  Row  : FiniteLinearAggregate R
+  Col  : FiniteLinearAggregate R
+  M    : MatrixCategory(R,Row,Col)
+  QF   : QuotientFieldCategory R
+  Row2 : FiniteLinearAggregate QF
+  Col2 : FiniteLinearAggregate QF
+  M2   : MatrixCategory(QF,Row2,Col2)
+  IMATLIN ==> InnerMatrixLinearAlgebraFunctions(QF,Row2,Col2,M2)
+  MATCAT2 ==> MatrixCategoryFunctions2(R,Row,Col,M,QF,Row2,Col2,M2)
+  CDEN    ==> InnerCommonDenominator(R,QF,Col,Col2)
+
+  Exports ==> with
+      rowEchelon: M -> M2
+        ++ \spad{rowEchelon(m)} returns the row echelon form of the matrix m.
+        ++ the result will have entries in the quotient field.
+      inverse: M -> Union(M2,"failed")
+        ++ \spad{inverse(m)} returns the inverse of the matrix m.
+        ++ If the matrix is not invertible, "failed" is returned.
+        ++ Error: if the matrix is not square.
+        ++ Note: the result will have entries in the quotient field.
+      if Col2 has shallowlyMutable then
+        nullSpace : M -> List Col
+          ++ \spad{nullSpace(m)} returns a basis for the null space of the
+          ++ matrix m.
+  Implementation ==> add
+
+    qfMat: M -> M2
+    qfMat m == map(#1 :: QF,m)$MATCAT2
+
+    rowEchelon m == rowEchelon(qfMat m)$IMATLIN
+    inverse m ==
+      (inv := inverse(qfMat m)$IMATLIN) case "failed" => "failed"
+      inv :: M2
+
+    if Col2 has shallowlyMutable then
+      nullSpace m ==
+        [clearDenominator(v)$CDEN for v in nullSpace(qfMat m)$IMATLIN]
+
+@
+\section{package MATLIN MatrixLinearAlgebraFunctions}
+<<package MATLIN MatrixLinearAlgebraFunctions>>=
+)abbrev package MATLIN MatrixLinearAlgebraFunctions
+++ Author: Clifton J. Williamson, P.Gianni
+++ Date Created: 13 November 1989
+++ Date Last Updated: December 1992
+++ Basic Operations:
+++ Related Domains: IndexedMatrix(R,minRow,minCol), Matrix(R),
+++    RectangularMatrix(n,m,R), SquareMatrix(n,R)
+++ Also See:
+++ AMS Classifications:
+++ Keywords: matrix, canonical forms, linear algebra
+++ Examples:
+++ References:
+++ Description:
+++   \spadtype{MatrixLinearAlgebraFunctions} provides functions to compute
+++   inverses and canonical forms.
+MatrixLinearAlgebraFunctions(R,Row,Col,M):Exports == Implementation where
+  R   : CommutativeRing
+  Row : FiniteLinearAggregate R
+  Col : FiniteLinearAggregate R
+  M   : MatrixCategory(R,Row,Col)
+  I ==> Integer
+
+  Exports ==> with
+
+    determinant: M -> R
+      ++ \spad{determinant(m)} returns the determinant of the matrix m.
+      ++ an error message is returned if the matrix is not square.
+    minordet: M -> R
+      ++ \spad{minordet(m)} computes the determinant of the matrix m using
+      ++ minors. Error: if the matrix is not square.
+    elRow1!       :   (M,I,I)         ->  M
+      ++ elRow1!(m,i,j) swaps rows i and j of matrix m : elementary operation
+      ++ of first kind
+    elRow2!       :  (M,R,I,I)        ->  M
+      ++ elRow2!(m,a,i,j)  adds to row i a*row(m,j) : elementary operation of
+      ++ second kind. (i ^=j)
+    elColumn2!    :  (M,R,I,I)        ->  M
+      ++ elColumn2!(m,a,i,j)  adds to column i a*column(m,j) : elementary
+      ++ operation of second kind. (i ^=j)
+
+    if R has IntegralDomain then
+      rank: M -> NonNegativeInteger
+        ++ \spad{rank(m)} returns the rank of the matrix m.
+      nullity: M -> NonNegativeInteger
+        ++ \spad{nullity(m)} returns the mullity of the matrix m. This is
+        ++ the dimension of the null space of the matrix m.
+      nullSpace: M -> List Col
+        ++ \spad{nullSpace(m)} returns a basis for the null space of the
+        ++ matrix m.
+      fractionFreeGauss! : M -> M
+        ++ \spad{fractionFreeGauss(m)} performs the fraction
+        ++ free gaussian  elimination on the matrix m.
+      invertIfCan : M -> Union(M,"failed")
+        ++ \spad{invertIfCan(m)} returns the inverse of m over R
+      adjoint : M -> Record(adjMat:M, detMat:R)
+        ++ \spad{adjoint(m)} returns the ajoint matrix of m (i.e. the matrix
+        ++ n such that m*n = determinant(m)*id) and the detrminant of m.
+
+    if R has EuclideanDomain then
+      rowEchelon: M -> M
+        ++ \spad{rowEchelon(m)} returns the row echelon form of the matrix m.
+
+      normalizedDivide: (R, R) -> Record(quotient:R, remainder:R)
+        ++ normalizedDivide(n,d) returns a normalized quotient and
+        ++ remainder such that consistently unique representatives
+        ++ for the residue class are chosen, e.g. positive remainders
+
+    if R has Field then
+      inverse: M -> Union(M,"failed")
+        ++ \spad{inverse(m)} returns the inverse of the matrix.
+        ++ If the matrix is not invertible, "failed" is returned.
+        ++ Error: if the matrix is not square.
+
+  Implementation ==> add
+
+    rowAllZeroes?: (M,I) -> Boolean
+    rowAllZeroes?(x,i) ==
+      -- determines if the ith row of x consists only of zeroes
+      -- internal function: no check on index i
+      for j in minColIndex(x)..maxColIndex(x) repeat
+        qelt(x,i,j) ^= 0 => return false
+      true
+
+    colAllZeroes?: (M,I) -> Boolean
+    colAllZeroes?(x,j) ==
+      -- determines if the ith column of x consists only of zeroes
+      -- internal function: no check on index j
+      for i in minRowIndex(x)..maxRowIndex(x) repeat
+        qelt(x,i,j) ^= 0 => return false
+      true
+
+    minorDet:(M,I,List I,I,PrimitiveArray(Union(R,"uncomputed")))-> R
+    minorDet(x,m,l,i,v) ==
+      z := v.m
+      z case R => z
+      ans : R := 0; rl : List I := nil()
+      j := first l; l := rest l; pos := true
+      minR := minRowIndex x; minC := minColIndex x;
+      repeat
+        if qelt(x,j + minR,i + minC) ^= 0 then
+          ans :=
+            md := minorDet(x,m - 2**(j :: NonNegativeInteger),_
+                           concat_!(reverse rl,l),i + 1,v) *_
+                           qelt(x,j + minR,i + minC)
+            pos => ans + md
+            ans - md
+        null l =>
+          v.m := ans
+          return ans
+        pos := not pos; rl := cons(j,rl); j := first l; l := rest l
+
+    minordet x ==
+      (ndim := nrows x) ^= (ncols x) =>
+        error "determinant: matrix must be square"
+      -- minor expansion with (s---loads of) memory
+      n1 : I := ndim - 1
+      v : PrimitiveArray(Union(R,"uncomputed")) :=
+           new((2**ndim - 1) :: NonNegativeInteger,"uncomputed")
+      minR := minRowIndex x; maxC := maxColIndex x
+      for i in 0..n1 repeat
+        qsetelt_!(v,(2**i - 1),qelt(x,i + minR,maxC))
+      minorDet(x, 2**ndim - 2, [i for i in 0..n1], 0, v)
+
+       -- elementary operation of first kind: exchange two rows --
+    elRow1!(m:M,i:I,j:I) : M ==
+      vec:=row(m,i)
+      setRow!(m,i,row(m,j))
+      setRow!(m,j,vec)
+      m
+
+             -- elementary operation of second kind: add to row i--
+                         -- a*row j  (i^=j) --
+    elRow2!(m : M,a:R,i:I,j:I) : M ==
+      vec:= map(a*#1,row(m,j))
+      vec:=map("+",row(m,i),vec)
+      setRow!(m,i,vec)
+      m
+             -- elementary operation of second kind: add to column i --
+                           -- a*column j (i^=j) --
+    elColumn2!(m : M,a:R,i:I,j:I) : M ==
+      vec:= map(a*#1,column(m,j))
+      vec:=map("+",column(m,i),vec)
+      setColumn!(m,i,vec)
+      m
+
+    if R has IntegralDomain then
+      -- Fraction-Free Gaussian Elimination
+      fractionFreeGauss! x  ==
+        (ndim := nrows x) = 1 => x
+        ans := b := 1$R
+        minR := minRowIndex x; maxR := maxRowIndex x
+        minC := minColIndex x; maxC := maxColIndex x
+        i := minR
+        for j in minC..maxC repeat
+          if qelt(x,i,j) = 0 then -- candidate for pivot = 0
+            rown := minR - 1
+            for k in (i+1)..maxR repeat
+              if qelt(x,k,j) ^= 0 then
+                 rown := k -- found a pivot
+                 leave
+            if rown > minR - 1 then
+               swapRows_!(x,i,rown)
+               ans := -ans
+          (c := qelt(x,i,j)) = 0 =>  "next j" -- try next column
+          for k in (i+1)..maxR repeat
+            if qelt(x,k,j) = 0 then
+              for l in (j+1)..maxC repeat
+                qsetelt_!(x,k,l,(c * qelt(x,k,l) exquo b) :: R)
+            else
+              pv := qelt(x,k,j)
+              qsetelt_!(x,k,j,0)
+              for l in (j+1)..maxC repeat
+                val := c * qelt(x,k,l) - pv * qelt(x,i,l)
+                qsetelt_!(x,k,l,(val exquo b) :: R)
+          b := c
+          (i := i+1)>maxR => leave
+        if ans=-1 then
+          lasti := i-1
+          for j in 1..maxC repeat x(lasti, j) := -x(lasti,j)
+        x
+
+      --
+      lastStep(x:M)  : M ==
+        ndim := nrows x
+        minR := minRowIndex x; maxR := maxRowIndex x
+        minC := minColIndex x; maxC := minC+ndim -1
+        exCol:=maxColIndex x
+        det:=x(maxR,maxC)
+        maxR1:=maxR-1
+        maxC1:=maxC+1
+        minC1:=minC+1
+        iRow:=maxR
+        iCol:=maxC-1
+        for i in maxR1..1 by -1 repeat
+          for j in maxC1..exCol repeat
+            ss:=+/[x(i,iCol+k)*x(i+k,j) for k in 1..(maxR-i)]
+            x(i,j) := _exquo((det * x(i,j) - ss),x(i,iCol))::R
+          iCol:=iCol-1
+        subMatrix(x,minR,maxR,maxC1,exCol)
+
+      invertIfCan(y) ==
+        (nr:=nrows y) ^= (ncols y) =>
+            error "invertIfCan: matrix must be square"
+        adjRec := adjoint y
+        (den:=recip(adjRec.detMat)) case "failed" => "failed"
+        den::R * adjRec.adjMat
+
+      adjoint(y) ==
+        (nr:=nrows y) ^= (ncols y) => error "adjoint: matrix must be square"
+        maxR := maxRowIndex y
+        maxC := maxColIndex y
+        x := horizConcat(copy y,scalarMatrix(nr,1$R))
+        ffr:= fractionFreeGauss!(x)
+        det:=ffr(maxR,maxC)
+        [lastStep(ffr),det]
+
+
+    if R has Field then
+
+      VR      ==> Vector R
+      IMATLIN ==> InnerMatrixLinearAlgebraFunctions(R,Row,Col,M)
+      MMATLIN ==> InnerMatrixLinearAlgebraFunctions(R,VR,VR,Matrix R)
+      FLA2    ==> FiniteLinearAggregateFunctions2(R, VR, R, Col)
+      MAT2    ==> MatrixCategoryFunctions2(R,Row,Col,M,R,VR,VR,Matrix R)
+
+      rowEchelon  y == rowEchelon(y)$IMATLIN
+      rank        y == rank(y)$IMATLIN
+      nullity     y == nullity(y)$IMATLIN
+      determinant y == determinant(y)$IMATLIN
+      inverse     y == inverse(y)$IMATLIN
+      if Col has shallowlyMutable then
+        nullSpace y == nullSpace(y)$IMATLIN
+      else
+        nullSpace y ==
+          [map(#1, v)$FLA2 for v in nullSpace(map(#1, y)$MAT2)$MMATLIN]
+
+    else if R has IntegralDomain then
+      QF      ==> Fraction R
+      Row2    ==> Vector QF
+      Col2    ==> Vector QF
+      M2      ==> Matrix QF
+      IMATQF  ==> InnerMatrixQuotientFieldFunctions(R,Row,Col,M,QF,Row2,Col2,M2)
+
+      nullSpace m == nullSpace(m)$IMATQF
+
+      determinant y ==
+        (nrows y) ^= (ncols y) => error "determinant: matrix must be square"
+        fm:=fractionFreeGauss!(copy y)
+        fm(maxRowIndex fm,maxColIndex fm)
+
+      rank x ==
+        y :=
+          (rk := nrows x) > (rh := ncols x) =>
+              rk := rh
+              transpose x
+          copy x
+        y := fractionFreeGauss! y
+        i := maxRowIndex y
+        while rk > 0 and rowAllZeroes?(y,i) repeat
+          i := i - 1
+          rk := (rk - 1) :: NonNegativeInteger
+        rk :: NonNegativeInteger
+
+      nullity x == (ncols x - rank x) :: NonNegativeInteger
+
+      if R has EuclideanDomain then
+
+        if R has IntegerNumberSystem then
+            normalizedDivide(n:R, d:R):Record(quotient:R, remainder:R) ==
+               qr := divide(n, d)
+               qr.remainder >= 0 => qr
+               d > 0 =>
+                  qr.remainder := qr.remainder + d
+                  qr.quotient := qr.quotient - 1
+                  qr
+               qr.remainder := qr.remainder - d
+               qr.quotient := qr.quotient + 1
+               qr
+        else
+            normalizedDivide(n:R, d:R):Record(quotient:R, remainder:R) ==
+               divide(n, d)
+
+        rowEchelon y ==
+          x := copy y
+          minR := minRowIndex x; maxR := maxRowIndex x
+          minC := minColIndex x; maxC := maxColIndex x
+          n := minR - 1
+          i := minR
+          for j in minC..maxC repeat
+            if i > maxR then leave x
+            n := minR - 1
+            xnj: R
+            for k in i..maxR repeat
+              if not zero?(xkj:=qelt(x,k,j)) and ((n = minR - 1) _
+                     or sizeLess?(xkj,xnj)) then
+                n := k
+                xnj := xkj
+            n = minR - 1 => "next j"
+            swapRows_!(x,i,n)
+            for k in (i+1)..maxR repeat
+              qelt(x,k,j) = 0 => "next k"
+              aa := extendedEuclidean(qelt(x,i,j),qelt(x,k,j))
+              (a,b,d) := (aa.coef1,aa.coef2,aa.generator)
+              b1 := (qelt(x,i,j) exquo d) :: R
+              a1 := (qelt(x,k,j) exquo d) :: R
+              -- a*b1+a1*b = 1
+              for k1 in (j+1)..maxC repeat
+                val1 := a * qelt(x,i,k1) + b * qelt(x,k,k1)
+                val2 := -a1 * qelt(x,i,k1) + b1 * qelt(x,k,k1)
+                qsetelt_!(x,i,k1,val1); qsetelt_!(x,k,k1,val2)
+              qsetelt_!(x,i,j,d); qsetelt_!(x,k,j,0)
+
+            un := unitNormal qelt(x,i,j)
+            qsetelt_!(x,i,j,un.canonical)
+            if un.associate ^= 1 then for jj in (j+1)..maxC repeat
+                qsetelt_!(x,i,jj,un.associate * qelt(x,i,jj))
+
+            xij := qelt(x,i,j)
+            for k in minR..(i-1) repeat
+              qelt(x,k,j) = 0 => "next k"
+              qr := normalizedDivide(qelt(x,k,j), xij)
+              qsetelt_!(x,k,j,qr.remainder)
+              for k1 in (j+1)..maxC repeat
+                qsetelt_!(x,k,k1,qelt(x,k,k1) - qr.quotient * qelt(x,i,k1))
+            i := i + 1
+          x
+
+    else determinant x == minordet x
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+-- This file and MATRIX SPAD must be compiled in bootstrap mode.
+
+<<package IMATLIN InnerMatrixLinearAlgebraFunctions>>
+<<package MATCAT2 MatrixCategoryFunctions2>>
+<<package RMCAT2 RectangularMatrixCategoryFunctions2>>
+<<package IMATQF InnerMatrixQuotientFieldFunctions>>
+<<package MATLIN MatrixLinearAlgebraFunctions>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

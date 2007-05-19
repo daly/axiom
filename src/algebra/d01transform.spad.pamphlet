@@ -1,0 +1,212 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra d01transform.spad}
+\author{Brian Dupee}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{domain D01TRNS d01TransformFunctionType}
+<<domain D01TRNS d01TransformFunctionType>>=
+)abbrev domain D01TRNS d01TransformFunctionType
+++ Author: Brian Dupee
+++ Date Created: April 1994
+++ Date Last Updated: December 1997
+++ Basic Operations: measure, numericalIntegration
+++ Related Constructors: Result, RoutinesTable
+++ Description:
+++ Since an infinite integral cannot be evaluated numerically
+++ it is necessary to transform the integral onto finite ranges.
+++ \axiomType{d01TransformFunctionType} uses the mapping \spad{x -> 1/x}
+++ and contains the functions \axiomFun{measure} and
+++ \axiomFun{numericalIntegration}.
+EDF	==> Expression DoubleFloat
+EEDF	==> Equation Expression DoubleFloat
+FI	==> Fraction Integer
+EFI	==> Expression Fraction Integer
+EEFI	==> Equation Expression Fraction Integer
+EF2	==> ExpressionFunctions2
+DF	==> DoubleFloat
+F	==> Float
+SOCDF	==> Segment OrderedCompletion DoubleFloat
+OCDF	==> OrderedCompletion DoubleFloat
+NIA	==> Record(var:Symbol,fn:EDF,range:SOCDF,abserr:DF,relerr:DF)
+INT     ==> Integer
+PI	==> PositiveInteger
+HINT	==> Record(str:String,fn:EDF,range:SOCDF,ext:Result)
+S	==> Symbol
+ST	==> String
+LST	==> List String
+Measure	==> Record(measure:F,explanations:ST,extra:Result)
+MS	==> Record(measure:F,name:ST,explanations:LST,extra:Result)
+
+d01TransformFunctionType():NumericalIntegrationCategory == Result add
+  Rep:=Result
+  import d01AgentsPackage,Rep
+
+  rec2any(re:Record(str:ST,fn:EDF,range:SOCDF)):Any ==
+    coerce(re)$AnyFunctions1(Record(str:ST,fn:EDF,range:SOCDF))
+
+  changeName(ans:Result,name:ST):Result ==
+    sy:S := coerce(name "Answer")$S
+    anyAns:Any := coerce(ans)$AnyFunctions1(Result)
+    construct([[sy,anyAns]])$Result
+
+  getIntegral(args:NIA,hint:HINT) : Result ==
+    Args := copy args
+    Args.fn := hint.fn
+    Args.range := hint.range
+    integrate(Args::NumericalIntegrationProblem)$AnnaNumericalIntegrationPackage
+
+  transformFunction(args:NIA) : NIA ==
+    Args := copy args    
+    Var := Args.var :: EFI                 -- coerce Symbol to EFI
+    NewVar:EFI := inv(Var)$EFI             -- invert it
+    VarEqn:EEFI:=equation(Var,NewVar)$EEFI -- turn it into an equation
+    Afn:EFI := edf2efi(Args.fn)$ExpertSystemToolsPackage
+    Afn := subst(Afn,VarEqn)$EFI           -- substitute into function
+    Var2:EFI := Var**2
+    Afn:= simplify(Afn/Var2)$TranscendentalManipulations(FI,EFI)
+    Args.fn:= map(convert(#1)$FI,Afn)$EF2(FI,DF)
+    Args
+
+  doit(seg:SOCDF,args:NIA):MS ==
+    Args := copy args
+    Args.range := seg
+    measure(Args::NumericalIntegrationProblem)$AnnaNumericalIntegrationPackage
+
+  transform(c:Boolean,args:NIA):Measure ==
+    if c then
+      l := coerce(recip(lo(args.range)))@OCDF
+      Seg:SOCDF := segment(0$OCDF,l)
+    else
+      h := coerce(recip(hi(args.range)))@OCDF
+      Seg:SOCDF := segment(h,0$OCDF)
+    Args := transformFunction(args)
+    m:MS := doit(Seg,Args)
+    out1:ST := 
+       "The recommendation is to transform the function and use " m.name
+    out2:List(HINT) := [[m.name,Args.fn,Seg,m.extra]]
+    out2Any:Any := coerce(out2)$AnyFunctions1(List(HINT))
+    ex:Record(key:S,entry:Any) := [d01transformextra@S,out2Any]
+    extr:Result := construct([ex])$Result
+    [m.measure,out1,extr]
+      
+  split(c:PI,args:NIA):Measure ==
+    Args := copy args
+    Args.relerr := Args.relerr/2
+    Args.abserr := Args.abserr/2
+    if (c = 1)@Boolean then 
+      seg1:SOCDF := segment(-1$OCDF,1$OCDF)
+    else if (c = 2)@Boolean then
+      seg1 := segment(lo(Args.range),1$OCDF)
+    else
+      seg1 := segment(-1$OCDF,hi(Args.range))
+    m1:MS := doit(seg1,Args)
+    Args := transformFunction Args
+    if (c = 2)@Boolean then
+      seg2:SOCDF := segment(0$OCDF,1$OCDF)
+    else if (c = 3)@Boolean then
+      seg2 := segment(-1$OCDF,0$OCDF)
+    else seg2 := seg1
+    m2:MS := doit(seg2,Args)
+    m1m:F := m1.measure
+    m2m:F := m2.measure
+    m:F := m1m*m2m/((m1m*m2m)+(1.0-m1m)*(1.0-m2m))
+    out1:ST := "The recommendation is to transform the function and use "
+                               m1.name " and " m2.name
+    out2:List(HINT) :=
+             [[m1.name,args.fn,seg1,m1.extra],[m2.name,Args.fn,seg2,m2.extra]]
+    out2Any:Any := coerce(out2)$AnyFunctions1(List(HINT))
+    ex:Record(key:S,entry:Any) := [d01transformextra@S,out2Any]
+    extr:Result := construct([ex])$Result
+    [m,out1,extr]
+
+  measure(R:RoutinesTable,args:NIA) ==
+    Range:=rangeIsFinite(args)
+    Range case bothInfinite => split(1,args)
+    Range case upperInfinite =>
+      positive?(lo(args.range))$OCDF =>
+        transform(true,args)
+      split(2,args)
+    Range case lowerInfinite =>
+      negative?(hi(args.range))$OCDF =>
+        transform(false,args)
+      split(3,args)
+
+  numericalIntegration(args:NIA,hints:Result) ==
+    mainResult:DF := mainAbserr:DF := 0$DF
+    ans:Result := empty()$Result
+    hla:Any := coerce(search((d01transformextra@S),hints)$Result)@Any
+    hintList := retract(hla)$AnyFunctions1(List(HINT))
+    methodName:ST := empty()$ST
+    repeat
+      if (empty?(hintList)$(List(HINT))) 
+        then leave
+      item := first(hintList)$List(HINT)
+      a:Result := getIntegral(args,item)
+      anyRes := coerce(search((result@S),a)$Result)@Any
+      midResult := retract(anyRes)$AnyFunctions1(DF)
+      anyErr := coerce(search((abserr pretend S),a)$Result)@Any
+      midAbserr := retract(anyErr)$AnyFunctions1(DF)
+      mainResult := mainResult+midResult
+      mainAbserr := mainAbserr+midAbserr
+      if (methodName = item.str)@Boolean then
+        methodName := concat([item.str,"1"])$ST
+      else
+        methodName := item.str
+      ans := concat(ans,changeName(a,methodName))$ExpertSystemToolsPackage
+      hintList := rest(hintList)$(List(HINT))
+    anyResult := coerce(mainResult)$AnyFunctions1(DF)
+    anyAbserr := coerce(mainAbserr)$AnyFunctions1(DF)
+    recResult:Record(key:S,entry:Any):=[result@S,anyResult]
+    recAbserr:Record(key:S,entry:Any):=[abserr pretend S,anyAbserr]
+    insert!(recAbserr,insert!(recResult,ans))$Result
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<domain D01TRNS d01TransformFunctionType>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

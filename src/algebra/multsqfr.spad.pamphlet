@@ -1,0 +1,395 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra multsqfr.spad}
+\author{Patrizia Gianni}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package MULTSQFR MultivariateSquareFree}
+<<package MULTSQFR MultivariateSquareFree>>=
+)abbrev package MULTSQFR MultivariateSquareFree
+++Author : P.Gianni
+++ This package provides the functions for the computation of the square
+++ free decomposition of a multivariate polynomial.
+++ It uses the package GenExEuclid for the resolution of
+++ the equation \spad{Af + Bg = h} and its generalization to n polynomials
+++ over an integral domain and the package \spad{MultivariateLifting}
+++ for the "multivariate" lifting.
+ 
+MultivariateSquareFree (E,OV,R,P) : C == T where
+ Z   ==> Integer
+ NNI ==> NonNegativeInteger
+ R   : EuclideanDomain
+ OV  : OrderedSet
+ E   : OrderedAbelianMonoidSup
+ P   : PolynomialCategory(R,E,OV)
+ SUP ==> SparseUnivariatePolynomial P
+ 
+ BP          ==> SparseUnivariatePolynomial(R)
+ fUnion      ==> Union("nil","sqfr","irred","prime")
+ ffSUP       ==> Record(flg:fUnion,fctr:SUP,xpnt:Integer)
+ ffP         ==> Record(flg:fUnion,fctr:P,xpnt:Integer)
+ FFE         ==> Record(factor:BP,exponent:Z)
+ FFEP        ==> Record(factor:P,exponent:Z)
+ FFES        ==> Record(factor:SUP,exponent:Z)
+ Choice      ==> Record(upol:BP,Lval:List(R),Lfact:List FFE,ctpol:R)
+ squareForm  ==> Record(unitPart:P,suPart:List FFES)
+ Twopol      ==> Record(pol:SUP,polval:BP)
+ UPCF2       ==> UnivariatePolynomialCategoryFunctions2
+
+ 
+ C == with
+   squareFree      :      P     -> Factored P
+     ++ squareFree(p) computes the square free 
+     ++ decomposition of a multivariate polynomial p.
+   squareFree      :      SUP     -> Factored SUP
+     ++ squareFree(p) computes the square free 
+     ++ decomposition of a multivariate polynomial p presented as
+     ++ a univariate polynomial with multivariate coefficients.
+   squareFreePrim :      P     -> Factored P
+     ++ squareFreePrim(p) compute the square free decomposition 
+     ++ of a primitive multivariate polynomial p.
+
+
+ 
+                    ----  local functions  ----
+   compdegd   :             List FFE                   -> Z
+	++ compdegd should be local
+   univcase   :              (P,OV)                    -> Factored(P)
+	++ univcase should be local
+   consnewpol :            (SUP,BP,Z)                  -> Twopol
+	++ consnewpol should be local
+   nsqfree    :           (SUP,List(OV), List List R)  -> squareForm
+	++ nsqfree should be local
+   intChoose  :           (SUP,List(OV),List List R)   -> Choice
+	++ intChoose should be local
+   coefChoose :           (Z,Factored P)               -> P
+	++ coefChoose should be local
+   check      :     (List(FFE),List(FFE))              -> Boolean
+	++ check should be local
+   lift       : (SUP,BP,BP,P,List(OV),List(NNI),List(R)) -> Union(List(SUP),"failed")
+	++ lift should be local
+   myDegree   :       (SUP,List OV,NNI)                -> List NNI
+	++ myDegree should be local
+   normDeriv2 :            (BP,Z)                      ->  BP
+	++ normDeriv2 should be local
+
+
+ 
+ T == add
+ 
+   pmod:R   :=  (prevPrime(2**26)$IntegerPrimesPackage(Integer))::R
+ 
+ 
+   import GenExEuclid()
+   import MultivariateLifting(E,OV,R,P)
+   import PolynomialGcdPackage(E,OV,R,P)
+   import FactoringUtilities(E,OV,R,P)
+   import IntegerCombinatoricFunctions(Z)
+ 
+ 
+    ----  Are the univariate square-free decompositions consistent?  ----
+ 
+     ----  new square-free algorithm for primitive polynomial  ----
+   nsqfree(oldf:SUP,lvar:List(OV),ltry:List List R) : squareForm ==
+     f:=oldf
+     univPol := intChoose(f,lvar,ltry)
+--     debug msg
+--     if not empty? ltry then output("ltry =", (ltry::OutputForm))$OutputPackage
+     f0:=univPol.upol
+     --the polynomial is square-free
+     f0=1$BP => [1$P,[[f,1]$FFES]]$squareForm
+     lfact:List(FFE):=univPol.Lfact
+     lval:=univPol.Lval
+     ctf:=univPol.ctpol
+     leadpol:Boolean:=false
+     sqdec:List FFES := empty()
+     exp0:Z:=0
+     unitsq:P:=1
+     lcf:P:=leadingCoefficient f
+     if ctf^=1 then
+       f0:=ctf*f0
+       f:=(ctf::P)*f
+       lcf:=ctf*lcf
+     sqlead:List FFEP:= empty()
+     sqlc:Factored P:=1
+     if lcf^=1$P then
+       leadpol:=true
+       sqlc:=squareFree lcf
+       unitsq:=unitsq*(unit sqlc)
+       sqlead:= factors sqlc
+     lfact:=sort(#1.exponent > #2.exponent,lfact)
+     while lfact^=[] repeat
+       pfact:=lfact.first
+       (g0,exp0):=(pfact.factor,pfact.exponent)
+       lfact:=lfact.rest
+       lfact=[] and exp0 =1 =>
+         f := (f exquo (ctf::P))::SUP
+         gg := unitNormal leadingCoefficient f
+         sqdec:=cons([gg.associate*f,exp0],sqdec)
+         return  [gg.unit, sqdec]$squareForm
+       if ctf^=1 then g0:=ctf*g0
+       npol:=consnewpol(f,f0,exp0)
+       (d,d0):=(npol.pol,npol.polval)
+       if leadpol then lcoef:=coefChoose(exp0,sqlc)
+       else lcoef:=1$P
+       ldeg:=myDegree(f,lvar,exp0::NNI)
+       result:=lift(d,g0,(d0 exquo g0)::BP,lcoef,lvar,ldeg,lval)
+       result case "failed" => return nsqfree(oldf,lvar,ltry)
+       result0:SUP:= (result::List SUP).1
+       r1:SUP:=result0**(exp0:NNI)
+       if (h:=f exquo r1) case "failed" then return nsqfree(oldf,lvar,empty())
+       sqdec:=cons([result0,exp0],sqdec)
+       f:=h::SUP
+       f0:=completeEval(h,lvar,lval)
+       lcr:P:=leadingCoefficient result0
+       if leadpol and lcr^=1$P then
+         for lpfact in sqlead  while lcr^=1 repeat
+           ground? lcr =>
+             unitsq:=(unitsq exquo lcr)::P
+             lcr:=1$P
+           (h1:=lcr exquo lpfact.factor) case "failed" => "next"
+           lcr:=h1::P
+           lpfact.exponent:=(lpfact.exponent)-exp0
+     [((retract f) exquo ctf)::P,sqdec]$squareForm
+
+ 
+   squareFree(f:SUP) : Factored SUP ==
+     degree f =0 =>
+       fu:=squareFree retract f
+       makeFR((unit fu)::SUP,[["sqfr",ff.fctr::SUP,ff.xpnt]
+               for ff in factorList fu])
+     lvar:= "setUnion"/[variables cf for cf in coefficients f]
+     empty? lvar =>  -- the polynomial is univariate
+       upol:=map(ground,f)$UPCF2(P,SUP,R,BP)
+       usqfr:=squareFree upol
+       makeFR(map(coerce,unit usqfr)$UPCF2(R,BP,P,SUP),
+              [["sqfr",map(coerce,ff.fctr)$UPCF2(R,BP,P,SUP),ff.xpnt]
+                 for ff in factorList usqfr])
+
+     lcf:=content f
+     f:=(f exquo lcf) ::SUP
+     lcSq:=squareFree lcf
+     lfs:List ffSUP:=[["sqfr",ff.fctr ::SUP,ff.xpnt]
+                        for ff in factorList lcSq]
+     partSq:=nsqfree(f,lvar,empty())
+
+     lfs:=append([["sqfr",fu.factor,fu.exponent]$ffSUP
+                    for fu in partSq.suPart],lfs)
+     makeFR((unit lcSq * partSq.unitPart) ::SUP,lfs)
+
+   squareFree(f:P) : Factored P ==
+     ground? f => makeFR(f,[])      ---   the polynomial is constant  ---
+ 
+     lvar:List(OV):=variables(f)
+     result1:List ffP:= empty()
+
+     lmdeg :=minimumDegree(f,lvar)     ---       is the mindeg > 0 ? ---
+     p:P:=1$P
+     for im in 1..#lvar repeat
+       (n:=lmdeg.im)=0 => "next im"
+       y:=lvar.im
+       p:=p*monomial(1$P,y,n)
+       result1:=cons(["sqfr",y::P,n],result1)
+     if p^=1$P then
+       f := (f exquo p)::P
+       if ground? f then return makeFR(f, result1)
+       lvar:=variables(f)
+ 
+ 
+     #lvar=1 =>                    ---  the polynomial is univariate ---
+       result:=univcase(f,lvar.first)
+       makeFR(unit result,append(result1,factorList result))
+ 
+     ldeg:=degree(f,lvar)          ---  general case ---
+     m:="min"/[j for j in ldeg|j^=0]
+     i:Z:=1
+     for j in ldeg while j>m repeat i:=i+1
+     x:=lvar.i
+     lvar:=delete(lvar,i)
+     f0:=univariate (f,x)
+     lcont:P:= content f0
+     nsqfftot:=nsqfree((f0 exquo lcont)::SUP,lvar,empty())
+     nsqff:List ffP:=[["sqfr",multivariate(fu.factor,x),fu.exponent]$ffP
+                          for fu in nsqfftot.suPart]
+     result1:=append(result1,nsqff)
+     ground? lcont => makeFR(lcont*nsqfftot.unitPart,result1)
+     sqlead:=squareFree(lcont)
+     makeFR(unit sqlead*nsqfftot.unitPart,append(result1,factorList sqlead))
+ 
+  -- Choose the integer for the evaluation.                        --
+  -- If the polynomial is square-free the function returns upol=1. --
+ 
+   intChoose(f:SUP,lvar:List(OV),ltry:List List R):Choice ==
+     degf:= degree f
+     try:NNI:=0
+     nvr:=#lvar
+     range:Z:=10
+     lfact1:List(FFE):=[]
+     lval1:List R := []
+     lfact:List(FFE)
+     ctf1:R:=1
+     f1:BP:=1$BP
+     d1:Z
+     while range<10000000000 repeat
+       range:=2*range
+       lval:= [ran(range) for i in 1..nvr]
+       member?(lval,ltry) => "new integer"
+       ltry:=cons(lval,ltry)
+       f0:=completeEval(f,lvar,lval)
+       degree f0 ^=degf  => "new integer"
+       ctf:=content f0
+       lfact:List(FFE):=factors(squareFree((f0 exquo (ctf:R)::BP)::BP))
+ 
+            ----  the univariate polynomial is square-free  ----
+       if #lfact=1 and (lfact.1).exponent=1 then
+         return [1$BP,lval,lfact,1$R]$Choice
+ 
+       d0:=compdegd lfact
+                 ----      inizialize lfact1      ----
+       try=0 =>
+         f1:=f0
+         lfact1:=lfact
+         ctf1:=ctf
+         lval1:=lval
+         d1:=d0
+         try:=1
+       d0=d1 =>
+         return [f1,lval1,lfact1,ctf1]$Choice
+       d0 < d1 =>
+         try:=1
+         f1:=f0
+         lfact1:=lfact
+         ctf1:=ctf
+         lval1:=lval
+         d1:=d0
+ 
+ 
+        ----  Choose the leading coefficient for the lifting  ----
+   coefChoose(exp:Z,sqlead:Factored(P)) : P ==
+     lcoef:P:=unit(sqlead)
+     for term in factors(sqlead) repeat
+       texp:=term.exponent
+       texp<exp => "next term"
+       texp=exp => lcoef:=lcoef*term.factor
+       lcoef:=lcoef*(term.factor)**((texp quo exp)::NNI)
+     lcoef
+ 
+        ----  Construction of the polynomials for the lifting  ----
+   consnewpol(g:SUP,g0:BP,deg:Z):Twopol ==
+     deg=1 => [g,g0]$Twopol
+     deg:=deg-1
+     [normalDeriv(g,deg),normDeriv2(g0,deg)]$Twopol
+ 
+         ----  lift the univariate square-free factor  ----
+   lift(ud:SUP,g0:BP,g1:BP,lcoef:P,lvar:List(OV),
+                        ldeg:List(NNI),lval:List(R)) : Union(List SUP,"failed") ==
+     leadpol:Boolean:=false
+     lcd:P:=leadingCoefficient ud
+     leadlist:List(P):=empty()
+ 
+     if ^ground?(leadingCoefficient ud) then
+       leadpol:=true
+       ud:=lcoef*ud
+       lcg0:R:=leadingCoefficient g0
+       if ground? lcoef then g0:=retract(lcoef) quo lcg0 *g0
+       else g0:=(retract(eval(lcoef,lvar,lval)) quo lcg0) * g0
+       g1:=lcg0*g1
+       leadlist:=[lcoef,lcd]
+     plist:=lifting(ud,lvar,[g0,g1],lval,leadlist,ldeg,pmod)
+     plist case "failed" => "failed" 
+     (p0:SUP,p1:SUP):=((plist::List SUP).1,(plist::List SUP).2)
+     if completeEval(p0,lvar,lval) ^= g0 then (p0,p1):=(p1,p0)
+     [primitivePart p0,primitivePart p1]
+
+                ----  the polynomial is univariate  ----
+   univcase(f:P,x:OV) : Factored(P) ==
+     uf := univariate f
+     cf:=content uf
+     uf :=(uf exquo cf)::BP
+     result:Factored BP:=squareFree uf
+     makeFR(multivariate(cf*unit result,x),
+         [["sqfr",multivariate(term.factor,x),term.exponent]
+           for term in factors result])
+
+--   squareFreePrim(p:P) : Factored P ==
+--     -- p is content free
+--     ground? p => makeFR(p,[])      ---   the polynomial is constant  ---
+-- 
+--     lvar:List(OV):=variables p
+--     #lvar=1 =>                    ---  the polynomial is univariate ---
+--       univcase(p,lvar.first)
+--     nsqfree(p,lvar,1)
+ 
+   compdegd(lfact:List(FFE)) : Z ==
+     ris:Z:=0
+     for pfact in lfact repeat
+       ris:=ris+(pfact.exponent -1)*degree pfact.factor
+     ris
+ 
+   normDeriv2(f:BP,m:Z) : BP ==
+     (n1:Z:=degree f) < m => 0$BP
+     n1=m => (leadingCoefficient f)::BP
+     k:=binomial(n1,m)
+     ris:BP:=0$BP
+     n:Z:=n1
+     while n>= m repeat
+       while n1>n repeat
+         k:=(k*(n1-m)) quo n1
+         n1:=n1-1
+       ris:=ris+monomial(k*leadingCoefficient f,(n-m)::NNI)
+       f:=reductum f
+       n:=degree f
+     ris
+
+   myDegree(f:SUP,lvar:List OV,exp:NNI) : List NNI==
+     [n quo exp for n in degree(f,lvar)]
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package MULTSQFR MultivariateSquareFree>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

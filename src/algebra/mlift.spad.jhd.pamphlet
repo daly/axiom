@@ -1,0 +1,272 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra mlift.spad.jhd}
+\author{Patrizia Gianni}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package MLIFT MultivariateLifting}
+<<package MLIFT MultivariateLifting>>=
+)abbrev package MLIFT MultivariateLifting
+++ Author : P.Gianni.
+++ Description: 
+++ This package provides the functions for the multivariate "lifting", using
+++ an algorithm of Paul Wang.
+++ This package will work for every euclidean domain R which has property
+++ F, i.e. there exists a factor operation in \spad{R[x]}.
+ 
+MultivariateLifting(E,OV,R,P) : C == T
+ where
+  OV        :   OrderedSet
+  E         :   OrderedAbelianMonoidSup
+  R         :   EuclideanDomain  -- with property "F"
+  Z         ==> Integer
+  BP        ==> SparseUnivariatePolynomial R
+  P         :   PolynomialCategory(R,E,OV)
+  SUP       ==> SparseUnivariatePolynomial P
+  NNI       ==> NonNegativeInteger
+  Term      ==> Record(expt:NNI,pcoef:P)
+  VTerm     ==> List Term
+  Table     ==> Vector List BP
+  L         ==> List
+ 
+  C == with
+    corrPoly:      (SUP,L OV,L R,L NNI,L SUP,Table,R) -> Union(L SUP,"failed")
+    lifting:       (SUP,L OV,L BP,L R,L P,L NNI,R) -> Union(L SUP,"failed")
+    lifting1:      (SUP,L OV,L SUP,L R,L P,L VTerm,L NNI,Table,R) ->
+                                                Union(L SUP,"failed")
+ 
+  T == add
+    GenExEuclid(R,BP)
+    NPCoef(BP,E,OV,R,P)
+    IntegerCombinatoricFunctions(Z)
+
+    SUPF2   ==> SparseUnivariatePolynomialFunctions2
+
+    DetCoef ==> Record(deter:L SUP,dterm:L VTerm,nfacts:L BP,
+                       nlead:L P)
+ 
+              ---   local functions   ---
+    normalDerivM    :    (P,Z,OV)     ->  P
+    normalDeriv     :     (SUP,Z)     ->  SUP
+    subslead        :     (SUP,P)     ->  SUP
+    subscoef        :   (SUP,L Term)  ->  SUP
+    maxDegree       :   (SUP,OV)      ->  NonNegativeInteger
+ 
+ 
+    corrPoly(m:SUP,lvar:L OV,fval:L R,ld:L NNI,flist:L SUP,
+             table:Table,pmod:R):Union(L SUP,"failed") ==
+      --  The correction coefficients are evaluated recursively.
+      --   Extended Euclidean algorithm for the multivariate case.
+ 
+      -- the polynomial is univariate  --
+      #lvar=0 =>
+        lp:=solveid(map(ground,m)$SUPF2(P,R),pmod,table)
+        if lp case "failed" then return "failed"
+        lcoef:= [map(coerce,mp)$SUPF2(R,P) for mp in lp::L BP]
+ 
+ 
+      diff,ddiff,pol,polc:SUP
+      listpolv,listcong:L SUP
+      deg1:NNI:= ld.first
+      np:NNI:= #flist
+      a:P:= fval.first ::P
+      y:OV:=lvar.first
+      lvar:=lvar.rest
+      listpolv:L SUP := [map(eval(#1,y,a),f1) for f1 in flist]
+      um:=map(eval(#1,y,a),m)
+      flcoef:=corrPoly(um,lvar,fval.rest,ld.rest,listpolv,table,pmod)
+      if flcoef case "failed" then return "failed"
+      else lcoef:=flcoef :: L SUP
+      listcong:=[*/[flist.i for i in 1..np | i^=l] for l in 1..np]
+      polc:SUP:= (monomial(1,y,1) - a)::SUP
+      pol := 1$SUP
+      diff:=m- +/[lcoef.i*listcong.i for i in 1..np]
+      for l in 1..deg1 repeat
+        if diff=0 then return lcoef
+        pol := pol*polc
+        (ddiff:= map(eval(normalDerivM(#1,l,y),y,a),diff)) = 0 => "next l"
+        fbeta := corrPoly(ddiff,lvar,fval.rest,ld.rest,listpolv,table,pmod)
+        if fbeta case "failed" then return "failed"
+        else beta:=fbeta :: L SUP
+        lcoef := [lcoef.i+beta.i*pol  for i in 1..np]
+        diff:=diff- +/[listcong.i*beta.i for i in 1..np]*pol
+      lcoef
+ 
+ 
+ 
+    lifting1(m:SUP,lvar:L OV,plist:L SUP,vlist:L R,tlist:L P,_
+      coeflist:L VTerm,listdeg:L NNI,table:Table,pmod:R) :Union(L SUP,"failed") ==
+    -- The factors of m (multivariate) are determined ,
+    -- We suppose to know the true univariate factors
+    -- some coefficients are determined
+      conglist:L SUP:=empty()
+      nvar : NNI:= #lvar
+      pol,polc:P
+      mc,mj:SUP
+      testp:Boolean:= (not empty?(tlist))
+      lalpha : L SUP := empty()
+      tlv:L P:=empty()
+      subsvar:L OV:=empty()
+      subsval:L R:=empty()
+      li:L OV := lvar
+      ldeg:L NNI:=empty()
+      clv:L VTerm:=empty()
+      --j =#variables, i=#factors
+      for j in 1..nvar repeat
+        x  := li.first
+        li := rest li
+        conglist:= plist
+        v := vlist.first
+        vlist := rest vlist
+        degj := listdeg.j
+        ldeg := cons(degj,ldeg)
+        subsvar:=cons(x,subsvar)
+        subsval:=cons(v,subsval)
+ 
+      --substitute the determined coefficients
+        if testp then
+          if j<nvar then
+            tlv:=[eval(p,li,vlist) for p in tlist]
+            clv:=[[[term.expt,eval(term.pcoef,li,vlist)]$Term
+                   for term in clist] for clist  in coeflist]
+          else (tlv,clv):=(tlist,coeflist)
+          plist :=[subslead(p,lcp) for p in plist for lcp in tlv]
+          if not(empty? coeflist) then
+            plist:=[subscoef(tpol,clist)
+                   for tpol in plist for clist in clv]
+        mj := map(eval(#1,li,vlist),m)  --m(x1,..,xj,aj+1,..,an
+        polc := x::P - v::P  --(xj-aj)
+        pol:= 1$P
+      --Construction of Rik, k in 1..right degree for xj+1
+        for k in 1..degj repeat  --I can exit before
+         pol := pol*polc
+         mc := */[term for term in plist]-mj
+         if mc=0 then leave "next var"
+         --Modulus Dk
+         mc:=map(normalDerivM(#1,k,x),mc)
+         (mc := map(eval(#1,[x],[v]),mc))=0 => "next k"
+         flalpha:=corrPoly(mc,subsvar.rest,subsval.rest,
+                          ldeg.rest,conglist,table,pmod)
+         if flalpha case "failed" then return "failed"
+         else lalpha:=flalpha :: L SUP
+         plist:=[term-alpha*pol for term in plist for alpha in lalpha]
+        for term in plist repeat degj:=degj-maxDegree(term,x)
+        degj ^= 0 => return "failed"
+      plist
+        --There are not extraneous factors
+ 
+    maxDegree(um:SUP,x:OV):NonNegativeInteger ==
+       ans:NonNegativeInteger:=0
+       while um ^= 0 repeat
+          ans:=max(ans,degree(leadingCoefficient um,x))
+          um:=reductum um
+       ans
+
+    lifting(um:SUP,lvar:L OV,plist:L BP,vlist:L R,
+            tlist:L P,listdeg:L NNI,pmod:R):Union(L SUP,"failed") ==
+    -- The factors of m (multivariate) are determined, when the
+    --  univariate true factors are known and some coefficient determined
+      nplist:List SUP:=[map(coerce,pp)$SUPF2(R,P) for pp in plist]
+      empty? tlist =>
+        table:=tablePow(degree um,pmod,plist)
+        table case "failed" => error "Table construction failed in MLIFT"
+        lifting1(um,lvar,nplist,vlist,tlist,empty(),listdeg,table,pmod)
+      ldcoef:DetCoef:=npcoef(um,plist,tlist)
+      if not empty?(listdet:=ldcoef.deter) then
+        if #listdet = #plist  then return listdet
+        plist:=ldcoef.nfacts
+        nplist:=[map(coerce,pp)$SUPF2(R,P) for pp in plist]
+        um:=(um exquo */[pol for pol in listdet])::SUP
+        tlist:=ldcoef.nlead
+        tab:=tablePow(degree um,pmod,plist.rest)
+      else tab:=tablePow(degree um,pmod,plist)
+      tab case "failed" => error "Table construction failed in MLIFT"
+      table:Table:=tab
+      ffl:=lifting1(um,lvar,nplist,vlist,tlist,ldcoef.dterm,listdeg,table,pmod)
+      if ffl case "failed" then return "failed"
+      append(listdet,ffl:: L SUP)
+
+    -- normalDerivM(f,m,x) = the normalized (divided by m!) m-th
+    -- derivative with respect to x of the multivariate polynomial f
+    normalDerivM(g:P,m:Z,x:OV) : P ==
+     multivariate(normalDeriv(univariate(g,x),m),x)
+
+    normalDeriv(f:SUP,m:Z) : SUP ==
+     (n1:Z:=degree f) < m => 0$SUP
+     n1=m => leadingCoefficient f :: SUP
+     k:=binomial(n1,m)
+     ris:SUP:=0$SUP
+     n:Z:=n1
+     while n>= m repeat
+       while n1>n repeat
+         k:=(k*(n1-m)) quo n1
+         n1:=n1-1
+       ris:=ris+monomial(k*leadingCoefficient f,(n-m)::NNI)
+       f:=reductum f
+       n:=degree f
+     ris
+
+    subslead(m:SUP,pol:P):SUP ==
+      dm:NNI:=degree m
+      monomial(pol,dm)+reductum m
+ 
+    subscoef(um:SUP,lterm:L Term):SUP ==
+      dm:NNI:=degree um
+      new:=monomial(leadingCoefficient um,dm)
+      for k in dm-1..0 by -1 repeat
+        i:NNI:=k::NNI
+        empty?(lterm) or lterm.first.expt^=i =>
+                                new:=new+monomial(coefficient(um,i),i)
+        new:=new+monomial(lterm.first.pcoef,i)
+        lterm:=lterm.rest
+      new
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package MLIFT MultivariateLifting>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

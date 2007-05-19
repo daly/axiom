@@ -1,0 +1,568 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra rdeef.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package INTTOOLS IntegrationTools}
+<<package INTTOOLS IntegrationTools>>=
+)abbrev package INTTOOLS IntegrationTools
+++ Tools for the integrator
+++ Author: Manuel Bronstein
+++ Date Created: 25 April 1990
+++ Date Last Updated: 9 June 1993
+++ Keywords: elementary, function, integration.
+IntegrationTools(R:OrderedSet, F:FunctionSpace R): Exp == Impl where
+  K   ==> Kernel F
+  SE  ==> Symbol
+  P   ==> SparseMultivariatePolynomial(R, K)
+  UP  ==> SparseUnivariatePolynomial F
+  IR  ==> IntegrationResult F
+  ANS ==> Record(special:F, integrand:F)
+  U   ==> Union(ANS, "failed")
+  ALGOP ==> "%alg"
+
+  Exp ==> with
+    varselect: (List K, SE) -> List K
+      ++ varselect([k1,...,kn], x) returns the ki which involve x.
+    kmax     : List K -> K
+      ++ kmax([k1,...,kn]) returns the top-level ki for integration.
+    ksec     : (K, List K, SE) -> K
+      ++ ksec(k, [k1,...,kn], x) returns the second top-level ki
+      ++ after k involving x.
+    union    : (List K, List K) -> List K
+      ++ union(l1, l2) returns set-theoretic union of l1 and l2.
+    vark     : (List F, SE) -> List K
+      ++ vark([f1,...,fn],x) returns the set-theoretic union of
+      ++ \spad{(varselect(f1,x),...,varselect(fn,x))}.
+    if R has IntegralDomain then
+      removeConstantTerm: (F, SE) -> F
+        ++ removeConstantTerm(f, x) returns f minus any additive constant
+        ++ with respect to x.
+    if R has GcdDomain and F has ElementaryFunctionCategory then
+      mkPrim: (F, SE) -> F
+        ++ mkPrim(f, x) makes the logs in f which are linear in x
+        ++ primitive with respect to x.
+      if R has ConvertibleTo Pattern Integer and R has PatternMatchable Integer
+        and F has LiouvillianFunctionCategory and F has RetractableTo SE then
+          intPatternMatch: (F, SE, (F, SE) -> IR, (F, SE) -> U) -> IR
+            ++ intPatternMatch(f, x, int, pmint) tries to integrate \spad{f}
+            ++ first by using the integration function \spad{int}, and then
+            ++ by using the pattern match intetgration function \spad{pmint}
+            ++ on any remaining unintegrable part.
+
+  Impl ==> add
+    better?: (K, K) -> Boolean
+
+    union(l1, l2)   == setUnion(l1, l2)
+    varselect(l, x) == [k for k in l | member?(x, variables(k::F))]
+    ksec(k, l, x)   == kmax setUnion(remove(k, l), vark(argument k, x))
+
+    vark(l, x) ==
+      varselect(reduce("setUnion",[kernels f for f in l],empty()$List(K)), x)
+
+    kmax l ==
+      ans := first l
+      for k in rest l repeat
+        if better?(k, ans) then ans := k
+      ans
+
+-- true if x should be considered before y in the tower
+    better?(x, y) ==
+      height(y) ^= height(x) => height(y) < height(x)
+      has?(operator y, ALGOP) or
+              (is?(y, "exp"::SE) and not is?(x, "exp"::SE)
+                                 and not has?(operator x, ALGOP))
+
+    if R has IntegralDomain then
+      removeConstantTerm(f, x) ==
+        not freeOf?((den := denom f)::F, x) => f
+        (u := isPlus(num := numer f)) case "failed" =>
+          freeOf?(num::F, x) => 0
+          f
+        ans:P := 0
+        for term in u::List(P) repeat
+          if not freeOf?(term::F, x) then ans := ans + term
+        ans / den
+
+    if R has GcdDomain and F has ElementaryFunctionCategory then
+      psimp     : (P, SE) -> Record(coef:Integer, logand:F)
+      cont      : (P, List K) -> P
+      logsimp   : (F, SE) -> F
+      linearLog?: (K, F, SE)  -> Boolean
+
+      logsimp(f, x) ==
+        r1 := psimp(numer f, x)
+        r2 := psimp(denom f, x)
+        g := gcd(r1.coef, r2.coef)
+        g * log(r1.logand ** (r1.coef quo g) / r2.logand ** (r2.coef quo g))
+
+      cont(p, l) ==
+        empty? l => p
+        q := univariate(p, first l)
+        cont(unitNormal(leadingCoefficient q).unit * content q, rest l)
+
+      linearLog?(k, f, x) ==
+        is?(k, "log"::SE) and
+         ((u := retractIfCan(univariate(f,k))@Union(UP,"failed")) case UP)
+--             and one?(degree(u::UP))
+             and (degree(u::UP) = 1)
+                and not member?(x, variables leadingCoefficient(u::UP))
+
+      mkPrim(f, x) ==
+        lg := [k for k in kernels f | linearLog?(k, f, x)]
+        eval(f, lg, [logsimp(first argument k, x) for k in lg])
+
+      psimp(p, x) ==
+        (u := isExpt(p := ((p exquo cont(p, varselect(variables p, x)))::P)))
+          case "failed" => [1, p::F]
+        [u.exponent, u.var::F]
+
+      if R has Join(ConvertibleTo Pattern Integer, PatternMatchable Integer)
+        and F has Join(LiouvillianFunctionCategory, RetractableTo SE) then
+          intPatternMatch(f, x, int, pmint) ==
+            ir := int(f, x)
+            empty?(l := notelem ir) => ir
+            ans := ratpart ir
+            nl:List(Record(integrand:F, intvar:F)) := empty()
+            lg := logpart ir
+            for rec in l repeat
+              u := pmint(rec.integrand, retract(rec.intvar))
+              if u case ANS then
+                 rc := u::ANS
+                 ans := ans + rc.special
+                 if rc.integrand ^= 0 then
+                   ir0 := intPatternMatch(rc.integrand, x, int, pmint)
+                   ans := ans + ratpart ir0
+                   lg  := concat(logpart ir0, lg)
+                   nl  := concat(notelem ir0, nl)
+              else nl := concat(rec, nl)
+            mkAnswer(ans, lg, nl)
+
+@
+\section{package RDEEF ElementaryRischDE}
+<<package RDEEF ElementaryRischDE>>=
+)abbrev package RDEEF ElementaryRischDE
+++ Risch differential equation, elementary case.
+++ Author: Manuel Bronstein
+++ Date Created: 1 February 1988
+++ Date Last Updated: 2 November 1995
+++ Keywords: elementary, function, integration.
+ElementaryRischDE(R, F): Exports == Implementation where
+  R : Join(GcdDomain, OrderedSet, CharacteristicZero,
+           RetractableTo Integer, LinearlyExplicitRingOver Integer)
+  F : Join(TranscendentalFunctionCategory, AlgebraicallyClosedField,
+           FunctionSpace R)
+
+  N   ==> NonNegativeInteger
+  Z   ==> Integer
+  SE  ==> Symbol
+  LF  ==> List F
+  K   ==> Kernel F
+  LK  ==> List K
+  P   ==> SparseMultivariatePolynomial(R, K)
+  UP  ==> SparseUnivariatePolynomial F
+  RF  ==> Fraction UP
+  GP  ==> LaurentPolynomial(F, UP)
+  Data ==> List Record(coeff:Z, argument:P)
+  RRF ==> Record(mainpart:F,limitedlogs:List NL)
+  NL  ==> Record(coeff:F,logand:F)
+  U   ==> Union(RRF, "failed")
+  UF  ==> Union(F, "failed")
+  UUP ==> Union(UP, "failed")
+  UGP ==> Union(GP, "failed")
+  URF ==> Union(RF, "failed")
+  UEX ==> Union(Record(ratpart:F,  coeff:F), "failed")
+  PSOL==> Record(ans:F, right:F, sol?:Boolean)
+  FAIL==> error("Function not supported by Risch d.e.")
+  ALGOP ==> "%alg"
+
+  Exports ==> with
+    rischDE: (Z, F, F, SE, (F, LF) -> U, (F, F) -> UEX) -> PSOL
+         ++ rischDE(n, f, g, x, lim, ext) returns \spad{[y, h, b]} such that
+         ++ \spad{dy/dx + n df/dx y = h} and \spad{b := h = g}.
+         ++ The equation \spad{dy/dx + n df/dx y = g} has no solution
+         ++ if \spad{h \~~= g} (y is a partial solution in that case).
+         ++ Notes: lim is a limited integration function, and
+         ++ ext is an extended integration function.
+
+  Implementation ==> add
+    import IntegrationTools(R, F)
+    import TranscendentalRischDE(F, UP)
+    import TranscendentalIntegration(F, UP)
+    import PureAlgebraicIntegration(R, F, F)
+    import FunctionSpacePrimitiveElement(R, F)
+    import ElementaryFunctionStructurePackage(R, F)
+    import PolynomialCategoryQuotientFunctions(IndexedExponents K,
+                                                             K, R, P, F)
+
+    RF2GP:     RF -> GP
+    makeData  : (F, SE, K)    -> Data
+    normal0   : (Z, F, F, SE) -> UF
+    normalise0: (Z, F, F, SE) -> PSOL
+    normalise : (Z, F, F, F, SE, K, (F, LF) -> U, (F, F) -> UEX) -> PSOL
+    rischDEalg: (Z, F, F, F, K, LK, SE, (F, LF) -> U, (F, F) -> UEX) -> PSOL
+    rischDElog: (LK, RF, RF, SE, K, UP->UP,(F,LF)->U,(F,F)->UEX) -> URF
+    rischDEexp: (LK, RF, RF, SE, K, UP->UP,(F,LF)->U,(F,F)->UEX) -> URF
+    polyDElog : (LK, UP, UP,UP,SE,K,UP->UP,(F,LF)->U,(F,F)->UEX) -> UUP
+    polyDEexp : (LK, UP, UP,UP,SE,K,UP->UP,(F,LF)->U,(F,F)->UEX) -> UUP
+    gpolDEexp : (LK, UP, GP,GP,SE,K,UP->UP,(F,LF)->U,(F,F)->UEX) -> UGP
+    boundAt0  : (LK, F, Z,  Z,    SE, K, (F, LF) -> U) -> Z
+    boundInf  : (LK, F, Z,  Z, Z, SE, K, (F, LF) -> U) -> Z
+    logdegrad : (LK, F, UP, Z, SE, K,(F,LF)->U, (F,F) -> UEX) -> UUP
+    expdegrad : (LK, F, UP, Z, SE, K,(F,LF)->U, (F,F) -> UEX) -> UUP
+    logdeg    : (UP, F, Z, SE, F, (F, LF) -> U, (F, F) -> UEX) -> UUP
+    expdeg    : (UP, F, Z, SE, F, (F, LF) -> U, (F, F) -> UEX) -> UUP
+    exppolyint: (UP, (Z, F) -> PSOL) -> UUP
+    RRF2F     : RRF -> F
+    logdiff   : (List K, List K) -> List K
+
+    tab:AssociationList(F, Data) := table()
+
+    RF2GP f == (numer(f)::GP exquo denom(f)::GP)::GP
+
+    logdiff(twr, bad) ==
+      [u for u in twr | is?(u, "log"::SE) and not member?(u, bad)]
+
+    rischDEalg(n, nfp, f, g, k, l, x, limint, extint) ==
+      symbolIfCan(kx := ksec(k, l, x)) case SE =>
+        (u := palgRDE(nfp, f, g, kx, k, normal0(n, #1, #2, #3))) case "failed"
+             => [0, 0, false]
+        [u::F, g, true]
+      has?(operator kx, ALGOP) =>
+        rec := primitiveElement(kx::F, k::F)
+        y   := rootOf(rec.prim)
+        lk:LK := [kx, k]
+        lv:LF := [(rec.pol1) y, (rec.pol2) y]
+        rc := rischDE(n, eval(f, lk, lv), eval(g, lk, lv), x, limint, extint)
+        rc.sol? => [eval(rc.ans, retract(y)@K, rec.primelt), rc.right, true]
+        [0, 0, false]
+      FAIL
+
+-- solve y' + n f'y = g for a rational function y
+    rischDE(n, f, g, x, limitedint, extendedint) ==
+      zero? g => [0, g, true]
+      zero?(nfp := n * differentiate(f, x)) =>
+        (u := limitedint(g, empty())) case "failed" => [0, 0, false]
+        [u.mainpart, g, true]
+      freeOf?(y := g / nfp, x) => [y, g, true]
+      vl := varselect(union(kernels nfp, kernels g), x)
+      symbolIfCan(k := kmax vl) case SE => normalise0(n, f, g, x)
+      is?(k, "log"::SE) or is?(k, "exp"::SE) =>
+        normalise(n, nfp, f, g, x, k, limitedint, extendedint)
+      has?(operator k, ALGOP) =>
+        rischDEalg(n, nfp, f, g, k, vl, x, limitedint, extendedint)
+      FAIL
+
+    normal0(n, f, g, x) ==
+      rec := normalise0(n, f, g, x)
+      rec.sol? => rec.ans
+      "failed"
+
+-- solve y' + n f' y = g
+-- when f' and g are rational functions over a constant field
+    normalise0(n, f, g, x) ==
+      k := kernel(x)@K
+      if (data1 := search(f, tab)) case "failed" then
+        tab.f := data := makeData(f, x, k)
+      else data := data1::Data
+      f'  := nfprime := n * differentiate(f, x)
+      p:P := 1
+      for v in data | (m := n * v.coeff) > 0 repeat
+        p  := p * v.argument ** (m::N)
+        f' := f' - m * differentiate(v.argument::F, x) / (v.argument::F)
+      rec := baseRDE(univariate(f', k), univariate(p::F * g, k))
+      y := multivariate(rec.ans, k) / p::F
+      rec.nosol => [y, differentiate(y, x) + nfprime * y, false]
+      [y, g, true]
+
+-- make f weakly normalized, and solve y' + n f' y = g
+    normalise(n, nfp, f, g, x, k, limitedint, extendedint) ==
+      if (data1:= search(f, tab)) case "failed" then
+        tab.f := data := makeData(f, x, k)
+      else data := data1::Data
+      p:P := 1
+      for v in data | (m := n * v.coeff) > 0 repeat
+        p  := p * v.argument ** (m::N)
+        f  := f - v.coeff * log(v.argument::F)
+        nfp := nfp - m * differentiate(v.argument::F, x) / (v.argument::F)
+      newf := univariate(nfp, k)
+      newg := univariate(p::F * g, k)
+      twr := union(logdiff(tower f, empty()), logdiff(tower g, empty()))
+      ans1 :=
+        is?(k, "log"::SE) =>
+          rischDElog(twr, newf, newg, x, k,
+                       differentiate(#1, differentiate(#1, x),
+                             differentiate(k::F, x)::UP),
+                                            limitedint, extendedint)
+        is?(k, "exp"::SE) =>
+          rischDEexp(twr, newf, newg, x, k,
+                     differentiate(#1, differentiate(#1, x),
+                      monomial(differentiate(first argument k, x), 1)),
+                                                limitedint, extendedint)
+      ans1 case "failed" => [0, 0, false]
+      [multivariate(ans1::RF, k) / p::F, g, true]
+
+-- find the n * log(P) appearing in f, where P is in P, n in Z
+    makeData(f, x, k) ==
+      disasters := empty()$Data
+      fnum := numer f
+      fden := denom f
+      for u in varselect(kernels f, x) | is?(u, "log"::SE) repeat
+        logand := first argument u
+        if zero?(degree univariate(fden, u)) and
+--           one?(degree(num := univariate(fnum, u))) then
+           (degree(num := univariate(fnum, u)) = 1) then
+            cf := (leadingCoefficient num) / fden
+            if (n := retractIfCan(cf)@Union(Z, "failed")) case Z then
+              if degree(numer logand, k) > 0 then
+                disasters := concat([n::Z, numer logand], disasters)
+              if degree(denom logand, k) > 0 then
+                disasters := concat([-(n::Z), denom logand], disasters)
+      disasters
+
+    rischDElog(twr, f, g, x, theta, driv, limint, extint) ==
+      (u := monomRDE(f, g, driv)) case "failed" => "failed"
+      (v := polyDElog(twr, u.a, retract(u.b), retract(u.c), x, theta, driv,
+                      limint, extint)) case "failed" => "failed"
+      v::UP / u.t
+
+    rischDEexp(twr, f, g, x, theta, driv, limint, extint) ==
+      (u := monomRDE(f, g, driv)) case "failed" => "failed"
+      (v := gpolDEexp(twr, u.a, RF2GP(u.b), RF2GP(u.c), x, theta, driv,
+                      limint, extint)) case "failed" => "failed"
+      convert(v::GP)@RF / u.t::RF
+
+    polyDElog(twr, aa, bb, cc, x, t, driv, limint, extint) ==
+      zero? cc => 0
+      t' := differentiate(t::F, x)
+      zero? bb =>
+        (u := cc exquo aa) case "failed" => "failed"
+        primintfldpoly(u::UP, extint(#1, t'), t')
+      n := degree(cc)::Z - (db := degree(bb)::Z)
+      if ((da := degree(aa)::Z) = db) and (da > 0) then
+        lk0 := tower(f0 :=
+                      - (leadingCoefficient bb) / (leadingCoefficient aa))
+        lk1 := logdiff(twr, lk0)
+        (if0 := limint(f0, [first argument u for u in lk1]))
+                       case "failed" => error "Risch's theorem violated"
+        (alph := validExponential(lk0, RRF2F(if0::RRF), x)) case F =>
+          return
+            (ans := polyDElog(twr, alph::F * aa,
+              differentiate(alph::F, x) * aa + alph::F * bb,
+               cc, x, t, driv, limint, extint)) case "failed" => "failed"
+            alph::F * ans::UP
+      if (da > db + 1) then n := max(0, degree(cc)::Z - da + 1)
+      if (da = db + 1) then
+        i := limint(- (leadingCoefficient bb) / (leadingCoefficient aa),
+                    [first argument t])
+        if not(i case "failed") then
+          r :=
+            null(i.limitedlogs) => 0$F
+            i.limitedlogs.first.coeff
+          if (nn := retractIfCan(r)@Union(Z, "failed")) case Z then
+            n := max(nn::Z, n)
+      (v := polyRDE(aa, bb, cc, n, driv)) case ans =>
+           v.ans.nosol => "failed"
+           v.ans.ans
+      w := v.eq
+      zero?(w.b) =>
+        degree(w.c) > w.m => "failed"
+        (u := primintfldpoly(w.c, extint(#1,t'), t')) case "failed" => "failed"
+        degree(u::UP) > w.m => "failed"
+        w.alpha * u::UP + w.beta
+      (u := logdegrad(twr, retract(w.b), w.c, w.m, x, t, limint, extint))
+        case "failed" => "failed"
+      w.alpha * u::UP + w.beta
+
+    gpolDEexp(twr, a, b, c, x, t, driv, limint, extint) ==
+      zero? c => 0
+      zero? b =>
+        (u := c exquo (a::GP)) case "failed" => "failed"
+        expintfldpoly(u::GP,
+                   rischDE(#1, first argument t, #2, x, limint, extint))
+      lb := boundAt0(twr, - coefficient(b, 0) / coefficient(a, 0),
+                     nb := order b, nc := order c, x, t, limint)
+      tm := monomial(1, (m := max(0, max(-nb, lb - nc)))::N)$UP
+      (v := polyDEexp(twr,a * tm,lb * differentiate(first argument t, x)
+           * a * tm + retract(b * tm::GP)@UP,
+               retract(c * monomial(1, m - lb))@UP,
+                  x, t, driv, limint, extint)) case "failed" => "failed"
+      v::UP::GP * monomial(1, lb)
+
+    polyDEexp(twr, aa, bb, cc, x, t, driv, limint, extint) ==
+      zero? cc => 0
+      zero? bb =>
+        (u := cc exquo aa) case "failed" => "failed"
+        exppolyint(u::UP, rischDE(#1, first argument t, #2, x, limint, extint))
+      n := boundInf(twr,-leadingCoefficient(bb) / (leadingCoefficient aa),
+                 degree(aa)::Z, degree(bb)::Z, degree(cc)::Z, x, t, limint)
+      (v := polyRDE(aa, bb, cc, n, driv)) case ans =>
+           v.ans.nosol => "failed"
+           v.ans.ans
+      w := v.eq
+      zero?(w.b) =>
+        degree(w.c) > w.m => "failed"
+        (u := exppolyint(w.c,
+                  rischDE(#1, first argument t, #2, x, limint, extint)))
+                         case "failed" => "failed"
+        w.alpha * u::UP + w.beta
+      (u := expdegrad(twr, retract(w.b), w.c, w.m, x, t, limint, extint))
+        case "failed" => "failed"
+      w.alpha * u::UP + w.beta
+
+    exppolyint(p, rischdiffeq) ==
+      (u := expintfldpoly(p::GP, rischdiffeq)) case "failed" => "failed"
+      retractIfCan(u::GP)@Union(UP, "failed")
+
+    boundInf(twr, f0, da, db, dc, x, t, limitedint) ==
+      da < db => dc - db
+      da > db => max(0, dc - da)
+      l1 := logdiff(twr, l0 := tower f0)
+      (if0 := limitedint(f0, [first argument u for u in l1]))
+                       case "failed" => error "Risch's theorem violated"
+      (alpha := validExponential(concat(t, l0), RRF2F(if0::RRF), x))
+       case F =>
+        al := separate(univariate(alpha::F, t))$GP
+        zero?(al.fracPart) and monomial?(al.polyPart) =>
+                               max(0, max(degree(al.polyPart), dc - db))
+        dc - db
+      dc - db
+
+    boundAt0(twr, f0, nb, nc, x, t, limitedint) ==
+      nb ^= 0 => min(0, nc - min(0, nb))
+      l1 := logdiff(twr, l0 := tower f0)
+      (if0 := limitedint(f0, [first argument u for u in l1]))
+                       case "failed" => error "Risch's theorem violated"
+      (alpha := validExponential(concat(t, l0), RRF2F(if0::RRF), x))
+       case F =>
+        al := separate(univariate(alpha::F, t))$GP
+        zero?(al.fracPart) and monomial?(al.polyPart) =>
+                                    min(0, min(degree(al.polyPart), nc))
+        min(0, nc)
+      min(0, nc)
+
+-- case a = 1, deg(B) = 0, B <> 0
+-- cancellation at infinity is possible
+    logdegrad(twr, b, c, n, x, t, limitedint, extint) ==
+      t'  := differentiate(t::F, x)
+      lk1 := logdiff(twr, lk0 := tower(f0 := - b))
+      (if0 := limitedint(f0, [first argument u for u in lk1]))
+                       case "failed" => error "Risch's theorem violated"
+      (alpha := validExponential(lk0, RRF2F(if0::RRF), x)) case F =>
+        (u1 := primintfldpoly(inv(alpha::F) * c, extint(#1, t'), t'))
+                                               case "failed" => "failed"
+        degree(u1::UP)::Z > n => "failed"
+        alpha::F * u1::UP
+      logdeg(c, - if0.mainpart -
+               +/[v.coeff * log(v.logand) for v in if0.limitedlogs],
+                                           n, x, t', limitedint, extint)
+
+-- case a = 1, degree(b) = 0, and (exp integrate b) is not in F
+-- this implies no cancellation at infinity
+    logdeg(c, f, n, x, t', limitedint, extint) ==
+      answr:UP := 0
+      repeat
+        zero? c => return answr
+        (n < 0) or ((m := degree c)::Z > n) => return "failed"
+        u := rischDE(1, f, leadingCoefficient c, x, limitedint, extint)
+        ~u.sol? => return "failed"
+        zero? m => return(answr + u.ans::UP)
+        n   := m::Z - 1
+        c   := (reductum c) - monomial(m::Z * t' * u.ans, (m - 1)::N)
+        answr := answr + monomial(u.ans, m)
+
+-- case a = 1, deg(B) = 0, B <> 0
+-- cancellation at infinity is possible
+    expdegrad(twr, b, c, n, x, t, limint, extint) ==
+      lk1 := logdiff(twr, lk0 := tower(f0 := - b))
+      (if0 := limint(f0, [first argument u for u in lk1]))
+                       case "failed" => error "Risch's theorem violated"
+      intf0 := - if0.mainpart -
+                    +/[v.coeff * log(v.logand) for v in if0.limitedlogs]
+      (alpha := validExponential(concat(t, lk0), RRF2F(if0::RRF), x))
+       case F =>
+        al := separate(univariate(alpha::F, t))$GP
+        zero?(al.fracPart) and monomial?(al.polyPart) and
+         (degree(al.polyPart) >= 0) =>
+          (u1 := expintfldpoly(c::GP * recip(al.polyPart)::GP,
+                  rischDE(#1, first argument t, #2, x, limint, extint)))
+                                               case "failed" => "failed"
+          degree(u1::GP) > n => "failed"
+          retractIfCan(al.polyPart * u1::GP)@Union(UP, "failed")
+        expdeg(c, intf0, n, x, first argument t, limint,extint)
+      expdeg(c, intf0, n, x, first argument t, limint, extint)
+
+-- case a = 1, degree(b) = 0, and (exp integrate b) is not a monomial
+-- this implies no cancellation at infinity
+    expdeg(c, f, n, x, eta, limitedint, extint) ==
+      answr:UP := 0
+      repeat
+        zero? c => return answr
+        (n < 0) or ((m := degree c)::Z > n) => return "failed"
+        u := rischDE(1, f + m * eta, leadingCoefficient c, x,limitedint,extint)
+        ~u.sol? => return "failed"
+        zero? m => return(answr + u.ans::UP)
+        n   := m::Z - 1
+        c   := reductum c
+        answr := answr + monomial(u.ans, m)
+
+    RRF2F rrf ==
+      rrf.mainpart + +/[v.coeff*log(v.logand) for v in rrf.limitedlogs]
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+-- SPAD files for the integration world should be compiled in the
+-- following order:
+--
+--   intaux  rderf  intrf  curve  curvepkg  divisor  pfo
+--   intalg  intaf  efstruc  RDEEF  intef  irexpand  integrat
+
+<<package INTTOOLS IntegrationTools>>
+<<package RDEEF ElementaryRischDE>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

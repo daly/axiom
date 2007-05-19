@@ -1,0 +1,368 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra unifact.spad}
+\author{Patrizia Gianni}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package UNIFACT UnivariateFactorize}
+<<package UNIFACT UnivariateFactorize>>=
+)abbrev package UNIFACT UnivariateFactorize
+++ Factorisation of univariate polynomials  with integer coefficients
+++ Author: Patrizia Gianni
+++ Date Created: ???
+++ Date Last Updated: December 1993
+++ Description:
+++ Package for the factorization of univariate polynomials with integer
+++ coefficients. The factorization is done by "lifting" (HENSEL) the
+++ factorization over a finite field.
+UnivariateFactorize(ZP) : public == private where
+  Z    ==>  Integer
+  PI   ==>  PositiveInteger
+  NNI  ==>  NonNegativeInteger
+  SUPZ ==>  SparseUnivariatePolynomial Z
+
+  ZP : UnivariatePolynomialCategory Z
+
+  FR        ==>  Factored ZP
+  fUnion    ==>  Union("nil", "sqfr", "irred", "prime")
+  FFE       ==>  Record(flg:fUnion, fctr:ZP, xpnt:Z)
+  ParFact   ==>  Record(irr: ZP,pow: Z)
+  FinalFact ==>  Record(contp: Z,factors:List(ParFact))
+
+
+  public == with
+     factor            :           ZP              -> FR
+       ++ factor(m) returns the factorization of m
+     factorSquareFree  :           ZP              -> FR
+       ++ factorSquareFree(m) returns the factorization of m square free
+       ++ polynomial
+     henselFact        :      (ZP,Boolean)         -> FinalFact
+       ++ henselFact(m,flag) returns the factorization of m,
+       ++ FinalFact is a Record s.t. FinalFact.contp=content m,
+       ++ FinalFact.factors=List of irreducible factors
+       ++ of m with exponent , if flag =true the polynomial is
+       ++ assumed square free.
+
+  private == add
+                 --- local functions ---
+
+     henselfact  :           ZP      -> List(ZP)
+     quadratic   :           ZP      -> List(ZP)
+     remp        :        (Z, PI)    -> Z
+     negShiftz   :        (Z, PI)    -> Z
+     negShiftp   :        (ZP,PI)    -> ZP
+     bound       :           ZP      -> PI
+     choose      :           ZP      -> FirstStep
+     eisenstein  :           ZP      -> Boolean
+     isPowerOf2  :           Z       -> Boolean
+     subMinusX   :          SUPZ     -> ZP
+     sqroot      :           Z       -> Z
+
+                 ---   declarations  ---
+     CYC       ==> CyclotomicPolynomialPackage()
+     DDRecord  ==> Record(factor: ZP,degree: Z)
+     DDList    ==> List DDRecord
+     FirstStep ==> Record(prime:PI,factors:DDList)
+     ContPrim  ==> Record(cont: Z,prim: ZP)
+
+     import GeneralHenselPackage(Z,ZP)
+     import ModularDistinctDegreeFactorizer ZP
+
+
+     factor(m: ZP) ==
+       flist := henselFact(m,false)
+       ctp:=unitNormal flist.contp
+       makeFR((ctp.unit)::ZP,cons(["nil",ctp.canonical::ZP,1$Z]$FFE,
+                      [["prime",u.irr,u.pow]$FFE for u in flist.factors]))
+
+     factorSquareFree(m: ZP) ==
+       flist := henselFact(m,true)
+       ctp:=unitNormal flist.contp
+       makeFR((ctp.unit)::ZP,cons(["nil",ctp.canonical::ZP,1$Z]$FFE,
+                     [["prime",u.irr,u.pow]$FFE for u in flist.factors]))
+
+
+     -- Integer square root: returns 0 if t is non-positive
+     sqroot(t: Z): Z  ==
+      t <= 0 => 0
+      s:Integer:=t::Integer
+      s:=approxSqrt(s)$IntegerRoots(Integer)
+      t:=s::Z
+      t
+
+     -- Eisenstein criterion: returns true if polynomial is
+     -- irreducible. Result of false in inconclusive.
+     eisenstein(m : ZP): Boolean ==
+       -- calculate the content of the terms after the first
+       c := content reductum m
+       c = 0 => false
+       c = 1 => false
+       -- factor the content
+       -- if there is a prime in the factorization that does not divide
+       -- the leading term and appears to multiplicity 1, and the square
+       -- of this does not divide the last coef, return true.
+       -- Otherwise reurn false.
+       lead := leadingCoefficient m
+       trail := lead
+       m := reductum m
+       while m ^= 0 repeat
+         trail := leadingCoefficient m
+         m:= reductum m
+       fc := factor(c) :: Factored(Z)
+       for r in factors fc repeat
+         if (r.exponent = 1) and (0 ^= (lead rem r.factor)) and
+           (0 ^= (trail rem (r.factor ** 2))) then return true
+       false
+
+     negShiftz(n: Z,Modulus:PI): Z ==
+       if n < 0 then n := n+Modulus
+       n > (Modulus quo 2) => n-Modulus
+       n
+
+     negShiftp(pp: ZP,Modulus:PI): ZP ==
+       map(negShiftz(#1,Modulus),pp)
+
+     -- Choose the bound for the coefficients of factors
+     bound(m: ZP):PI ==
+       nm,nmq2,lcm,bin0,bin1:NNI
+       cbound,j : PI
+       k:NNI
+       lcm := abs(leadingCoefficient m)::NNI
+       nm := (degree m)::NNI
+       nmq2:NNI := nm quo 2
+       norm: Z := sqroot(+/[coefficient(m,k)**2 for k in 0..nm])
+       if nmq2^=1 then nm := (nmq2-1):NNI
+       else nm := nmq2
+       bin0 := nm
+       cbound := (bin0*norm+lcm)::PI
+       for i in 2..(nm-1)::NNI repeat
+         bin1 := bin0
+         bin0 := (bin0*(nm+1-i):NNI) quo i
+         j := (bin0*norm+bin1*lcm)::PI
+         if cbound<j then cbound := j
+       (2*cbound*lcm)::PI -- adjusted by lcm to prepare for exquo in ghensel
+
+     remp(t: Z,q:PI): Z == ((t := t rem q)<0 => t+q ;t)
+
+     numFactors(ddlist:DDList): Z ==
+       ans: Z := 0
+       for dd in ddlist repeat
+         (d := degree(dd.factor)) = 0 => nil
+         ans := ans + ((d pretend Z) exquo dd.degree):: Z
+       ans
+
+     -- select the prime,try up to 4 primes,
+     -- choose the one yielding the fewest factors, but stopping if
+     -- fewer than 9 factors
+     choose(m: ZP):FirstStep ==
+       qSave:PI := 1
+       ddSave:DDList := []
+       numberOfFactors: Z := 0
+       lcm := leadingCoefficient m
+       k: Z := 1
+       ddRep := 5
+       disc:ZP:=0
+       q:PI:=2
+       while k<ddRep repeat
+         -- q must be a new prime number at each iteration
+         q:=nextPrime(q)$IntegerPrimesPackage(Z) pretend PI
+         (rr:=lcm rem q) = 0$Z => "next prime"
+         disc:=gcd(m,differentiate m,q)
+         (degree disc)^=0 => "next prime"
+         k := k+1
+         newdd := ddFact(m,q)
+         ((n := numFactors(newdd)) < 9) =>
+           ddSave := newdd
+           qSave := q
+           k := 5
+         (numberOfFactors = 0) or (n < numberOfFactors) =>
+           ddSave := newdd
+           qSave := q
+           numberOfFactors := n
+       [qSave,ddSave]$FirstStep
+
+     -- Find the factors of m,primitive, square-free, with lc positive
+     -- and mindeg m = 0
+     henselfact1(m: ZP):List(ZP) ==
+      zero? degree m =>
+--          one? m => []
+          (m = 1) => []
+          [m]
+      selected := choose(m)
+      (numFactors(selected.factors) = 1$Z) => [m]
+      q := selected.prime
+      fl := separateFactors(selected.factors,q)
+      --choose the bound
+      cbound := bound(m)
+      completeHensel(m,fl,q,cbound)
+
+     -- check for possible degree reduction
+     -- could use polynomial decomposition ?
+     henselfact(m: ZP):List ZP ==
+      deggcd:=degree m
+      mm:= m
+      while not zero? mm repeat (deggcd:=gcd(deggcd, degree mm); mm:=reductum mm)
+      deggcd>1 and deggcd<degree m =>
+         faclist := henselfact1(divideExponents(m, deggcd)::ZP)
+         "append"/[henselfact1 multiplyExponents(mm, deggcd) for mm in faclist]
+      henselfact1 m
+
+     quadratic(m: ZP):List(ZP) ==
+       d,d2: Z
+       d := coefficient(m,1)**2-4*coefficient(m,0)*coefficient(m,2)
+       d2 := sqroot(d)
+       (d-d2**2)^=0 => [m]
+       alpha: Z := coefficient(m,1)+d2
+       beta: Z := 2*coefficient(m,2)
+       d := gcd(alpha,beta)
+       if d ^=1 then
+         alpha := alpha quo d
+         beta := beta quo d
+       m0: ZP := monomial(beta,1)+monomial(alpha,0)
+       cons(m0,[(m exquo m0):: ZP])
+
+     isPowerOf2(n : Z): Boolean ==
+       n = 1 => true
+       qr : Record(quotient: Z, remainder: Z) := divide(n,2)
+       qr.remainder = 1 => false
+       isPowerOf2 qr.quotient
+
+     subMinusX(supPol : SUPZ): ZP ==
+       minusX : SUPZ := monomial(-1,1)$SUPZ
+       (elt(supPol,minusX)$SUPZ) : ZP
+
+--   Factorize the polynomial m, test=true if m is known to be
+--   square-free, false otherwise.
+--   FinalFact.contp=content m, FinalFact.factors=List of irreducible
+--   factors with exponent .
+     henselFact(m: ZP,test:Boolean):FinalFact ==
+      factorlist : List(ParFact) := []
+      c : Z
+
+      -- make m primitive
+      c := content m
+      m := (m exquo c)::ZP
+
+      -- make the lc m positive
+      if leadingCoefficient m < 0 then
+        c := -c
+        m := -m
+
+      -- is x**d factor of m?
+      if (d := minimumDegree m) >0 then
+        m := (monicDivide(m,monomial(1,d))).quotient
+        factorlist := [[monomial(1,1),d]$ParFact]
+
+      d := degree m
+
+      -- is m constant?
+      d=0 => [c,factorlist]$FinalFact
+
+      -- is m linear?
+      d=1 => [c,cons([m,1]$ParFact,factorlist)]$FinalFact
+
+      -- does m satisfy Eisenstein's criterion?
+      eisenstein m => [c,cons([m,1]$ParFact,factorlist)]$FinalFact
+
+      lcPol : ZP := leadingCoefficient(m) :: ZP
+
+      -- is m cyclotomic (x**n - 1)?
+      -lcPol = reductum(m) =>    -- if true, both will = 1
+        for fac in
+          (cyclotomicDecomposition(degree m)$CYC : List ZP) repeat
+            factorlist := cons([fac,1]$ParFact,factorlist)
+        [c,factorlist]$FinalFact
+
+      -- is m odd cyclotomic (x**(2*n+1) + 1)?
+      odd?(d) and (lcPol = reductum(m)) =>
+        for sfac in cyclotomicDecomposition(degree m)$CYC repeat
+           fac:=subMinusX sfac
+           if leadingCoefficient fac < 0 then fac := -fac
+           factorlist := cons([fac,1]$ParFact,factorlist)
+        [c,factorlist]$FinalFact
+
+      -- is the poly of the form x**n + 1 with n a power of 2?
+      -- if so, then irreducible
+      isPowerOf2(d) and (lcPol = reductum(m)) =>
+        factorlist := cons([m,1]$ParFact,factorlist)
+        [c,factorlist]$FinalFact
+
+      -- is m quadratic?
+      d=2 =>
+       lfq:List(ZP) := quadratic m
+       #lfq=1 => [c,cons([lfq.first,1]$ParFact,factorlist)]$FinalFact
+       (lf0,lf1) := (lfq.first,second lfq)
+       if lf0=lf1 then factorlist := cons([lf0,2]$ParFact,factorlist)
+       else factorlist := append([[v,1]$ParFact for v in lfq],factorlist)
+       [c,factorlist]$FinalFact
+
+      -- m is square-free
+      test =>
+        fln := henselfact(m)
+        [c,append(factorlist,[[pf,1]$ParFact for pf in fln])]$FinalFact
+
+      -- find the square-free decomposition of m
+      irrFact := squareFree(m)
+      llf := factors irrFact
+
+      -- factorize the square-free primitive terms
+      for l1 in llf repeat
+        d1 := l1.exponent
+        pol := l1.factor
+        degree pol=1 => factorlist := cons([pol,d1]$ParFact,factorlist)
+        degree pol=2 =>
+          fln := quadratic(pol)
+          factorlist := append([[pf,d1]$ParFact for pf in fln],factorlist)
+        fln := henselfact(pol)
+        factorlist := append([[pf,d1]$ParFact for pf in fln],factorlist)
+      [c,factorlist]$FinalFact
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package UNIFACT UnivariateFactorize>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

@@ -1,0 +1,1113 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/sman sman}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+The superman process, called sman, is normally invoked from the
+axiom shell script in order to start a tree of subprocesses.
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{sman.h}
+The spad\_proc structure holds information about the process id
+of a child process, what to do when it dies, and the shell command
+line necessary to restart the process. There is a linked list of
+these structures which maintains the process list for axiom.
+<<sman.h>>=
+/* Process control definitions.  Used by fork_you and spawn_of_hell */
+
+/* When a process dies it kills off everything else */
+#define Die 1
+/* When a process dies, do nothing */
+#define NadaDelShitsky  2
+/* When a process dies start it up again */
+#define DoItAgain       3
+
+typedef struct spad_proc {
+  int	proc_id;	/* process id of child */
+  int	death_action;	/* one of the above constants */
+  char	*command;	/* sh command line to restart the process */
+  struct spad_proc *next;
+} SpadProcess;
+
+@
+\section{sman}
+\subsection{includes}
+<<includes>>=
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <stdio.h>
+#include <pwd.h>
+#include <fcntl.h>
+#include <termios.h>
+#include <errno.h>
+#include <sys/time.h>
+#include <sys/wait.h>
+#include <signal.h>
+
+#if defined(SUN4OS5platform) || defined(HP10platform)
+#include <sys/stropts.h>
+#endif
+
+#include "com.h"
+#include "bsdsignal.h"
+#include "sman.h"
+
+#include "bsdsignal.H1"
+#include "sockio-c.H1"
+#include "openpty.H1"
+#include "sman.H1"
+
+@
+\subsection{variables}
+We add a debug flag so we can print information about what [[sman]]
+is trying to do. This change is pervasive as it touches nearly every
+routine.
+<<debugflag>>=
+int tpd=0;                      /* to-print-debug information */
+@
+This line is no longer used. We would completely elide it except that
+it would raise spurious issues about deleting credit and/or copyright
+information.
+\begin{verbatim}
+char *start_line =
+"AKCL (Austin Kyoto Common Lisp)  Version(1.568) Thu Aug 22 16:49:01 EDT 1991\
+\r\nContains Enhancements by W. Schelter\r\n";
+\end{verbatim}
+We modified the place where the command list lives. 
+The command list used to live in
+\begin{verbatim}
+$AXIOM/../../share/algebra/command.list
+\end{verbatim}
+but the open source version of the system no longer has a share
+subdirectory so we move this to the lib subdirectory.
+<<clefprogram>>=
+char	*ClefProgram            = 
+           "$AXIOM/bin/clef -f $AXIOM/lib/command.list -e ";
+@
+and we change the command line arguments
+<<clefprogram1>>=
+      ClefProgram = 
+        strcat(ClefCommandLine, " -f $AXIOM/lib/command.list -e ");
+@
+<<variables>>=
+char *ws_path;                  /* location of the AXIOM executable */
+int start_clef;			/* start clef under spad */
+int start_graphics;		/* start the viewman */
+int start_nagman;               /* start the nagman */
+int start_ht;			/* start hypertex */
+int start_spadclient;		/* Start the client spad buffer */
+int start_local_spadclient;	/* Start the client spad buffer */
+int use_X;			/* Use the X windows environment */
+int server_num;			/* AXIOM server number */
+<<debugflag>>
+
+/************************************************/
+/* definitions of programs which sman can start */
+/************************************************/
+
+char	*GraphicsProgram        = "$AXIOM/lib/viewman";
+char    *NagManagerProgram      = "$AXIOM/lib/nagman";
+char	*HypertexProgram        = "$AXIOM/bin/hypertex -s";
+<<clefprogram>>
+char	*SessionManagerProgram  = "$AXIOM/lib/session";
+char	*SpadClientProgram      = "$AXIOM/lib/spadclient";
+char	*PasteFile		= NULL;
+char	*MakeRecordFile		= NULL;
+char	*VerifyRecordFile	= NULL;
+
+SpadProcess *spad_process_list = NULL;
+/***************************/
+/* sman defaults file name */
+/***************************/
+
+#define SpadDefaultFile "spadprof.input"
+
+char ClefCommandLine[256];
+
+#define BufSize      4096 	/* size of communication buffer */
+char big_bad_buf[BufSize];      /* big I/O buffer */
+
+Sock *session_io = NULL;        /* socket connecting to session manager */
+
+/***********************************************************/
+/* Some characters used and externally defined in edible.h */
+/***********************************************************/
+
+unsigned char  _INTR, _QUIT, _ERASE, _KILL, _EOF, _EOL, _RES1, _RES2;
+
+/*************************************/
+/* Stuff for opening pseudo-terminal */
+/*************************************/
+
+int ptsNum, ptcNum;
+char ptsPath[20], ptcPath[20];
+
+char **new_envp;                /* new environment for AXIOM */
+int child_pid;                  /* child's process id */
+struct termios oldbuf;           /* the original settings */
+struct termios childbuf;         /* terminal structure for user i/o */
+
+
+int nagman_signal=0;
+int death_signal = 0;
+
+@
+\subsection{process\_arguments}
+<<processarguments>>=
+static void
+process_arguments(int argc,char ** argv)
+{
+  int arg;
+  if (tpd == 1) fprintf(stderr,"sman:process_arguments entered\n");
+  for (arg = 1; arg < argc; arg++) {
+    if      (strcmp(argv[arg], "-debug")      == 0)
+      tpd = 1;
+    else if (strcmp(argv[arg], "-noclef")      == 0)
+      start_clef = 0;
+    else if (strcmp(argv[arg], "-clef")        == 0)
+      start_clef = 1;
+    else if (strcmp(argv[arg], "-gr")          == 0)
+      start_graphics = 1;
+    else if (strcmp(argv[arg], "-nogr")        == 0)
+      start_graphics = 0;
+    else if (strcmp(argv[arg], "-nag")          == 0)
+      start_nagman = 1;
+    else if (strcmp(argv[arg], "-nonag")        == 0)
+      start_nagman = 0;
+    else if (strcmp(argv[arg], "-ht")          == 0)
+      start_ht = 1;
+    else if (strcmp(argv[arg], "-noht")        == 0)
+      start_ht = 0;
+    else if (strcmp(argv[arg], "-iw")          == 0)
+      start_spadclient = 1;
+    else if (strcmp(argv[arg], "-ihere")       == 0)
+      start_local_spadclient = 1;
+    else if (strcmp(argv[arg], "-noihere")     == 0)
+      start_local_spadclient = 0;
+    else if (strcmp(argv[arg], "-noiw")        == 0)
+      start_spadclient = 0;
+    else if (strcmp(argv[arg], "-ws")          == 0)
+      ws_path = argv[++arg];
+    else if (strcmp(argv[arg], "-comp")        == 0)
+      ws_path = "$AXIOM/etc/images/comp";
+    else if (strcmp(argv[arg], "-nox")         == 0)
+      {
+	use_X = 0;
+	start_local_spadclient = 1;
+	start_spadclient = 0;
+	start_ht = 0;
+	start_graphics = 0;
+      }
+    else if (strcmp(argv[arg], "-grprog")      == 0)
+      GraphicsProgram = argv[++arg];
+    else if (strcmp(argv[arg], "-nagprog")      == 0)
+      NagManagerProgram = argv[++arg];
+    else if (strcmp(argv[arg], "-htprog")      == 0)
+      HypertexProgram = argv[++arg];
+    else if (strcmp(argv[arg], "-clefprog")    == 0) {
+      strcpy(ClefCommandLine,argv[++arg]);
+<<clefprogram1>>
+    }
+    else if (strcmp(argv[arg], "-sessionprog") == 0)
+      SessionManagerProgram = argv[++arg];
+    else if (strcmp(argv[arg], "-clientprog")  == 0)
+      SpadClientProgram = argv[++arg];
+    else if (strcmp(argv[arg], "-rm")  == 0)
+      MakeRecordFile = argv[++arg];
+    else if (strcmp(argv[arg], "-rv")  == 0)
+      VerifyRecordFile = argv[++arg];
+    else if (strcmp(argv[arg], "-paste")  == 0)
+      PasteFile = argv[++arg];
+    else {
+      fprintf(stderr, "Usage: sman <-clef|-noclef> <-gr|-nogr> <-ht|-noht>");
+      fprintf(stderr, " <-iw|-noiw> <-nag|-nonag> <-nox> <-comp>");
+      fprintf(stderr, " <-ws spad_workspace> <-grprog path> <-htprog path>");
+      fprintf(stderr, " <-clefprog path> <-sessionprog path> <-nagprog path>");
+      fprintf(stderr, " <-clientprog path>\n");
+      exit(-1);
+    }
+  }
+  if (tpd == 1)
+  { fprintf(stderr,"  sman ");
+    if (start_clef == 0)
+      fprintf(stderr,"-noclef ");
+    else
+      fprintf(stderr,"-clef ");
+    if (start_graphics == 0)
+      fprintf(stderr,"-nogr ");
+    else
+      fprintf(stderr,"-gr ");
+    if (start_nagman == 0)
+      fprintf(stderr,"-nonag ");
+    else
+      fprintf(stderr,"-nag ");
+    if (start_ht == 0)
+      fprintf(stderr,"-noht ");
+    else
+      fprintf(stderr,"-ht ");
+    if (start_spadclient == 0)
+      fprintf(stderr,"-noiw ");
+    else
+      fprintf(stderr,"-iw ");
+    if (start_local_spadclient == 0)
+      fprintf(stderr,"-noihere ");
+    else
+      fprintf(stderr,"-ihere ");
+    if (start_local_spadclient == 0)
+      fprintf(stderr,"-noihere ");
+    else
+      fprintf(stderr,"-ihere ");
+    if (use_X == 0)
+      fprintf(stderr,"-nox ");
+    fprintf(stderr,"-ws ");
+    fprintf(stderr,"'%s' ",ws_path);
+    fprintf(stderr,"-grprog ");
+    fprintf(stderr,"'%s' ",GraphicsProgram);
+    fprintf(stderr,"-nagprog ");
+    fprintf(stderr,"'%s' ",NagManagerProgram);
+    fprintf(stderr,"-htprog ");
+    fprintf(stderr,"'%s' ",HypertexProgram);
+    fprintf(stderr,"-clefprog ");
+    fprintf(stderr,"'%s' ",ClefCommandLine);
+    fprintf(stderr,"-sessionprog ");
+    fprintf(stderr,"'%s' ",SessionManagerProgram);
+    fprintf(stderr,"-clientprog ");
+    fprintf(stderr,"'%s' ",SpadClientProgram);
+    fprintf(stderr,"-rm ");
+    fprintf(stderr,"'%s' ",MakeRecordFile);
+    fprintf(stderr,"-rv ");
+    fprintf(stderr,"'%s' ",VerifyRecordFile);
+    fprintf(stderr,"-paste ");
+    fprintf(stderr,"'%s' ",PasteFile);
+    fprintf(stderr,"\n");
+  }
+  if (tpd == 1) fprintf(stderr,"sman:process_arguments exit\n");
+}
+
+@
+\subsection{should\_I\_clef}
+<<shouldIclef>>=
+static int 
+should_I_clef(void)
+{
+  return(1);
+}
+
+@
+\subsection{in\_X}
+<<inX>>=
+static int 
+in_X(void)
+{
+  if (getenv("DISPLAY")) return 1;
+  return 0;
+}
+
+@
+\subsection{set\_up\_defaults}
+These are the default values for sman. A '1' value means that
+sman will try to start the given process, a '0' value means not
+starting the process.
+
+We do not have replacement code for the [[nagman]] process nor
+do we have a copy of the [[nag fortran library]] to test the process.
+Until this changes we set [[start_nagman = 0]] in order to disable
+starting this process by default.
+<<setupdefaults>>=
+static  void
+set_up_defaults(void)
+{
+  if (tpd == 1) fprintf(stderr,"sman:set_up_defaults entered\n");
+  start_clef = should_I_clef();
+  start_graphics = 1;
+  start_nagman = 0;
+  start_ht = 1;
+  start_spadclient = 0;
+  start_local_spadclient = 1;
+  use_X = isatty(0) && in_X();
+  ws_path = "$AXIOM/bin/AXIOMsys";
+  if (tpd == 1) fprintf(stderr,"sman:set_up_defaults exit\n");
+}
+
+@
+\subsection{process\_options}
+<<processoptions>>=
+static void
+process_options(int argc, char **argv)
+{
+  if (tpd == 1) fprintf(stderr,"sman:process_options entered\n");
+  set_up_defaults();
+  process_arguments(argc, argv);
+  if (tpd == 1) fprintf(stderr,"sman:process_options exit\n");
+}
+
+@
+\subsection{death\_handler}
+<<deathhandler>>=
+static void
+death_handler(int sig)
+{
+  death_signal = 1;
+}
+
+@
+\subsection{nagman\_handler}
+<<nagmanhandler>>=
+static void 
+nagman_handler(int sig)
+{
+  nagman_signal=1;
+}
+
+@
+\subsection{sman\_catch\_signals}
+<<smancatchsignals>>=
+static void
+sman_catch_signals(void)
+{
+  
+  /* Set up the signal handlers for sman */
+  bsdSignal(SIGINT,  SIG_IGN,RestartSystemCalls);
+  bsdSignal(SIGTERM, death_handler,RestartSystemCalls);
+  bsdSignal(SIGQUIT, death_handler,RestartSystemCalls);
+  bsdSignal(SIGHUP,  death_handler,RestartSystemCalls);
+  bsdSignal(SIGILL,  death_handler,RestartSystemCalls);
+  bsdSignal(SIGTRAP, death_handler,RestartSystemCalls);
+  bsdSignal(SIGIOT,  death_handler,RestartSystemCalls);
+  bsdSignal(SIGBUS,  death_handler,RestartSystemCalls);
+  bsdSignal(SIGSEGV, death_handler,RestartSystemCalls);
+  /* don't restart wait call on SIGUSR1  */
+  bsdSignal(SIGUSR1, nagman_handler,DontRestartSystemCalls); 
+  /* ONLY nagman should send this.
+     If an error (such as C-c) interrupts a NAGLINK call, nagman
+     gets a signal to clean up. We need to start another nagman 
+     almost immediately to process the next NAGLINK request.
+     Since nagman takes a while to clean up, we treat it specially.
+     nagman should send a signal (USR1) to sman.
+     sman should respond by spawning a new nagman.
+     
+     so nagman is NOT a DoItAgain but a NadaDelShitsky.
+     
+     The USR1 mechanism does not work for HPUX 9 - use DoItAgain 
+     */
+
+}
+
+@
+\subsection{fix\_env}
+insert SPADSERVER and SPADNUM variables into the environemnt
+<<fixenv>>=
+static void
+fix_env(char **envp, int spadnum)
+{
+  int len, i;
+  char *sn;
+  for(len = 0; envp[len] != NULL; len++);
+  new_envp = (char **) malloc((len + 3) * sizeof(char *));
+  new_envp[0] = "SPADSERVER=TRUE";
+  sn = (char *) malloc(20 * sizeof(char));
+  sprintf(sn, "SPADNUM=%d", spadnum);
+  new_envp[1] = sn;
+  for(i=0; i<=len; i++)
+    new_envp[i+2] = envp[i];
+}
+
+@
+\subsection{init\_term\_io}
+<<inittermio>>=
+static void
+init_term_io(void)
+{
+  if(!isatty(0)) return;
+  if( tcgetattr(0, &oldbuf) == -1) {
+    perror("getting termios");
+    return ; 			/*  exit(-1); */
+  }
+  if( tcgetattr(0, &childbuf) == -1) {
+    perror("getting termios");
+    return ; 			/*   exit(-1); */
+  }
+  _INTR = oldbuf.c_cc[VINTR];
+  _QUIT = oldbuf.c_cc[VQUIT];
+  _ERASE = oldbuf.c_cc[VERASE];
+  _KILL = oldbuf.c_cc[VKILL];
+  _EOF = oldbuf.c_cc[VEOF];
+  _EOL = oldbuf.c_cc[VEOL];
+}
+
+@
+\subsection{strPrefix}
+<<strPrefix>>=
+static char *
+strPrefix(char *prefix,char * s)
+{
+  while (*prefix != '\0' && *prefix == *s) {
+    prefix++;
+    s++;
+  }
+  if (*prefix == '\0') return s;
+  return NULL;
+}
+
+@
+\subsection{check\_spad\_proc}
+<<checkspadproc>>=
+static void
+check_spad_proc(char *file, char *prefix)
+{
+  char *num;
+  int pid;
+  if ((num = strPrefix(prefix, file))) {
+    pid = atoi(num);
+    if (pid > 2) {
+      kill(pid, 0);
+      if (kill(pid, 0) == -1 && errno == ESRCH) {
+	unlink(file);
+      }
+    }
+  }
+}
+
+@
+\subsection{clean\_up\_old\_sockets}
+<<cleanupoldsockets>>=
+static void
+clean_up_old_sockets(void)
+{
+  char com[512], tmp_file[128];
+  FILE *file;
+  int len;
+  sprintf(tmp_file, "/tmp/socks.%d", server_num);
+  sprintf(com, "ls /tmp/.d* /tmp/.s* /tmp/.i* /tmp/.h* 2> %s > %s",
+	  tmp_file, tmp_file);
+  system(com);
+  file = fopen(tmp_file, "r");
+  if (file == NULL) {
+    fprintf(stderr, "Can't open socket listing file\n");
+    return;
+  }
+  while(fgets(com, 512, file) != NULL) {
+    len = strlen(com);
+    if (len) com[len-1] = '\0';
+    else break;
+    check_spad_proc(com, "/tmp/.d");
+    check_spad_proc(com, "/tmp/.s");
+    check_spad_proc(com, "/tmp/.i");
+    check_spad_proc(com, "/tmp/.h");
+  }
+  fclose(file);
+  unlink(tmp_file);
+}
+
+@
+\subsection{fork\_you}
+<<forkyou>>=
+static SpadProcess *
+fork_you(int death_action)
+{
+  /* fork a new process, giving it a default death action */
+  /* return NULL in child, SpadProcess in parent          */
+  int child_pid = fork();
+  SpadProcess *proc;
+  if (!child_pid) return NULL;
+  proc = (SpadProcess *) malloc(sizeof(SpadProcess));
+  proc->proc_id = child_pid;
+  proc->death_action = death_action;
+  proc->command = NULL;
+  proc->next = spad_process_list;
+  spad_process_list = proc;
+  return proc;
+}
+
+@
+\subsection{exec\_command\_env}
+Note that the next-to-last argument of {\tt execle} must be an
+explicit NULL pointer. The previous naked 0 value was not correct.
+<<execcommandenv>>=
+static void
+exec_command_env(char *command,char ** env)
+{
+  char new_command[512];
+  sprintf(new_command, "exec %s", command);
+  execle("/bin/sh","/bin/sh", "-c", new_command, (char *)0, env);
+}
+
+@
+\subsection{spawn\_of\_hell}
+<<spawnofhell>>=
+static SpadProcess *
+spawn_of_hell(char *command, int death_action)
+{
+  SpadProcess *proc = fork_you(death_action);
+  if (proc != NULL) {
+    proc->command = command;
+    return proc;
+  }
+  exec_command_env(command, new_envp);
+  return NULL;
+}
+
+@
+\subsection{start\_the\_spadclient}
+run a AXIOM client in the main process
+<<startthespadclient>>=
+static void
+start_the_spadclient(void)
+{
+  char command[256];
+  if (start_clef)
+#ifdef RIOSplatform
+    sprintf(command, 
+	    "aixterm -sb -sl 500 -name axiomclient -n AXIOM -T AXIOM -e %s %s",
+	    ClefProgram, SpadClientProgram);
+#else
+  sprintf(command, 
+	  "xterm -sb -sl 500 -name axiomclient -n AXIOM -T AXIOM -e %s %s",
+	  ClefProgram, SpadClientProgram);
+#endif
+  else
+#ifdef RIOSplatform
+    sprintf(command, 
+	    "aixterm -sb -sl 500 -name axiomclient -n AXIOM -T AXIOM -e %s", 
+	    SpadClientProgram);
+#else
+  sprintf(command, 
+	  "xterm -sb -sl 500 -name axiomclient -n AXIOM -T AXIOM -e %s", 
+	  SpadClientProgram);
+#endif
+  if (tpd == 1) 
+    fprintf(stderr,"sman:start_the_spadclient: %s\n",command);
+  spawn_of_hell(command, NadaDelShitsky);
+}
+
+@
+\subsection{start\_the\_local\_spadclient}
+<<startthelocalspadclient>>=
+static void
+start_the_local_spadclient(void)
+{
+  char command[256];
+  if (start_clef)
+    sprintf(command, "%s  %s", ClefProgram, SpadClientProgram);
+  else
+    sprintf(command, "%s", SpadClientProgram);
+  if (tpd == 1) 
+    fprintf(stderr,"sman:start_the_local_spadclient: %s\n",command);
+  spawn_of_hell(command, NadaDelShitsky);
+}
+
+@
+\subsection{start\_the\_nagman}
+<<startthenagman>>=
+static void
+start_the_nagman(void)
+{
+#if defined(HP9platform)
+  spawn_of_hell(NagManagerProgram,DoItAgain);
+#else
+  spawn_of_hell(NagManagerProgram,NadaDelShitsky );
+#endif
+}
+
+@
+\subsection{start\_the\_session\_manager}
+<<startthesessionmanager>>=
+static void
+start_the_session_manager(void)
+{
+  spawn_of_hell(SessionManagerProgram, Die);
+}
+
+@
+\subsection{start\_the\_hypertex}
+<<startthehypertex>>=
+static void
+start_the_hypertex(void)
+{
+  char prog[512];
+
+  if (PasteFile){
+    sprintf(prog, "%s -k -ip %s", HypertexProgram, PasteFile);
+    spawn_of_hell(prog, NadaDelShitsky);
+  }
+  else if (MakeRecordFile){
+    sprintf(prog, "%s -k -rm %s", HypertexProgram,MakeRecordFile );
+    spawn_of_hell(prog, NadaDelShitsky);
+  }
+  else if (VerifyRecordFile){
+    sprintf(prog, "%s -k -rv %s", HypertexProgram, VerifyRecordFile);
+    spawn_of_hell(prog, NadaDelShitsky);
+  }
+  else	spawn_of_hell(HypertexProgram, NadaDelShitsky);
+}
+
+@
+\subsection{start\_the\_graphics}
+<<startthegraphics>>=
+static void
+start_the_graphics(void)
+{
+  spawn_of_hell(GraphicsProgram, DoItAgain);
+}
+
+@
+\subsection{fork\_Axiom}
+<<forkAxiom>>=
+/* Start the AXIOM session in a separate process, */
+/* using a pseudo-terminal to catch all input and output */
+static void 
+fork_Axiom(void)
+{
+  char augmented_ws_path[256];  /* will append directory path */
+  char *tmp_pointer;
+  SpadProcess *proc;
+
+  proc =  fork_you(Die);
+  child_pid = (proc == NULL ? 0 : proc->proc_id);
+  switch(child_pid) {
+  case -1 :
+    fprintf(stderr, "Can't create a new process \n");
+    exit(0);
+  case 0:
+    /* Dissasociate from my parents group so all my child processes */
+    /* look at my terminal as the controlling terminal for the      */
+    /* group                                                        */
+
+    if(setsid() < 0) {
+      perror("Dissassociating from parents group");
+      exit(-1);
+    }
+
+    close(ptsNum);
+    /* Now reopen the server side, so that pg, su, etc. work properly */
+
+    if ((ptsNum =  open(ptsPath, O_RDWR)) < 0 ) {
+      perror("fork_Axiom: Failed to reopen server");
+      exit(-1);
+    }
+#if defined(SUN4OS5platform) || defined(HP10platform)
+    ioctl(ptsNum,I_PUSH,"ptem");
+    ioctl(ptsNum,I_PUSH,"ldterm");
+#endif
+
+    /* since I am the child, I can close ptc, and dup pts for all its */
+    /* standard descriptors                                           */
+
+    if( (dup2(ptsNum, 0) == -1) ||
+        (dup2(ptsNum, 1) == -1) ||
+        (dup2(ptsNum, 2) == -1)  ) {
+      perror("trying to dupe the child");
+      exit(-1);
+    }
+    close(ptcNum);
+    close(ptsNum);
+
+
+    /* I also have to turn off echoing, since I am echoing all the */
+    /* input myself                  */
+
+    childbuf.c_lflag &= ~ECHO;
+    if( tcsetattr(0, TCSAFLUSH, &childbuf) == -1) {
+      perror("setting the term buffer");
+      exit(-1); 
+    }
+    strcpy(augmented_ws_path,ws_path);          /* write the name    */
+    strcat(augmented_ws_path," ");              /* space             */
+    strcat(augmented_ws_path,ws_path);          /* name again        */
+    tmp_pointer = (char *)
+      strrchr(augmented_ws_path,'/');      /*pointer to last /  */
+    *(++tmp_pointer) = '\0';
+    exec_command_env(augmented_ws_path, new_envp);
+
+    /*    fprintf(stderr, "Cannot execute the %s system.\n", ws_path); */
+
+    exit(0);
+  }
+}
+
+@
+\subsection{start\_the\_Axiom}
+<<starttheAxiom>>=
+static void
+start_the_Axiom(char **envp)
+{
+  server_num = make_server_number();
+  clean_up_old_sockets();
+  if (server_num == -1) {
+    fprintf(stderr, "could not get an AXIOM server number\n");
+    exit(-1);
+  }
+  if (ptyopen(&ptcNum, &ptsNum, ptcPath, ptsPath) == -1) {
+    perror("start_the_Axiom: ptyopen failed");
+    exit(-1);
+  }
+  fix_env(envp, server_num);
+  fork_Axiom();
+  close(ptsNum);
+}
+
+@
+\subsection{clean\_up\_sockets}
+<<cleanupsockets>>=
+static void
+clean_up_sockets(void)
+{
+  char name[256];
+  sprintf(name, "%s%d", SpadServer, server_num);
+  unlink(name);
+  sprintf(name, "%s%d", SessionServer, server_num);
+  unlink(name);
+  sprintf(name, "%s%d", SessionIOName, server_num);
+  unlink(name);
+  sprintf(name, "%s%d", MenuServerName, server_num);
+  unlink(name);
+}
+
+@
+\subsection{read\_from\_spad\_io}
+<<readfromspadio>>=
+static void
+read_from_spad_io(int ptcNum)
+{
+  int ret_code = 0, i=0;
+  static int mes_len =0; 
+  ret_code = read(ptcNum, big_bad_buf, BufSize);
+  if (ret_code == -1) {
+    clean_up_sockets();
+    exit(-1);
+  }
+  if (session_io == NULL) {
+    if (ret_code < mes_len)
+      mes_len -= ret_code;
+    else {
+      if (mes_len > 0) {
+	i = mes_len;
+	mes_len = 0;
+      }
+      else
+	i = 0;
+      ret_code = write(1, big_bad_buf+i, ret_code-i);
+    }
+  }
+  else
+    ret_code = swrite(session_io, big_bad_buf, ret_code,
+		      "writing to session man");
+  if (ret_code == -1) {
+    perror("writing output to session manager");
+    clean_up_sockets();
+    exit(-1);
+  }
+}
+
+@
+\subsection{read\_from\_manager}
+<<readfrommanager>>=
+static void
+read_from_manager(int ptcNum)
+{
+  int ret_code;
+  ret_code = sread(session_io, big_bad_buf, BufSize, "reading session io");
+  if (ret_code == -1) {
+    return;
+  }
+  ret_code = write(ptcNum, big_bad_buf, ret_code);
+  if (ret_code == -1) {
+    return;
+  }
+}
+
+@
+\subsection{manage\_spad\_io}
+<<managespadio>>=
+static void
+manage_spad_io(int ptcNum)
+{
+  int ret_code, i, p;
+  fd_set rd;
+  while (1) {
+    rd = socket_mask;
+    FD_SET(ptcNum, &rd);
+    if (session_io != NULL)
+      FD_SET(session_io->socket, &rd);
+    ret_code = sselect(FD_SETSIZE, &rd, 0, 0, NULL);
+    if (ret_code == -1) {
+      perror("Session manager select");
+      clean_up_sockets();
+      exit(-1);
+    }
+    if (FD_ISSET(ptcNum, &rd)) {
+      read_from_spad_io(ptcNum);
+    }
+    for(i=0; i<2; i++) {
+      if (server[i].socket > 0 && FD_ISSET(server[i].socket, &rd)) {
+	p = accept_connection(server+i);
+	switch(p) {
+	case SessionIO:
+	  session_io = purpose_table[SessionIO];
+	  /*  printf("connected session manager\n\r");*/
+	  printf("\n");
+	  break;
+	default:
+	  printf("sman: Unkown connection request type: %d\n", p);
+	  break;
+	}
+      }
+    }
+    if (session_io != NULL && FD_ISSET(session_io->socket, &rd)) {
+      read_from_manager(ptcNum);
+    }
+  }
+}
+
+@
+\subsection{init\_spad\_process\_list}
+<<initspadprocesslist>>=
+static void
+init_spad_process_list(void)
+{
+  spad_process_list = NULL;
+}
+
+@
+\subsection{print\_spad\_process\_list}
+<<printspadprocesslist>>=
+#if 0
+static void
+print_spad_process_list()
+{
+  SpadProcess *proc;
+  for(proc = spad_process_list; proc != NULL; proc = proc->next)
+    fprintf(stderr, "proc_id = %d, death_action = %d\n", proc->proc_id,
+	    proc->death_action);
+}
+#endif
+
+@
+\subsection{find\_child}
+<<findchild>>=
+static SpadProcess *
+find_child(int proc_id)
+{
+  SpadProcess *proc;
+  for(proc = spad_process_list; proc != NULL; proc = proc->next)
+    if (proc->proc_id == proc_id) return proc;
+  return NULL;
+}
+
+@
+\subsection{kill\_all\_children}
+<<killallchildren>>=
+static void
+kill_all_children(void)
+{
+  char name[256];
+  SpadProcess *proc;
+  
+  
+  for(proc = spad_process_list; proc != NULL; proc = proc->next) {
+    kill(proc->proc_id, SIGTERM);
+  }
+  sprintf(name, "/tmp/hyper%d.input",server_num);
+  unlink(name);
+
+}
+
+@
+\subsection{clean\_up\_terminal}
+<<cleanupterminal>>=
+static void
+clean_up_terminal(void)
+{
+  tcsetattr(0, TCSAFLUSH, &oldbuf);
+}
+
+@
+\subsection{monitor\_children}
+<<monitorchildren>>=
+static void
+monitor_children(void)
+{
+  int dead_baby, stat;
+  SpadProcess *proc;
+  while (1) {
+    stat = 0;
+    dead_baby = wait(&stat);
+    /* Check the value of dead_baby, since wait may have returned
+       a pid but subsequently we have received a signal.  Yeuch! */
+    if (dead_baby == -1 && death_signal) {
+      kill_all_children();
+      clean_up_sockets();
+      clean_up_terminal();
+      sleep(2);
+      exit(0);
+    }
+    /* Check the value of dead_baby, since wait may have returned
+       a pid but subsequently we have received a signal.  Yeuch! */
+    if(dead_baby == -1 && nagman_signal) {
+      nagman_signal=0;
+      spawn_of_hell(NagManagerProgram,NadaDelShitsky);
+      continue;
+    }
+
+    if (dead_baby == -1) {
+      fprintf(stderr, "sman: wait returned -1\n");
+      continue;
+    }
+    proc = find_child(dead_baby);
+    if (proc == NULL) {
+      /*      fprintf(stderr, "sman: %d is not known to be a child process\n",
+	      dead_baby);
+	      */
+      continue;
+    }
+    switch(proc->death_action) {
+    case Die:
+      kill_all_children();
+      clean_up_sockets();
+      clean_up_terminal();
+      sleep(2);
+      exit(0);
+    case NadaDelShitsky:
+      break;
+    case DoItAgain:
+      spawn_of_hell(proc->command, DoItAgain);
+      break;
+    }
+  }
+}
+
+@
+\subsection{main}
+The main procedure should return an [[int]]. We change the return value
+here and in [[src/include/sman.H1]].
+<<result>>=
+  return(0);
+@
+<<main>>=
+int
+main(int argc, char *argv[],char *envp[])
+{
+  if (tpd == 1) fprintf(stderr,"sman:main entered\n");
+  bsdSignal(SIGINT,  SIG_IGN,RestartSystemCalls);
+  process_options(argc, argv);
+
+  init_term_io();
+  init_spad_process_list();
+  start_the_Axiom(envp);
+  if (open_server(SessionIOName) == -2) {
+    fprintf(stderr, "Fatal error opening I/O socket\n");
+    clean_up_sockets();
+    exit(-1);
+  }
+  start_the_session_manager();
+  if (start_spadclient)       start_the_spadclient();
+  if (start_local_spadclient) start_the_local_spadclient();
+  if (start_nagman)           start_the_nagman();
+  if (start_ht)               start_the_hypertex();
+  if (start_graphics)         start_the_graphics();
+  sleep(1);
+
+  if (fork_you(Die) != NULL) {
+    sman_catch_signals();
+    monitor_children();
+    exit(0);
+  }
+  manage_spad_io(ptcNum);
+  if (tpd == 1) fprintf(stderr,"sman:main exit\n");
+<<result>>
+}
+
+@
+\subsection{sman}
+<<sman>>=
+#define _SMAN_C
+
+<<includes>>
+<<variables>>
+<<processarguments>>
+<<shouldIclef>>
+<<inX>>
+<<setupdefaults>>
+<<processoptions>>
+<<deathhandler>>
+<<nagmanhandler>>
+<<smancatchsignals>>
+<<fixenv>>
+<<inittermio>>
+<<strPrefix>>
+<<checkspadproc>>
+<<cleanupoldsockets>>
+<<forkyou>>
+<<execcommandenv>>
+<<spawnofhell>>
+<<startthespadclient>>
+<<startthelocalspadclient>>
+<<startthenagman>>
+<<startthesessionmanager>>
+<<startthehypertex>>
+<<startthegraphics>>
+<<forkAxiom>>
+<<starttheAxiom>>
+<<cleanupsockets>>
+<<readfromspadio>>
+<<readfrommanager>>
+<<managespadio>>
+<<initspadprocesslist>>
+<<printspadprocesslist>>
+<<findchild>>
+<<killallchildren>>
+<<cleanupterminal>>
+<<monitorchildren>>
+<<main>>
+
+@
+\section{License}
+<<license>>=
+/*
+Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+    - Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+
+    - Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in
+      the documentation and/or other materials provided with the
+      distribution.
+
+    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+      names of its contributors may be used to endorse or promote products
+      derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
+@
+<<*>>=
+<<license>>
+<<sman>>
+@ 
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

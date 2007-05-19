@@ -1,0 +1,267 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra defintef.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package DEFINTEF ElementaryFunctionDefiniteIntegration}
+<<package DEFINTEF ElementaryFunctionDefiniteIntegration>>=
+)abbrev package DEFINTEF ElementaryFunctionDefiniteIntegration
+++ Definite integration of elementary functions.
+++ Author: Manuel Bronstein
+++ Date Created: 14 April 1992
+++ Date Last Updated: 2 February 1993
+++ Description:
+++   \spadtype{ElementaryFunctionDefiniteIntegration}
+++   provides functions to compute definite
+++   integrals of elementary functions.
+ElementaryFunctionDefiniteIntegration(R, F): Exports == Implementation where
+  R : Join(EuclideanDomain, OrderedSet, CharacteristicZero,
+           RetractableTo Integer, LinearlyExplicitRingOver Integer)
+  F : Join(TranscendentalFunctionCategory, PrimitiveFunctionCategory,
+           AlgebraicallyClosedFunctionSpace R)
+
+  B   ==> Boolean
+  SE  ==> Symbol
+  Z   ==> Integer
+  P   ==> SparseMultivariatePolynomial(R, K)
+  K   ==> Kernel F
+  UP  ==> SparseUnivariatePolynomial F
+  OFE ==> OrderedCompletion F
+  U   ==> Union(f1:OFE, f2:List OFE, fail:"failed", pole:"potentialPole")
+
+  Exports ==> with
+    integrate: (F, SegmentBinding OFE) -> U
+      ++ integrate(f, x = a..b) returns the integral of
+      ++ \spad{f(x)dx} from a to b.
+      ++ Error: if f has a pole for x between a and b.
+    integrate: (F, SegmentBinding OFE, String) -> U
+      ++ integrate(f, x = a..b, "noPole") returns the
+      ++ integral of \spad{f(x)dx} from a to b.
+      ++ If it is not possible to check whether f has a pole for x
+      ++ between a and b (because of parameters), then this function
+      ++ will assume that f has no such pole.
+      ++ Error: if f has a pole for x between a and b or
+      ++ if the last argument is not "noPole".
+    innerint: (F, SE, OFE, OFE, B) -> U
+      ++ innerint(f, x, a, b, ignore?) should be local but conditional
+
+  Implementation ==> add
+    import ElementaryFunctionSign(R, F)
+    import DefiniteIntegrationTools(R, F)
+    import FunctionSpaceIntegration(R, F)
+
+    polyIfCan   : (P, K) -> Union(UP, "failed")
+    int         : (F, SE, OFE, OFE, B) -> U
+    nopole      : (F, SE, K, OFE, OFE) -> U
+    checkFor0   : (P, K, OFE, OFE) -> Union(B, "failed")
+    checkSMP    : (P, SE, K, OFE, OFE) -> Union(B, "failed")
+    checkForPole: (F, SE, K, OFE, OFE) -> Union(B, "failed")
+    posit       : (F, SE, K, OFE, OFE) -> Union(B, "failed")
+    negat       : (F, SE, K, OFE, OFE) -> Union(B, "failed")
+    moreThan    : (OFE, Fraction Z) -> Union(B, "failed")
+
+    if R has Join(ConvertibleTo Pattern Integer, PatternMatchable Integer)
+      and F has SpecialFunctionCategory then
+        import PatternMatchIntegration(R, F)
+
+        innerint(f, x, a, b, ignor?) ==
+          ((u := int(f, x, a, b, ignor?)) case f1) or (u case f2)
+            or ((v := pmintegrate(f, x, a, b)) case "failed") => u
+          [v::F::OFE]
+
+    else
+      innerint(f, x, a, b, ignor?) == int(f, x, a, b, ignor?)
+
+    integrate(f:F, s:SegmentBinding OFE) ==
+      innerint(f, variable s, lo segment s, hi segment s, false)
+
+    integrate(f:F, s:SegmentBinding OFE, str:String) ==
+      innerint(f, variable s, lo segment s, hi segment s, ignore? str)
+
+    int(f, x, a, b, ignor?) ==
+      a = b => [0::OFE]
+      k := kernel(x)@Kernel(F)
+      (z := checkForPole(f, x, k, a, b)) case "failed" =>
+        ignor? => nopole(f, x, k, a, b)
+        ["potentialPole"]
+      z::B => error "integrate: pole in path of integration"
+      nopole(f, x, k, a, b)
+
+    checkForPole(f, x, k, a, b) ==
+      ((u := checkFor0(d := denom f, k, a, b)) case "failed") or (u::B) => u
+      ((u := checkSMP(d, x, k, a, b)) case "failed") or (u::B) => u
+      checkSMP(numer f, x, k, a, b)
+
+-- true if p has a zero between a and b exclusive
+    checkFor0(p, x, a, b) ==
+      (u := polyIfCan(p, x)) case UP => checkForZero(u::UP, a, b, false)
+      (v := isTimes p) case List(P) =>
+         for t in v::List(P) repeat
+           ((w := checkFor0(t, x, a, b)) case "failed") or (w::B) => return w
+         false
+      (r := retractIfCan(p)@Union(K, "failed")) case "failed" => "failed"
+      k := r::K
+-- functions with no real zeros
+      is?(k, "exp"::SE) or is?(k, "acot"::SE) or is?(k, "cosh"::SE) => false
+-- special case for log
+      is?(k, "log"::SE) =>
+        (w := moreThan(b, 1)) case "failed" or not(w::B) => w
+        moreThan(-a, -1)
+      "failed"
+
+-- returns true if a > b, false if a < b, "failed" if can't decide
+    moreThan(a, b) ==
+      (r := retractIfCan(a)@Union(F, "failed")) case "failed" =>  -- infinite
+        whatInfinity(a) > 0
+      (u := retractIfCan(r::F)@Union(Fraction Z, "failed")) case "failed" =>
+        "failed"
+      u::Fraction(Z) > b
+
+-- true if p has a pole between a and b
+    checkSMP(p, x, k, a, b) ==
+      (u := polyIfCan(p, k)) case UP => false
+      (v := isTimes p) case List(P) =>
+         for t in v::List(P) repeat
+           ((w := checkSMP(t, x, k, a, b)) case "failed") or (w::B) => return w
+         false
+      (v := isPlus p) case List(P) =>
+         n := 0              -- number of summand having a pole
+         for t in v::List(P) repeat
+           (w := checkSMP(t, x, k, a, b)) case "failed" => return w
+           if w::B then n := n + 1
+         zero? n => false    -- no summand has a pole
+--         one? n => true      -- only one summand has a pole
+         (n = 1) => true      -- only one summand has a pole
+         "failed"            -- at least 2 summands have a pole
+      (r := retractIfCan(p)@Union(K, "failed")) case "failed" => "failed"
+      kk := r::K
+      -- nullary operators have no poles
+      nullary? operator kk => false
+      f := first argument kk
+      -- functions which are defined over all the reals:
+      is?(kk, "exp"::SE) or is?(kk, "sin"::SE) or is?(kk, "cos"::SE)
+        or is?(kk, "sinh"::SE) or is?(kk, "cosh"::SE) or is?(kk, "tanh"::SE)
+          or is?(kk, "sech"::SE) or is?(kk, "atan"::SE) or is?(kk, "acot"::SE)
+            or is?(kk, "asinh"::SE) => checkForPole(f, x, k, a, b)
+      -- functions which are defined on (-1,+1):
+      is?(kk, "asin"::SE) or is?(kk, "acos"::SE) or is?(kk, "atanh"::SE) =>
+        ((w := checkForPole(f, x, k, a, b)) case "failed") or (w::B) => w
+        ((w := posit(f - 1, x, k, a, b)) case "failed") or (w::B) => w
+        negat(f + 1, x, k, a, b)
+      -- functions which are defined on (+1, +infty):
+      is?(kk, "acosh"::SE) =>
+        ((w := checkForPole(f, x, k, a, b)) case "failed") or (w::B) => w
+        negat(f - 1, x, k, a, b)
+      -- functions which are defined on (0, +infty):
+      is?(kk, "log"::SE) =>
+        ((w := checkForPole(f, x, k, a, b)) case "failed") or (w::B) => w
+        negat(f, x, k, a, b)
+      "failed"
+
+-- returns true if it is certain that f takes at least one strictly positive
+-- value for x in (a,b), false if it is certain that f takes no strictly
+-- positive value in (a,b), "failed" otherwise
+-- f must be known to have no poles in (a,b)
+    posit(f, x, k, a, b) ==
+      z :=
+        (r := retractIfCan(a)@Union(F, "failed")) case "failed" => sign(f, x, a)
+        sign(f, x, r::F, "right")
+      (b1 := z case Z) and z::Z > 0 => true
+      z :=
+        (r := retractIfCan(b)@Union(F, "failed")) case "failed" => sign(f, x, b)
+        sign(f, x, r::F, "left")
+      (b2 := z case Z) and z::Z > 0 => true
+      b1 and b2 =>
+        ((w := checkFor0(numer f, k, a, b)) case "failed") or (w::B) => "failed"
+        false
+      "failed"
+
+-- returns true if it is certain that f takes at least one strictly negative
+-- value for x in (a,b), false if it is certain that f takes no strictly
+-- negative value in (a,b), "failed" otherwise
+-- f must be known to have no poles in (a,b)
+    negat(f, x, k, a, b) ==
+      z :=
+        (r := retractIfCan(a)@Union(F, "failed")) case "failed" => sign(f, x, a)
+        sign(f, x, r::F, "right")
+      (b1 := z case Z) and z::Z < 0 => true
+      z :=
+        (r := retractIfCan(b)@Union(F, "failed")) case "failed" => sign(f, x, b)
+        sign(f, x, r::F, "left")
+      (b2 := z case Z) and z::Z < 0 => true
+      b1 and b2 =>
+        ((w := checkFor0(numer f, k, a, b)) case "failed") or (w::B) => "failed"
+        false
+      "failed"
+
+-- returns a UP if p is only a poly w.r.t. the kernel x
+    polyIfCan(p, x) ==
+      q := univariate(p, x)
+      ans:UP := 0
+      while q ^= 0 repeat
+        member?(x, tower(c := leadingCoefficient(q)::F)) => return "failed"
+        ans := ans + monomial(c, degree q)
+        q := reductum q
+      ans
+
+-- integrate f for x between a and b assuming that f has no pole in between
+    nopole(f, x, k, a, b) ==
+      (u := integrate(f, x)) case F =>
+        (v := computeInt(k, u::F, a, b, false)) case "failed" => ["failed"]
+        [v::OFE]
+      ans := empty()$List(OFE)
+      for g in u::List(F) repeat
+        (v := computeInt(k, g, a, b, false)) case "failed" => return ["failed"]
+        ans := concat_!(ans, [v::OFE])
+      [ans]
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package DEFINTEF ElementaryFunctionDefiniteIntegration>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

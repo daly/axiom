@@ -1,0 +1,367 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra mts.spad}
+\author{William Burge, Stephen Watt, Clifton Williamson}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{domain SMTS SparseMultivariateTaylorSeries}
+<<domain SMTS SparseMultivariateTaylorSeries>>=
+)abbrev domain SMTS SparseMultivariateTaylorSeries
+++ This domain provides multivariate Taylor series
+++ Authors: William Burge, Stephen Watt, Clifton Williamson
+++ Date Created: 15 August 1988
+++ Date Last Updated: 18 May 1991
+++ Basic Operations:
+++ Related Domains:
+++ Also See: UnivariateTaylorSeries
+++ AMS Classifications:
+++ Keywords: multivariate, Taylor, series
+++ Examples:
+++ References:
+++ Description:
+++   This domain provides multivariate Taylor series with variables
+++   from an arbitrary ordered set.  A Taylor series is represented
+++   by a stream of polynomials from the polynomial domain SMP.
+++   The nth element of the stream is a form of degree n.  SMTS is an
+++   internal domain.
+SparseMultivariateTaylorSeries(Coef,Var,SMP):_
+ Exports == Implementation where
+  Coef : Ring
+  Var  : OrderedSet
+  SMP  : PolynomialCategory(Coef,IndexedExponents Var,Var)
+  I   ==> Integer
+  L   ==> List
+  NNI ==> NonNegativeInteger
+  OUT ==> OutputForm
+  PS  ==> InnerTaylorSeries SMP
+  RN  ==> Fraction Integer
+  ST  ==> Stream
+  StS ==> Stream SMP
+  STT ==> StreamTaylorSeriesOperations SMP
+  STF ==> StreamTranscendentalFunctions SMP
+  ST2 ==> StreamFunctions2
+  ST3 ==> StreamFunctions3
+ 
+  Exports ==> MultivariateTaylorSeriesCategory(Coef,Var) with
+    coefficient: (%,NNI) -> SMP
+      ++ \spad{coefficient(s, n)} gives the terms of total degree n.
+    coerce: Var -> %
+      ++ \spad{coerce(var)} converts a variable to a Taylor series
+    coerce: SMP -> %
+      ++ \spad{coerce(poly)} regroups the terms by total degree and forms
+      ++ a series.
+    "*":(SMP,%)->%
+      ++\spad{smp*ts} multiplies a TaylorSeries by a monomial SMP.
+    csubst:(L Var,L StS) -> (SMP -> StS)
+      ++\spad{csubst(a,b)} is for internal use only
+ 
+    if Coef has Algebra Fraction Integer then
+      integrate: (%,Var,Coef) -> %
+        ++\spad{integrate(s,v,c)} is the integral of s with respect
+        ++ to v and having c as the constant of integration.
+      fintegrate: (() -> %,Var,Coef) -> %
+        ++\spad{fintegrate(f,v,c)} is the integral of \spad{f()} with respect
+        ++ to v and having c as the constant of integration.
+        ++ The evaluation of \spad{f()} is delayed.
+ 
+  Implementation ==> PS add
+ 
+    Rep := StS -- Below we use the fact that Rep of PS is Stream SMP.
+    extend(x,n) == extend(x,n + 1)$Rep
+    complete x == complete(x)$Rep
+
+    evalstream:(%,L Var,L SMP) -> StS
+    evalstream(s:%,lv:(L Var),lsmp:(L SMP)):(ST SMP) ==
+      scan(0,_+$SMP,map(eval(#1,lv,lsmp),s pretend StS))$ST2(SMP,SMP)
+ 
+    addvariable:(Var,InnerTaylorSeries Coef) -> %
+    addvariable(v,s) ==
+      ints := integers(0)$STT pretend ST NNI
+      map(monomial(#2 :: SMP,v,#1)$SMP,ints,s pretend ST Coef)$ST3(NNI,Coef,SMP)
+ 
+    coefficient(s,n) == elt(s,n + 1)$Rep  -- 1-based indexing for streams
+ 
+--% creation of series
+ 
+    coerce(r:Coef) == monom(r::SMP,0)$STT
+    smp:SMP * p:% == (((smp) *  (p pretend Rep))$STT)pretend %
+    r:Coef * p:% == (((r::SMP) *  (p pretend Rep))$STT)pretend %
+    p:% * r:Coef == (((r::SMP) * ( p pretend Rep))$STT)pretend %
+    mts(p:SMP):% ==
+      (uv := mainVariable p) case "failed" => monom(p,0)$STT
+      v := uv :: Var
+      s : % := 0
+      up := univariate(p,v)
+      while not zero? up repeat
+        s := s + monomial(1,v,degree up) * mts(leadingCoefficient up)
+        up := reductum up
+      s
+ 
+    coerce(p:SMP) == mts p
+    coerce(v:Var) == v :: SMP :: %
+ 
+    monomial(r:%,v:Var,n:NNI) ==
+      r * monom(monomial(1,v,n)$SMP,n)$STT
+ 
+--% evaluation
+ 
+    substvar: (SMP,L Var,L %) -> %
+    substvar(p,vl,q) ==
+      null vl => monom(p,0)$STT
+      (uv := mainVariable p) case "failed" => monom(p,0)$STT
+      v := uv :: Var
+      v = first vl =>
+        s : % := 0
+        up := univariate(p,v)
+        while not zero? up repeat
+          c := leadingCoefficient up
+          s := s + first q ** degree up * substvar(c,rest vl,rest q)
+          up := reductum up
+        s
+      substvar(p,rest vl,rest q)
+ 
+    sortmfirst:(SMP,L Var,L %) -> %
+    sortmfirst(p,vl,q) ==
+      nlv : L Var := sort(#1 > #2,vl)
+      nq : L % := [q position$(L Var) (i,vl) for i in nlv]
+      substvar(p,nlv,nq)
+ 
+    csubst(vl,q) == sortmfirst(#1,vl,q pretend L(%)) pretend StS
+ 
+    restCheck(s:StS):StS ==
+      -- checks that stream is null or first element is 0
+      -- returns empty() or rest of stream
+      empty? s => s
+      not zero? frst s =>
+        error "eval: constant coefficient should be 0"
+      rst s
+ 
+    eval(s:%,v:L Var,q:L %) ==
+      #v ^= #q =>
+        error "eval: number of variables should equal number of values"
+      nq : L StS := [restCheck(i pretend StS) for i in q]
+      addiag(map(csubst(v,nq),s pretend StS)$ST2(SMP,StS))$STT pretend %
+ 
+    substmts(v:Var,p:SMP,q:%):% ==
+      up := univariate(p,v)
+      ss : % := 0
+      while not zero? up repeat
+        d:=degree up
+        c:SMP:=leadingCoefficient up
+        ss := ss + c* q ** d
+        up := reductum up
+      ss
+ 
+    subststream(v:Var,p:SMP,q:StS):StS==
+      substmts(v,p,q pretend %) pretend StS
+ 
+    comp1:(Var,StS,StS) -> StS
+    comp1(v,r,t)== addiag(map(subststream(v,#1,t),r)$ST2(SMP,StS))$STT
+ 
+    comp(v:Var,s:StS,t:StS):StS == delay
+      empty? s => s
+      f := frst s; r : StS := rst s;
+      empty? r => s
+      empty? t => concat(f,comp1(v,r,empty()$StS))
+      not zero? frst t =>
+        error "eval: constant coefficient should be zero"
+      concat(f,comp1(v,r,rst t))
+ 
+    eval(s:%,v:Var,t:%) == comp(v,s pretend StS,t pretend StS)
+ 
+--% differentiation and integration
+ 
+    differentiate(s:%,v:Var):% ==
+      empty? s => 0
+      map(differentiate(#1,v),rst s)
+ 
+    if Coef has Algebra Fraction Integer then
+ 
+      stream(x:%):Rep == x pretend Rep
+ 
+      (x:%) ** (r:RN) == powern(r,stream x)$STT
+      (r:RN) * (x:%)  == map(r * #1, stream x)$ST2(SMP,SMP) pretend %
+      (x:%) * (r:RN)  == map(#1 * r,stream x )$ST2(SMP,SMP) pretend %
+ 
+      exp x == exp(stream x)$STF
+      log x == log(stream x)$STF
+ 
+      sin x == sin(stream x)$STF
+      cos x == cos(stream x)$STF
+      tan x == tan(stream x)$STF
+      cot x == cot(stream x)$STF
+      sec x == sec(stream x)$STF
+      csc x == csc(stream x)$STF
+ 
+      asin x == asin(stream x)$STF
+      acos x == acos(stream x)$STF
+      atan x == atan(stream x)$STF
+      acot x == acot(stream x)$STF
+      asec x == asec(stream x)$STF
+      acsc x == acsc(stream x)$STF
+ 
+      sinh x == sinh(stream x)$STF
+      cosh x == cosh(stream x)$STF
+      tanh x == tanh(stream x)$STF
+      coth x == coth(stream x)$STF
+      sech x == sech(stream x)$STF
+      csch x == csch(stream x)$STF
+ 
+      asinh x == asinh(stream x)$STF
+      acosh x == acosh(stream x)$STF
+      atanh x == atanh(stream x)$STF
+      acoth x == acoth(stream x)$STF
+      asech x == asech(stream x)$STF
+      acsch x == acsch(stream x)$STF
+ 
+      intsmp(v:Var,p: SMP): SMP ==
+        up := univariate(p,v)
+        ss : SMP := 0
+        while not zero? up repeat
+          d := degree up
+          c := leadingCoefficient up
+          ss := ss + inv((d+1) :: RN) * monomial(c,v,d+1)$SMP
+          up := reductum up
+        ss
+ 
+      fintegrate(f,v,r) ==
+        concat(r::SMP,delay map(intsmp(v,#1),f() pretend StS))
+      integrate(s,v,r) ==
+        concat(r::SMP,map(intsmp(v,#1),s pretend StS))
+ 
+    -- If there is more than one term of the same order, group them.
+    tout(p:SMP):OUT ==
+      pe := p :: OUT
+      monomial? p => pe
+      paren pe
+ 
+    showAll?: () -> Boolean
+    -- check a global Lisp variable
+    showAll?() == true
+ 
+    coerce(s:%):OUT ==
+      uu := s pretend Stream(SMP)
+      empty? uu => (0$SMP) :: OUT
+      n : NNI; count : NNI := _$streamCount$Lisp
+      l : List OUT := empty()
+      for n in 0..count while not empty? uu repeat
+        if frst(uu) ^= 0 then l := concat(tout frst uu,l)
+        uu := rst uu
+      if showAll?() then
+        for n in n.. while explicitEntries? uu and _
+               not eq?(uu,rst uu) repeat
+          if frst(uu) ^= 0 then l := concat(tout frst uu,l)
+          uu := rst uu
+      l :=
+        explicitlyEmpty? uu => l
+        eq?(uu,rst uu) and frst uu = 0 => l
+        concat(prefix("O" :: OUT,[n :: OUT]),l)
+      empty? l => (0$SMP) :: OUT
+      reduce("+",reverse_! l)
+    if Coef has Field then
+         stream(x:%):Rep == x pretend Rep
+         SF2==> StreamFunctions2
+         p:% / r:Coef ==(map(#1/$SMP r,stream p)$SF2(SMP,SMP))pretend %
+
+@
+\section{domain TS TaylorSeries}
+<<domain TS TaylorSeries>>=
+)abbrev domain TS TaylorSeries
+++ Authors: Burge, Watt, Williamson
+++ Date Created: 15 August 1988
+++ Date Last Updated: 18 May 1991
+++ Basic Operations:
+++ Related Domains: SparseMultivariateTaylorSeries
+++ Also See: UnivariateTaylorSeries
+++ AMS Classifications:
+++ Keywords: multivariate, Taylor, series
+++ Examples:
+++ References:
+++ Description:
+++   \spadtype{TaylorSeries} is a general multivariate Taylor series domain
+++   over the ring Coef and with variables of type Symbol.
+TaylorSeries(Coef): Exports == Implementation where
+  Coef  : Ring
+  L   ==> List
+  NNI ==> NonNegativeInteger
+  SMP ==> Polynomial Coef
+  StS ==> Stream SMP
+ 
+  Exports ==> MultivariateTaylorSeriesCategory(Coef,Symbol) with
+    coefficient: (%,NNI) -> SMP
+      ++\spad{coefficient(s, n)} gives the terms of total degree n.
+    coerce: Symbol -> %
+      ++\spad{coerce(s)} converts a variable to a Taylor series
+    coerce: SMP -> %
+      ++\spad{coerce(s)} regroups terms of s by total degree
+      ++ and forms a series.
+ 
+    if Coef has Algebra Fraction Integer then
+      integrate: (%,Symbol,Coef) -> %
+        ++\spad{integrate(s,v,c)} is the integral of s with respect
+        ++ to v and having c as the constant of integration.
+      fintegrate: (() -> %,Symbol,Coef) -> %
+        ++\spad{fintegrate(f,v,c)} is the integral of \spad{f()} with respect
+        ++ to v and having c as the constant of integration.
+        ++ The evaluation of \spad{f()} is delayed.
+ 
+  Implementation ==> SparseMultivariateTaylorSeries(Coef,Symbol,SMP) add
+    Rep := StS -- Below we use the fact that Rep of PS is Stream SMP.
+ 
+    polynomial(s,n) ==
+      sum : SMP := 0
+      for i in 0..n while not empty? s repeat
+        sum := sum + frst s
+        s:= rst s
+      sum
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+ 
+<<domain SMTS SparseMultivariateTaylorSeries>>
+<<domain TS TaylorSeries>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

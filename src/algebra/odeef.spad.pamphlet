@@ -1,0 +1,643 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra odeef.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package REDORDER ReductionOfOrder}
+<<package REDORDER ReductionOfOrder>>=
+)abbrev package REDORDER ReductionOfOrder
+++ Author: Manuel Bronstein
+++ Date Created: 4 November 1991
+++ Date Last Updated: 3 February 1994
+++ Description:
+++ \spadtype{ReductionOfOrder} provides
+++ functions for reducing the order of linear ordinary differential equations
+++ once some solutions are known.
+++ Keywords: differential equation, ODE
+ReductionOfOrder(F, L): Exports == Impl where
+  F: Field
+  L: LinearOrdinaryDifferentialOperatorCategory F
+
+  Z ==> Integer
+  A ==> PrimitiveArray F
+
+  Exports ==> with
+    ReduceOrder: (L, F) -> L
+      ++ ReduceOrder(op, s) returns \spad{op1} such that for any solution
+      ++ \spad{z} of \spad{op1 z = 0}, \spad{y = s \int z} is a solution of
+      ++ \spad{op y = 0}. \spad{s} must satisfy \spad{op s = 0}.
+    ReduceOrder: (L, List F) -> Record(eq:L, op:List F)
+      ++ ReduceOrder(op, [f1,...,fk]) returns \spad{[op1,[g1,...,gk]]} such that
+      ++ for any solution \spad{z} of \spad{op1 z = 0},
+      ++ \spad{y = gk \int(g_{k-1} \int(... \int(g1 \int z)...)} is a solution
+      ++ of \spad{op y = 0}. Each \spad{fi} must satisfy \spad{op fi = 0}.
+
+  Impl ==> add
+    ithcoef   : (L, Z, A) -> F
+    locals    : (A, Z, Z) -> F
+    localbinom: (Z, Z) -> Z
+
+    diff := D()$L
+
+    localbinom(j, i) == (j > i => binomial(j, i+1); 0)
+    locals(s, j, i)  == (j > i => qelt(s, j - i - 1); 0)
+
+    ReduceOrder(l:L, sols:List F) ==
+      empty? sols => [l, empty()]
+      neweq := ReduceOrder(l, sol := first sols)
+      rec := ReduceOrder(neweq, [diff(s / sol) for s in rest sols])
+      [rec.eq, concat_!(rec.op, sol)]
+
+    ithcoef(eq, i, s) ==
+      ans:F := 0
+      while eq ^= 0 repeat
+          j   := degree eq
+          ans := ans + localbinom(j, i) * locals(s,j,i) * leadingCoefficient eq
+          eq  := reductum eq
+      ans
+
+    ReduceOrder(eq:L, sol:F) ==
+      s:A := new(n := degree eq, 0)         -- will contain derivatives of sol
+      si := sol                             -- will run through the derivatives
+      qsetelt_!(s, 0, si)
+      for i in 1..(n-1)::NonNegativeInteger repeat 
+          qsetelt_!(s, i, si := diff si)
+      ans:L := 0
+      for i in 0..(n-1)::NonNegativeInteger repeat
+          ans := ans + monomial(ithcoef(eq, i, s), i)
+      ans
+
+@
+\section{package LODEEF ElementaryFunctionLODESolver}
+<<package LODEEF ElementaryFunctionLODESolver>>=
+)abbrev package LODEEF ElementaryFunctionLODESolver
+++ Author: Manuel Bronstein
+++ Date Created: 3 February 1994
+++ Date Last Updated: 9 March 1994
+++ Description:
+++ \spad{ElementaryFunctionLODESolver} provides the top-level
+++ functions for finding closed form solutions of linear ordinary
+++ differential equations and initial value problems.
+++ Keywords: differential equation, ODE
+ElementaryFunctionLODESolver(R, F, L): Exports == Implementation where
+  R: Join(OrderedSet, EuclideanDomain, RetractableTo Integer,
+          LinearlyExplicitRingOver Integer, CharacteristicZero)
+  F: Join(AlgebraicallyClosedFunctionSpace R, TranscendentalFunctionCategory,
+          PrimitiveFunctionCategory)
+  L: LinearOrdinaryDifferentialOperatorCategory F
+
+  SY  ==> Symbol
+  N   ==> NonNegativeInteger
+  K   ==> Kernel F
+  V   ==> Vector F
+  M   ==> Matrix F
+  UP  ==> SparseUnivariatePolynomial F
+  RF  ==> Fraction UP
+  UPUP==> SparseUnivariatePolynomial RF
+  P   ==> SparseMultivariatePolynomial(R, K)
+  P2  ==> SparseMultivariatePolynomial(P, K)
+  LQ  ==> LinearOrdinaryDifferentialOperator1 RF
+  REC ==> Record(particular: F, basis: List F)
+  U   ==> Union(REC, "failed")
+  ALGOP  ==> "%alg"
+
+  Exports ==> with
+    solve: (L, F, SY) -> U
+      ++ solve(op, g, x) returns either a solution of the ordinary differential
+      ++ equation \spad{op y = g} or "failed" if no non-trivial solution can be
+      ++ found; When found, the solution is returned in the form
+      ++ \spad{[h, [b1,...,bm]]} where \spad{h} is a particular solution and
+      ++ and \spad{[b1,...bm]} are linearly independent solutions of the
+      ++ associated homogenuous equation \spad{op y = 0}.
+      ++ A full basis for the solutions of the homogenuous equation
+      ++ is not always returned, only the solutions which were found;
+      ++ \spad{x} is the dependent variable.
+    solve: (L, F, SY, F, List F) -> Union(F, "failed")
+      ++ solve(op, g, x, a, [y0,...,ym]) returns either the solution
+      ++ of the initial value problem \spad{op y = g, y(a) = y0, y'(a) = y1,...}
+      ++ or "failed" if the solution cannot be found;
+      ++ \spad{x} is the dependent variable.
+
+  Implementation ==> add
+    import Kovacic(F, UP)
+    import ODETools(F, L)
+    import RationalLODE(F, UP)
+    import RationalRicDE(F, UP)
+    import ODEIntegration(R, F)
+    import ConstantLODE(R, F, L)
+    import IntegrationTools(R, F)
+    import ReductionOfOrder(F, L)
+    import ReductionOfOrder(RF, LQ)
+    import PureAlgebraicIntegration(R, F, L)
+    import FunctionSpacePrimitiveElement(R, F)
+    import LinearSystemMatrixPackage(F, V, V, M)
+    import SparseUnivariatePolynomialFunctions2(RF, F)
+    import FunctionSpaceUnivariatePolynomialFactor(R, F, UP)
+    import LinearOrdinaryDifferentialOperatorFactorizer(F, UP)
+    import PolynomialCategoryQuotientFunctions(IndexedExponents K,
+                                                             K, R, P, F)
+
+    upmp       : (P, List K) -> P2
+    downmp     : (P2, List K, List P) -> P
+    xpart      : (F, SY) -> F
+    smpxpart   : (P, SY, List K, List P) -> P
+    multint    : (F, List F, SY) -> F
+    ulodo      : (L, K) -> LQ
+    firstOrder : (F, F, F, SY) -> REC
+    rfSolve    : (L, F, K, SY) -> U
+    ratlogsol  : (LQ, List RF, K, SY) -> List F
+    expsols    : (LQ, K, SY) -> List F
+    homosolve  : (L, LQ, List RF, K, SY) -> List F
+    homosolve1 : (L, List F, K, SY) -> List F
+    norf1      : (L, K, SY, N) -> List F
+    kovode     : (LQ, K, SY) -> List F
+    doVarParams: (L, F, List F, SY) -> U
+    localmap   : (F -> F, L) -> L
+    algSolve   : (L, F, K, List K, SY) -> U
+    palgSolve  : (L, F, K, K, SY) -> U
+    lastChance : (L, F, SY) -> U
+
+    diff := D()$L
+
+    smpxpart(p, x, l, lp) == downmp(primitivePart upmp(p, l), l, lp)
+    downmp(p, l, lp)      == ground eval(p, l, lp)
+    homosolve(lf, op, sols, k, x) == homosolve1(lf, ratlogsol(op,sols,k,x),k,x)
+
+-- left hand side has algebraic (not necessarily pure) coefficients
+    algSolve(op, g, k, l, x) ==
+      symbolIfCan(kx := ksec(k, l, x)) case SY => palgSolve(op, g, kx, k, x)
+      has?(operator kx, ALGOP) =>
+        rec := primitiveElement(kx::F, k::F)
+        z   := rootOf(rec.prim)
+        lk:List K := [kx, k]
+        lv:List F := [(rec.pol1) z, (rec.pol2) z]
+        (u := solve(localmap(eval(#1, lk, lv), op), eval(g, lk, lv), x))
+            case "failed" => "failed"
+        rc := u::REC
+        kz := retract(z)@K
+        [eval(rc.particular, kz, rec.primelt),
+            [eval(f, kz, rec.primelt) for f in rc.basis]]
+      lastChance(op, g, x)
+
+    doVarParams(eq, g, bas, x) ==
+      (u := particularSolution(eq, g, bas, int(#1, x))) case "failed" =>
+         lastChance(eq, g, x)
+      [u::F, bas]
+
+    lastChance(op, g, x) ==
+--      one? degree op => firstOrder(coefficient(op,0), leadingCoefficient op,g,x)
+      (degree op) = 1 => firstOrder(coefficient(op,0), leadingCoefficient op,g,x)
+      "failed"
+
+-- solves a0 y + a1 y' = g
+-- does not check whether there is a solution in the field generated by
+-- a0, a1 and g
+    firstOrder(a0, a1, g, x) ==
+      h := xpart(expint(- a0 / a1, x), x)
+      [h * int((g / h) / a1, x), [h]]
+
+-- xpart(f,x) removes any constant not involving x from f
+    xpart(f, x) ==
+      l  := reverse_! varselect(tower f, x)
+      lp := [k::P for k in l]
+      smpxpart(numer f, x, l, lp) / smpxpart(denom f, x, l, lp)
+
+    upmp(p, l) ==
+      empty? l => p::P2
+      up := univariate(p, k := first l)
+      l := rest l
+      ans:P2 := 0
+      while up ^= 0 repeat
+        ans := ans + monomial(upmp(leadingCoefficient up, l), k, degree up)
+        up  := reductum up
+      ans
+
+-- multint(a, [g1,...,gk], x) returns gk \int(g(k-1) \int(....g1 \int(a))...)
+    multint(a, l, x) ==
+       for g in l repeat a := g * xpart(int(a, x), x)
+       a
+
+    expsols(op, k, x) ==
+--      one? degree op =>
+      (degree op) = 1 =>
+          firstOrder(multivariate(coefficient(op, 0), k),
+                     multivariate(leadingCoefficient op, k), 0, x).basis
+      [xpart(expint(multivariate(h, k), x), x) for h in ricDsolve(op, ffactor)]
+
+-- Finds solutions with rational logarithmic derivative
+    ratlogsol(oper, sols, k, x) ==
+      bas := [xpart(multivariate(h, k), x) for h in sols]
+      degree(oper) = #bas => bas            -- all solutions are found already
+      rec := ReduceOrder(oper, sols)
+      le := expsols(rec.eq, k, x)
+      int:List(F) := [xpart(multivariate(h, k), x) for h in rec.op]
+      concat_!([xpart(multivariate(h, k), x) for h in sols],
+               [multint(e, int, x) for e in le])
+
+    homosolve1(oper, sols, k, x) ==
+      zero?(n := (degree(oper) - #sols)::N) => sols   -- all solutions found
+      rec := ReduceOrder(oper, sols)
+      int:List(F) := [xpart(h, x) for h in rec.op]
+      concat_!(sols, [multint(e, int, x) for e in norf1(rec.eq, k, x, n::N)])
+
+-- if the coefficients are rational functions, then the equation does not
+-- not have a proper 1st-order right factor over the rational functions
+    norf1(op, k, x, n) ==
+--      one? n => firstOrder(coefficient(op, 0), leadingCoefficient op,0,x).basis
+      (n = 1) => firstOrder(coefficient(op, 0), leadingCoefficient op,0,x).basis
+-- for order > 2, we check that the coeffs are still rational functions
+      symbolIfCan(kmax vark(coefficients op, x)) case SY =>
+        eq := ulodo(op, k)
+        n = 2 => kovode(eq, k, x)
+        eq := last factor1 eq        -- eq cannot have order 1
+        degree(eq) = 2 =>
+          empty?(bas := kovode(eq, k, x)) => empty()
+          homosolve1(op, bas, k, x)
+        empty()
+      empty()
+
+    kovode(op, k, x) ==
+      b := coefficient(op, 1)
+      a := coefficient(op, 2)
+      (u := kovacic(coefficient(op, 0), b, a, ffactor)) case "failed" => empty()
+      p := map(multivariate(#1, k), u::UPUP)
+      ba := multivariate(- b / a, k)
+-- if p has degree 2 (case 2), then it must be squarefree since the
+-- ode is irreducible over the rational functions, so the 2 roots of p
+-- are distinct and must yield 2 independent solutions.
+      degree(p) = 2 => [xpart(expint(ba/(2::F) + e, x), x) for e in zerosOf p]
+-- otherwise take 1 root of p and find the 2nd solution by reduction of order
+      y1 := xpart(expint(ba / (2::F) + zeroOf p, x), x)
+      [y1, y1 * xpart(int(expint(ba, x) / y1**2, x), x)]
+
+    solve(op:L, g:F, x:SY) ==
+      empty?(l := vark(coefficients op, x)) => constDsolve(op, g, x)
+      symbolIfCan(k := kmax l) case SY => rfSolve(op, g, k, x)
+      has?(operator k, ALGOP) => algSolve(op, g, k, l, x)
+      lastChance(op, g, x)
+
+    ulodo(eq, k) ==
+        op:LQ := 0
+        while eq ^= 0 repeat
+            op := op + monomial(univariate(leadingCoefficient eq, k), degree eq)
+            eq := reductum eq
+        op
+
+-- left hand side has rational coefficients
+    rfSolve(eq, g, k, x) ==
+      op := ulodo(eq, k)
+      empty? remove_!(k, varselect(kernels g, x)) =>  -- i.e. rhs is rational
+        rc := ratDsolve(op, univariate(g, k))
+        rc.particular case "failed" =>                -- this implies g ^= 0
+          doVarParams(eq, g, homosolve(eq, op, rc.basis, k, x), x)
+        [multivariate(rc.particular::RF, k), homosolve(eq, op, rc.basis, k, x)]
+      doVarParams(eq, g, homosolve(eq, op, ratDsolve(op, 0).basis, k, x), x)
+
+    solve(op, g, x, a, y0) ==
+      (u := solve(op, g, x)) case "failed" => "failed"
+      hp := h := (u::REC).particular
+      b := (u::REC).basis
+      v:V := new(n := #y0, 0)
+      kx:K := kernel x
+      for i in minIndex v .. maxIndex v for yy in y0 repeat
+        v.i := yy - eval(h, kx, a)
+        h := diff h
+      (sol := particularSolution(map_!(eval(#1,kx,a),wronskianMatrix(b,n)), v))
+         case "failed" => "failed"
+      for f in b for i in minIndex(s := sol::V) .. repeat
+        hp := hp + s.i * f
+      hp
+
+    localmap(f, op) ==
+        ans:L := 0
+        while op ^= 0 repeat
+            ans := ans + monomial(f leadingCoefficient op, degree op)
+            op  := reductum op
+        ans
+
+-- left hand side has pure algebraic coefficients
+    palgSolve(op, g, kx, k, x) ==
+      rec := palgLODE(op, g, kx, k, x)   -- finds solutions in the coef. field
+      rec.particular case "failed" =>
+        doVarParams(op, g, homosolve1(op, rec.basis, k, x), x)
+      [(rec.particular)::F, homosolve1(op, rec.basis, k, x)]
+
+@
+\section{package ODEEF ElementaryFunctionODESolver}
+<<package ODEEF ElementaryFunctionODESolver>>=
+)abbrev package ODEEF ElementaryFunctionODESolver
+++ Author: Manuel Bronstein
+++ Date Created: 18 March 1991
+++ Date Last Updated: 8 March 1994
+++ Description:
+++ \spad{ElementaryFunctionODESolver} provides the top-level
+++ functions for finding closed form solutions of ordinary
+++ differential equations and initial value problems.
+++ Keywords: differential equation, ODE
+ElementaryFunctionODESolver(R, F): Exports == Implementation where
+  R: Join(OrderedSet, EuclideanDomain, RetractableTo Integer,
+          LinearlyExplicitRingOver Integer, CharacteristicZero)
+  F: Join(AlgebraicallyClosedFunctionSpace R, TranscendentalFunctionCategory,
+          PrimitiveFunctionCategory)
+
+  N   ==> NonNegativeInteger
+  OP  ==> BasicOperator
+  SY  ==> Symbol
+  K   ==> Kernel F
+  EQ  ==> Equation F
+  V   ==> Vector F
+  M   ==> Matrix F
+  UP  ==> SparseUnivariatePolynomial F
+  P   ==> SparseMultivariatePolynomial(R, K)
+  LEQ ==> Record(left:UP, right:F)
+  NLQ ==> Record(dx:F, dy:F)
+  REC ==> Record(particular: F, basis: List F)
+  VEC ==> Record(particular: V, basis: List V)
+  ROW ==> Record(index: Integer, row: V, rh: F)
+  SYS ==> Record(mat:M, vec: V)
+  U   ==> Union(REC, F, "failed")
+  UU  ==> Union(F, "failed")
+  OPDIFF ==> "%diff"::SY
+
+  Exports ==> with
+    solve: (M, V, SY) -> Union(VEC, "failed")
+      ++ solve(m, v, x) returns \spad{[v_p, [v_1,...,v_m]]} such that
+      ++ the solutions of the system \spad{D y = m y + v} are
+      ++ \spad{v_p + c_1 v_1 + ... + c_m v_m} where the \spad{c_i's} are
+      ++ constants, and the \spad{v_i's} form a basis for the solutions of
+      ++ \spad{D y = m y}.
+      ++ \spad{x} is the dependent variable.
+    solve: (M, SY) -> Union(List V, "failed")
+      ++ solve(m, x) returns a basis for the solutions of \spad{D y = m y}.
+      ++ \spad{x} is the dependent variable.
+    solve: (List EQ, List OP, SY) -> Union(VEC, "failed")
+      ++ solve([eq_1,...,eq_n], [y_1,...,y_n], x) returns either "failed"
+      ++ or, if the equations form a fist order linear system, a solution
+      ++ of the form \spad{[y_p, [b_1,...,b_n]]} where \spad{h_p} is a
+      ++ particular solution and \spad{[b_1,...b_m]} are linearly independent
+      ++ solutions of the associated homogenuous system.
+      ++ error if the equations do not form a first order linear system
+    solve: (List F, List OP, SY) -> Union(VEC, "failed")
+      ++ solve([eq_1,...,eq_n], [y_1,...,y_n], x) returns either "failed"
+      ++ or, if the equations form a fist order linear system, a solution
+      ++ of the form \spad{[y_p, [b_1,...,b_n]]} where \spad{h_p} is a
+      ++ particular solution and \spad{[b_1,...b_m]} are linearly independent
+      ++ solutions of the associated homogenuous system.
+      ++ error if the equations do not form a first order linear system
+    solve: (EQ, OP, SY) -> U
+      ++ solve(eq, y, x) returns either a solution of the ordinary differential
+      ++ equation \spad{eq} or "failed" if no non-trivial solution can be found;
+      ++ If the equation is linear ordinary, a solution is of the form
+      ++ \spad{[h, [b1,...,bm]]} where \spad{h} is a particular solution
+      ++ and \spad{[b1,...bm]} are linearly independent solutions of the
+      ++ associated homogenuous equation \spad{f(x,y) = 0};
+      ++ A full basis for the solutions of the homogenuous equation
+      ++ is not always returned, only the solutions which were found;
+      ++ If the equation is of the form {dy/dx = f(x,y)}, a solution is of
+      ++ the form \spad{h(x,y)} where \spad{h(x,y) = c} is a first integral
+      ++ of the equation for any constant \spad{c};
+      ++ error if the equation is not one of those 2 forms;
+    solve: (F, OP, SY) -> U
+      ++ solve(eq, y, x) returns either a solution of the ordinary differential
+      ++ equation \spad{eq} or "failed" if no non-trivial solution can be found;
+      ++ If the equation is linear ordinary, a solution is of the form
+      ++ \spad{[h, [b1,...,bm]]} where \spad{h} is a particular solution and
+      ++ and \spad{[b1,...bm]} are linearly independent solutions of the
+      ++ associated homogenuous equation \spad{f(x,y) = 0};
+      ++ A full basis for the solutions of the homogenuous equation
+      ++ is not always returned, only the solutions which were found;
+      ++ If the equation is of the form {dy/dx = f(x,y)}, a solution is of
+      ++ the form \spad{h(x,y)} where \spad{h(x,y) = c} is a first integral
+      ++ of the equation for any constant \spad{c};
+    solve: (EQ, OP, EQ, List F) -> UU
+      ++ solve(eq, y, x = a, [y0,...,ym]) returns either the solution
+      ++ of the initial value problem \spad{eq, y(a) = y0, y'(a) = y1,...}
+      ++ or "failed" if the solution cannot be found;
+      ++ error if the equation is not one linear ordinary or of the form
+      ++ \spad{dy/dx = f(x,y)};
+    solve: (F, OP, EQ, List F) -> UU
+      ++ solve(eq, y, x = a, [y0,...,ym]) returns either the solution
+      ++ of the initial value problem \spad{eq, y(a) = y0, y'(a) = y1,...}
+      ++ or "failed" if the solution cannot be found;
+      ++ error if the equation is not one linear ordinary or of the form
+      ++ \spad{dy/dx = f(x,y)};
+
+  Implementation ==> add
+    import ODEIntegration(R, F)
+    import IntegrationTools(R, F)
+    import NonLinearFirstOrderODESolver(R, F)
+
+    getfreelincoeff : (F, K, SY) -> F
+    getfreelincoeff1: (F, K, List F) -> F
+    getlincoeff     : (F, K) -> F
+    getcoeff        : (F, K) -> UU
+    parseODE        : (F, OP, SY) -> Union(LEQ, NLQ)
+    parseLODE       : (F, List K, UP, SY) -> LEQ
+    parseSYS        : (List F, List OP, SY) -> Union(SYS, "failed")
+    parseSYSeq      : (F, List K, List K, List F, SY) -> Union(ROW, "failed")
+
+    solve(diffeq:EQ, y:OP, x:SY) == solve(lhs diffeq - rhs diffeq, y, x)
+
+    solve(leq: List EQ, lop: List OP, x:SY) ==
+        solve([lhs eq - rhs eq for eq in leq], lop, x)
+
+    solve(diffeq:EQ, y:OP, center:EQ, y0:List F) ==
+      solve(lhs diffeq - rhs diffeq, y, center, y0)
+
+    solve(m:M, x:SY) ==
+        (u := solve(m, new(nrows m, 0), x)) case "failed" => "failed"
+        u.basis
+
+    solve(m:M, v:V, x:SY) ==
+        Lx := LinearOrdinaryDifferentialOperator(F, diff x)
+        uu := solve(m, v, solve(#1, #2,
+               x)$ElementaryFunctionLODESolver(R, F, Lx))$SystemODESolver(F, Lx)
+        uu case "failed" => "failed"
+        rec := uu::Record(particular: V, basis: M)
+        [rec.particular, [column(rec.basis, i) for i in 1..ncols(rec.basis)]]
+
+    solve(diffeq:F, y:OP, center:EQ, y0:List F) ==
+      a := rhs center
+      kx:K := kernel(x := retract(lhs(center))@SY)
+      (ur := parseODE(diffeq, y, x)) case NLQ =>
+--        not one?(#y0) => error "solve: more than one initial condition!"
+        not ((#y0) = 1) => error "solve: more than one initial condition!"
+        rc := ur::NLQ
+        (u := solve(rc.dx, rc.dy, y, x)) case "failed" => "failed"
+        u::F - eval(u::F,  [kx, retract(y(x::F))@K], [a, first y0])
+      rec := ur::LEQ
+      p := rec.left
+      Lx := LinearOrdinaryDifferentialOperator(F, diff x)
+      op:Lx := 0
+      while p ^= 0 repeat
+        op := op + monomial(leadingCoefficient p, degree p)
+        p  := reductum p
+      solve(op, rec.right, x, a, y0)$ElementaryFunctionLODESolver(R, F, Lx)
+
+    solve(leq: List F, lop: List OP, x:SY) ==
+        (u := parseSYS(leq, lop, x)) case SYS =>
+            rec := u::SYS
+            solve(rec.mat, rec.vec, x)
+        error "solve: not a first order linear system"
+
+    solve(diffeq:F, y:OP, x:SY) ==
+      (u := parseODE(diffeq, y, x)) case NLQ =>
+        rc := u::NLQ
+        (uu := solve(rc.dx, rc.dy, y, x)) case "failed" => "failed"
+        uu::F
+      rec := u::LEQ
+      p := rec.left
+      Lx := LinearOrdinaryDifferentialOperator(F, diff x)
+      op:Lx := 0
+      while p ^= 0 repeat
+        op := op + monomial(leadingCoefficient p, degree p)
+        p  := reductum p
+      (uuu := solve(op, rec.right, x)$ElementaryFunctionLODESolver(R, F, Lx))
+         case "failed" => "failed"
+      uuu::REC
+
+-- returns [M, v] s.t. the equations are D x = M x + v
+    parseSYS(eqs, ly, x) ==
+      (n := #eqs) ^= #ly => "failed"
+      m:M := new(n, n, 0)
+      v:V := new(n, 0)
+      xx := x::F
+      lf := [y xx for y in ly]
+      lk0:List(K) := [retract(f)@K for f in lf]
+      lk1:List(K) := [retract(differentiate(f, x))@K for f in lf]
+      for eq in eqs repeat
+          (u := parseSYSeq(eq,lk0,lk1,lf,x)) case "failed" => return "failed"
+          rec := u::ROW
+          setRow_!(m, rec.index, rec.row)
+          v(rec.index) := rec.rh
+      [m, v]
+
+    parseSYSeq(eq, l0, l1, lf, x) ==
+      l := [k for k in varselect(kernels eq, x) | is?(k, OPDIFF)]
+      empty? l or not empty? rest l or zero?(n := position(k := first l,l1)) =>
+         "failed"
+      c := getfreelincoeff1(eq, k, lf)
+      eq := eq - c * k::F
+      v:V := new(#l0, 0)
+      for y in l0 for i in 1.. repeat
+          ci := getfreelincoeff1(eq, y, lf)
+          v.i := - ci / c
+          eq := eq - ci * y::F
+      [n, v, -eq]
+
+-- returns either [p, g] where the equation (diffeq) is of the form p(D)(y) = g
+-- or [p, q] such that the equation (diffeq) is of the form p dx + q dy = 0
+    parseODE(diffeq, y, x) ==
+      f := y(x::F)
+      l:List(K) := [retract(f)@K]
+      n:N := 2
+      for k in varselect(kernels diffeq, x) | is?(k, OPDIFF) repeat
+        if (m := height k) > n then n := m
+      n := (n - 2)::N
+-- build a list of kernels in the order [y^(n)(x),...,y''(x),y'(x),y(x)]
+      for i in 1..n repeat
+        l := concat(retract(f := differentiate(f, x))@K, l)
+      k:K   -- #$^#& compiler requires this line and the next one too...
+      c:F
+      while not(empty? l) and zero?(c := getlincoeff(diffeq, k := first l))
+        repeat l := rest l
+      empty? l or empty? rest l => error "parseODE: equation has order 0"
+      diffeq := diffeq - c * (k::F)
+      ny := name y
+      l := rest l
+      height(k) > 3 => parseLODE(diffeq, l, monomial(c, #l), ny)
+      (u := getcoeff(diffeq, k := first l)) case "failed" => [diffeq, c]
+      eqrhs := (d := u::F) * (k::F) - diffeq
+      freeOf?(eqrhs, ny) and freeOf?(c, ny) and freeOf?(d, ny) =>
+        [monomial(c, 1) + d::UP, eqrhs]
+      [diffeq, c]
+
+-- returns [p, g] where the equation (diffeq) is of the form p(D)(y) = g
+    parseLODE(diffeq, l, p, y) ==
+      not freeOf?(leadingCoefficient p, y) =>
+        error "parseLODE: not a linear ordinary differential equation"
+      d := degree(p)::Integer - 1
+      for k in l repeat
+        p := p + monomial(c := getfreelincoeff(diffeq, k, y), d::N)
+        d := d - 1
+        diffeq := diffeq - c * (k::F)
+      freeOf?(diffeq, y) => [p, - diffeq]
+      error "parseLODE: not a linear ordinary differential equation"
+
+    getfreelincoeff(f, k, y) ==
+      freeOf?(c := getlincoeff(f, k), y) => c
+      error "getfreelincoeff: not a linear ordinary differential equation"
+
+    getfreelincoeff1(f, k, ly) ==
+      c := getlincoeff(f, k)
+      for y in ly repeat
+         not freeOf?(c, y) =>
+            error "getfreelincoeff: not a linear ordinary differential equation"
+      c
+
+    getlincoeff(f, k) ==
+      (u := getcoeff(f, k)) case "failed" =>
+        error "getlincoeff: not an appropriate ordinary differential equation"
+      u::F
+
+    getcoeff(f, k) ==
+      (r := retractIfCan(univariate(denom f, k))@Union(P, "failed"))
+        case "failed" or degree(p := univariate(numer f, k)) > 1 => "failed"
+      coefficient(p, 1) / (r::P)
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+-- Compile order for the differential equation solver:
+-- oderf.spad  odealg.spad  nlode.spad  nlinsol.spad  riccati.spad
+-- kovacic.spad  lodof.spad  odeef.spad
+
+<<package REDORDER ReductionOfOrder>>
+<<package LODEEF ElementaryFunctionLODESolver>>
+<<package ODEEF ElementaryFunctionODESolver>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

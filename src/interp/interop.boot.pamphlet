@@ -1,0 +1,368 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp interop.boot}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{License}
+<<license>>=
+-- Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+-- All rights reserved.
+--
+-- Redistribution and use in source and binary forms, with or without
+-- modification, are permitted provided that the following conditions are
+-- met:
+--
+--     - Redistributions of source code must retain the above copyright
+--       notice, this list of conditions and the following disclaimer.
+--
+--     - Redistributions in binary form must reproduce the above copyright
+--       notice, this list of conditions and the following disclaimer in
+--       the documentation and/or other materials provided with the
+--       distribution.
+--
+--     - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--       names of its contributors may be used to endorse or promote products
+--       derived from this software without specific prior written permission.
+--
+-- THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+-- IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+-- TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+-- PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+-- OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+-- EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+-- PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+-- PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+-- LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+-- NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+-- SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+@
+<<*>>=
+<<license>>
+
+-- note domainObjects are now (dispatchVector hashCode . domainVector)
+-- lazy oldAxiomDomainObjects are (dispatchVector hashCode  (Call form) . backptr), 
+-- pre oldAxiomCategory is (dispatchVector . (cat form))
+-- oldAxiomCategory objects are (dispatchVector . ( (cat form)  hash defaultpack parentlist))
+
+hashCode? x == INTEGERP x
+
+$domainTypeTokens := ['lazyOldAxiomDomain, 'oldAxiomDomain, 'oldAxiomPreCategory,
+           'oldAxiomCategory, 0]
+
+-- The name game.
+-- The compiler produces names that are of the form:
+-- a) cons(0, <string>)
+-- b) cons(1, type-name, arg-names...)
+-- c) cons(2, arg-names...)
+-- d) cons(3, value)
+-- NB: (c) is for tuple-ish constructors, 
+--     and (d) is for dependent types.
+
+DNameStringID := 0
+DNameApplyID  := 1
+DNameTupleID  := 2
+DNameOtherID  := 3
+
+DNameToSExpr1 dname ==
+  NULL dname => error "unexpected domain name"
+  CAR dname = DNameStringID => 
+    INTERN(CompStrToString CDR dname)
+  name0 := DNameToSExpr1 CAR CDR dname
+  args  := CDR CDR dname
+  name0 = '_-_> => 
+    froms := CAR args
+    froms := MAPCAR(function DNameToSExpr, CDR froms)
+    ret   := CAR CDR args -- a tuple
+    ret   := DNameToSExpr CAR CDR ret -- contents
+    CONS('Mapping, CONS(ret, froms))
+  name0 = 'Union or name0 = 'Record =>
+    sxs := MAPCAR(function DNameToSExpr, CDR CAR args)
+    CONS(name0, sxs)
+  name0 = 'Enumeration =>
+    CONS(name0, MAPCAR(function DNameFixEnum, CDR CAR args))
+  CONS(name0, MAPCAR(function DNameToSExpr, args))
+
+DNameToSExpr dname ==
+  CAR dname = DNameOtherID  =>
+	CDR dname
+  sx := DNameToSExpr1 dname
+  CONSP sx => sx
+  LIST sx
+
+DNameFixEnum arg == CompStrToString CDR arg
+  
+SExprToDName(sexpr, cosigVal) == 
+  -- is it a non-type valued object?
+  NOT cosigVal => [DNameOtherID, :sexpr]
+  if CAR sexpr = '_: then sexpr := CAR CDR CDR sexpr
+  CAR sexpr = 'Mapping =>
+    args := [ SExprToDName(sx, 'T) for sx in CDR sexpr]
+    [DNameApplyID,
+         [DNameStringID,: StringToCompStr '"->"],
+              [DNameTupleID, : CDR args],
+		 [DNameTupleID, CAR args]]
+  name0 :=   [DNameStringID, : StringToCompStr SYMBOL_-NAME CAR sexpr]
+  CAR sexpr = 'Union or CAR sexpr = 'Record =>
+    [DNameApplyID, name0, 
+        [DNameTupleID,: [ SExprToDName(sx, 'T) for sx in CDR sexpr]]]
+  newCosig := CDR GETDATABASE(CAR sexpr, QUOTE COSIG)
+  [DNameApplyID, name0,
+   : MAPCAR(function SExprToDName, CDR sexpr, newCosig)]
+
+-- local garbage because Compiler strings are null terminated
+StringToCompStr(str) == 
+   CONCATENATE(QUOTE STRING, str, STRING (CODE_-CHAR 0))
+
+CompStrToString(str) == 
+   SUBSTRING(str, 0, (LENGTH str - 1))
+-- local garbage ends
+
+runOldAxiomFunctor(:allArgs) ==
+  [:args,env] := allArgs
+  GETDATABASE(env, 'CONSTRUCTORKIND) = 'category =>
+      [$oldAxiomPreCategoryDispatch,: [env, :args]]
+  dom:=APPLY(env, args)
+  makeOldAxiomDispatchDomain dom
+
+makeLazyOldAxiomDispatchDomain domform ==
+  attribute? domform =>
+      [$attributeDispatch, domform, hashString(SYMBOL_-NAME domform)]
+  GETDATABASE(opOf domform, 'CONSTRUCTORKIND) = 'category =>
+      [$oldAxiomPreCategoryDispatch,: domform]
+  dd := [$lazyOldAxiomDomainDispatch, hashTypeForm(domform,0), domform]
+  NCONC(dd,dd) -- installs back pointer to head of domain.
+  dd
+
+makeOldAxiomDispatchDomain dom ==
+  PAIRP dom => dom
+  [$oldAxiomDomainDispatch,hashTypeForm(dom.0,0),:dom]
+
+closeOldAxiomFunctor(name) ==
+   [function runOldAxiomFunctor,:SYMBOL_-FUNCTION name]
+
+lazyOldAxiomDomainLookupExport(domenv, self, op, sig, box, skipdefaults, env) ==
+  dom := instantiate domenv
+  SPADCALL(CDR dom, self, op, sig, box, skipdefaults, CAR(dom).3)
+
+lazyOldAxiomDomainHashCode(domenv, env) == CAR domenv
+
+lazyOldAxiomDomainDevaluate(domenv, env) ==
+  dom := instantiate domenv
+  SPADCALL(CDR dom, CAR(dom).1)
+
+lazyOldAxiomAddChild(domenv, kid, env) ==
+  CONS($lazyOldAxiomDomainDispatch,domenv)
+
+$lazyOldAxiomDomainDispatch :=
+   VECTOR('lazyOldAxiomDomain,
+          [function lazyOldAxiomDomainDevaluate],
+          [nil],
+	  [function lazyOldAxiomDomainLookupExport],
+          [function lazyOldAxiomDomainHashCode],
+          [function lazyOldAxiomAddChild])
+
+-- old Axiom pre category objects are just (dispatch . catform)
+-- where catform is ('categoryname,: evaluated args)
+-- old Axiom category objects are  (dispatch . [catform, hashcode, defaulting package, parent vector, dom])
+oldAxiomPreCategoryBuild(catform, dom, env) ==
+   pack := oldAxiomCategoryDefaultPackage(catform, dom)
+   CONS($oldAxiomCategoryDispatch,
+       [catform, hashTypeForm(catform,0), pack, oldAxiomPreCategoryParents(catform,dom), dom])
+oldAxiomPreCategoryHashCode(catform, env) == hashTypeForm(catform,0)
+oldAxiomCategoryDefaultPackage(catform, dom) ==
+    hasDefaultPackage opOf catform 
+
+oldAxiomPreCategoryDevaluate([op,:args], env) ==
+   SExprToDName([op,:devaluateList args], T)
+
+$oldAxiomPreCategoryDispatch :=
+   VECTOR('oldAxiomPreCategory,
+          [function oldAxiomPreCategoryDevaluate],
+          [nil],
+          [nil],
+          [function oldAxiomPreCategoryHashCode],
+          [function oldAxiomPreCategoryBuild],
+          [nil])
+
+oldAxiomCategoryDevaluate([[op,:args],:.], env) ==
+   SExprToDName([op,:devaluateList args], T)
+
+oldAxiomPreCategoryParents(catform,dom) ==
+  vars := ["$",:rest GETDATABASE(opOf catform, 'CONSTRUCTORFORM)]
+  vals := [dom,:rest catform]
+  -- parents :=  GETDATABASE(opOf catform, 'PARENTS)
+  parents := parentsOf opOf catform
+  PROGV(vars, vals,
+    LIST2VEC
+      [EVAL quoteCatOp cat for [cat,:pred] in parents | EVAL pred])
+
+quoteCatOp cat == 
+   atom cat => MKQ cat
+   ['LIST, MKQ CAR cat,: CDR cat]
+
+
+oldAxiomCategoryLookupExport(catenv, self, op, sig, box, env) ==
+   [catform,hash, pack,:.] := catenv
+   opIsHasCat op => if EQL(sig, hash) then [self] else nil
+   NULL(pack) => nil
+   if not VECP pack then
+       pack:=apply(pack, CONS(self, rest catform))
+       RPLACA(CDDR catenv, pack)
+   fun := basicLookup(op, sig, pack, self) => [fun]
+   nil
+
+oldAxiomCategoryParentCount([.,.,.,parents,.], env) == LENGTH parents
+oldAxiomCategoryNthParent([.,.,.,parvec,dom], n, env) ==
+  catform := ELT(parvec, n-1)
+  VECTORP KAR catform => catform
+  newcat := oldAxiomPreCategoryBuild(catform,dom,nil)
+  SETELT(parvec, n-1, newcat)
+  newcat
+
+oldAxiomCategoryBuild([catform,:.], dom, env) ==
+  oldAxiomPreCategoryBuild(catform,dom, env)
+oldAxiomCategoryHashCode([.,hash,:.], env) == hash
+
+$oldAxiomCategoryDispatch :=
+   VECTOR('oldAxiomCategory,
+          [function oldAxiomCategoryDevaluate],
+          [nil],
+          [function oldAxiomCategoryLookupExport],
+          [function oldAxiomCategoryHashCode],
+          [function oldAxiomCategoryBuild], -- builder ??
+          [function oldAxiomCategoryParentCount],
+          [function oldAxiomCategoryNthParent]) -- 1 indexed
+
+attributeDevaluate(attrObj, env) ==
+   [name, hash] := attrObj
+   StringToCompStr SYMBOL_-NAME name
+
+attributeLookupExport(attrObj, self, op, sig, box, env) ==
+   [name, hash] := attrObj
+   opIsHasCat op => if EQL(hash, sig) then [self] else nil
+
+attributeHashCode(attrObj, env) ==
+   [name, hash] := attrObj
+   hash
+
+attributeCategoryBuild(attrObj, dom, env) ==
+   [name, hash] := attrObj
+   [$attributeDispatch, name, hash] 
+
+attributeCategoryParentCount(attrObj, env) == 0
+
+attributeNthParent(attrObj, env) == nil
+
+$attributeDispatch :=
+   VECTOR('attribute,
+          [function attributeDevaluate],
+          [nil],
+          [function attributeLookupExport],
+          [function attributeHashCode],
+          [function attributeCategoryBuild], -- builder ??
+          [function attributeCategoryParentCount],
+          [function attributeNthParent]) -- 1 indexed
+
+
+orderedDefaults(conform,domform) ==
+  $depthAssocCache : local := MAKE_-HASHTABLE 'ID
+  conList := [x for x in orderCatAnc (op := opOf conform) | hasDefaultPackage op]
+  acc := nil
+  ancestors := ancestorsOf(conform,domform)
+  for x in conList repeat
+    for y in ancestors | x = CAAR y repeat acc := [y,:acc]
+  NREVERSE acc
+
+instantiate domenv ==
+   -- following is a patch for a bug in runtime.as
+   -- has a lazy dispatch vector with an instantiated domenv
+  VECTORP CDR domenv => [$oldAxiomDomainDispatch ,: domenv]
+  callForm := CADR domenv
+  oldDom := CDDR domenv
+  [functor,:args] := callForm
+--  if null(fn := GET(functor,'instantiate)) then
+--     ofn := SYMBOL_-FUNCTION functor
+--     loadFunctor functor
+--     fn := SYMBOL_-FUNCTION functor
+--     SETF(SYMBOL_-FUNCTION functor, ofn)
+--     PUT(functor, 'instantiate, fn)
+--  domvec := APPLY(fn, args)
+  domvec := APPLY(functor, args)
+  RPLACA(oldDom, $oldAxiomDomainDispatch)
+  RPLACD(oldDom, [CADR oldDom,: domvec])
+  oldDom
+
+hashTypeForm([fn,: args], percentHash) == 
+   hashType([fn,:devaluateList args], percentHash)
+
+$hashOp1 := hashString '"1"
+$hashOp0 := hashString '"0"
+$hashOpApply := hashString '"apply"
+$hashOpSet := hashString '"set!"
+$hashSeg := hashString '".."
+$hashPercent := hashString '"%"
+
+oldAxiomDomainLookupExport _
+  (domenv, self, op, sig, box, skipdefaults, env) ==
+     domainVec := CDR domenv
+     if hashCode? op then
+         EQL(op, $hashOp1) => op := 'One
+         EQL(op, $hashOp0) => op := 'Zero
+         EQL(op, $hashOpApply) => op := 'elt
+         EQL(op, $hashOpSet) => op := 'setelt
+         EQL(op, $hashSeg) => op := 'SEGMENT
+     constant := nil
+     if hashCode? sig and self and EQL(sig, getDomainHash self) then
+       sig := '($)
+       constant := true
+     val :=
+       skipdefaults => 
+          oldCompLookupNoDefaults(op, sig, domainVec, self)
+       oldCompLookup(op, sig, domainVec, self)
+     null val => val
+     if constant then val := SPADCALL val
+     RPLACA(box, val)
+     box
+     
+oldAxiomDomainHashCode(domenv, env) == CAR domenv
+
+oldAxiomDomainHasCategory(domenv, cat, env) ==
+  HasAttribute(domvec := CDR domenv, cat) or
+    HasCategory(domvec, devaluate cat)
+
+oldAxiomDomainDevaluate(domenv, env) == 
+   SExprToDName(CDR(domenv).0, 'T)
+
+oldAxiomAddChild(domenv, child, env) == CONS($oldAxiomDomainDispatch, domenv)
+
+$oldAxiomDomainDispatch :=
+   VECTOR('oldAxiomDomain,
+          [function oldAxiomDomainDevaluate],
+          [nil],
+	  [function oldAxiomDomainLookupExport],
+	  [function oldAxiomDomainHashCode],
+          [function oldAxiomAddChild])
+
+coerceConvertMmSelection(funName,m1,m2) ==
+  -- calls selectMms with $Coerce=NIL and tests for required
+  -- target type. funName is either 'coerce or 'convert.
+  $declaredMode : local:= NIL
+  $reportBottomUpFlag : local:= NIL
+  l := selectMms1(funName,m2,[m1],[m1],NIL)
+  mmS := [[sig,[targ,arg],:pred] for x in l | x is [sig,[.,arg],:pred] and
+    hasCorrectTarget(m2,sig) and sig is [dc,targ,oarg] and oarg = m1]
+  mmS and CAR mmS
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

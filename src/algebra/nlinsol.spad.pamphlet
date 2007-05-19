@@ -1,0 +1,224 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra nlinsol.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package RETSOL RetractSolvePackage}
+<<package RETSOL RetractSolvePackage>>=
+)abbrev package RETSOL RetractSolvePackage
+++ Author: Manuel Bronstein
+++ Date Created: 31 October 1991
+++ Date Last Updated: 31 October 1991
+++ Description:
+++ RetractSolvePackage is an interface to \spadtype{SystemSolvePackage}
+++ that attempts to retract the coefficients of the equations before
+++ solving.
+
+RetractSolvePackage(Q, R): Exports == Implementation where
+  Q: IntegralDomain
+  R: Join(IntegralDomain, RetractableTo Q)
+
+  PQ  ==> Polynomial Q
+  FQ  ==> Fraction PQ
+  SY  ==> Symbol
+  P   ==> Polynomial R
+  F   ==> Fraction P
+  EQ  ==> Equation
+  SSP ==> SystemSolvePackage
+
+  Exports ==> with
+    solveRetract: (List P, List SY) -> List List EQ F
+      ++ solveRetract(lp,lv) finds the solutions of the list lp of
+      ++ rational functions with respect to the list of symbols lv.
+      ++ The function tries to retract all the coefficients of the equations
+      ++ to Q before solving if possible.
+
+  Implementation ==> add
+    LEQQ2F : List EQ FQ -> List EQ F
+    FQ2F   : FQ -> F
+    PQ2P   : PQ -> P
+    QIfCan : List P -> Union(List FQ, "failed")
+    PQIfCan: P -> Union(FQ, "failed")
+
+    PQ2P p   == map(#1::R, p)$PolynomialFunctions2(Q, R)
+    FQ2F f   == PQ2P numer f / PQ2P denom f
+    LEQQ2F l == [equation(FQ2F lhs eq, FQ2F rhs eq) for eq in l]
+
+    solveRetract(lp, lv) ==
+      (u := QIfCan lp) case "failed" =>
+        solve([p::F for p in lp]$List(F), lv)$SSP(R)
+      [LEQQ2F l for l in solve(u::List(FQ), lv)$SSP(Q)]
+
+    QIfCan l ==
+      ans:List(FQ) := empty()
+      for p in l repeat
+        (u := PQIfCan p) case "failed" => return "failed"
+        ans := concat(u::FQ, ans)
+      ans
+
+    PQIfCan p ==
+      (u := mainVariable p) case "failed" =>
+        (r := retractIfCan(ground p)@Union(Q,"failed")) case Q => r::Q::PQ::FQ
+        "failed"
+      up := univariate(p, s := u::SY)
+      ans:FQ := 0
+      while up ^= 0 repeat
+        (v := PQIfCan leadingCoefficient up) case "failed" => return "failed"
+        ans := ans + monomial(1, s, degree up)$PQ * (v::FQ)
+        up  := reductum up
+      ans
+
+@
+\section{package NLINSOL NonLinearSolvePackage}
+<<package NLINSOL NonLinearSolvePackage>>=
+)abbrev package NLINSOL NonLinearSolvePackage
+++ Author: Manuel Bronstein
+++ Date Created: 31 October 1991
+++ Date Last Updated: 26 June 1992
+++ Description:
+++ NonLinearSolvePackage is an interface to \spadtype{SystemSolvePackage}
+++ that attempts to retract the coefficients of the equations before
+++ solving. The solutions are given in the algebraic closure of R whenever
+++ possible.
+
+NonLinearSolvePackage(R:IntegralDomain): Exports == Implementation where
+  Z   ==> Integer
+  Q   ==> Fraction Z
+  SY  ==> Symbol
+  P   ==> Polynomial R
+  F   ==> Fraction P
+  EQ  ==> Equation F
+  SSP ==> SystemSolvePackage
+  SOL ==> RetractSolvePackage
+
+  Exports ==> with
+    solveInField:    (List P, List SY) -> List List EQ
+      ++ solveInField(lp,lv) finds the solutions of the list lp of
+      ++ rational functions with respect to the list of symbols lv.
+    solveInField:     List P       -> List List EQ
+      ++ solveInField(lp) finds the solution of the list lp of rational
+      ++ functions with respect to all the symbols appearing in lp.
+    solve:           (List P, List SY) -> List List EQ
+      ++ solve(lp,lv) finds the solutions in the algebraic closure of R
+      ++ of the list lp of
+      ++ rational functions with respect to the list of symbols lv.
+    solve:            List P       -> List List EQ
+      ++ solve(lp) finds the solution in the algebraic closure of R
+      ++ of the list lp of rational
+      ++ functions with respect to all the symbols appearing in lp.
+
+  Implementation ==> add
+    solveInField l == solveInField(l, "setUnion"/[variables p for p in l])
+
+    if R has AlgebraicallyClosedField then
+      import RationalFunction(R)
+
+      expandSol: List EQ -> List List EQ
+      RIfCan   : F -> Union(R, "failed")
+      addRoot  : (EQ, List List EQ) -> List List EQ
+      allRoots : List P -> List List EQ
+      evalSol  : (List EQ, List EQ) -> List EQ
+
+      solve l        == solve(l, "setUnion"/[variables p for p in l])
+      solve(lp, lv)  == concat([expandSol sol for sol in solveInField(lp, lv)])
+      addRoot(eq, l) == [concat(eq, sol) for sol in l]
+      evalSol(ls, l) == [equation(lhs eq, eval(rhs eq, l)) for eq in ls]
+
+-- converts [p1(a1),...,pn(an)] to
+-- [[a1=v1,...,an=vn]] where vi ranges over all the zeros of pi
+      allRoots l ==
+        empty? l => [empty()$List(EQ)]
+        z := allRoots rest l
+        s := mainVariable(p := first l)::SY::P::F
+        concat [addRoot(equation(s, a::P::F), z) for a in zerosOf univariate p]
+
+      expandSol l ==
+        lassign := lsubs := empty()$List(EQ)
+        luniv := empty()$List(P)
+        for eq in l repeat
+          if retractIfCan(lhs eq)@Union(SY, "failed") case SY then
+            if RIfCan(rhs eq) case R then lassign := concat(eq, lassign)
+                                     else lsubs := concat(eq, lsubs)
+          else
+            if ((u := retractIfCan(lhs eq)@Union(P, "failed")) case P) and
+--               one?(# variables(u::P)) and ((r := RIfCan rhs eq) case R) then
+               ((# variables(u::P)) = 1) and ((r := RIfCan rhs eq) case R) then
+                 luniv := concat(u::P - r::R::P, luniv)
+            else return [l]
+        empty? luniv => [l]
+        [concat(z, concat(evalSol(lsubs,z), lassign)) for z in allRoots luniv]
+
+      RIfCan f ==
+        ((n := retractIfCan(numer f)@Union(R,"failed")) case R) and
+          ((d := retractIfCan(denom f)@Union(R,"failed")) case R) => n::R / d::R
+        "failed"
+    else
+      solve l       == solveInField l
+      solve(lp, lv) == solveInField(lp, lv)
+
+ -- 'else if' is doubtful with this compiler so all 3 conditions are explicit
+    if (not(R is Q)) and (R has RetractableTo Q) then
+      solveInField(lp, lv) == solveRetract(lp, lv)$SOL(Q, R)
+
+    if (not(R is Z)) and (not(R has RetractableTo Q)) and
+      (R has RetractableTo Z) then
+        solveInField(lp, lv) == solveRetract(lp, lv)$SOL(Z, R)
+
+    if (not(R is Z)) and (not(R has RetractableTo Q)) and
+      (not(R has RetractableTo Z)) then
+        solveInField(lp, lv) == solve([p::F for p in lp]$List(F), lv)$SSP(R)
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+-- Compile order for the differential equation solver:
+-- oderf.spad  odealg.spad  nlode.spad  nlinsol.spad  riccati.spad  odeef.spad
+
+<<package RETSOL RetractSolvePackage>>
+<<package NLINSOL NonLinearSolvePackage>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

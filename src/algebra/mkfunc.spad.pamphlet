@@ -1,0 +1,497 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra mkfunc.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{domain INFORM InputForm}
+<<domain INFORM InputForm>>=
+)abbrev domain INFORM InputForm
+++ Parser forms
+++ Author: Manuel Bronstein
+++ Date Created: ???
+++ Date Last Updated: 19 April 1991
+++ Description:
+++   Domain of parsed forms which can be passed to the interpreter.
+++   This is also the interface between algebra code and facilities
+++   in the interpreter.
+
+--)boot $noSubsumption := true
+
+InputForm():
+  Join(SExpressionCategory(String,Symbol,Integer,DoubleFloat,OutputForm),
+       ConvertibleTo SExpression) with
+    interpret: % -> Any
+      ++ interpret(f) passes f to the interpreter.
+    convert  : SExpression -> %
+      ++ convert(s) makes s into an input form.
+    binary   : (%, List %) -> %
+      ++ \spad{binary(op, [a1,...,an])} returns the input form
+      ++ corresponding to  \spad{a1 op a2 op ... op an}.
+    function : (%, List Symbol, Symbol) -> %
+      ++ \spad{function(code, [x1,...,xn], f)} returns the input form
+      ++ corresponding to \spad{f(x1,...,xn) == code}.
+    lambda   : (%, List Symbol) -> %
+      ++ \spad{lambda(code, [x1,...,xn])} returns the input form
+      ++ corresponding to \spad{(x1,...,xn) +-> code} if \spad{n > 1},
+      ++ or to \spad{x1 +-> code} if \spad{n = 1}.
+    "+"      : (%, %) -> %
+      ++ \spad{a + b} returns the input form corresponding to \spad{a + b}.
+    "*"      : (%, %) -> %
+      ++ \spad{a * b} returns the input form corresponding to \spad{a * b}.
+    "/"      : (%, %) -> %
+      ++ \spad{a / b} returns the input form corresponding to \spad{a / b}.
+    "**"     : (%, NonNegativeInteger) -> %
+      ++ \spad{a ** b} returns the input form corresponding to \spad{a ** b}.
+    "**"     : (%, Integer) -> %
+      ++ \spad{a ** b} returns the input form corresponding to \spad{a ** b}.
+    0        : constant -> %
+      ++ \spad{0} returns the input form corresponding to 0.
+    1        : constant -> %
+      ++ \spad{1} returns the input form corresponding to 1.
+    flatten  : % -> %
+      ++ flatten(s) returns an input form corresponding to s with
+      ++ all the nested operations flattened to triples using new
+      ++ local variables.
+      ++ If s is a piece of code, this speeds up
+      ++ the compilation tremendously later on.
+    unparse  : % -> String
+      ++ unparse(f) returns a string s such that the parser
+      ++ would transform s to f.
+      ++ Error: if f is not the parsed form of a string.
+    declare  : List %   -> Symbol
+      ++ declare(t) returns a name f such that f has been
+      ++ declared to the interpreter to be of type t, but has
+      ++ not been assigned a value yet.
+      ++ Note: t should be created as \spad{devaluate(T)$Lisp} where T is the
+      ++ actual type of f (this hack is required for the case where
+      ++ T is a mapping type).
+    compile  : (Symbol, List %) -> Symbol
+      ++ \spad{compile(f, [t1,...,tn])} forces the interpreter to compile
+      ++ the function f with signature \spad{(t1,...,tn) -> ?}.
+      ++ returns the symbol f if successful.
+      ++ Error: if f was not defined beforehand in the interpreter,
+      ++ or if the ti's are not valid types, or if the compiler fails.
+ == SExpression add
+    Rep := SExpression
+
+    mkProperOp: Symbol -> %
+    strsym    : % -> String
+    tuplify   : List Symbol -> %
+    flatten0  : (%, Symbol, NonNegativeInteger) ->
+                                             Record(lst: List %, symb:%)
+
+    0                        == convert(0::Integer)
+    1                        == convert(1::Integer)
+    convert(x:%):SExpression == x pretend SExpression
+    convert(x:SExpression):% == x
+
+    conv(ll : List %): % ==
+      convert(ll pretend List SExpression)$SExpression pretend %
+
+    lambda(f,l) == conv([convert("+->"::Symbol),tuplify l,f]$List(%))
+
+    interpret x ==
+      v := interpret(x)$Lisp
+      mkObj(unwrap(objVal(v)$Lisp)$Lisp, objMode(v)$Lisp)$Lisp
+
+    convert(x:DoubleFloat):% ==
+      zero? x => 0
+--      one? x => 1
+      (x = 1) => 1
+      convert(x)$Rep
+
+    flatten s ==
+      -- will not compile if I use 'or'
+      atom? s => s
+      every?(atom?,destruct s)$List(%) => s
+      sy := new()$Symbol
+      n:NonNegativeInteger := 0
+      l2 := [flatten0(x, sy, n := n + 1) for x in rest(l := destruct s)]
+      conv(concat(convert("SEQ"::Symbol)@%,
+        concat(concat [u.lst for u in l2], conv(
+           [convert("exit"::Symbol)@%, 1$%, conv(concat(first l,
+               [u.symb for u in l2]))@%]$List(%))@%)))@%
+
+    flatten0(s, sy, n) ==
+      atom? s => [nil(), s]
+      a := convert(concat(string sy, convert(n)@String)::Symbol)@%
+      l2 := [flatten0(x, sy, n := n+1) for x in rest(l := destruct s)]
+      [concat(concat [u.lst for u in l2], conv([convert(
+        "LET"::Symbol)@%, a, conv(concat(first l,
+             [u.symb for u in l2]))@%]$List(%))@%), a]
+
+    strsym s ==
+      string? s => string s
+      symbol? s => string symbol s
+      error "strsym: form is neither a string or symbol"
+
+    unparse x ==
+      atom?(s:% := form2String(x)$Lisp) => strsym s
+      concat [strsym a for a in destruct s]
+
+    declare signature ==
+      declare(name := new()$Symbol, signature)$Lisp
+      name
+
+    compile(name, types) ==
+      symbol car cdr car
+        selectLocalMms(mkProperOp name, convert(name)@%,
+          types, nil$List(%))$Lisp
+
+    mkProperOp name ==
+      op := mkAtree(nme := convert(name)@%)$Lisp
+      transferPropsToNode(nme, op)$Lisp
+      convert op
+
+    binary(op, args) ==
+      (n := #args) < 2 => error "Need at least 2 arguments"
+      n = 2 => convert([op, first args, last args]$List(%))
+      convert([op, first args, binary(op, rest args)]$List(%))
+
+    tuplify l ==
+      empty? rest l => convert first l
+      conv
+        concat(convert("Tuple"::Symbol), [convert x for x in l]$List(%))
+
+    function(f, l, name) ==
+      nn := convert(new(1 + #l, convert(nil()$List(%)))$List(%))@%
+      conv([convert("DEF"::Symbol), conv(cons(convert(name)@%,
+                        [convert(x)@% for x in l])), nn, nn, f]$List(%))
+
+    s1 + s2 ==
+      s1 = 0 => s2
+      s2 = 0 => s1
+      conv [convert("+"::Symbol), s1, s2]$List(%)
+
+    s1 * s2 ==
+      s1 = 0 or s2 = 0 => 0
+      s1 = 1 => s2
+      s2 = 1 => s1
+      conv [convert("*"::Symbol), s1, s2]$List(%)
+
+    s1:% ** n:Integer ==
+      s1 = 0 and n > 0 => 0
+      s1 = 1 or zero? n => 1
+--      one? n => s1
+      (n = 1) => s1
+      conv [convert("**"::Symbol), s1, convert n]$List(%)
+
+    s1:% ** n:NonNegativeInteger == s1 ** (n::Integer)
+
+    s1 / s2 ==
+      s2 = 1 => s1
+      conv [convert("/"::Symbol), s1, s2]$List(%)
+
+@
+\section{package INFORM1 InputFormFunctions1}
+<<package INFORM1 InputFormFunctions1>>=
+)abbrev package INFORM1 InputFormFunctions1
+--)boot $noSubsumption := false
+
+++ Tools for manipulating input forms
+++ Author: Manuel Bronstein
+++ Date Created: ???
+++ Date Last Updated: 19 April 1991
+++ Description: Tools for manipulating input forms.
+
+InputFormFunctions1(R:Type):with
+  packageCall: Symbol -> InputForm
+    ++ packageCall(f) returns the input form corresponding to f$R.
+  interpret  : InputForm -> R
+    ++ interpret(f) passes f to the interpreter, and transforms
+    ++ the result into an object of type R.
+ == add
+  Rname := devaluate(R)$Lisp :: InputForm
+
+  packageCall name ==
+    convert([convert("$elt"::Symbol), Rname,
+                                convert name]$List(InputForm))@InputForm
+
+  interpret form ==
+    retract(interpret(convert([convert("@"::Symbol), form,
+          Rname]$List(InputForm))@InputForm)$InputForm)$AnyFunctions1(R)
+
+@
+\section{package MKFUNC MakeFunction}
+<<package MKFUNC MakeFunction>>=
+)abbrev package MKFUNC MakeFunction
+++ Tools for making interpreter functions from top-level expressions
+++ Author: Manuel Bronstein
+++ Date Created: 22 Nov 1988
+++ Date Last Updated: 8 Jan 1990
+++ Description: transforms top-level objects into interpreter functions.
+MakeFunction(S:ConvertibleTo InputForm): Exports == Implementation where
+  SY ==> Symbol
+
+  Exports ==> with
+    function: (S, SY         ) -> SY
+      ++ function(e, foo) creates a function \spad{foo() == e}.
+    function: (S, SY,      SY) -> SY
+      ++ function(e, foo, x) creates a function \spad{foo(x) == e}.
+    function: (S, SY, SY,  SY) -> SY
+      ++ function(e, foo, x, y) creates a function \spad{foo(x, y) = e}.
+    function: (S, SY, List SY) -> SY
+      ++ \spad{function(e, foo, [x1,...,xn])} creates a function
+      ++ \spad{foo(x1,...,xn) == e}.
+
+  Implementation ==> add
+    function(s, name)            == function(s, name, nil())
+    function(s:S, name:SY, x:SY) == function(s, name, [x])
+    function(s, name, x, y)      == function(s, name, [x, y])
+
+    function(s:S, name:SY, args:List SY) ==
+      interpret function(convert s, args, name)$InputForm
+      name
+
+@
+\section{package MKUCFUNC MakeUnaryCompiledFunction}
+<<package MKUCFUNC MakeUnaryCompiledFunction>>=
+)abbrev package MKUCFUNC MakeUnaryCompiledFunction
+++ Tools for making compiled functions from top-level expressions
+++ Author: Manuel Bronstein
+++ Date Created: 1 Dec 1988
+++ Date Last Updated: 5 Mar 1990
+++ Description: transforms top-level objects into compiled functions.
+MakeUnaryCompiledFunction(S, D, I): Exports == Implementation where
+  S: ConvertibleTo InputForm
+  D, I: Type
+
+  SY  ==> Symbol
+  DI  ==> devaluate(D -> I)$Lisp
+
+  Exports ==> with
+    unaryFunction   : SY -> (D -> I)
+      ++ unaryFunction(a) is a local function
+    compiledFunction: (S, SY) -> (D -> I)
+      ++ compiledFunction(expr, x) returns a function \spad{f: D -> I}
+      ++ defined by \spad{f(x) == expr}. 
+      ++ Function f is compiled and directly
+      ++ applicable to objects of type D.
+
+  Implementation ==> add
+    import MakeFunction(S)
+
+    func: (SY, D) -> I
+
+    func(name, x)       == FUNCALL(name, x, NIL$Lisp)$Lisp
+    unaryFunction name  == func(name, #1)
+
+    compiledFunction(e:S, x:SY) ==
+      t := [convert([devaluate(D)$Lisp]$List(InputForm))
+           ]$List(InputForm)
+      unaryFunction compile(function(e, declare DI, x), t)
+
+@
+\section{package MKBCFUNC MakeBinaryCompiledFunction}
+<<package MKBCFUNC MakeBinaryCompiledFunction>>=
+)abbrev package MKBCFUNC MakeBinaryCompiledFunction
+++ Tools for making compiled functions from top-level expressions
+++ Author: Manuel Bronstein
+++ Date Created: 1 Dec 1988
+++ Date Last Updated: 5 Mar 1990
+++ Description: transforms top-level objects into compiled functions.
+MakeBinaryCompiledFunction(S, D1, D2, I):Exports == Implementation where
+  S: ConvertibleTo InputForm
+  D1, D2, I: Type
+
+  SY  ==> Symbol
+  DI  ==> devaluate((D1, D2) -> I)$Lisp
+
+  Exports ==> with
+    binaryFunction  : SY -> ((D1, D2) -> I)
+      ++ binaryFunction(s) is a local function
+    compiledFunction: (S, SY, SY) -> ((D1, D2) -> I)
+      ++ compiledFunction(expr,x,y) returns a function \spad{f: (D1, D2) -> I}
+      ++ defined by \spad{f(x, y) == expr}.
+      ++ Function f is compiled and directly
+      ++ applicable to objects of type \spad{(D1, D2)}
+
+  Implementation ==> add
+    import MakeFunction(S)
+
+    func: (SY, D1, D2) -> I
+
+    func(name, x, y)   == FUNCALL(name, x, y, NIL$Lisp)$Lisp
+    binaryFunction name == func(name, #1, #2)
+
+    compiledFunction(e, x, y) ==
+      t := [devaluate(D1)$Lisp, devaluate(D2)$Lisp]$List(InputForm)
+      binaryFunction compile(function(e, declare DI, x, y), t)
+
+@
+\section{package MKFLCFN MakeFloatCompiledFunction}
+<<package MKFLCFN MakeFloatCompiledFunction>>=
+)abbrev package MKFLCFN MakeFloatCompiledFunction
+++ Tools for making compiled functions from top-level expressions
+++ Author: Manuel Bronstein
+++ Date Created: 2 Mar 1990
+++ Date Last Updated: 2 Dec 1996 (MCD)
+++ Description:
+++ MakeFloatCompiledFunction transforms top-level objects into
+++ compiled Lisp functions whose arguments are Lisp floats.
+++ This by-passes the \Language{} compiler and interpreter,
+++ thereby gaining several orders of magnitude.
+MakeFloatCompiledFunction(S): Exports == Implementation where
+  S: ConvertibleTo InputForm
+
+  INF ==> InputForm
+  SF  ==> DoubleFloat
+  DI1 ==> devaluate(SF -> SF)$Lisp
+  DI2 ==> devaluate((SF, SF) -> SF)$Lisp
+
+  Exports ==> with
+    makeFloatFunction: (S, Symbol)         -> (SF -> SF)
+      ++ makeFloatFunction(expr, x) returns a Lisp function
+      ++ \spad{f: \axiomType{DoubleFloat} -> \axiomType{DoubleFloat}}
+      ++ defined by \spad{f(x) == expr}. 
+      ++ Function f is compiled and directly
+      ++ applicable to objects of type \axiomType{DoubleFloat}.
+    makeFloatFunction: (S, Symbol, Symbol) -> ((SF, SF) -> SF)
+      ++ makeFloatFunction(expr, x, y) returns a Lisp function
+      ++ \spad{f: (\axiomType{DoubleFloat}, \axiomType{DoubleFloat}) -> \axiomType{DoubleFloat}}
+      ++ defined by \spad{f(x, y) == expr}.
+      ++ Function f is compiled and directly
+      ++ applicable to objects of type \spad{(\axiomType{DoubleFloat}, \axiomType{DoubleFloat})}.
+
+  Implementation ==> add
+    import MakeUnaryCompiledFunction(S, SF, SF)
+    import MakeBinaryCompiledFunction(S, SF, SF, SF)
+
+    streq?    : (INF, String) -> Boolean
+    streqlist?: (INF, List String) -> Boolean
+    gencode   : (String, List INF) -> INF
+    mkLisp    : INF -> Union(INF, "failed")
+    mkLispList: List INF -> Union(List INF, "failed")
+    mkDefun   : (INF, List INF) -> INF
+    mkLispCall: INF -> INF
+    mkPretend : INF -> INF
+    mkCTOR : INF -> INF
+
+    lsf := convert([convert("DoubleFloat"::Symbol)@INF]$List(INF))@INF
+
+    streq?(s, st)    == s = convert(st::Symbol)@INF
+    gencode(s, l)    == convert(concat(convert(s::Symbol)@INF, l))@INF
+    streqlist?(s, l) == member?(string symbol s, l)
+
+    mkPretend form ==
+      convert([convert("pretend"::Symbol), form, lsf]$List(INF))@INF
+
+    mkCTOR form ==
+      convert([convert("C-TO-R"::Symbol), form]$List(INF))@INF
+
+
+    mkLispCall name ==
+      convert([convert("$elt"::Symbol),
+                           convert("Lisp"::Symbol), name]$List(INF))@INF
+
+    mkDefun(s, lv) ==
+      name := convert(new()$Symbol)@INF
+      fun  := convert([convert("DEFUN"::Symbol), name, convert lv,
+              gencode("DECLARE",[gencode("FLOAT",lv)]),mkCTOR s]$List(INF))@INF
+      EVAL(fun)$Lisp
+      if _$compileDontDefineFunctions$Lisp then COMPILE(name)$Lisp
+      name
+
+    makeFloatFunction(f, x, y) ==
+      (u := mkLisp(convert(f)@INF)) case "failed" =>
+        compiledFunction(f, x, y)
+      name := mkDefun(u::INF, [ix := convert x, iy := convert y])
+      t    := [lsf, lsf]$List(INF)
+      spadname := declare DI2
+      spadform:=mkPretend convert([mkLispCall name,ix,iy]$List(INF))@INF
+      interpret function(spadform, [x, y], spadname)
+      binaryFunction compile(spadname, t)
+
+    makeFloatFunction(f, var) ==
+      (u := mkLisp(convert(f)@INF)) case "failed" =>
+        compiledFunction(f, var)
+      name := mkDefun(u::INF, [ivar := convert var])
+      t    := [lsf]$List(INF)
+      spadname := declare DI1
+      spadform:= mkPretend convert([mkLispCall name,ivar]$List(INF))@INF
+      interpret function(spadform, [var], spadname)
+      unaryFunction compile(spadname, t)
+
+    mkLispList l ==
+      ans := nil()$List(INF)
+      for s in l repeat
+        (u := mkLisp s) case "failed" => return "failed"
+        ans := concat(u::INF, ans)
+      reverse_! ans
+    
+
+    mkLisp s ==
+      atom? s => s
+      op := first(l := destruct s)
+      (u := mkLispList rest l) case "failed" => "failed"
+      ll := u::List(INF)
+      streqlist?(op, ["+","*","/","-"]) => convert(concat(op, ll))@INF
+      streq?(op, "**") => gencode("EXPT", ll)
+      streqlist?(op, ["exp","sin","cos","tan","atan", 
+         "log", "sinh","cosh","tanh","asinh","acosh","atanh","sqrt"]) =>
+            gencode(upperCase string symbol op, ll)
+      streq?(op, "nthRoot") =>
+        second ll = convert(2::Integer)@INF =>gencode("SQRT",[first ll])
+        gencode("EXPT", concat(first ll, [1$INF / second ll]))
+      streq?(op, "float") =>
+        a := ll.1
+        e := ll.2
+        b := ll.3
+        _*(a, EXPT(b, e)$Lisp)$Lisp pretend INF
+      "failed"
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<domain INFORM InputForm>>
+<<package INFORM1 InputFormFunctions1>>
+<<package MKFUNC MakeFunction>>
+<<package MKUCFUNC MakeUnaryCompiledFunction>>
+<<package MKBCFUNC MakeBinaryCompiledFunction>>
+<<package MKFLCFN MakeFloatCompiledFunction>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

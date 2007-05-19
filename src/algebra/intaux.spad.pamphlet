@@ -1,0 +1,299 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra intaux.spad}
+\author{Barry Trager, Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{domain IR IntegrationResult}
+<<domain IR IntegrationResult>>=
+)abbrev domain IR IntegrationResult
+++ The result of a transcendental integration.
+++ Author: Barry Trager, Manuel Bronstein
+++ Date Created: 1987
+++ Date Last Updated: 12 August 1992
+++ Description:
+++ If a function f has an elementary integral g, then g can be written
+++ in the form \spad{g = h + c1 log(u1) + c2 log(u2) + ... + cn log(un)}
+++ where h, which is in the same field than f, is called the rational
+++ part of the integral, and \spad{c1 log(u1) + ... cn log(un)} is called the
+++ logarithmic part of the integral. This domain manipulates integrals
+++ represented in that form, by keeping both parts separately. The logs
+++ are not explicitly computed.
+++ Keywords: integration.
+++ Examples: )r RATINT INPUT
+IntegrationResult(F:Field): Exports == Implementation where
+  O   ==> OutputForm
+  B   ==> Boolean
+  Z   ==> Integer
+  Q   ==> Fraction Integer
+  SE  ==> Symbol
+  UP  ==> SparseUnivariatePolynomial F
+  LOG ==> Record(scalar:Q, coeff:UP, logand:UP)
+  NE  ==> Record(integrand:F, intvar:F)
+
+  Exports ==> (Module Q, RetractableTo F) with
+    mkAnswer: (F, List LOG, List NE) -> %
+      ++ mkAnswer(r,l,ne) creates an integration result from
+      ++ a rational part r, a logarithmic part l, and a non-elementary part ne.
+    ratpart : % -> F
+      ++ ratpart(ir) returns the rational part of an integration result
+    logpart : % -> List LOG
+      ++ logpart(ir) returns the logarithmic part of an integration result
+    notelem : % -> List NE
+      ++ notelem(ir) returns the non-elementary part of an integration result
+    elem?   : % -> B
+      ++ elem?(ir) tests if an integration result is elementary over F?
+    integral: (F, F) -> %
+      ++ integral(f,x) returns the formal integral of f with respect to x
+    differentiate: (%, F -> F) -> F
+      ++ differentiate(ir,D) differentiates ir with respect to the derivation D.
+    if F has PartialDifferentialRing(SE) then
+      differentiate: (%, Symbol) -> F
+        ++ differentiate(ir,x) differentiates ir with respect to x
+    if F has RetractableTo Symbol then
+      integral: (F, Symbol) -> %
+        ++ integral(f,x) returns the formal integral of f with respect to x
+
+  Implementation ==> add
+    Rep := Record(ratp: F, logp: List LOG, nelem: List NE)
+
+    timelog : (Q, LOG) -> LOG
+    timene  : (Q, NE)  -> NE
+    LOG2O   : LOG      -> O
+    NE2O    : NE       -> O
+    Q2F     : Q        -> F
+    nesimp  : List NE  -> List NE
+    neselect: (List NE, F) -> F
+    pLogDeriv: (LOG, F -> F) -> F
+    pNeDeriv : (NE,  F -> F) -> F
+
+
+    alpha:O := new()$Symbol :: O
+
+    - u               == (-1$Z) * u
+    0                 == mkAnswer(0, empty(), empty())
+    coerce(x:F):%     == mkAnswer(x, empty(), empty())
+    ratpart u         == u.ratp
+    logpart u         == u.logp
+    notelem u         == u.nelem
+    elem? u           == empty? notelem u
+    mkAnswer(x, l, n) == [x, l, nesimp n]
+    timelog(r, lg)    == [r * lg.scalar, lg.coeff, lg.logand]
+    integral(f:F,x:F) == (zero? f => 0; mkAnswer(0, empty(), [[f, x]]))
+    timene(r, ne)     == [Q2F(r) * ne.integrand, ne.intvar]
+    n:Z * u:%         == (n::Q) * u
+    Q2F r             == numer(r)::F / denom(r)::F
+    neselect(l, x)    == _+/[ne.integrand for ne in l | ne.intvar = x]
+
+    if F has RetractableTo Symbol then
+      integral(f:F, x:Symbol):% == integral(f, x::F)
+
+    LOG2O rec ==
+--      one? degree rec.coeff =>
+      (degree rec.coeff) = 1 =>
+        -- deg 1 minimal poly doesn't get sigma
+        lastc := - coefficient(rec.coeff, 0) / coefficient(rec.coeff, 1)
+        lg    := (rec.logand) lastc
+        logandp := prefix("log"::Symbol::O, [lg::O])
+        (cc := Q2F(rec.scalar) * lastc) = 1 => logandp
+        cc = -1 => - logandp
+        cc::O * logandp
+      coeffp:O := (outputForm(rec.coeff, alpha) = 0::Z::O)@O
+      logandp :=
+           alpha * prefix("log"::Symbol::O, [outputForm(rec.logand, alpha)])
+      if (cc := Q2F(rec.scalar)) ^= 1 then
+        logandp := cc::O * logandp
+      sum(logandp, coeffp)
+
+    nesimp l ==
+      [[u,x] for x in removeDuplicates_!([ne.intvar for ne in l]$List(F))
+                                           | (u := neselect(l, x)) ^= 0]
+
+    if (F has LiouvillianFunctionCategory) and (F has RetractableTo Symbol) then
+      retractIfCan u ==
+        empty? logpart u =>
+          ratpart u +
+             _+/[integral(ne.integrand, retract(ne.intvar)@Symbol)$F
+                for ne in notelem u]
+        "failed"
+
+    else
+      retractIfCan u ==
+        elem? u and empty? logpart u => ratpart u
+        "failed"
+
+    r:Q * u:% ==
+      r = 0 => 0
+      mkAnswer(Q2F(r) * ratpart u, map(timelog(r, #1), logpart u),
+                                          map(timene(r, #1), notelem u))
+
+    -- Initial attempt, quick and dirty, no simplification
+    u + v ==
+      mkAnswer(ratpart u + ratpart v, concat(logpart u, logpart v),
+                                    nesimp concat(notelem u, notelem v))
+
+    if F has PartialDifferentialRing(Symbol) then
+      differentiate(u:%, x:Symbol):F == differentiate(u, differentiate(#1, x))
+
+    differentiate(u:%, derivation:F -> F):F ==
+      derivation ratpart u +
+          _+/[pLogDeriv(log, derivation) for log in logpart u]
+               + _+/[pNeDeriv(ne, derivation) for ne in notelem u]
+
+    pNeDeriv(ne, derivation) ==
+--      one? derivation(ne.intvar) => ne.integrand
+      (derivation(ne.intvar) = 1) => ne.integrand
+      zero? derivation(ne.integrand) => 0
+      error "pNeDeriv: cannot differentiate not elementary part into F"
+
+    pLogDeriv(log, derivation) ==
+      map(derivation, log.coeff) ^= 0 =>
+        error "pLogDeriv: can only handle logs with constant coefficients"
+--      one?(n := degree(log.coeff)) =>
+      ((n := degree(log.coeff)) = 1) =>
+        c   := - (leadingCoefficient reductum log.coeff)
+                                        / (leadingCoefficient log.coeff)
+        ans := (log.logand) c
+        Q2F(log.scalar) * c * derivation(ans) / ans
+      numlog := map(derivation, log.logand)
+      diflog := extendedEuclidean(log.logand, log.coeff,
+                                    numlog)::Record(coef1:UP, coef2:UP)
+      algans := diflog.coef1
+      ans:F := 0
+      for i in 0..(n-1) repeat
+        algans := algans * monomial(1, 1) rem log.coeff
+        ans := ans + coefficient(algans, i)
+      Q2F(log.scalar) * ans
+
+    coerce(u:%):O ==
+      (r := retractIfCan u) case F => r::F::O
+      l := reverse_! [LOG2O f for f in logpart u]$List(O)
+      if ratpart u ^= 0 then l := concat(ratpart(u)::O, l)
+      if not elem? u then l := concat([NE2O f for f in notelem u], l)
+      null l => 0::O
+      reduce("+", l)
+
+    NE2O ne ==
+      int((ne.integrand)::O * hconcat ["d"::Symbol::O, (ne.intvar)::O])
+
+@
+\section{package IR2 IntegrationResultFunctions2}
+<<package IR2 IntegrationResultFunctions2>>=
+)abbrev package IR2 IntegrationResultFunctions2
+++ Internally used by the integration packages
+++ Author: Manuel Bronstein
+++ Date Created: 1987
+++ Date Last Updated: 12 August 1992
+++ Keywords: integration.
+IntegrationResultFunctions2(E, F): Exports == Implementation where
+  E : Field
+  F : Field
+
+  SE  ==> Symbol
+  Q   ==> Fraction Integer
+  IRE ==> IntegrationResult E
+  IRF ==> IntegrationResult F
+  UPE ==> SparseUnivariatePolynomial E
+  UPF ==> SparseUnivariatePolynomial F
+  NEE ==> Record(integrand:E, intvar:E)
+  NEF ==> Record(integrand:F, intvar:F)
+  LGE ==> Record(scalar:Q, coeff:UPE, logand:UPE)
+  LGF ==> Record(scalar:Q, coeff:UPF, logand:UPF)
+  NLE ==> Record(coeff:E, logand:E)
+  NLF ==> Record(coeff:F, logand:F)
+  UFE ==> Union(Record(mainpart:E, limitedlogs:List NLE), "failed")
+  URE ==> Union(Record(ratpart:E, coeff:E), "failed")
+  UE  ==> Union(E, "failed")
+
+  Exports ==> with
+    map: (E -> F, IRE) -> IRF
+	++ map(f,ire) \undocumented
+    map: (E -> F, URE) -> Union(Record(ratpart:F, coeff:F), "failed")
+	++ map(f,ure) \undocumented
+    map: (E -> F,  UE) -> Union(F, "failed")
+	++ map(f,ue) \undocumented
+    map: (E -> F, UFE) ->
+               Union(Record(mainpart:F, limitedlogs:List NLF), "failed")
+	++ map(f,ufe) \undocumented
+
+  Implementation ==> add
+    import SparseUnivariatePolynomialFunctions2(E, F)
+
+    NEE2F: (E -> F, NEE) -> NEF
+    LGE2F: (E -> F, LGE) -> LGF
+    NLE2F: (E -> F, NLE) -> NLF
+
+    NLE2F(func, r)         == [func(r.coeff), func(r.logand)]
+    NEE2F(func, n)         == [func(n.integrand), func(n.intvar)]
+    map(func:E -> F, u:UE) == (u case "failed" => "failed"; func(u::E))
+
+    map(func:E -> F, ir:IRE) ==
+      mkAnswer(func ratpart ir, [LGE2F(func, f) for f in logpart ir],
+                                   [NEE2F(func, g) for g in notelem ir])
+
+    map(func:E -> F, u:URE) ==
+      u case "failed" => "failed"
+      [func(u.ratpart), func(u.coeff)]
+
+    map(func:E -> F, u:UFE) ==
+      u case "failed" => "failed"
+      [func(u.mainpart), [NLE2F(func, f) for f in u.limitedlogs]]
+
+    LGE2F(func, lg) ==
+      [lg.scalar, map(func, lg.coeff), map(func, lg.logand)]
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+-- SPAD files for the integration world should be compiled in the
+-- following order:
+--
+--   INTAUX  rderf  intrf  rdeef  intef  irexpand  integrat
+
+<<domain IR IntegrationResult>>
+<<package IR2 IntegrationResultFunctions2>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

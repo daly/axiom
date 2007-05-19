@@ -1,0 +1,361 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra kl.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{category CACHSET CachableSet}
+<<category CACHSET CachableSet>>=
+)abbrev category CACHSET CachableSet
+++ Sets whose elements can cache an integer
+++ Author: Manuel Bronstein
+++ Date Created: 31 Oct 1988
+++ Date Last Updated: 14 May 1991
+++ Description:
+++   A cachable set is a set whose elements keep an integer as part
+++   of their structure.
+CachableSet: Category == OrderedSet with
+  position   : % -> NonNegativeInteger
+    ++ position(x) returns the integer n associated to x.
+  setPosition: (%, NonNegativeInteger) -> Void
+    ++ setPosition(x, n) associates the integer n to x.
+
+@
+\section{package SCACHE SortedCache}
+<<package SCACHE SortedCache>>=
+)abbrev package SCACHE SortedCache
+++ Cache of elements in a set
+++ Author: Manuel Bronstein
+++ Date Created: 31 Oct 1988
+++ Date Last Updated: 14 May 1991
+++   A sorted cache of a cachable set S is a dynamic structure that
+++   keeps the elements of S sorted and assigns an integer to each
+++   element of S once it is in the cache. This way, equality and ordering
+++   on S are tested directly on the integers associated with the elements
+++   of S, once they have been entered in the cache.
+SortedCache(S:CachableSet): Exports == Implementation where
+  N    ==> NonNegativeInteger
+  DIFF ==> 1024
+
+  Exports ==> with
+    clearCache  : () -> Void
+      ++ clearCache() empties the cache.
+    cache       : () -> List S
+      ++ cache() returns the current cache as a list.
+    enterInCache: (S, S -> Boolean) -> S
+      ++ enterInCache(x, f) enters x in the cache, calling \spad{f(y)} to
+      ++ determine whether x is equal to y. It returns x with an integer
+      ++ associated with it.
+    enterInCache: (S, (S, S) -> Integer) -> S
+      ++ enterInCache(x, f) enters x in the cache, calling \spad{f(x, y)} to
+      ++ determine whether \spad{x < y (f(x,y) < 0), x = y (f(x,y) = 0)}, or
+      ++ \spad{x > y (f(x,y) > 0)}.
+      ++ It returns x with an integer associated with it.
+
+  Implementation ==> add
+    shiftCache   : (List S, N) -> Void
+    insertInCache: (List S, List S, S, N) -> S
+
+    cach := [nil()]$Record(cche:List S)
+
+    cache() == cach.cche
+
+    shiftCache(l, n) ==
+      for x in l repeat setPosition(x, n + position x)
+      void
+
+    clearCache() ==
+      for x in cache repeat setPosition(x, 0)
+      cach.cche := nil()
+      void
+
+    enterInCache(x:S, equal?:S -> Boolean) ==
+      scan := cache()
+      while not null scan repeat
+        equal?(y := first scan) =>
+          setPosition(x, position y)
+          return y
+        scan := rest scan
+      setPosition(x, 1 + #cache())
+      cach.cche := concat(cache(), x)
+      x
+
+    enterInCache(x:S, triage:(S, S) -> Integer) ==
+      scan := cache()
+      pos:N:= 0
+      for i in 1..#scan repeat
+        zero?(n := triage(x, y := first scan)) =>
+          setPosition(x, position y)
+          return y
+        n<0 => return insertInCache(first(cache(),(i-1)::N),scan,x,pos)
+        scan := rest scan
+        pos  := position y
+      setPosition(x, pos + DIFF)
+      cach.cche := concat(cache(), x)
+      x
+
+    insertInCache(before, after, x, pos) ==
+      if ((pos+1) = position first after) then shiftCache(after, DIFF)
+      setPosition(x, pos + (((position first after) - pos)::N quo 2))
+      cach.cche := concat(before, concat(x, after))
+      x
+
+@
+\section{domain MKCHSET MakeCachableSet}
+<<domain MKCHSET MakeCachableSet>>=
+)abbrev domain MKCHSET MakeCachableSet
+++ Make a cachable set from any set
+++ Author: Manuel Bronstein
+++ Date Created: ???
+++ Date Last Updated: 14 May 1991
+++ Description:
+++   MakeCachableSet(S) returns a cachable set which is equal to S as a set.
+MakeCachableSet(S:SetCategory): Exports == Implementation where
+  Exports ==> Join(CachableSet, CoercibleTo S) with
+    coerce: S -> %
+      ++ coerce(s) returns s viewed as an element of %.
+
+  Implementation ==> add
+    import SortedCache(%)
+
+    Rep := Record(setpart: S, pos: NonNegativeInteger)
+
+    clearCache()
+
+    position x             == x.pos
+    setPosition(x, n)      == (x.pos := n; void)
+    coerce(x:%):S          == x.setpart
+    coerce(x:%):OutputForm == x::S::OutputForm
+    coerce(s:S):%          == enterInCache([s, 0]$Rep, s = #1::S)
+
+    x < y ==
+      if position(x) = 0 then enterInCache(x, x::S = #1::S)
+      if position(y) = 0 then enterInCache(y, y::S = #1::S)
+      position(x) < position(y)
+
+    x = y ==
+      if position(x) = 0 then enterInCache(x, x::S = #1::S)
+      if position(y) = 0 then enterInCache(y, y::S = #1::S)
+      position(x) = position(y)
+
+@
+\section{domain KERNEL Kernel}
+<<domain KERNEL Kernel>>=
+)abbrev domain KERNEL Kernel
+++ Operators applied to elements of a set
+++ Author: Manuel Bronstein
+++ Date Created: 22 March 1988
+++ Date Last Updated: 10 August 1994
+++ Description:
+++ A kernel over a set S is an operator applied to a given list
+++ of arguments from S.
+Kernel(S:OrderedSet): Exports == Implementation where
+  O  ==> OutputForm
+  N  ==> NonNegativeInteger
+  OP ==> BasicOperator
+
+  SYMBOL  ==> "%symbol"
+  PMPRED  ==> "%pmpredicate"
+  PMOPT   ==> "%pmoptional"
+  PMMULT  ==> "%pmmultiple"
+  PMCONST ==> "%pmconstant"
+  SPECIALDISP  ==> "%specialDisp"
+  SPECIALEQUAL ==> "%specialEqual"
+  SPECIALINPUT ==> "%specialInput"
+
+  Exports ==> Join(CachableSet, Patternable S) with
+    name    : % -> Symbol
+      ++ name(op(a1,...,an)) returns the name of op.
+    operator: % -> OP
+      ++ operator(op(a1,...,an)) returns the operator op.
+    argument: % -> List S
+      ++ argument(op(a1,...,an)) returns \spad{[a1,...,an]}.
+    height  : % -> N
+      ++ height(k) returns the nesting level of k.
+    kernel  : (OP, List S, N) -> %
+      ++ kernel(op, [a1,...,an], m) returns the kernel \spad{op(a1,...,an)}
+      ++ of nesting level m.
+      ++ Error: if op is k-ary for some k not equal to m.
+    kernel  : Symbol -> %
+      ++ kernel(x) returns x viewed as a kernel.
+    symbolIfCan: % -> Union(Symbol, "failed")
+      ++ symbolIfCan(k) returns k viewed as a symbol if k is a symbol, and
+      ++ "failed" otherwise.
+    is?     : (%, OP) -> Boolean
+      ++ is?(op(a1,...,an), f) tests if op = f.
+    is?     : (%, Symbol) -> Boolean
+      ++ is?(op(a1,...,an), s) tests if the name of op is s.
+    if S has ConvertibleTo InputForm then ConvertibleTo InputForm
+
+  Implementation ==> add
+    import SortedCache(%)
+
+    Rep := Record(op:OP, arg:List S, nest:N, posit:N)
+
+    clearCache()
+
+    B2Z   : Boolean -> Integer
+    triage: (%, %)  -> Integer
+    preds : OP      -> List Any
+
+    is?(k:%, s:Symbol) == is?(operator k, s)
+    is?(k:%, o:OP)     == (operator k) = o
+    name k             == name operator k
+    height k           == k.nest
+    operator k         == k.op
+    argument k         == k.arg
+    position k         == k.posit
+    setPosition(k, n)  == k.posit := n
+    B2Z flag           == (flag => -1; 1)
+    kernel s           == kernel(assert(operator(s,0),SYMBOL), nil(), 1)
+
+    preds o ==
+      (u := property(o, PMPRED)) case "failed" => nil()
+      (u::None) pretend List(Any)
+
+    symbolIfCan k ==
+      has?(operator k, SYMBOL) => name operator k
+      "failed"
+
+    k1 = k2 ==
+      if k1.posit = 0 then enterInCache(k1, triage)
+      if k2.posit = 0 then enterInCache(k2, triage)
+      k1.posit = k2.posit
+
+    k1 < k2 ==
+      if k1.posit = 0 then enterInCache(k1, triage)
+      if k2.posit = 0 then enterInCache(k2, triage)
+      k1.posit < k2.posit
+
+    kernel(fn, x, n) ==
+      ((u := arity fn) case N) and (#x ^= u::N)
+                                    => error "Wrong number of arguments"
+      enterInCache([fn, x, n, 0]$Rep, triage)
+
+    -- SPECIALDISP contains a map List S -> OutputForm
+    -- it is used when the converting the arguments first is not good,
+    -- for instance with formal derivatives.
+    coerce(k:%):OutputForm ==
+      (v := symbolIfCan k) case Symbol => v::Symbol::OutputForm
+      (f := property(o := operator k, SPECIALDISP)) case None =>
+        ((f::None) pretend (List S -> OutputForm)) (argument k)
+      l := [x::OutputForm for x in argument k]$List(OutputForm)
+      (u := display o) case "failed" => prefix(name(o)::OutputForm, l)
+      (u::(List OutputForm -> OutputForm)) l
+
+    triage(k1, k2) ==
+      k1.nest   ^= k2.nest   => B2Z(k1.nest   < k2.nest)
+      k1.op ^= k2.op => B2Z(k1.op < k2.op)
+      (n1 := #(argument k1)) ^= (n2 := #(argument k2)) => B2Z(n1 < n2)
+      ((func := property(operator k1, SPECIALEQUAL)) case None) and
+        (((func::None) pretend ((%, %) -> Boolean)) (k1, k2)) => 0
+      for x1 in argument(k1) for x2 in argument(k2) repeat
+        x1 ^= x2 => return B2Z(x1 < x2)
+      0
+
+    if S has ConvertibleTo InputForm then
+      convert(k:%):InputForm ==
+        (v := symbolIfCan k) case Symbol => convert(v::Symbol)@InputForm
+        (f := property(o := operator k, SPECIALINPUT)) case None =>
+          ((f::None) pretend (List S -> InputForm)) (argument k)
+        l := [convert x for x in argument k]$List(InputForm)
+        (u := input operator k) case "failed" =>
+          convert concat(convert name operator k, l)
+        (u::(List InputForm -> InputForm)) l
+
+    if S has ConvertibleTo Pattern Integer then
+      convert(k:%):Pattern(Integer) ==
+        o := operator k
+        (v := symbolIfCan k) case Symbol =>
+          s  := patternVariable(v::Symbol,
+                      has?(o, PMCONST), has?(o, PMOPT), has?(o, PMMULT))
+          empty?(l := preds o) => s
+          setPredicates(s, l)
+        o [convert x for x in k.arg]$List(Pattern Integer)
+
+    if S has ConvertibleTo Pattern Float then
+      convert(k:%):Pattern(Float) ==
+        o := operator k
+        (v := symbolIfCan k) case Symbol =>
+          s  := patternVariable(v::Symbol,
+                      has?(o, PMCONST), has?(o, PMOPT), has?(o, PMMULT))
+          empty?(l := preds o) => s
+          setPredicates(s, l)
+        o [convert x for x in k.arg]$List(Pattern Float)
+
+@
+\section{package KERNEL2 KernelFunctions2}
+<<package KERNEL2 KernelFunctions2>>=
+)abbrev package KERNEL2 KernelFunctions2
+++ Description:
+++ This package exports some auxiliary functions on kernels
+KernelFunctions2(R:OrderedSet, S:OrderedSet): with
+  constantKernel: R -> Kernel S
+	++ constantKernel(r) \undocumented
+  constantIfCan : Kernel S -> Union(R, "failed")
+	++ constantIfCan(k) \undocumented
+
+ == add
+  import BasicOperatorFunctions1(R)
+
+  constantKernel r == kernel(constantOperator r, nil(), 1)
+  constantIfCan k  == constantOpIfCan operator k
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+-- SPAD files for the functional world should be compiled in the
+-- following order:
+--
+--   op  KL  expr function
+
+<<category CACHSET CachableSet>>
+<<package SCACHE SortedCache>>
+<<domain MKCHSET MakeCachableSet>>
+<<domain KERNEL Kernel>>
+<<package KERNEL2 KernelFunctions2>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

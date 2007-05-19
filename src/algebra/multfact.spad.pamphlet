@@ -1,0 +1,604 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra multfact.spad}
+\author{Patrizia Gianni}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package INNMFACT InnerMultFact}
+<<package INNMFACT InnerMultFact>>=
+)abbrev package INNMFACT InnerMultFact
+++ Author: P. Gianni
+++ Date Created: 1983
+++ Date Last Updated: Sept. 1990
+++ Additional Comments: JHD Aug 1997
+++ Basic Functions:
+++ Related Constructors: MultivariateFactorize, AlgebraicMultFact
+++ Also See:
+++ AMS Classifications:
+++ Keywords:
+++ References:
+++ Description:
+++   This is an inner package for factoring multivariate polynomials
+++ over various coefficient domains in characteristic 0.
+++ The univariate factor operation is passed as a parameter.
+++ Multivariate hensel lifting is used to lift the univariate
+++ factorization
+
+-- Both exposed functions call mFactor. This deals with issues such as 
+-- monomial factors, contents, square-freeness etc., then calls intfact.
+-- This uses intChoose to find a "good" evaluation and factorise the 
+-- corresponding univariate, and then uses MultivariateLifting to find
+-- the multivariate factors.
+
+InnerMultFact(OV,E,R,P) : C == T
+ where
+  R          :   Join(EuclideanDomain, CharacteristicZero)
+                      -- with factor on R[x]
+  OV         :   OrderedSet
+  E          :   OrderedAbelianMonoidSup
+  P          :   PolynomialCategory(R,E,OV)
+  BP         ==> SparseUnivariatePolynomial R
+  UFactor    ==> (BP -> Factored BP)
+  Z            ==> Integer
+  MParFact     ==> Record(irr:P,pow:Z)
+  USP          ==> SparseUnivariatePolynomial P
+  SUParFact    ==> Record(irr:USP,pow:Z)
+  SUPFinalFact ==> Record(contp:R,factors:List SUParFact)
+  MFinalFact   ==> Record(contp:R,factors:List MParFact)
+
+               --  contp   =  content,
+               --  factors =  List of irreducible factors with exponent
+  L          ==> List
+
+  C == with
+    factor      :      (P,UFactor)    ->  Factored P
+      ++ factor(p,ufact) factors the multivariate polynomial p
+      ++ by specializing variables and calling the univariate
+      ++ factorizer ufact.
+    factor      :      (USP,UFactor)    ->  Factored USP
+      ++ factor(p,ufact) factors the multivariate polynomial p
+      ++ by specializing variables and calling the univariate
+      ++ factorizer ufact. p is represented as a univariate
+      ++ polynomial with multivariate coefficients.
+
+  T == add
+
+    NNI       ==> NonNegativeInteger
+
+    LeadFact  ==> Record(polfac:L P,correct:R,corrfact:L BP)
+    ContPrim  ==> Record(cont:P,prim:P)
+    ParFact   ==> Record(irr:BP,pow:Z)
+    FinalFact ==> Record(contp:R,factors:L ParFact)
+    NewOrd    ==> Record(npol:USP,nvar:L OV,newdeg:L NNI)
+    pmod:R   :=  (prevPrime(2**26)$IntegerPrimesPackage(Integer))::R
+
+    import GenExEuclid(R,BP)
+    import MultivariateLifting(E,OV,R,P)
+    import FactoringUtilities(E,OV,R,P)
+    import LeadingCoefDetermination(OV,E,R,P)
+    Valuf ==> Record(inval:L L R,unvfact:L BP,lu:R,complead:L R)
+    UPCF2 ==> UnivariatePolynomialCategoryFunctions2
+
+                   ----  Local Functions  ----
+    mFactor   :            (P,UFactor)           ->  MFinalFact
+    supFactor :           (USP,UFactor)          ->  SUPFinalFact
+    mfconst   :      (USP,L OV,L NNI,UFactor)    -> L USP
+    mfpol     :      (USP,L OV,L NNI,UFactor)    -> L USP
+    monicMfpol:      (USP,L OV,L NNI,UFactor)    -> L USP
+    varChoose :           (P,L OV,L NNI)         -> NewOrd
+    simplify  :       (P,L OV,L NNI,UFactor)     -> MFinalFact
+    intChoose :  (USP,L OV,R,L P,L L R,UFactor)  -> Union(Valuf,"failed")
+    intfact   : (USP,L OV,L NNI,MFinalFact,L L R,UFactor) -> L USP
+    pretest   :         (P,NNI,L OV,L R)         -> FinalFact
+    checkzero :            (USP,BP)              -> Boolean
+    localNorm :               L BP               -> Z
+
+    convertPUP(lfg:MFinalFact): SUPFinalFact ==
+      [lfg.contp,[[lff.irr ::USP,lff.pow]$SUParFact
+                    for lff in lfg.factors]]$SUPFinalFact
+
+    -- intermediate routine if an SUP was passed in.
+    supFactor(um:USP,ufactor:UFactor) : SUPFinalFact ==
+      ground?(um) => convertPUP(mFactor(ground um,ufactor))
+      lvar:L OV:= "setUnion"/[variables cf for cf in coefficients um]
+      empty? lvar => -- the polynomial is univariate
+        umv:= map(ground,um)$UPCF2(P,USP,R,BP)
+        lfact:=ufactor umv
+        [retract unit lfact,[[map(coerce,ff.factor)$UPCF2(R,BP,P,USP),
+           ff.exponent] for ff in factors lfact]]$SUPFinalFact
+      lcont:P
+      lf:L USP
+      flead : SUPFinalFact:=[0,empty()]$SUPFinalFact
+      factorlist:L SUParFact :=empty()
+
+      mdeg :=minimumDegree um     ---- is the Mindeg > 0? ----
+      if mdeg>0 then
+        f1:USP:=monomial(1,mdeg)
+        um:=(um exquo f1)::USP
+        factorlist:=cons([monomial(1,1),mdeg],factorlist)
+        if degree um=0 then return
+          lfg:=convertPUP mFactor(ground um, ufactor)
+          [lfg.contp,append(factorlist,lfg.factors)]
+      uum:=unitNormal um
+      um :=uum.canonical
+      sqfacs := squareFree(um)$MultivariateSquareFree(E,OV,R,P)
+      lcont :=  ground(uum.unit * unit sqfacs)
+                                   ----  Factorize the content  ----
+      flead:=convertPUP mFactor(lcont,ufactor)
+      factorlist:=append(flead.factors,factorlist)
+                               ----  Make the polynomial square-free  ----
+      sqqfact:=factors sqfacs
+                        ---  Factorize the primitive square-free terms ---
+      for fact in sqqfact repeat
+        ffactor:USP:=fact.factor
+        ffexp:=fact.exponent
+        zero? degree ffactor =>
+          lfg:=mFactor(ground ffactor,ufactor)
+          lcont:=lfg.contp * lcont
+          factorlist := append(factorlist,
+             [[lff.irr ::USP,lff.pow * ffexp]$SUParFact
+                       for lff in lfg.factors])
+        coefs := coefficients ffactor
+        ldeg:= ["max"/[degree(fc,xx) for fc in coefs] for xx in lvar]
+        lf :=
+          ground?(leadingCoefficient ffactor) =>
+             mfconst(ffactor,lvar,ldeg,ufactor)
+          mfpol(ffactor,lvar,ldeg,ufactor)
+        auxfl:=[[lfp,ffexp]$SUParFact  for lfp in lf]
+        factorlist:=append(factorlist,auxfl)
+      lcfacs := */[leadingCoefficient leadingCoefficient(f.irr)**((f.pow)::NNI)
+                           for f in factorlist]
+      [(leadingCoefficient leadingCoefficient(um) exquo lcfacs)::R,
+                     factorlist]$SUPFinalFact
+
+    factor(um:USP,ufactor:UFactor):Factored USP ==
+      flist := supFactor(um,ufactor)
+      (flist.contp):: P :: USP *
+        (*/[primeFactor(u.irr,u.pow) for u in flist.factors])
+
+    checkzero(u:USP,um:BP) : Boolean ==
+      u=0 => um =0
+      um = 0 => false
+      degree u = degree um => checkzero(reductum u, reductum um)
+      false
+              ---  Choose the variable of less degree  ---
+    varChoose(m:P,lvar:L OV,ldeg:L NNI) : NewOrd ==
+      k:="min"/[d for d in ldeg]
+      k=degree(m,first lvar) =>
+                             [univariate(m,first lvar),lvar,ldeg]$NewOrd
+      i:=position(k,ldeg)
+      x:OV:=lvar.i
+      ldeg:=cons(k,delete(ldeg,i))
+      lvar:=cons(x,delete(lvar,i))
+      [univariate(m,x),lvar,ldeg]$NewOrd
+
+    localNorm(lum: L BP): Z ==
+      R is AlgebraicNumber =>
+        "max"/[numberOfMonomials ff for ff in lum]
+
+      "max"/[+/[euclideanSize cc for i in 0..degree ff|
+                (cc:= coefficient(ff,i))^=0] for ff in lum]
+
+          ---  Choose the integer to reduce to univariate case  ---
+    intChoose(um:USP,lvar:L OV,clc:R,plist:L P,ltry:L L R,
+                                 ufactor:UFactor) : Union(Valuf,"failed") ==
+      -- declarations
+      degum:NNI := degree um
+      nvar1:=#lvar
+      range:NNI:=5
+      unifact:L BP
+      ctf1 : R := 1
+      testp:Boolean :=             -- polynomial leading coefficient
+        empty? plist => false
+        true
+      leadcomp,leadcomp1 : L R
+      leadcomp:=leadcomp1:=empty()
+      nfatt:NNI := degum+1
+      lffc:R:=1
+      lffc1:=lffc
+      newunifact : L BP:=empty()
+      leadtest:=true --- the lc test with polCase has to be performed
+      int:L R:=empty()
+
+   --  New sets of integers are chosen to reduce the multivariate problem to
+   --  a univariate one, until we find twice the
+   --  same (and minimal) number of "univariate" factors:
+   --  the set smaller in modulo is chosen.
+   --  Note that there is no guarantee that this is the truth:
+   --  merely the closest approximation we have found!
+
+      while true repeat
+       testp and #ltry>10 => return "failed"
+       lval := [ ran(range) for i in 1..nvar1]
+       member?(lval,ltry) => range:=2*range
+       ltry := cons(lval,ltry)
+       leadcomp1:=[retract eval(pol,lvar,lval) for pol in plist]
+       testp and or/[unit? epl for epl in leadcomp1] => range:=2*range
+       newm:BP:=completeEval(um,lvar,lval)
+       degum ^= degree newm or minimumDegree newm ^=0 => range:=2*range
+       lffc1:=content newm
+       newm:=(newm exquo lffc1)::BP
+       testp and leadtest and ^ polCase(lffc1*clc,#plist,leadcomp1)
+                             => range:=2*range
+       degree(gcd [newm,differentiate(newm)])^=0 => range:=2*range
+       luniv:=ufactor(newm)
+       lunivf:= factors luniv
+       lffc1:R:=retract(unit luniv)@R * lffc1
+       nf:= #lunivf
+
+       nf=0 or nf>nfatt => "next values"      ---  pretest failed ---
+
+                        --- the univariate polynomial is irreducible ---
+       if nf=1 then leave (unifact:=[newm])
+
+   --  the new integer give the same number of factors
+       nfatt = nf =>
+       -- if this is the first univariate factorization with polCase=true
+       -- or if the last factorization has smaller norm and satisfies
+       -- polCase
+         if leadtest or
+           ((localNorm unifact > localNorm [ff.factor for ff in lunivf])
+             and (^testp or polCase(lffc1*clc,#plist,leadcomp1))) then
+                unifact:=[uf.factor for uf in lunivf]
+                int:=lval
+                lffc:=lffc1
+                if testp then leadcomp:=leadcomp1
+         leave "foundit"
+
+   --  the first univariate factorization, inizialize
+       nfatt > degum =>
+         unifact:=[uf.factor for uf in lunivf]
+         lffc:=lffc1
+         if testp then leadcomp:=leadcomp1
+         int:=lval
+         leadtest := false
+         nfatt := nf
+
+       nfatt>nf =>  -- for the previous values there were more factors
+         if testp then leadtest:=^polCase(lffc*clc,#plist,leadcomp)
+         else leadtest:= false
+         -- if polCase=true we can consider the univariate decomposition
+         if ^leadtest then
+           unifact:=[uf.factor for uf in lunivf]
+           lffc:=lffc1
+           if testp then leadcomp:=leadcomp1
+           int:=lval
+         nfatt := nf
+      [cons(int,ltry),unifact,lffc,leadcomp]$Valuf
+
+
+                ----  The polynomial has mindeg>0   ----
+
+    simplify(m:P,lvar:L OV,lmdeg:L NNI,ufactor:UFactor):MFinalFact ==
+      factorlist:L MParFact:=[]
+      pol1:P:= 1$P
+      for x in lvar repeat
+        i := lmdeg.(position(x,lvar))
+        i=0 => "next value"
+        pol1:=pol1*monomial(1$P,x,i)
+        factorlist:=cons([x::P,i]$MParFact,factorlist)
+      m := (m exquo pol1)::P
+      ground? m => [retract m,factorlist]$MFinalFact
+      flead:=mFactor(m,ufactor)
+      flead.factors:=append(factorlist,flead.factors)
+      flead
+
+    -- This is the key internal function
+    -- We now know that the polynomial is square-free etc.,
+    -- We use intChoose to find a set of integer values to reduce the
+    -- problem to univariate (and for efficiency, intChoose returns
+    -- the univariate factors).
+    -- In the case of a polynomial leading coefficient, we check that this 
+    -- is consistent with leading coefficient determination (else try again)
+    -- We then lift the univariate factors to multivariate factors, and
+    -- return the result
+    intfact(um:USP,lvar: L OV,ldeg:L NNI,tleadpol:MFinalFact,
+                                   ltry:L L R,ufactor:UFactor) :  L USP ==
+      polcase:Boolean:=(not empty? tleadpol.factors)
+      vfchoo:Valuf:=
+        polcase =>
+          leadpol:L P:=[ff.irr for ff in tleadpol.factors]
+          check:=intChoose(um,lvar,tleadpol.contp,leadpol,ltry,ufactor)
+          check case "failed" => return monicMfpol(um,lvar,ldeg,ufactor)
+          check::Valuf
+        intChoose(um,lvar,1,empty(),empty(),ufactor)::Valuf
+      unifact:List BP := vfchoo.unvfact
+      nfact:NNI := #unifact
+      nfact=1 => [um]
+      ltry:L L R:= vfchoo.inval
+      lval:L R:=first ltry
+      dd:= vfchoo.lu
+      leadval:L R:=empty()
+      lpol:List P:=empty()
+      if polcase then
+        leadval := vfchoo.complead
+        distf := distFact(vfchoo.lu,unifact,tleadpol,leadval,lvar,lval)
+        distf case "failed" =>
+             return intfact(um,lvar,ldeg,tleadpol,ltry,ufactor)
+        dist := distf :: LeadFact
+          -- check the factorization of leading coefficient
+        lpol:= dist.polfac
+        dd := dist.correct
+        unifact:=dist.corrfact
+      if dd^=1 then
+--        if polcase then lpol := [unitCanonical lp for lp in lpol]
+--        dd:=unitCanonical(dd)
+        unifact := [dd * unif for unif in unifact]
+        umd := unitNormal(dd).unit * ((dd**(nfact-1)::NNI)::P)*um
+      else umd := um
+      (ffin:=lifting(umd,lvar,unifact,lval,lpol,ldeg,pmod))
+        case "failed" => intfact(um,lvar,ldeg,tleadpol,ltry,ufactor)
+      factfin: L USP:=ffin :: L USP
+      if dd^=1 then
+        factfin:=[primitivePart ff for ff in factfin]
+      factfin
+
+                ----  m square-free,primitive,lc constant  ----
+    mfconst(um:USP,lvar:L OV,ldeg:L NNI,ufactor:UFactor):L USP ==
+      factfin:L USP:=empty()
+      empty? lvar =>
+        lum:=factors ufactor(map(ground,um)$UPCF2(P,USP,R,BP))
+        [map(coerce,uf.factor)$UPCF2(R,BP,P,USP) for uf in lum]
+      intfact(um,lvar,ldeg,[0,empty()]$MFinalFact,empty(),ufactor)
+
+    monicize(um:USP,c:P):USP ==
+      n:=degree(um)
+      ans:USP := monomial(1,n)
+      n:=(n-1)::NonNegativeInteger
+      prod:P:=1
+      while (um:=reductum(um)) ^= 0 repeat
+        i := degree um
+        lc := leadingCoefficient um
+        prod := prod * c ** (n-(n:=i))::NonNegativeInteger
+        ans := ans + monomial(prod*lc, i)
+      ans
+
+    unmonicize(m:USP,c:P):USP == primitivePart m(monomial(c,1))
+
+              --- m is square-free,primitive,lc is a polynomial  ---
+    monicMfpol(um:USP,lvar:L OV,ldeg:L NNI,ufactor:UFactor):L USP ==
+      l := leadingCoefficient um
+      monpol := monicize(um,l)
+      nldeg := degree(monpol,lvar)
+      map(unmonicize(#1,l),
+                mfconst(monpol,lvar,nldeg,ufactor))
+
+    mfpol(um:USP,lvar:L OV,ldeg:L NNI,ufactor:UFactor):L USP ==
+      R has Field =>
+        monicMfpol(um,lvar,ldeg,ufactor)
+      tleadpol:=mFactor(leadingCoefficient um,ufactor)
+      intfact(um,lvar,ldeg,tleadpol,[],ufactor)
+
+    mFactor(m:P,ufactor:UFactor) : MFinalFact ==
+      ground?(m) => [retract(m),empty()]$MFinalFact
+      lvar:L OV:= variables m
+      lcont:P
+      lf:L USP
+      flead : MFinalFact:=[0,empty()]$MFinalFact
+      factorlist:L MParFact :=empty()
+
+      lmdeg :=minimumDegree(m,lvar)     ---- is the Mindeg > 0? ----
+      or/[n>0 for n in lmdeg] => simplify(m,lvar,lmdeg,ufactor)
+
+      sqfacs := squareFree m
+      lcont := unit sqfacs
+
+                                  ----  Factorize the content  ----
+      if ground? lcont then flead.contp:=retract lcont
+      else flead:=mFactor(lcont,ufactor)
+      factorlist:=flead.factors
+
+
+
+                              ----  Make the polynomial square-free  ----
+      sqqfact:=factors sqfacs
+
+                       ---  Factorize the primitive square-free terms ---
+      for fact in sqqfact repeat
+        ffactor:P:=fact.factor
+        ffexp := fact.exponent
+        lvar := variables ffactor
+        x:OV :=lvar.first
+        ldeg:=degree(ffactor,lvar)
+             ---  Is the polynomial linear in one of the variables ? ---
+        member?(1,ldeg) =>
+          x:OV:=lvar.position(1,ldeg)
+          lcont:= gcd coefficients(univariate(ffactor,x))
+          ffactor:=(ffactor exquo lcont)::P
+          factorlist:=cons([ffactor,ffexp]$MParFact,factorlist)
+          for lcterm in mFactor(lcont,ufactor).factors repeat
+           factorlist:=cons([lcterm.irr,lcterm.pow * ffexp], factorlist)
+
+        varch:=varChoose(ffactor,lvar,ldeg)
+        um:=varch.npol
+
+        x:=lvar.first
+        ldeg:=ldeg.rest
+        lvar := lvar.rest
+        if varch.nvar.first ^= x then
+          lvar:= varch.nvar
+          x := lvar.first
+          lvar := lvar.rest
+        pc:= gcd coefficients um
+        if pc^=1 then
+            um:=(um exquo pc)::USP
+            ffactor:=multivariate(um,x)
+            for lcterm in mFactor(pc,ufactor).factors repeat
+              factorlist:=cons([lcterm.irr,lcterm.pow*ffexp],factorlist)
+        ldeg:=degree(ffactor,lvar)
+        um := unitCanonical um
+        if ground?(leadingCoefficient um) then
+           lf:= mfconst(um,lvar,ldeg,ufactor)
+        else lf:=mfpol(um,lvar,ldeg,ufactor)
+        auxfl:=[[unitCanonical multivariate(lfp,x),ffexp]$MParFact  for lfp in lf]
+        factorlist:=append(factorlist,auxfl)
+      lcfacs := */[leadingCoefficient(f.irr)**((f.pow)::NNI) for f in factorlist]
+      [(leadingCoefficient(m) exquo lcfacs):: R,factorlist]$MFinalFact
+
+    factor(m:P,ufactor:UFactor):Factored P ==
+      flist := mFactor(m,ufactor)
+      (flist.contp):: P *
+        (*/[primeFactor(u.irr,u.pow) for u in flist.factors])
+
+@
+\section{package MULTFACT MultivariateFactorize}
+<<package MULTFACT MultivariateFactorize>>=
+)abbrev package MULTFACT MultivariateFactorize
+++ Author: P. Gianni
+++ Date Created: 1983
+++ Date Last Updated: Sept. 1990
+++ Basic Functions:
+++ Related Constructors: MultFiniteFactorize, AlgebraicMultFact, UnivariateFactorize
+++ Also See:
+++ AMS Classifications:
+++ Keywords:
+++ References:
+++ Description:
+++   This is the top level package for doing multivariate factorization
+++ over basic domains like \spadtype{Integer} or \spadtype{Fraction Integer}.
+
+MultivariateFactorize(OV,E,R,P) : C == T
+ where
+  R          :   Join(EuclideanDomain, CharacteristicZero)
+                    -- with factor on R[x]
+  OV         :   OrderedSet
+  E          :   OrderedAbelianMonoidSup
+  P          :   PolynomialCategory(R,E,OV)
+  Z            ==> Integer
+  MParFact     ==> Record(irr:P,pow:Z)
+  USP          ==> SparseUnivariatePolynomial P
+  SUParFact    ==> Record(irr:USP,pow:Z)
+  SUPFinalFact ==> Record(contp:R,factors:List SUParFact)
+  MFinalFact   ==> Record(contp:R,factors:List MParFact)
+ 
+                 --  contp   =  content,
+                 --  factors =  List of irreducible factors with exponent
+  L          ==> List
+
+  C == with
+    factor      :      P  ->  Factored P
+      ++ factor(p) factors the multivariate polynomial p over its coefficient
+      ++ domain
+    factor      :      USP  ->  Factored USP
+      ++ factor(p) factors the multivariate polynomial p over its coefficient
+      ++ domain where p is represented as a univariate polynomial with
+      ++ multivariate coefficients
+  T == add
+    factor(p:P) : Factored P ==
+      R is Fraction Integer =>
+         factor(p)$MRationalFactorize(E,OV,Integer,P)
+      R is Fraction Complex Integer =>
+         factor(p)$MRationalFactorize(E,OV,Complex Integer,P)
+      R is Fraction Polynomial Integer and OV has convert: % -> Symbol =>
+         factor(p)$MPolyCatRationalFunctionFactorizer(E,OV,Integer,P)
+      factor(p,factor$GenUFactorize(R))$InnerMultFact(OV,E,R,P)
+
+    factor(up:USP) : Factored USP ==
+      factor(up,factor$GenUFactorize(R))$InnerMultFact(OV,E,R,P)
+
+@
+\section{package ALGMFACT AlgebraicMultFact}
+<<package ALGMFACT AlgebraicMultFact>>=
+)abbrev package ALGMFACT AlgebraicMultFact
+++ Author: P. Gianni
+++ Date Created: 1990
+++ Date Last Updated:
+++ Basic Functions:
+++ Related Constructors:
+++ Also See:
+++ AMS Classifications:
+++ Keywords:
+++ References:
+++ Description:
+++ This package factors multivariate polynomials over the
+++ domain of \spadtype{AlgebraicNumber} by allowing the user
+++ to specify a list of algebraic numbers generating the particular
+++ extension to factor over.
+
+AlgebraicMultFact(OV,E,P) : C == T
+ where
+  AN         ==> AlgebraicNumber
+  OV         :   OrderedSet
+  E          :   OrderedAbelianMonoidSup
+  P          :   PolynomialCategory(AN,E,OV)
+  BP         ==> SparseUnivariatePolynomial AN
+  Z            ==> Integer
+  MParFact     ==> Record(irr:P,pow:Z)
+  USP          ==> SparseUnivariatePolynomial P
+  SUParFact    ==> Record(irr:USP,pow:Z)
+  SUPFinalFact ==> Record(contp:R,factors:List SUParFact)
+  MFinalFact   ==> Record(contp:R,factors:List MParFact)
+
+                 --  contp   =  content,
+                 --  factors =  List of irreducible factors with exponent
+  L          ==> List
+
+  C == with
+    factor      :   (P,L AN)  ->  Factored P
+      ++ factor(p,lan) factors the polynomial p over the extension
+      ++ generated by the algebraic numbers given by the list lan.
+    factor      :   (USP,L AN)  ->  Factored USP
+      ++ factor(p,lan) factors the polynomial p over the extension
+      ++ generated by the algebraic numbers given by the list lan.
+      ++ p is presented as a univariate polynomial with multivariate
+      ++ coefficients.
+  T == add
+    AF := AlgFactor(BP)
+
+    factor(p:P,lalg:L AN) : Factored P ==
+      factor(p,factor(#1,lalg)$AF)$InnerMultFact(OV,E,AN,P)
+
+    factor(up:USP,lalg:L AN) : Factored USP ==
+      factor(up,factor(#1,lalg)$AF)$InnerMultFact(OV,E,AN,P)
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package INNMFACT InnerMultFact>>
+<<package MULTFACT MultivariateFactorize>>
+<<package ALGMFACT AlgebraicMultFact>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

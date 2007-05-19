@@ -1,0 +1,389 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra intef.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package INTEF ElementaryIntegration}
+<<package INTEF ElementaryIntegration>>=
+)abbrev package INTEF ElementaryIntegration
+++ Integration of elementary functions
+++ Author: Manuel Bronstein
+++ Date Created: 1 February 1988
+++ Date Last Updated: 24 October 1995
+++ Description:
+++ This package provides functions for integration, limited integration,
+++ extended integration and the risch differential equation for
+++ elemntary functions.
+++ Keywords: elementary, function, integration.
+++ Examples: )r INTEF INPUT
+ElementaryIntegration(R, F): Exports == Implementation where
+  R : Join(GcdDomain, OrderedSet, CharacteristicZero,
+           RetractableTo Integer, LinearlyExplicitRingOver Integer)
+  F : Join(AlgebraicallyClosedField, TranscendentalFunctionCategory,
+           FunctionSpace R)
+
+  SE  ==> Symbol
+  K   ==> Kernel F
+  P   ==> SparseMultivariatePolynomial(R, K)
+  UP  ==> SparseUnivariatePolynomial F
+  RF  ==> Fraction UP
+  IR  ==> IntegrationResult F
+  FF  ==> Record(ratpart:RF, coeff:RF)
+  LLG ==> List Record(coeff:F, logand:F)
+  U2  ==> Union(Record(ratpart:F, coeff:F), "failed")
+  U3  ==> Union(Record(mainpart:F, limitedlogs:LLG), "failed")
+  ANS ==> Record(special:F, integrand:F)
+  FAIL==> error "failed - cannot handle that integrand"
+  ALGOP  ==> "%alg"
+  OPDIFF ==> "%diff"::SE
+
+  Exports ==> with
+    lfextendedint: (F, SE, F) -> U2
+       ++ lfextendedint(f, x, g) returns functions \spad{[h, c]} such that
+       ++ \spad{dh/dx = f - cg}, if (h, c) exist, "failed" otherwise.
+    lflimitedint : (F, SE, List F) -> U3
+       ++ lflimitedint(f,x,[g1,...,gn]) returns functions \spad{[h,[[ci, gi]]]}
+       ++ such that the gi's are among \spad{[g1,...,gn]}, and
+       ++ \spad{d(h+sum(ci log(gi)))/dx = f}, if possible, "failed" otherwise.
+    lfinfieldint : (F, SE) -> Union(F, "failed")
+       ++ lfinfieldint(f, x) returns a function g such that \spad{dg/dx = f}
+       ++ if g exists, "failed" otherwise.
+    lfintegrate  : (F, SE) -> IR
+       ++ lfintegrate(f, x) = g such that \spad{dg/dx = f}.
+    lfextlimint  : (F, SE, K, List K) -> U2
+       ++ lfextlimint(f,x,k,[k1,...,kn]) returns functions \spad{[h, c]}
+       ++ such that \spad{dh/dx = f - c dk/dx}. Value h is looked for in a field
+       ++ containing f and k1,...,kn (the ki's must be logs).
+
+  Implementation ==> add
+    import IntegrationTools(R, F)
+    import ElementaryRischDE(R, F)
+    import RationalIntegration(F, UP)
+    import AlgebraicIntegration(R, F)
+    import AlgebraicManipulations(R, F)
+    import ElementaryRischDESystem(R, F)
+    import TranscendentalIntegration(F, UP)
+    import PureAlgebraicIntegration(R, F, F)
+    import IntegrationResultFunctions2(F, F)
+    import IntegrationResultFunctions2(RF, F)
+    import FunctionSpacePrimitiveElement(R, F)
+    import PolynomialCategoryQuotientFunctions(IndexedExponents K,
+                                                             K, R, P, F)
+
+    alglfint    : (F, K, List K, SE) -> IR
+    alglfextint : (F, K, List K, SE, F) -> U2
+    alglflimint : (F, K, List K, SE, List F) -> U3
+    primextint  : (F, SE, K, F) -> U2
+    expextint   : (F, SE, K, F) -> U2
+    primlimint  : (F, SE, K, List F) -> U3
+    explimint   : (F, SE, K, List F) -> U3
+    algprimint  : (F, K, K, SE) -> IR
+    algexpint   : (F, K, K, SE) -> IR
+    primint     : (F, SE, K) -> IR
+    expint      : (F, SE, K) -> IR
+    tanint      : (F, SE, K) -> IR
+    prim?       : (K, SE)  -> Boolean
+    isx?        : (F, SE)  -> Boolean
+    addx        : (IR, F) -> IR
+    cfind       : (F, LLG) -> F
+    lfintegrate0: (F, SE) -> IR
+    unknownint  : (F, SE) -> IR
+    unkextint   : (F, SE, F) -> U2
+    unklimint   : (F, SE, List F) -> U3
+    tryChangeVar: (F, K, SE) -> Union(IR, "failed")
+    droponex    : (F, F, K, F) -> Union(F, "failed")
+
+    prim?(k, x)      == is?(k, "log"::SE) or has?(operator k, "prim")
+
+    tanint(f, x, k) ==
+      eta' := differentiate(eta := first argument k, x)
+      r1  := tanintegrate(univariate(f, k), differentiate(#1,
+              differentiate(#1, x), monomial(eta', 2) + eta'::UP),
+                rischDEsys(#1, 2 * eta, #2, #3, x, lflimitedint(#1, x, #2),
+                   lfextendedint(#1, x, #2)))
+      map(multivariate(#1, k), r1.answer) + lfintegrate(r1.a0, x)
+
+-- tries various tricks since the integrand contains something not elementary
+    unknownint(f, x) ==
+      ((r := retractIfCan(f)@Union(K, "failed")) case K) and
+        is?(k := r::K, OPDIFF) and
+          ((ka:=retractIfCan(a:=second(l:=argument k))@Union(K,"failed"))case K)
+            and ((z := retractIfCan(zz := third l)@Union(SE, "failed")) case SE)
+              and (z::SE = x)
+                and ((u := droponex(first l, a, ka, zz)) case F) => u::F::IR
+      (da := differentiate(a := denom(f)::F, x)) ^= 0 and
+        zero? differentiate(c := numer(f)::F / da, x) => (c * log a)::IR
+      mkAnswer(0, empty(), [[f, x::F]])
+
+    droponex(f, a, ka, x) ==
+      (r := retractIfCan(f)@Union(K, "failed")) case "failed" => "failed"
+      is?(op := operator(k := r::K), OPDIFF) =>
+        (z := third(arg := argument k)) = a => op [first arg, second arg, x]
+        (u := droponex(first arg, a, ka, x)) case "failed" => "failed"
+        op [u::F, second arg, z]
+      eval(f, [ka], [x])
+
+    unklimint(f, x, lu) ==
+      for u in lu | u ^= 0 repeat
+        zero? differentiate(c := f * u / differentiate(u, x), x) => [0,[[c,u]]]
+      "failed"
+
+    unkextint(f, x, g) ==
+      zero?(g' := differentiate(g, x)) => "failed"
+      zero? differentiate(c := f / g', x) => [0, c]
+      "failed"
+
+    isx?(f, x) ==
+      (k := retractIfCan(f)@Union(K, "failed")) case "failed" => false
+      (r := symbolIfCan(k::K)) case "failed" => false
+      r::SE = x
+
+    alglfint(f, k, l, x) ==
+      xf := x::F
+      symbolIfCan(kx := ksec(k,l,x)) case SE => addx(palgint(f, kx, k), xf)
+      is?(kx, "exp"::SE) => addx(algexpint(f, kx, k, x), xf)
+      prim?(kx, x)       => addx(algprimint(f, kx, k, x), xf)
+      has?(operator kx, ALGOP) =>
+        rec := primitiveElement(kx::F, k::F)
+        y   := rootOf(rec.prim)
+        map(eval(#1, retract(y)@K, rec.primelt),
+          lfintegrate(eval(f, [kx,k], [(rec.pol1) y, (rec.pol2) y]), x))
+      unknownint(f, x)
+
+    alglfextint(f, k, l, x, g) ==
+      symbolIfCan(kx := ksec(k,l,x)) case SE => palgextint(f, kx, k, g)
+      has?(operator kx, ALGOP) =>
+        rec := primitiveElement(kx::F, k::F)
+        y   := rootOf(rec.prim)
+        lrhs := [(rec.pol1) y, (rec.pol2) y]$List(F)
+        (u := lfextendedint(eval(f, [kx, k], lrhs), x,
+                    eval(g, [kx, k], lrhs))) case "failed" => "failed"
+        ky := retract(y)@K
+        r := u::Record(ratpart:F, coeff:F)
+        [eval(r.ratpart,ky,rec.primelt), eval(r.coeff,ky,rec.primelt)]
+      is?(kx, "exp"::SE) or is?(kx, "log"::SE) => FAIL
+      unkextint(f, x, g)
+
+    alglflimint(f, k, l, x, lu) ==
+      symbolIfCan(kx := ksec(k,l,x)) case SE => palglimint(f, kx, k, lu)
+      has?(operator kx, ALGOP) =>
+        rec := primitiveElement(kx::F, k::F)
+        y   := rootOf(rec.prim)
+        lrhs := [(rec.pol1) y, (rec.pol2) y]$List(F)
+        (u := lflimitedint(eval(f, [kx, k], lrhs), x,
+           map(eval(#1, [kx, k], lrhs), lu))) case "failed" => "failed"
+        ky := retract(y)@K
+        r := u::Record(mainpart:F, limitedlogs:LLG)
+        [eval(r.mainpart, ky, rec.primelt),
+          [[eval(rc.coeff, ky, rec.primelt),
+            eval(rc.logand,ky, rec.primelt)] for rc in r.limitedlogs]]
+      is?(kx, "exp"::SE) or is?(kx, "log"::SE) => FAIL
+      unklimint(f, x, lu)
+
+    if R has Join(ConvertibleTo Pattern Integer, PatternMatchable Integer)
+      and F has Join(LiouvillianFunctionCategory, RetractableTo SE) then
+        import PatternMatchIntegration(R, F)
+        lfintegrate(f, x) == intPatternMatch(f, x, lfintegrate0, pmintegrate)
+
+    else lfintegrate(f, x) == lfintegrate0(f, x)
+
+    lfintegrate0(f, x) ==
+      zero? f => 0
+      xf := x::F
+      empty?(l := varselect(kernels f, x)) => (xf * f)::IR
+      symbolIfCan(k := kmax l) case SE =>
+        map(multivariate(#1, k), integrate univariate(f, k))
+      is?(k, "tan"::SE)  => addx(tanint(f, x, k), xf)
+      is?(k, "exp"::SE)  => addx(expint(f, x, k), xf)
+      prim?(k, x)        => addx(primint(f, x, k), xf)
+      has?(operator k, ALGOP) => alglfint(f, k, l, x)
+      unknownint(f, x)
+
+    addx(i, x) ==
+      elem? i => i
+      mkAnswer(ratpart i, logpart i,
+                                [[ne.integrand, x] for ne in notelem i])
+
+    tryChangeVar(f, t, x) ==
+        z := new()$Symbol
+        g := subst(f / differentiate(t::F, x), [t], [z::F])
+        freeOf?(g, x) =>               -- can we do change of variables?
+            map(eval(#1, kernel z, t::F), lfintegrate(g, z))
+        "failed"
+
+    algexpint(f, t, y, x) ==
+        (u := tryChangeVar(f, t, x)) case IR => u::IR
+        algint(f, t, y,  differentiate(#1, differentiate(#1, x),
+                       monomial(differentiate(first argument t, x), 1)))
+
+    algprimint(f, t, y, x) ==
+        (u := tryChangeVar(f, t, x)) case IR => u::IR
+        algint(f, t, y, differentiate(#1, differentiate(#1, x),
+                                            differentiate(t::F, x)::UP))
+
+    lfextendedint(f, x, g) ==
+      empty?(l := varselect(kernels f, x)) => [x::F * f, 0]
+      symbolIfCan(k := kmax(l := union(l, varselect(kernels g, x))))
+        case SE =>
+          map(multivariate(#1, k), extendedint(univariate(f, k),
+                                               univariate(g, k)))
+      is?(k, "exp"::SE) => expextint(f, x, k, g)
+      prim?(k, x)       => primextint(f, x, k, g)
+      has?(operator k, ALGOP) => alglfextint(f, k, l, x, g)
+      unkextint(f, x, g)
+
+    lflimitedint(f, x, lu) ==
+      empty?(l := varselect(kernels f, x)) => [x::F * f, empty()]
+      symbolIfCan(k := kmax(l := union(l, vark(lu, x)))) case SE =>
+       map(multivariate(#1, k), limitedint(univariate(f, k),
+                                        [univariate(u, k) for u in lu]))
+      is?(k, "exp"::SE) => explimint(f, x, k, lu)
+      prim?(k, x)       => primlimint(f, x, k, lu)
+      has?(operator k, ALGOP) => alglflimint(f, k, l, x, lu)
+      unklimint(f, x, lu)
+
+    lfinfieldint(f, x) ==
+      (u := lfextendedint(f, x, 0)) case "failed" => "failed"
+      u.ratpart
+
+    primextint(f, x, k, g) ==
+      lk := varselect([a for a in tower f
+                                     | k ^= a and is?(a, "log"::SE)], x)
+      (u1 := primextendedint(univariate(f, k), differentiate(#1,
+           differentiate(#1, x), differentiate(k::F, x)::UP),
+             lfextlimint(#1, x, k, lk), univariate(g, k))) case "failed"
+                => "failed"
+      u1 case FF =>
+        [multivariate(u1.ratpart, k), multivariate(u1.coeff, k)]
+      (u2 := lfextendedint(u1.a0, x, g)) case "failed" => "failed"
+      [multivariate(u1.answer, k) + u2.ratpart, u2.coeff]
+
+    expextint(f, x, k, g) ==
+      (u1 := expextendedint(univariate(f, k), differentiate(#1,
+         differentiate(#1, x),
+          monomial(differentiate(first argument k, x), 1)),
+           rischDE(#1, first argument k, #2, x, lflimitedint(#1, x, #2),
+            lfextendedint(#1, x, #2)), univariate(g, k)))
+               case "failed" => "failed"
+      u1 case FF =>
+        [multivariate(u1.ratpart, k), multivariate(u1.coeff, k)]
+      (u2 := lfextendedint(u1.a0, x, g)) case "failed" => "failed"
+      [multivariate(u1.answer, k) + u2.ratpart, u2.coeff]
+
+    primint(f, x, k) ==
+      lk := varselect([a for a in tower f
+                                     | k ^= a and is?(a, "log"::SE)], x)
+      r1 := primintegrate(univariate(f, k), differentiate(#1,
+                      differentiate(#1, x), differentiate(k::F, x)::UP),
+                                              lfextlimint(#1, x, k, lk))
+      map(multivariate(#1, k), r1.answer) + lfintegrate(r1.a0, x)
+
+    lfextlimint(f, x, k, lk) ==
+      not((u1 := lfextendedint(f, x, differentiate(k::F, x)))
+        case "failed") => u1
+      twr := tower f
+      empty?(lg := [kk for kk in lk | not member?(kk, twr)]) => "failed"
+      is?(k, "log"::SE) =>
+        (u2 := lflimitedint(f, x,
+          [first argument u for u in union(lg, [k])])) case "failed"
+                                                             => "failed"
+        cf := cfind(first argument k, u2.limitedlogs)
+        [u2.mainpart - cf * k::F +
+                +/[c.coeff * log(c.logand) for c in u2.limitedlogs], cf]
+      "failed"
+
+    cfind(f, l) ==
+      for u in l repeat
+        f = u.logand => return u.coeff
+      0
+
+    expint(f, x, k) ==
+      eta := first argument k
+      r1  := expintegrate(univariate(f, k), differentiate(#1,
+              differentiate(#1, x), monomial(differentiate(eta, x), 1)),
+                 rischDE(#1, eta, #2, x, lflimitedint(#1, x, #2),
+                   lfextendedint(#1, x, #2)))
+      map(multivariate(#1, k), r1.answer) + lfintegrate(r1.a0, x)
+
+    primlimint(f, x, k, lu) ==
+      lk := varselect([a for a in tower f
+                                     | k ^= a and is?(a, "log"::SE)], x)
+      (u1 := primlimitedint(univariate(f, k), differentiate(#1,
+          differentiate(#1, x), differentiate(k::F, x)::UP),
+             lfextlimint(#1, x, k, lk), [univariate(u, k) for u in lu]))
+                                               case "failed" => "failed"
+      l := [[multivariate(lg.coeff, k),multivariate(lg.logand, k)]
+                                    for lg in u1.answer.limitedlogs]$LLG
+      (u2 := lflimitedint(u1.a0, x, lu)) case "failed" => "failed"
+      [multivariate(u1.answer.mainpart, k) + u2.mainpart,
+                                              concat(u2.limitedlogs, l)]
+
+    explimint(f, x, k, lu) ==
+      eta := first argument k
+      (u1 := explimitedint(univariate(f, k), differentiate(#1,
+        differentiate(#1, x), monomial(differentiate(eta, x), 1)),
+          rischDE(#1, eta, #2, x,
+            lflimitedint(#1, x, #2), lfextendedint(#1, x, #2)),
+              [univariate(u, k) for u in lu])) case "failed" => "failed"
+      l := [[multivariate(lg.coeff, k),multivariate(lg.logand, k)]
+                                    for lg in u1.answer.limitedlogs]$LLG
+      (u2 := lflimitedint(u1.a0, x, lu)) case "failed" => "failed"
+      [multivariate(u1.answer.mainpart, k) + u2.mainpart,
+                                              concat(u2.limitedlogs, l)]
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+-- SPAD files for the integration world should be compiled in the
+-- following order:
+--
+--   intaux  rderf  intrf  curve  curvepkg  divisor  pfo
+--   intalg  intaf  efstruc  rdeef  intpm INTEF  irexpand  integrat
+
+<<package INTEF ElementaryIntegration>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

@@ -1,0 +1,393 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra odealg.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package ODESYS SystemODESolver}
+<<package ODESYS SystemODESolver>>=
+)abbrev package ODESYS SystemODESolver
+++ Author: Manuel Bronstein
+++ Date Created: 11 June 1991
+++ Date Last Updated: 13 April 1994
+++ Description: SystemODESolver provides tools for triangulating
+++ and solving some systems of linear ordinary differential equations.
+++ Keywords: differential equation, ODE, system
+SystemODESolver(F, LO): Exports == Implementation where
+  F : Field
+  LO: LinearOrdinaryDifferentialOperatorCategory F
+
+  N   ==> NonNegativeInteger
+  Z   ==> Integer
+  MF  ==> Matrix F
+  M   ==> Matrix LO
+  V   ==> Vector F
+  UF  ==> Union(F, "failed")
+  UV  ==> Union(V, "failed")
+  REC ==> Record(mat: M, vec: V)
+  FSL ==> Record(particular: UF, basis: List F)
+  VSL ==> Record(particular: UV, basis: List V)
+  SOL ==> Record(particular: F, basis: List F)
+  USL ==> Union(SOL, "failed")
+  ER  ==> Record(C: MF, g: V, eq: LO, rh: F)
+
+  Exports ==> with
+    triangulate: (MF, V) -> Record(A:MF, eqs: List ER)
+      ++ triangulate(M,v) returns
+      ++ \spad{A,[[C_1,g_1,L_1,h_1],...,[C_k,g_k,L_k,h_k]]}
+      ++ such that under the change of variable \spad{y = A z}, the first
+      ++ order linear system \spad{D y = M y + v} is uncoupled as
+      ++ \spad{D z_i = C_i z_i + g_i} and each \spad{C_i} is a companion
+      ++ matrix corresponding to the scalar equation \spad{L_i z_j = h_i}.
+    triangulate: (M, V) -> REC
+      ++ triangulate(m, v) returns \spad{[m_0, v_0]} such that \spad{m_0}
+      ++ is upper triangular and the system \spad{m_0 x = v_0} is equivalent
+      ++ to \spad{m x = v}.
+    solve: (MF,V,(LO,F)->USL) -> Union(Record(particular:V, basis:MF), "failed")
+      ++ solve(m, v, solve) returns \spad{[[v_1,...,v_m], v_p]} such that
+      ++ the solutions in \spad{F} of the system \spad{D x = m x + v} are
+      ++ \spad{v_p + c_1 v_1 + ... + c_m v_m} where the \spad{c_i's} are
+      ++ constants, and the \spad{v_i's} form a basis for the solutions of
+      ++ \spad{D x = m x}.
+      ++ Argument \spad{solve} is a function for solving a single linear
+      ++ ordinary differential equation in \spad{F}.
+    solveInField: (M, V, (LO, F) -> FSL) -> VSL
+      ++ solveInField(m, v, solve) returns \spad{[[v_1,...,v_m], v_p]} such that
+      ++ the solutions in \spad{F} of the system \spad{m x = v} are
+      ++ \spad{v_p + c_1 v_1 + ... + c_m v_m} where the \spad{c_i's} are
+      ++ constants, and the \spad{v_i's} form a basis for the solutions of
+      ++ \spad{m x = 0}.
+      ++ Argument \spad{solve} is a function for solving a single linear
+      ++ ordinary differential equation in \spad{F}.
+
+  Implementation ==> add
+    import PseudoLinearNormalForm F
+
+    applyLodo   : (M, Z, V, N) -> F
+    applyLodo0  : (M, Z, Matrix F, Z, N) -> F
+    backsolve   : (M, V, (LO, F) -> FSL) -> VSL
+    firstnonzero: (M, Z) -> Z
+    FSL2USL     : FSL -> USL
+    M2F         : M -> Union(MF, "failed")
+
+    diff := D()$LO
+
+    solve(mm, v, solve) ==
+      rec  := triangulate(mm, v)
+      sols:List(SOL) := empty()
+      for e in rec.eqs repeat
+          (u := solve(e.eq, e.rh)) case "failed" => return "failed"
+          sols := concat(u::SOL, sols)
+      n := nrows(rec.A)    -- dimension of original vectorspace
+      k:N := 0             -- sum of sizes of visited companionblocks
+      i:N := 0             -- number of companionblocks
+      m:N := 0             -- number of Solutions
+      part:V := new(n, 0)
+      -- count first the different solutions
+      for sol in sols repeat m := m + count(#1 ^= 0, sol.basis)$List(F)
+      SolMatrix:MF := new(n, m, 0)
+      m := 0
+      for sol in reverse_! sols repeat
+          i := i+1
+          er := rec.eqs.i
+          nn := #(er.g)           -- size of active companionblock
+          for s in sol.basis repeat
+              solVec:V := new(n, 0)
+              -- compute corresponding solution base with recursion (24)
+              solVec(k+1) := s
+              for l in 2..nn repeat solVec(k+l) := diff solVec(k+l-1)
+              m := m+1
+              setColumn!(SolMatrix, m, solVec)
+          -- compute with (24) the corresponding components of the part. sol.
+          part(k+1) := sol.particular
+          for l in 2..nn repeat part(k+l) := diff part(k+l-1) - (er.g)(l-1)
+          k := k+nn
+      -- transform these values back to the original system
+      [rec.A * part, rec.A * SolMatrix]
+
+    triangulate(m:MF, v:V) ==
+      k:N := 0       -- sum of companion-dimensions
+      rat := normalForm(m, 1, - diff #1)
+      l   := companionBlocks(rat.R, rat.Ainv * v)
+      ler:List(ER) := empty()
+      for er in l repeat
+        n := nrows(er.C)         -- dimension of this companion vectorspace
+        op:LO := 0               -- compute homogeneous equation
+        for j in 0..n-1 repeat op := op + monomial((er.C)(n, j + 1), j)
+        op := monomial(1, n) - op
+        sum:V := new(n::N, 0)    -- compute inhomogen Vector (25)
+        for j in 1..n-1 repeat sum(j+1) := diff(sum j) + (er.g) j
+        h0:F := 0                 -- compute inhomogenity (26)
+        for j in 1..n repeat h0 := h0 - (er.C)(n, j) * sum j
+        h0 := h0 + diff(sum n) + (er.g) n
+        ler := concat([er.C, er.g, op, h0], ler)
+        k := k + n
+      [rat.A, ler]
+
+-- like solveInField, but expects a system already triangularized
+    backsolve(m, v, solve) ==
+      part:V
+      r := maxRowIndex m
+      offset := minIndex v - (mr := minRowIndex m)
+      while r >= mr and every?(zero?, row(m, r))$Vector(LO) repeat r := r - 1
+      r < mr => error "backsolve: system has a 0 matrix"
+      (c := firstnonzero(m, r)) ^= maxColIndex m =>
+        error "backsolve: undetermined system"
+      rec := solve(m(r, c), v(r + offset))
+      dim := (r - mr + 1)::N
+      if (part? := ((u := rec.particular) case F)) then
+        part := new(dim, 0)                           -- particular solution
+        part(r + offset) :=  u::F
+-- hom is the basis for the homogeneous solutions, each column is a solution
+      hom:Matrix(F) := new(dim, #(rec.basis), 0)
+      for i in minColIndex hom .. maxColIndex hom for b in rec.basis repeat
+        hom(r, i) := b
+      n:N := 1                 -- number of equations already solved
+      while r > mr repeat
+        r := r - 1
+        c := c - 1
+        firstnonzero(m, r) ^= c => error "backsolve: undetermined system"
+        degree(eq := m(r, c)) > 0 => error "backsolve: pivot of order > 0"
+        a := leadingCoefficient(eq)::F
+        if part? then
+           part(r + offset) := (v(r + offset) - applyLodo(m, r, part, n)) / a
+        for i in minColIndex hom .. maxColIndex hom repeat
+          hom(r, i) := - applyLodo0(m, r, hom, i, n)
+        n := n + 1
+      bas:List(V) := [column(hom,i) for i in minColIndex hom..maxColIndex hom]
+      part? => [part, bas]
+      ["failed", bas]
+
+    solveInField(m, v, solve) ==
+      ((n := nrows m) = ncols m) and
+         ((u := M2F(diagonalMatrix [diff for i in 1..n] - m)) case MF) =>
+             (uu := solve(u::MF, v, FSL2USL solve(#1, #2))) case "failed" =>
+                  ["failed", empty()]
+             rc := uu::Record(particular:V, basis:MF)
+             [rc.particular, [column(rc.basis, i) for i in 1..ncols(rc.basis)]]
+      rec := triangulate(m, v)
+      backsolve(rec.mat, rec.vec, solve)
+
+    M2F m ==
+        mf:MF := new(nrows m, ncols m, 0)
+        for i in minRowIndex m .. maxRowIndex m repeat
+            for j in minColIndex m .. maxColIndex m repeat
+                (u := retractIfCan(m(i, j))@Union(F, "failed")) case "failed" =>
+                     return "failed"
+                mf(i, j) := u::F
+        mf
+
+    FSL2USL rec ==
+        rec.particular case "failed" => "failed"
+        [rec.particular::F, rec.basis]
+
+-- returns the index of the first nonzero entry in row r of m
+    firstnonzero(m, r) ==
+      for c in minColIndex m .. maxColIndex m repeat
+        m(r, c) ^= 0 => return c
+      error "firstnonzero: zero row"
+
+-- computes +/[m(r, i) v(i) for i ranging over the last n columns of m]
+    applyLodo(m, r, v, n) ==
+      ans:F := 0
+      c := maxColIndex m
+      cv := maxIndex v
+      for i in 1..n repeat
+        ans := ans + m(r, c) (v cv)
+        c := c - 1
+        cv := cv - 1
+      ans
+
+-- computes +/[m(r, i) mm(i, c) for i ranging over the last n columns of m]
+    applyLodo0(m, r, mm, c, n) ==
+      ans := 0
+      rr := maxRowIndex mm
+      cc := maxColIndex m
+      for i in 1..n repeat
+        ans := ans + m(r, cc) mm(rr, c)
+        cc := cc - 1
+        rr := rr - 1
+      ans
+
+    triangulate(m:M, v:V) ==
+      x := copy m
+      w := copy v
+      nrows := maxRowIndex x
+      ncols := maxColIndex x
+      minr  := i := minRowIndex x
+      offset := minIndex w - minr
+      for j in minColIndex x .. ncols repeat
+        if i > nrows then leave x
+        rown := minr - 1
+        for k in i .. nrows repeat
+          if (x(k, j) ^= 0) and ((rown = minr - 1) or
+                              degree x(k,j) < degree x(rown,j)) then rown := k
+          rown = minr - 1 => "enuf"
+          x := swapRows_!(x, i, rown)
+          swap_!(w, i + offset, rown + offset)
+        for k in i+1 .. nrows | x(k, j) ^= 0 repeat
+          l := rightLcm(x(i,j), x(k,j))
+          a := rightQuotient(l, x(i, j))
+          b := rightQuotient(l, x(k, j))
+          -- l = a x(i,j) = b x(k,j)
+          for k1 in j+1 .. ncols repeat
+            x(k, k1) :=  a * x(i, k1) - b * x(k, k1)
+          x(k, j) := 0
+          w(k + offset) := a(w(i + offset)) - b(w(k + offset))
+        i := i+1
+      [x, w]
+
+@
+\section{package ODERED ReduceLODE}
+<<package ODERED ReduceLODE>>=
+)abbrev package ODERED ReduceLODE
+++ Author: Manuel Bronstein
+++ Date Created: 19 August 1991
+++ Date Last Updated: 11 April 1994
+++ Description: Elimination of an algebraic from the coefficentss
+++ of a linear ordinary differential equation.
+ReduceLODE(F, L, UP, A, LO): Exports == Implementation where
+  F : Field
+  L : LinearOrdinaryDifferentialOperatorCategory F
+  UP: UnivariatePolynomialCategory F
+  A : MonogenicAlgebra(F, UP)
+  LO: LinearOrdinaryDifferentialOperatorCategory A
+
+  V ==> Vector F
+  M ==> Matrix L
+
+  Exports ==> with
+    reduceLODE: (LO, A) -> Record(mat:M, vec:V)
+      ++ reduceLODE(op, g) returns \spad{[m, v]} such that
+      ++ any solution in \spad{A} of \spad{op z = g}
+      ++ is of the form \spad{z = (z_1,...,z_m) . (b_1,...,b_m)} where
+      ++ the \spad{b_i's} are the basis of \spad{A} over \spad{F} returned
+      ++ by \spadfun{basis}() from \spad{A}, and the \spad{z_i's} satisfy the
+      ++ differential system \spad{M.z = v}.
+
+  Implementation ==> add
+    matF2L: Matrix F -> M
+
+    diff := D()$L
+
+-- coerces a matrix of elements of F into a matrix of (order 0) L.O.D.O's
+    matF2L m ==
+      map(#1::L, m)$MatrixCategoryFunctions2(F, V, V, Matrix F,
+                                                L, Vector L, Vector L, M)
+
+-- This follows the algorithm and notation of
+--  "The Risch Differential Equation on an Algebraic Curve", M. Bronstein,
+-- in 'Proceedings of ISSAC '91', Bonn, BRD, ACM Press, pp.241-246, July 1991.
+    reduceLODE(l, g) ==
+      n := rank()$A
+-- md is the basic differential matrix (D x I + Dy)
+      md := matF2L transpose derivationCoordinates(basis(), diff #1)
+      for i in minRowIndex md .. maxRowIndex md
+        for j in minColIndex md .. maxColIndex md repeat
+          md(i, j) := diff + md(i, j)
+-- mdi will go through the successive powers of md
+      mdi := copy md
+      sys := matF2L(transpose regularRepresentation coefficient(l, 0))
+      for i in 1..degree l repeat
+        sys := sys +
+                matF2L(transpose regularRepresentation coefficient(l, i)) * mdi
+        mdi := md * mdi
+      [sys, coordinates g]
+
+@
+\section{package ODEPAL PureAlgebraicLODE}
+<<package ODEPAL PureAlgebraicLODE>>=
+)abbrev package ODEPAL PureAlgebraicLODE
+++ Author: Manuel Bronstein
+++ Date Created: 21 August 1991
+++ Date Last Updated: 3 February 1994
+++ Description: In-field solution of an linear ordinary differential equation,
+++ pure algebraic case.
+PureAlgebraicLODE(F, UP, UPUP, R): Exports == Implementation where
+  F   : Join(Field, CharacteristicZero,
+             RetractableTo Integer, RetractableTo Fraction Integer)
+  UP  : UnivariatePolynomialCategory F
+  UPUP: UnivariatePolynomialCategory Fraction UP
+  R   : FunctionFieldCategory(F, UP, UPUP)
+
+  RF  ==> Fraction UP
+  V   ==> Vector RF
+  U   ==> Union(R, "failed")
+  REC ==> Record(particular: Union(RF, "failed"), basis: List RF)
+  L   ==> LinearOrdinaryDifferentialOperator1 R
+  LQ  ==> LinearOrdinaryDifferentialOperator1 RF
+
+  Exports ==> with
+    algDsolve: (L, R) -> Record(particular: U, basis: List R)
+      ++ algDsolve(op, g) returns \spad{["failed", []]} if the equation
+      ++ \spad{op y = g} has no solution in \spad{R}. Otherwise, it returns
+      ++ \spad{[f, [y1,...,ym]]} where \spad{f} is a particular rational
+      ++ solution and the \spad{y_i's} form a basis for the solutions in
+      ++ \spad{R} of the homogeneous equation.
+
+  Implementation ==> add
+    import RationalLODE(F, UP)
+    import SystemODESolver(RF, LQ)
+    import ReduceLODE(RF, LQ, UPUP, R, L)
+
+    algDsolve(l, g) ==
+      rec := reduceLODE(l, g)
+      sol := solveInField(rec.mat, rec.vec, ratDsolve)
+      bas:List(R) := [represents v for v in sol.basis]
+      (u := sol.particular) case V => [represents(u::V), bas]
+      ["failed", bas]
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+-- Compile order for the differential equation solver:
+-- oderf.spad  odealg.spad  nlode.spad  nlinsol.spad  riccati.spad  odeef.spad
+
+<<package ODESYS SystemODESolver>>
+<<package ODERED ReduceLODE>>
+<<package ODEPAL PureAlgebraicLODE>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

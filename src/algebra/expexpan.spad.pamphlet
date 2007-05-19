@@ -1,0 +1,555 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra expexpan.spad}
+\author{Clifton J. Williamson}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{domain EXPUPXS ExponentialOfUnivariatePuiseuxSeries}
+<<domain EXPUPXS ExponentialOfUnivariatePuiseuxSeries>>=
+)abbrev domain EXPUPXS ExponentialOfUnivariatePuiseuxSeries
+++ Author: Clifton J. Williamson
+++ Date Created: 4 August 1992
+++ Date Last Updated: 27 August 1992
+++ Basic Operations:
+++ Related Domains: UnivariatePuiseuxSeries(FE,var,cen)
+++ Also See:
+++ AMS Classifications:
+++ Keywords: limit, functional expression, power series, essential singularity
+++ Examples:
+++ References:
+++ Description:
+++   ExponentialOfUnivariatePuiseuxSeries is a domain used to represent
+++   essential singularities of functions.  An object in this domain is a
+++   function of the form \spad{exp(f(x))}, where \spad{f(x)} is a Puiseux
+++   series with no terms of non-negative degree.  Objects are ordered
+++   according to order of singularity, with functions which tend more
+++   rapidly to zero or infinity considered to be larger.  Thus, if
+++   \spad{order(f(x)) < order(g(x))}, i.e. the first non-zero term of
+++   \spad{f(x)} has lower degree than the first non-zero term of \spad{g(x)},
+++   then \spad{exp(f(x)) > exp(g(x))}.  If \spad{order(f(x)) = order(g(x))},
+++   then the ordering is essentially random.  This domain is used
+++   in computing limits involving functions with essential singularities.
+ExponentialOfUnivariatePuiseuxSeries(FE,var,cen):_
+      Exports == Implementation where
+  FE  : Join(Field,OrderedSet)
+  var : Symbol
+  cen : FE
+  UPXS ==> UnivariatePuiseuxSeries(FE,var,cen)
+
+  Exports ==> Join(UnivariatePuiseuxSeriesCategory(FE),OrderedAbelianMonoid) _
+        with
+    exponential : UPXS -> %
+      ++ exponential(f(x)) returns \spad{exp(f(x))}.
+      ++ Note: the function does NOT check that \spad{f(x)} has no
+      ++ non-negative terms.
+    exponent : % -> UPXS
+      ++ exponent(exp(f(x))) returns \spad{f(x)}
+    exponentialOrder: % -> Fraction Integer
+      ++ exponentialOrder(exp(c * x **(-n) + ...)) returns \spad{-n}.
+      ++ exponentialOrder(0) returns \spad{0}.
+
+  Implementation ==> UPXS add
+
+    Rep := UPXS
+
+    exponential f == complete f
+    exponent f == f pretend UPXS
+    exponentialOrder f == order(exponent f,0)
+
+    zero? f == empty? entries complete terms f
+
+    f = g ==
+    -- we redefine equality because we know that we are dealing with
+    -- a FINITE series, so there is no danger in computing all terms
+      (entries complete terms f) = (entries complete terms g)
+
+    f < g ==
+      zero? f => not zero? g
+      zero? g => false
+      (ordf := exponentialOrder f) > (ordg := exponentialOrder g) => true
+      ordf < ordg => false
+      (fCoef := coefficient(f,ordf)) = (gCoef := coefficient(g,ordg)) =>
+        reductum(f) < reductum(g)
+      fCoef < gCoef  -- this is "random" if FE is EXPR INT
+
+    coerce(f:%):OutputForm ==
+      ("%e" :: OutputForm) ** ((coerce$Rep)(complete f)@OutputForm)
+
+@
+\section{domain UPXSSING UnivariatePuiseuxSeriesWithExponentialSingularity}
+<<domain UPXSSING UnivariatePuiseuxSeriesWithExponentialSingularity>>=
+)abbrev domain UPXSSING UnivariatePuiseuxSeriesWithExponentialSingularity
+++ Author: Clifton J. Williamson
+++ Date Created: 4 August 1992
+++ Date Last Updated: 27 August 1992
+++ Basic Operations:
+++ Related Domains: UnivariatePuiseuxSeries(FE,var,cen),
+++                  ExponentialOfUnivariatePuiseuxSeries(FE,var,cen)
+++                  ExponentialExpansion(R,FE,var,cen)
+++ Also See:
+++ AMS Classifications:
+++ Keywords: limit, functional expression, power series
+++ Examples:
+++ References:
+++ Description:
+++   UnivariatePuiseuxSeriesWithExponentialSingularity is a domain used to
+++   represent functions with essential singularities.  Objects in this
+++   domain are sums, where each term in the sum is a univariate Puiseux
+++   series times the exponential of a univariate Puiseux series.  Thus,
+++   the elements of this domain are sums of expressions of the form
+++   \spad{g(x) * exp(f(x))}, where g(x) is a univariate Puiseux series
+++   and f(x) is a univariate Puiseux series with no terms of non-negative
+++   degree.
+UnivariatePuiseuxSeriesWithExponentialSingularity(R,FE,var,cen):_
+  Exports == Implementation where
+  R   : Join(OrderedSet,RetractableTo Integer,_
+             LinearlyExplicitRingOver Integer,GcdDomain)
+  FE  : Join(AlgebraicallyClosedField,TranscendentalFunctionCategory,_
+             FunctionSpace R)
+  var : Symbol
+  cen : FE
+  B       ==> Boolean
+  I       ==> Integer
+  L       ==> List
+  RN      ==> Fraction Integer
+  UPXS    ==> UnivariatePuiseuxSeries(FE,var,cen)
+  EXPUPXS ==> ExponentialOfUnivariatePuiseuxSeries(FE,var,cen)
+  OFE     ==> OrderedCompletion FE
+  Result  ==> Union(OFE,"failed")
+  PxRec   ==> Record(k: Fraction Integer,c:FE)
+  Term    ==> Record(%coef:UPXS,%expon:EXPUPXS,%expTerms:List PxRec)
+    -- the %expTerms field is used to record the list of the terms (a 'term'
+    -- records an exponent and a coefficient) in the exponent %expon
+  TypedTerm ==> Record(%term:Term,%type:String)
+    -- a term together with a String which tells whether it has an infinite,
+    -- zero, or unknown limit as var -> cen+
+  TRec    ==> Record(%zeroTerms: List Term,_
+                     %infiniteTerms: List Term,_
+                     %failedTerms: List Term,_
+                     %puiseuxSeries: UPXS)
+  SIGNEF  ==> ElementaryFunctionSign(R,FE)
+
+  Exports ==> Join(FiniteAbelianMonoidRing(UPXS,EXPUPXS),IntegralDomain) with
+    limitPlus : % -> Union(OFE,"failed")
+      ++ limitPlus(f(var)) returns \spad{limit(var -> cen+,f(var))}.
+    dominantTerm : % -> Union(TypedTerm,"failed")
+      ++ dominantTerm(f(var)) returns the term that dominates the limiting
+      ++ behavior of \spad{f(var)} as \spad{var -> cen+} together with a
+      ++ \spadtype{String} which briefly describes that behavior.  The
+      ++ value of the \spadtype{String} will be \spad{"zero"} (resp.
+      ++ \spad{"infinity"}) if the term tends to zero (resp. infinity)
+      ++ exponentially and will \spad{"series"} if the term is a
+      ++ Puiseux series.
+
+  Implementation ==> PolynomialRing(UPXS,EXPUPXS) add
+    makeTerm : (UPXS,EXPUPXS) -> Term
+    coeff : Term -> UPXS
+    exponent : Term -> EXPUPXS
+    exponentTerms : Term -> List PxRec
+    setExponentTerms_! : (Term,List PxRec) -> List PxRec
+    computeExponentTerms_! : Term -> List PxRec
+    terms : % -> List Term
+    sortAndDiscardTerms: List Term -> TRec
+    termsWithExtremeLeadingCoef : (L Term,RN,I) -> Union(L Term,"failed")
+    filterByOrder: (L Term,(RN,RN) -> B) -> Record(%list:L Term,%order:RN)
+    dominantTermOnList : (L Term,RN,I) -> Union(Term,"failed")
+    iDominantTerm : L Term -> Union(Record(%term:Term,%type:String),"failed")
+
+    retractIfCan f ==
+      (numberOfMonomials f = 1) and (zero? degree f) => leadingCoefficient f
+      "failed"
+
+    recip f ==
+      numberOfMonomials f = 1 =>
+        monomial(inv leadingCoefficient f,- degree f)
+      "failed"
+
+    makeTerm(coef,expon) == [coef,expon,empty()]
+    coeff term == term.%coef
+    exponent term == term.%expon
+    exponentTerms term == term.%expTerms
+    setExponentTerms_!(term,list) == term.%expTerms := list
+    computeExponentTerms_! term ==
+      setExponentTerms_!(term,entries complete terms exponent term)
+
+    terms f ==
+      -- terms with a higher order singularity will appear closer to the
+      -- beginning of the list because of the ordering in EXPPUPXS;
+      -- no "expnonent terms" are computed by this function
+      zero? f => empty()
+      concat(makeTerm(leadingCoefficient f,degree f),terms reductum f)
+
+    sortAndDiscardTerms termList ==
+      -- 'termList' is the list of terms of some function f(var), ordered
+      -- so that terms with a higher order singularity occur at the
+      -- beginning of the list.
+      -- This function returns lists of candidates for the "dominant
+      -- term" in 'termList', i.e. the term which describes the
+      -- asymptotic behavior of f(var) as var -> cen+.
+      -- 'zeroTerms' will contain terms which tend to zero exponentially
+      -- and contains only those terms with the lowest order singularity.
+      -- 'zeroTerms' will be non-empty only when there are no terms of
+      -- infinite or series type.
+      -- 'infiniteTerms' will contain terms which tend to infinity
+      -- exponentially and contains only those terms with the highest
+      -- order singularity.
+      -- 'failedTerms' will contain terms which have an exponential
+      -- singularity, where we cannot say whether the limiting value
+      -- is zero or infinity. Only terms with a higher order sigularity
+      -- than the terms on 'infiniteList' are included.
+      -- 'pSeries' will be a Puiseux series representing a term without an
+      -- exponential singularity.  'pSeries' will be non-zero only when no
+      -- other terms are known to tend to infinity exponentially
+      zeroTerms : List Term := empty()
+      infiniteTerms : List Term := empty()
+      failedTerms : List Term := empty()
+      -- we keep track of whether or not we've found an infinite term
+      -- if so, 'infTermOrd' will be set to a negative value
+      infTermOrd : RN := 0
+      -- we keep track of whether or not we've found a zero term
+      -- if so, 'zeroTermOrd' will be set to a negative value
+      zeroTermOrd : RN := 0
+      ord : RN := 0; pSeries : UPXS := 0  -- dummy values
+      while not empty? termList repeat
+        -- 'expon' is a Puiseux series
+        expon := exponent(term := first termList)
+        -- quit if there is an infinite term with a higher order singularity
+        (ord := order(expon,0)) > infTermOrd => leave "infinite term dominates"
+        -- if ord = 0, we've hit the end of the list
+        (ord = 0) =>
+          -- since we have a series term, don't bother with zero terms
+          leave(pSeries := coeff(term); zeroTerms := empty())
+        coef := coefficient(expon,ord)
+        -- if we can't tell if the lowest order coefficient is positive or
+        -- negative, we have a "failed term"
+        (signum := sign(coef)$SIGNEF) case "failed" =>
+          failedTerms := concat(term,failedTerms)
+          termList := rest termList
+        -- if the lowest order coefficient is positive, we have an
+        -- "infinite term"
+        (sig := signum :: Integer) = 1 =>
+          infTermOrd := ord
+          infiniteTerms := concat(term,infiniteTerms)
+          -- since we have an infinite term, don't bother with zero terms
+          zeroTerms := empty()
+          termList := rest termList
+        -- if the lowest order coefficient is negative, we have a
+        -- "zero term" if there are no infinite terms and no failed
+        -- terms, add the term to 'zeroTerms'
+        if empty? infiniteTerms then
+          zeroTerms :=
+            ord = zeroTermOrd => concat(term,zeroTerms)
+            zeroTermOrd := ord
+            list term
+        termList := rest termList
+      -- reverse "failed terms" so that higher order singularities
+      -- appear at the beginning of the list
+      [zeroTerms,infiniteTerms,reverse_! failedTerms,pSeries]
+
+    termsWithExtremeLeadingCoef(termList,ord,signum) ==
+      -- 'termList' consists of terms of the form [g(x),exp(f(x)),...];
+      -- when 'signum' is +1 (resp. -1), this function filters 'termList'
+      -- leaving only those terms such that coefficient(f(x),ord) is
+      -- maximal (resp. minimal)
+      while (coefficient(exponent first termList,ord) = 0) repeat
+        termList := rest termList
+      empty? termList => error "UPXSSING: can't happen"
+      coefExtreme := coefficient(exponent first termList,ord)
+      outList := list first termList; termList := rest termList
+      for term in termList repeat
+        (coefDiff := coefficient(exponent term,ord) - coefExtreme) = 0 =>
+          outList := concat(term,outList)
+        (sig := sign(coefDiff)$SIGNEF) case "failed" => return "failed"
+        (sig :: Integer) = signum => outList := list term
+      outList
+
+    filterByOrder(termList,predicate) ==
+      -- 'termList' consists of terms of the form [g(x),exp(f(x)),expTerms],
+      -- where 'expTerms' is a list containing some of the terms in the
+      -- series f(x).
+      -- The function filters 'termList' and, when 'predicate' is < (resp. >),
+      -- leaves only those terms with the lowest (resp. highest) order term
+      -- in 'expTerms'
+      while empty? exponentTerms first termList repeat
+        termList := rest termList
+        empty? termList => error "UPXSING: can't happen"
+      ordExtreme := (first exponentTerms first termList).k
+      outList := list first termList
+      for term in rest termList repeat
+        not empty? exponentTerms term =>
+          (ord := (first exponentTerms term).k) = ordExtreme =>
+            outList := concat(term,outList)
+          predicate(ord,ordExtreme) =>
+            ordExtreme := ord
+            outList := list term
+      -- advance pointers on "exponent terms" on terms on 'outList'
+      for term in outList repeat
+        setExponentTerms_!(term,rest exponentTerms term)
+      [outList,ordExtreme]
+
+    dominantTermOnList(termList,ord0,signum) ==
+      -- finds dominant term on 'termList'
+      -- it is known that "exponent terms" of order < 'ord0' are
+      -- the same for all terms on 'termList'
+      newList := termsWithExtremeLeadingCoef(termList,ord0,signum)
+      newList case "failed" => "failed"
+      termList := newList :: List Term
+      empty? rest termList => first termList
+      filtered :=
+        signum = 1 => filterByOrder(termList,#1 < #2)
+        filterByOrder(termList,#1 > #2)
+      termList := filtered.%list
+      empty? rest termList => first termList
+      dominantTermOnList(termList,filtered.%order,signum)
+
+    iDominantTerm termList ==
+      termRecord := sortAndDiscardTerms termList
+      zeroTerms := termRecord.%zeroTerms
+      infiniteTerms := termRecord.%infiniteTerms
+      failedTerms := termRecord.%failedTerms
+      pSeries := termRecord.%puiseuxSeries
+      -- in future versions, we will deal with "failed terms"
+      -- at present, if any occur, we cannot determine the limit
+      not empty? failedTerms => "failed"
+      not zero? pSeries => [makeTerm(pSeries,0),"series"]
+      not empty? infiniteTerms =>
+        empty? rest infiniteTerms => [first infiniteTerms,"infinity"]
+        for term in infiniteTerms repeat computeExponentTerms_! term
+        ord0 := order exponent first infiniteTerms
+        (dTerm := dominantTermOnList(infiniteTerms,ord0,1)) case "failed" =>
+          return "failed"
+        [dTerm :: Term,"infinity"]
+      empty? rest zeroTerms => [first zeroTerms,"zero"]
+      for term in zeroTerms repeat computeExponentTerms_! term
+      ord0 := order exponent first zeroTerms
+      (dTerm := dominantTermOnList(zeroTerms,ord0,-1)) case "failed" =>
+        return "failed"
+      [dTerm :: Term,"zero"]
+
+    dominantTerm f == iDominantTerm terms f
+
+    limitPlus f ==
+      -- list the terms occurring in 'f'; if there are none, then f = 0
+      empty?(termList := terms f) => 0
+      -- compute dominant term
+      (tInfo := iDominantTerm termList) case "failed" => "failed"
+      termInfo := tInfo :: Record(%term:Term,%type:String)
+      domTerm := termInfo.%term
+      (type := termInfo.%type) = "series" =>
+        -- find limit of series term
+        (ord := order(pSeries := coeff domTerm,1)) > 0 => 0
+        coef := coefficient(pSeries,ord)
+        member?(var,variables coef) => "failed"
+        ord = 0 => coef :: OFE
+        -- in the case of an infinite limit, we need to know the sign
+        -- of the first non-zero coefficient
+        (signum := sign(coef)$SIGNEF) case "failed" => "failed"
+        (signum :: Integer) = 1 => plusInfinity()
+        minusInfinity()
+      type = "zero" => 0
+      -- examine lowest order coefficient in series part of 'domTerm'
+      ord := order(pSeries := coeff domTerm)
+      coef := coefficient(pSeries,ord)
+      member?(var,variables coef) => "failed"
+      (signum := sign(coef)$SIGNEF) case "failed" => "failed"
+      (signum :: Integer) = 1 => plusInfinity()
+      minusInfinity()
+
+@
+\section{domain EXPEXPAN ExponentialExpansion}
+<<domain EXPEXPAN ExponentialExpansion>>=
+)abbrev domain EXPEXPAN ExponentialExpansion
+++ Author: Clifton J. Williamson
+++ Date Created: 13 August 1992
+++ Date Last Updated: 27 August 1992
+++ Basic Operations:
+++ Related Domains: UnivariatePuiseuxSeries(FE,var,cen),
+++                  ExponentialOfUnivariatePuiseuxSeries(FE,var,cen)
+++ Also See:
+++ AMS Classifications:
+++ Keywords: limit, functional expression, power series
+++ Examples:
+++ References:
+++ Description:
+++   UnivariatePuiseuxSeriesWithExponentialSingularity is a domain used to
+++   represent essential singularities of functions.  Objects in this domain
+++   are quotients of sums, where each term in the sum is a univariate Puiseux
+++   series times the exponential of a univariate Puiseux series.
+ExponentialExpansion(R,FE,var,cen): Exports == Implementation where
+  R   : Join(OrderedSet,RetractableTo Integer,_
+             LinearlyExplicitRingOver Integer,GcdDomain)
+  FE  : Join(AlgebraicallyClosedField,TranscendentalFunctionCategory,_
+             FunctionSpace R)
+  var : Symbol
+  cen : FE
+  RN       ==> Fraction Integer
+  UPXS     ==> UnivariatePuiseuxSeries(FE,var,cen)
+  EXPUPXS  ==> ExponentialOfUnivariatePuiseuxSeries(FE,var,cen)
+  UPXSSING ==> UnivariatePuiseuxSeriesWithExponentialSingularity(R,FE,var,cen)
+  OFE      ==> OrderedCompletion FE
+  Result   ==> Union(OFE,"failed")
+  PxRec    ==> Record(k: Fraction Integer,c:FE)
+  Term     ==> Record(%coef:UPXS,%expon:EXPUPXS,%expTerms:List PxRec)
+  TypedTerm ==> Record(%term:Term,%type:String)
+  SIGNEF   ==> ElementaryFunctionSign(R,FE)
+
+  Exports ==> Join(QuotientFieldCategory UPXSSING,RetractableTo UPXS) with
+    limitPlus : % -> Union(OFE,"failed")
+      ++ limitPlus(f(var)) returns \spad{limit(var -> a+,f(var))}.
+    coerce: UPXS -> %
+      ++ coerce(f) converts a \spadtype{UnivariatePuiseuxSeries} to
+      ++ an \spadtype{ExponentialExpansion}.
+
+  Implementation ==> Fraction(UPXSSING) add
+    coeff : Term -> UPXS
+    exponent : Term -> EXPUPXS
+    upxssingIfCan : % -> Union(UPXSSING,"failed")
+    seriesQuotientLimit: (UPXS,UPXS) -> Union(OFE,"failed")
+    seriesQuotientInfinity: (UPXS,UPXS) -> Union(OFE,"failed")
+
+    Rep := Fraction UPXSSING
+
+    ZEROCOUNT : RN := 1000/1
+
+    coeff term == term.%coef
+    exponent term == term.%expon
+
+    --!! why is this necessary?
+    --!! code can run forever in retractIfCan if original assignment
+    --!! for 'ff' is used
+    upxssingIfCan f ==
+--      one? denom f => numer f
+      (denom f = 1) => numer f
+      "failed"
+
+    retractIfCan(f:%):Union(UPXS,"failed") ==
+      --ff := (retractIfCan$Rep)(f)@Union(UPXSSING,"failed")
+      --ff case "failed" => "failed"
+      (ff := upxssingIfCan f) case "failed" => "failed"
+      (fff := retractIfCan(ff::UPXSSING)@Union(UPXS,"failed")) case "failed" =>
+        "failed"
+      fff :: UPXS
+
+    f:UPXSSING / g:UPXSSING ==
+      (rec := recip g) case "failed" => f /$Rep g
+      f * (rec :: UPXSSING) :: %
+
+    f:% / g:% ==
+      (rec := recip numer g) case "failed" => f /$Rep g
+      (rec :: UPXSSING) * (denom g) * f
+
+    coerce(f:UPXS) == f :: UPXSSING :: %
+
+    seriesQuotientLimit(num,den) ==
+      -- limit of the quotient of two series
+      series := num / den
+      (ord := order(series,1)) > 0 => 0
+      coef := coefficient(series,ord)
+      member?(var,variables coef) => "failed"
+      ord = 0 => coef :: OFE
+      (sig := sign(coef)$SIGNEF) case "failed" => return "failed"
+      (sig :: Integer) = 1 => plusInfinity()
+      minusInfinity()
+
+    seriesQuotientInfinity(num,den) ==
+      -- infinite limit: plus or minus?
+      -- look at leading coefficients of series to tell
+      (numOrd := order(num,ZEROCOUNT)) = ZEROCOUNT => "failed"
+      (denOrd := order(den,ZEROCOUNT)) = ZEROCOUNT => "failed"
+      cc := coefficient(num,numOrd)/coefficient(den,denOrd)
+      member?(var,variables cc) => "failed"
+      (sig := sign(cc)$SIGNEF) case "failed" => return "failed"
+      (sig :: Integer) = 1 => plusInfinity()
+      minusInfinity()
+
+    limitPlus f ==
+      zero? f => 0
+      (den := denom f) = 1 => limitPlus numer f
+      (numerTerm := dominantTerm(num := numer f)) case "failed" => "failed"
+      numType := (numTerm := numerTerm :: TypedTerm).%type
+      (denomTerm := dominantTerm den) case "failed" => "failed"
+      denType := (denTerm := denomTerm :: TypedTerm).%type
+      numExpon := exponent numTerm.%term; denExpon := exponent denTerm.%term
+      numCoef := coeff numTerm.%term; denCoef := coeff denTerm.%term
+      -- numerator tends to zero exponentially
+      (numType = "zero") =>
+        -- denominator tends to zero exponentially
+        (denType = "zero") =>
+          (exponDiff := numExpon - denExpon) = 0 =>
+            seriesQuotientLimit(numCoef,denCoef)
+          expCoef := coefficient(exponDiff,order exponDiff)
+          (sig := sign(expCoef)$SIGNEF) case "failed" => return "failed"
+          (sig :: Integer) = -1 => 0
+          seriesQuotientInfinity(numCoef,denCoef)
+        0 -- otherwise limit is zero
+      -- numerator is a Puiseux series
+      (numType = "series") =>
+        -- denominator tends to zero exponentially
+        (denType = "zero") =>
+          seriesQuotientInfinity(numCoef,denCoef)
+        -- denominator is a series
+        (denType = "series") => seriesQuotientLimit(numCoef,denCoef)
+        0
+      -- remaining case: numerator tends to infinity exponentially
+      -- denominator tends to infinity exponentially
+      (denType = "infinity") =>
+        (exponDiff := numExpon - denExpon) = 0 =>
+          seriesQuotientLimit(numCoef,denCoef)
+        expCoef := coefficient(exponDiff,order exponDiff)
+        (sig := sign(expCoef)$SIGNEF) case "failed" => return "failed"
+        (sig :: Integer) = -1 => 0
+        seriesQuotientInfinity(numCoef,denCoef)
+      -- denominator tends to zero exponentially or is a series
+      seriesQuotientInfinity(numCoef,denCoef)
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<domain EXPUPXS ExponentialOfUnivariatePuiseuxSeries>>
+<<domain UPXSSING UnivariatePuiseuxSeriesWithExponentialSingularity>>
+<<domain EXPEXPAN ExponentialExpansion>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

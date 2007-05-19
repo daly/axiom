@@ -1,0 +1,598 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra fs2expxp.spad}
+\author{Clifton J. Williamson}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package FS2EXPXP FunctionSpaceToExponentialExpansion}
+<<package FS2EXPXP FunctionSpaceToExponentialExpansion>>=
+)abbrev package FS2EXPXP FunctionSpaceToExponentialExpansion
+++ Author: Clifton J. Williamson
+++ Date Created: 17 August 1992
+++ Date Last Updated: 2 December 1994
+++ Basic Operations:
+++ Related Domains: ExponentialExpansion, UnivariatePuiseuxSeries(FE,x,cen)
+++ Also See: FunctionSpaceToUnivariatePowerSeries
+++ AMS Classifications:
+++ Keywords: elementary function, power series
+++ Examples:
+++ References:
+++ Description:
+++   This package converts expressions in some function space to exponential
+++   expansions.
+FunctionSpaceToExponentialExpansion(R,FE,x,cen):_
+     Exports == Implementation where
+  R     : Join(GcdDomain,OrderedSet,RetractableTo Integer,_
+               LinearlyExplicitRingOver Integer)
+  FE    : Join(AlgebraicallyClosedField,TranscendentalFunctionCategory,_
+               FunctionSpace R)
+  x     : Symbol
+  cen   : FE
+  B        ==> Boolean
+  BOP      ==> BasicOperator
+  Expon    ==> Fraction Integer
+  I        ==> Integer
+  NNI      ==> NonNegativeInteger
+  K        ==> Kernel FE
+  L        ==> List
+  RN       ==> Fraction Integer
+  S        ==> String
+  SY       ==> Symbol
+  PCL      ==> PolynomialCategoryLifting(IndexedExponents K,K,R,SMP,FE)
+  POL      ==> Polynomial R
+  SMP      ==> SparseMultivariatePolynomial(R,K)
+  SUP      ==> SparseUnivariatePolynomial Polynomial R
+  UTS      ==> UnivariateTaylorSeries(FE,x,cen)
+  ULS      ==> UnivariateLaurentSeries(FE,x,cen)
+  UPXS     ==> UnivariatePuiseuxSeries(FE,x,cen)
+  EFULS    ==> ElementaryFunctionsUnivariateLaurentSeries(FE,UTS,ULS)
+  EFUPXS   ==> ElementaryFunctionsUnivariatePuiseuxSeries(FE,ULS,UPXS,EFULS)
+  FS2UPS   ==> FunctionSpaceToUnivariatePowerSeries(R,FE,RN,UPXS,EFUPXS,x)
+  EXPUPXS  ==> ExponentialOfUnivariatePuiseuxSeries(FE,x,cen)
+  UPXSSING ==> UnivariatePuiseuxSeriesWithExponentialSingularity(R,FE,x,cen)
+  XXP      ==> ExponentialExpansion(R,FE,x,cen)
+  Problem  ==> Record(func:String,prob:String)
+  Result   ==> Union(%series:UPXS,%problem:Problem)
+  XResult  ==> Union(%expansion:XXP,%problem:Problem)
+  SIGNEF   ==> ElementaryFunctionSign(R,FE)
+
+  Exports ==> with
+    exprToXXP : (FE,B) -> XResult
+      ++ exprToXXP(fcn,posCheck?) converts the expression \spad{fcn} to
+      ++ an exponential expansion.  If \spad{posCheck?} is true,
+      ++ log's of negative numbers are not allowed nor are nth roots of
+      ++ negative numbers with n even.  If \spad{posCheck?} is false,
+      ++ these are allowed.
+    localAbs: FE -> FE
+      ++ localAbs(fcn) = \spad{abs(fcn)} or \spad{sqrt(fcn**2)} depending
+      ++ on whether or not FE has a function \spad{abs}.  This should be
+      ++ a local function, but the compiler won't allow it.
+
+  Implementation ==> add
+
+    import FS2UPS  -- conversion of functional expressions to Puiseux series
+    import EFUPXS  -- partial transcendental funtions on UPXS
+
+    ratIfCan            : FE -> Union(RN,"failed")
+    stateSeriesProblem  : (S,S) -> Result
+    stateProblem        : (S,S) -> XResult
+    newElem             : FE -> FE
+    smpElem             : SMP -> FE
+    k2Elem              : K -> FE
+    iExprToXXP          : (FE,B) -> XResult
+    listToXXP           : (L FE,B,XXP,(XXP,XXP) -> XXP) -> XResult
+    isNonTrivPower      : FE -> Union(Record(val:FE,exponent:I),"failed")
+    negativePowerOK?    : UPXS -> Boolean
+    powerToXXP          : (FE,I,B) -> XResult
+    carefulNthRootIfCan : (UPXS,NNI,B) -> Result
+    nthRootXXPIfCan     : (XXP,NNI,B) -> XResult
+    nthRootToXXP        : (FE,NNI,B) -> XResult
+    genPowerToXXP       : (L FE,B) -> XResult
+    kernelToXXP         : (K,B) -> XResult
+    genExp              : (UPXS,B) -> Result
+    exponential         : (UPXS,B) -> XResult
+    expToXXP            : (FE,B) -> XResult
+    genLog              : (UPXS,B) -> Result
+    logToXXP            : (FE,B) -> XResult
+    applyIfCan          : (UPXS -> Union(UPXS,"failed"),FE,S,B) -> XResult
+    applyBddIfCan       : (FE,UPXS -> Union(UPXS,"failed"),FE,S,B) -> XResult
+    tranToXXP           : (K,FE,B) -> XResult
+    contOnReals?        : S -> B
+    bddOnReals?         : S -> B
+    opsInvolvingX       : FE -> L BOP
+    opInOpList?         : (SY,L BOP) -> B
+    exponential?        : FE -> B
+    productOfNonZeroes? : FE -> B
+    atancotToXXP        : (FE,FE,B,I) -> XResult
+
+    ZEROCOUNT : RN := 1000/1
+    -- number of zeroes to be removed when taking logs or nth roots
+
+--% retractions
+
+    ratIfCan fcn == retractIfCan(fcn)@Union(RN,"failed")
+
+--% 'problems' with conversion
+
+    stateSeriesProblem(function,problem) ==
+      -- records the problem which occured in converting an expression
+      -- to a power series
+      [[function,problem]]
+
+    stateProblem(function,problem) ==
+      -- records the problem which occured in converting an expression
+      -- to an exponential expansion
+      [[function,problem]]
+
+--% normalizations
+
+    newElem f ==
+      -- rewrites a functional expression; all trig functions are
+      -- expressed in terms of sin and cos; all hyperbolic trig
+      -- functions are expressed in terms of exp; all inverse
+      -- hyperbolic trig functions are expressed in terms of exp
+      -- and log
+      smpElem(numer f) / smpElem(denom f)
+
+    smpElem p == map(k2Elem,#1::FE,p)$PCL
+
+    k2Elem k ==
+    -- rewrites a kernel; all trig functions are
+    -- expressed in terms of sin and cos; all hyperbolic trig
+    -- functions are expressed in terms of exp
+      null(args := [newElem a for a in argument k]) => k :: FE
+      iez  := inv(ez  := exp(z := first args))
+      sinz := sin z; cosz := cos z
+      is?(k,"tan" :: SY)  => sinz / cosz
+      is?(k,"cot" :: SY)  => cosz / sinz
+      is?(k,"sec" :: SY)  => inv cosz
+      is?(k,"csc" :: SY)  => inv sinz
+      is?(k,"sinh" :: SY) => (ez - iez) / (2 :: FE)
+      is?(k,"cosh" :: SY) => (ez + iez) / (2 :: FE)
+      is?(k,"tanh" :: SY) => (ez - iez) / (ez + iez)
+      is?(k,"coth" :: SY) => (ez + iez) / (ez - iez)
+      is?(k,"sech" :: SY) => 2 * inv(ez + iez)
+      is?(k,"csch" :: SY) => 2 * inv(ez - iez)
+      is?(k,"acosh" :: SY) => log(sqrt(z**2 - 1) + z)
+      is?(k,"atanh" :: SY) => log((z + 1) / (1 - z)) / (2 :: FE)
+      is?(k,"acoth" :: SY) => log((z + 1) / (z - 1)) / (2 :: FE)
+      is?(k,"asech" :: SY) => log((inv z) + sqrt(inv(z**2) - 1))
+      is?(k,"acsch" :: SY) => log((inv z) + sqrt(1 + inv(z**2)))
+      (operator k) args
+
+--% general conversion function
+
+    exprToXXP(fcn,posCheck?) == iExprToXXP(newElem fcn,posCheck?)
+
+    iExprToXXP(fcn,posCheck?) ==
+      -- converts a functional expression to an exponential expansion
+      --!! The following line is commented out so that expressions of
+      --!! the form a**b will be normalized to exp(b * log(a)) even if
+      --!! 'a' and 'b' do not involve the limiting variable 'x'.
+      --!!                         - cjw 1 Dec 94
+      --not member?(x,variables fcn) => [monomial(fcn,0)$UPXS :: XXP]
+      (poly := retractIfCan(fcn)@Union(POL,"failed")) case POL =>
+        [exprToUPS(fcn,false,"real:two sides").%series :: XXP]
+      (sum := isPlus fcn) case L(FE) =>
+        listToXXP(sum :: L(FE),posCheck?,0,#1 + #2)
+      (prod := isTimes fcn) case L(FE) =>
+        listToXXP(prod :: L(FE),posCheck?,1,#1 * #2)
+      (expt := isNonTrivPower fcn) case Record(val:FE,exponent:I) =>
+        power := expt :: Record(val:FE,exponent:I)
+        powerToXXP(power.val,power.exponent,posCheck?)
+      (ker := retractIfCan(fcn)@Union(K,"failed")) case K =>
+        kernelToXXP(ker :: K,posCheck?)
+      error "exprToXXP: neither a sum, product, power, nor kernel"
+
+--% sums and products
+
+    listToXXP(list,posCheck?,ans,op) ==
+      -- converts each element of a list of expressions to an exponential
+      -- expansion and returns the sum of these expansions, when 'op' is +
+      -- and 'ans' is 0, or the product of these expansions, when 'op' is *
+      -- and 'ans' is 1
+      while not null list repeat
+        (term := iExprToXXP(first list,posCheck?)) case %problem =>
+          return term
+        ans := op(ans,term.%expansion)
+        list := rest list
+      [ans]
+
+--% nth roots and integral powers
+
+    isNonTrivPower fcn ==
+      -- is the function a power with exponent other than 0 or 1?
+      (expt := isPower fcn) case "failed" => "failed"
+      power := expt :: Record(val:FE,exponent:I)
+--      one? power.exponent => "failed"
+      (power.exponent = 1) => "failed"
+      power
+
+    negativePowerOK? upxs ==
+      -- checks the lower order coefficient of a Puiseux series;
+      -- the coefficient may be inverted only if
+      -- (a) the only function involving x is 'log', or
+      -- (b) the lowest order coefficient is a product of exponentials
+      --     and functions not involving x
+      deg := degree upxs
+      if (coef := coefficient(upxs,deg)) = 0 then
+        deg := order(upxs,deg + ZEROCOUNT :: Expon)
+        (coef := coefficient(upxs,deg)) = 0 =>
+          error "inverse of series with many leading zero coefficients"
+      xOpList := opsInvolvingX coef
+      -- only function involving x is 'log'
+      (null xOpList) => true
+      (null rest xOpList and is?(first xOpList,"log" :: SY)) => true
+      -- lowest order coefficient is a product of exponentials and
+      -- functions not involving x
+      productOfNonZeroes? coef => true
+      false
+
+    powerToXXP(fcn,n,posCheck?) ==
+      -- converts an integral power to an exponential expansion
+      (b := iExprToXXP(fcn,posCheck?)) case %problem => b
+      xxp := b.%expansion
+      n > 0 => [xxp ** n]
+      -- a Puiseux series will be reciprocated only if n < 0 and
+      -- numerator of 'xxp' has exactly one monomial
+      numberOfMonomials(num := numer xxp) > 1 => [xxp ** n]
+      negativePowerOK? leadingCoefficient num =>
+        (rec := recip num) case "failed" => error "FS2EXPXP: can't happen"
+        nn := (-n) :: NNI
+        [(((denom xxp) ** nn) * ((rec :: UPXSSING) ** nn)) :: XXP]
+      --!! we may want to create a fraction instead of trying to
+      --!! reciprocate the numerator
+      stateProblem("inv","lowest order coefficient involves x")
+
+    carefulNthRootIfCan(ups,n,posCheck?) ==
+      -- similar to 'nthRootIfCan', but it is fussy about the series
+      -- it takes as an argument.  If 'n' is EVEN and 'posCheck?'
+      -- is truem then the leading coefficient of the series must
+      -- be POSITIVE.  In this case, if 'rightOnly?' is false, the
+      -- order of the series must be zero.  The idea is that the
+      -- series represents a real function of a real variable, and
+      -- we want a unique real nth root defined on a neighborhood
+      -- of zero.
+      n < 1 => error "nthRoot: n must be positive"
+      deg := degree ups
+      if (coef := coefficient(ups,deg)) = 0 then
+        deg := order(ups,deg + ZEROCOUNT :: Expon)
+        (coef := coefficient(ups,deg)) = 0 =>
+          error "log of series with many leading zero coefficients"
+      -- if 'posCheck?' is true, we do not allow nth roots of negative
+      -- numbers when n in even
+      if even?(n :: I) then
+        if posCheck? and ((signum := sign(coef)$SIGNEF) case I) then
+          (signum :: I) = -1 =>
+            return stateSeriesProblem("nth root","root of negative number")
+      (ans := nthRootIfCan(ups,n)) case "failed" =>
+        stateSeriesProblem("nth root","no nth root")
+      [ans :: UPXS]
+
+    nthRootXXPIfCan(xxp,n,posCheck?) ==
+      num := numer xxp; den := denom xxp
+      not zero?(reductum num) or not zero?(reductum den) =>
+       stateProblem("nth root","several monomials in numerator or denominator")
+      nInv : RN := 1/n
+      newNum :=
+        coef : UPXS :=
+          root := carefulNthRootIfCan(leadingCoefficient num,n,posCheck?)
+          root case %problem => return [root.%problem]
+          root.%series
+        deg := (nInv :: FE) * (degree num)
+        monomial(coef,deg)
+      newDen :=
+        coef : UPXS :=
+          root := carefulNthRootIfCan(leadingCoefficient den,n,posCheck?)
+          root case %problem => return [root.%problem]
+          root.%series
+        deg := (nInv :: FE) * (degree den)
+        monomial(coef,deg)
+      [newNum/newDen]
+
+    nthRootToXXP(arg,n,posCheck?) ==
+      -- converts an nth root to a power series
+      -- this is not used in the limit package, so the series may
+      -- have non-zero order, in which case nth roots may not be unique
+      (result := iExprToXXP(arg,posCheck?)) case %problem => [result.%problem]
+      ans := nthRootXXPIfCan(result.%expansion,n,posCheck?)
+      ans case %problem => [ans.%problem]
+      [ans.%expansion]
+
+--% general powers f(x) ** g(x)
+
+    genPowerToXXP(args,posCheck?) ==
+      -- converts a power f(x) ** g(x) to an exponential expansion
+      (logBase := logToXXP(first args,posCheck?)) case %problem =>
+        logBase
+      (expon := iExprToXXP(second args,posCheck?)) case %problem =>
+        expon
+      xxp := (expon.%expansion) * (logBase.%expansion)
+      (f := retractIfCan(xxp)@Union(UPXS,"failed")) case "failed" =>
+        stateProblem("exp","multiply nested exponential")
+      exponential(f,posCheck?)
+
+--% kernels
+
+    kernelToXXP(ker,posCheck?) ==
+      -- converts a kernel to a power series
+      (sym := symbolIfCan(ker)) case Symbol =>
+        (sym :: Symbol) = x => [monomial(1,1)$UPXS :: XXP]
+        [monomial(ker :: FE,0)$UPXS :: XXP]
+      empty?(args := argument ker) => [monomial(ker :: FE,0)$UPXS :: XXP]
+      empty? rest args =>
+        arg := first args
+        is?(ker,"%paren" :: Symbol) => iExprToXXP(arg,posCheck?)
+        is?(ker,"log" :: Symbol) => logToXXP(arg,posCheck?)
+        is?(ker,"exp" :: Symbol) => expToXXP(arg,posCheck?)
+        tranToXXP(ker,arg,posCheck?)
+      is?(ker,"%power" :: Symbol) => genPowerToXXP(args,posCheck?)
+      is?(ker,"nthRoot" :: Symbol) =>
+        n := retract(second args)@I
+        nthRootToXXP(first args,n :: NNI,posCheck?)
+      stateProblem(string name ker,"unknown kernel")
+
+--% exponentials and logarithms
+
+    genExp(ups,posCheck?) ==
+      -- If the series has order zero and the constant term a0 of the
+      -- series involves x, the function tries to expand exp(a0) as
+      -- a power series.
+      (deg := order(ups,1)) < 0 =>
+        -- this "can't happen"
+        error "exp of function with sigularity"
+      deg > 0 => [exp(ups)]
+      lc := coefficient(ups,0); varOpList := opsInvolvingX lc
+      not opInOpList?("log" :: Symbol,varOpList) => [exp(ups)]
+      -- try to fix exp(lc) if necessary
+      expCoef := normalize(exp lc,x)$ElementaryFunctionStructurePackage(R,FE)
+      result := exprToGenUPS(expCoef,posCheck?,"real:right side")$FS2UPS
+      --!! will deal with problems in limitPlus in EXPEXPAN
+      --result case %problem => result
+      result case %problem => [exp(ups)]
+      [(result.%series) * exp(ups - monomial(lc,0))]
+
+    exponential(f,posCheck?) ==
+      singPart := truncate(f,0) - (coefficient(f,0) :: UPXS)
+      taylorPart := f - singPart
+      expon := exponential(singPart)$EXPUPXS
+      (coef := genExp(taylorPart,posCheck?)) case %problem => [coef.%problem]
+      [monomial(coef.%series,expon)$UPXSSING :: XXP]
+
+    expToXXP(arg,posCheck?) ==
+      (result := iExprToXXP(arg,posCheck?)) case %problem => result
+      xxp := result.%expansion
+      (f := retractIfCan(xxp)@Union(UPXS,"failed")) case "failed" =>
+        stateProblem("exp","multiply nested exponential")
+      exponential(f,posCheck?)
+
+    genLog(ups,posCheck?) ==
+      deg := degree ups
+      if (coef := coefficient(ups,deg)) = 0 then
+        deg := order(ups,deg + ZEROCOUNT)
+        (coef := coefficient(ups,deg)) = 0 =>
+          error "log of series with many leading zero coefficients"
+      -- if 'posCheck?' is true, we do not allow logs of negative numbers
+      if posCheck? then
+        if ((signum := sign(coef)$SIGNEF) case I) then
+          (signum :: I) = -1 =>
+            return stateSeriesProblem("log","negative leading coefficient")
+      lt := monomial(coef,deg)$UPXS
+      -- check to see if lowest order coefficient is a negative rational
+      negRat? : Boolean :=
+        ((rat := ratIfCan coef) case RN) =>
+          (rat :: RN) < 0 => true
+          false
+        false
+      logTerm : FE :=
+        mon : FE := (x :: FE) - (cen :: FE)
+        pow : FE := mon ** (deg :: FE)
+        negRat? => log(coef * pow)
+        term1 : FE := (deg :: FE) * log(mon)
+        log(coef) + term1
+      [monomial(logTerm,0)$UPXS + log(ups/lt)]
+
+    logToXXP(arg,posCheck?) ==
+      (result := iExprToXXP(arg,posCheck?)) case %problem => result
+      xxp := result.%expansion
+      num := numer xxp; den := denom xxp
+      not zero?(reductum num) or not zero?(reductum den) =>
+        stateProblem("log","several monomials in numerator or denominator")
+      numCoefLog : UPXS :=
+        (res := genLog(leadingCoefficient num,posCheck?)) case %problem =>
+          return [res.%problem]
+        res.%series
+      denCoefLog : UPXS :=
+        (res := genLog(leadingCoefficient den,posCheck?)) case %problem =>
+          return [res.%problem]
+        res.%series
+      numLog := (exponent degree num) + numCoefLog
+      denLog := (exponent degree den) + denCoefLog  --?? num?
+      [(numLog - denLog) :: XXP]
+
+--% other transcendental functions
+
+    applyIfCan(fcn,arg,fcnName,posCheck?) ==
+      -- converts fcn(arg) to an exponential expansion
+      (xxpArg := iExprToXXP(arg,posCheck?)) case %problem => xxpArg
+      xxp := xxpArg.%expansion
+      (f := retractIfCan(xxp)@Union(UPXS,"failed")) case "failed" =>
+        stateProblem(fcnName,"multiply nested exponential")
+      upxs := f :: UPXS
+      (deg := order(upxs,1)) < 0 =>
+        stateProblem(fcnName,"essential singularity")
+      deg > 0 => [fcn(upxs) :: UPXS :: XXP]
+      lc := coefficient(upxs,0); xOpList := opsInvolvingX lc
+      null xOpList => [fcn(upxs) :: UPXS :: XXP]
+      opInOpList?("log" :: SY,xOpList) =>
+        stateProblem(fcnName,"logs in constant coefficient")
+      contOnReals? fcnName => [fcn(upxs) :: UPXS :: XXP]
+      stateProblem(fcnName,"x in constant coefficient")
+
+    applyBddIfCan(fe,fcn,arg,fcnName,posCheck?) ==
+      -- converts fcn(arg) to a generalized power series, where the
+      -- function fcn is bounded for real values
+      -- if fcn(arg) has an essential singularity as a complex
+      -- function, we return fcn(arg) as a monomial of degree 0
+      (xxpArg := iExprToXXP(arg,posCheck?)) case %problem =>
+        trouble := xxpArg.%problem
+        trouble.prob = "essential singularity" => [monomial(fe,0)$UPXS :: XXP]
+        xxpArg
+      xxp := xxpArg.%expansion
+      (f := retractIfCan(xxp)@Union(UPXS,"failed")) case "failed" =>
+        stateProblem("exp","multiply nested exponential")
+      (ans := fcn(f :: UPXS)) case "failed" => [monomial(fe,0)$UPXS :: XXP]
+      [ans :: UPXS :: XXP]
+
+    CONTFCNS : L S := ["sin","cos","atan","acot","exp","asinh"]
+    -- functions which are defined and continuous at all real numbers
+
+    BDDFCNS : L S := ["sin","cos","atan","acot"]
+    -- functions which are bounded on the reals
+
+    contOnReals? fcn == member?(fcn,CONTFCNS)
+    bddOnReals? fcn  == member?(fcn,BDDFCNS)
+
+    opsInvolvingX fcn ==
+      opList := [op for k in tower fcn | unary?(op := operator k) _
+                 and member?(x,variables first argument k)]
+      removeDuplicates opList
+
+    opInOpList?(name,opList) ==
+      for op in opList repeat
+        is?(op,name) => return true
+      false
+
+    exponential? fcn ==
+      -- is 'fcn' of the form exp(f)?
+      (ker := retractIfCan(fcn)@Union(K,"failed")) case K =>
+        is?(ker :: K,"exp" :: Symbol)
+      false
+
+    productOfNonZeroes? fcn ==
+      -- is 'fcn' a product of non-zero terms, where 'non-zero'
+      -- means an exponential or a function not involving x
+      exponential? fcn => true
+      (prod := isTimes fcn) case "failed" => false
+      for term in (prod :: L(FE)) repeat
+        (not exponential? term) and member?(x,variables term) =>
+          return false
+      true
+
+    tranToXXP(ker,arg,posCheck?) ==
+      -- converts op(arg) to a power series for certain functions
+      -- op in trig or hyperbolic trig categories
+      -- N.B. when this function is called, 'k2elem' will have been
+      -- applied, so the following functions cannot appear:
+      -- tan, cot, sec, csc, sinh, cosh, tanh, coth, sech, csch
+      -- acosh, atanh, acoth, asech, acsch
+      is?(ker,"sin" :: SY) =>
+        applyBddIfCan(ker :: FE,sinIfCan,arg,"sin",posCheck?)
+      is?(ker,"cos" :: SY) =>
+        applyBddIfCan(ker :: FE,cosIfCan,arg,"cos",posCheck?)
+      is?(ker,"asin" :: SY) =>
+        applyIfCan(asinIfCan,arg,"asin",posCheck?)
+      is?(ker,"acos" :: SY) =>
+        applyIfCan(acosIfCan,arg,"acos",posCheck?)
+      is?(ker,"atan" :: SY) =>
+        atancotToXXP(ker :: FE,arg,posCheck?,1)
+      is?(ker,"acot" :: SY) =>
+        atancotToXXP(ker :: FE,arg,posCheck?,-1)
+      is?(ker,"asec" :: SY) =>
+        applyIfCan(asecIfCan,arg,"asec",posCheck?)
+      is?(ker,"acsc" :: SY) =>
+        applyIfCan(acscIfCan,arg,"acsc",posCheck?)
+      is?(ker,"asinh" :: SY) =>
+        applyIfCan(asinhIfCan,arg,"asinh",posCheck?)
+      stateProblem(string name ker,"unknown kernel")
+
+    if FE has abs: FE -> FE then
+      localAbs fcn == abs fcn
+    else
+      localAbs fcn == sqrt(fcn * fcn)
+
+    signOfExpression: FE -> FE
+    signOfExpression arg == localAbs(arg)/arg
+
+    atancotToXXP(fe,arg,posCheck?,plusMinus) ==
+      -- converts atan(f(x)) to a generalized power series
+      atanFlag : String := "real: right side"; posCheck? : Boolean := true
+      (result := exprToGenUPS(arg,posCheck?,atanFlag)$FS2UPS) case %problem =>
+        trouble := result.%problem
+        trouble.prob = "essential singularity" => [monomial(fe,0)$UPXS :: XXP]
+        [result.%problem]
+      ups := result.%series; coef := coefficient(ups,0)
+      -- series involves complex numbers
+      (ord := order(ups,0)) = 0 and coef * coef = -1 =>
+        y := differentiate(ups)/(1 + ups*ups)
+        yCoef := coefficient(y,-1)
+        [(monomial(log yCoef,0)+integrate(y - monomial(yCoef,-1)$UPXS)) :: XXP]
+      cc : FE :=
+        ord < 0 =>
+          (rn := ratIfCan(ord :: FE)) case "failed" =>
+            -- this condition usually won't occur because exponents will
+            -- be integers or rational numbers
+            return stateProblem("atan","branch problem")
+          lc := coefficient(ups,ord)
+          (signum := sign(lc)$SIGNEF) case "failed" =>
+            -- can't determine sign
+            posNegPi2 := signOfExpression(lc) * pi()/(2 :: FE)
+            plusMinus = 1 => posNegPi2
+            pi()/(2 :: FE) - posNegPi2
+          (n := signum :: Integer) = -1 =>
+            plusMinus = 1 => -pi()/(2 :: FE)
+            pi()
+          plusMinus = 1 => pi()/(2 :: FE)
+          0
+        atan coef
+      [((cc :: UPXS) + integrate(differentiate(ups)/(1 + ups*ups))) :: XXP]
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package FS2EXPXP FunctionSpaceToExponentialExpansion>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

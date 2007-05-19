@@ -1,0 +1,218 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp g-error.boot}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{License}
+<<license>>=
+-- Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+-- All rights reserved.
+--
+-- Redistribution and use in source and binary forms, with or without
+-- modification, are permitted provided that the following conditions are
+-- met:
+--
+--     - Redistributions of source code must retain the above copyright
+--       notice, this list of conditions and the following disclaimer.
+--
+--     - Redistributions in binary form must reproduce the above copyright
+--       notice, this list of conditions and the following disclaimer in
+--       the documentation and/or other materials provided with the
+--       distribution.
+--
+--     - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--       names of its contributors may be used to endorse or promote products
+--       derived from this software without specific prior written permission.
+--
+-- THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+-- IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+-- TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+-- PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+-- OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+-- EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+-- PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+-- PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+-- LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+-- NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+-- SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+@
+<<*>>=
+<<license>>
+
+-- This file contains the error printing code used in BOOT and SPAD.
+-- While SPAD only calls "error" (which is then labeled as an algebra
+-- error, BOOT calls "userError" and "systemError" when a problem is
+-- found.
+--
+-- The variable $BreakMode is set using the system command )set breakmode
+-- and can have one of the values:
+--   break    -- always enter a lisp break when an error is signalled
+--   nobreak  -- do not enter lisp break mode
+--   query    -- ask the user if break mode should be entered
+
+SETANDFILEQ($SystemError,'SystemError)
+SETANDFILEQ($UserError,'UserError)
+SETANDFILEQ($AlgebraError,'AlgebraError)
+
+-- REDERR is used in BFLOAT LISP, should be a macro
+-- REDERR msg == error msg
+
+-- BFLERRMSG func ==
+--  errorSupervisor($AlgebraError,STRCONC(
+--    '"BigFloat: invalid argument to ",func))
+
+argumentDataError(argnum, condit, funname) ==
+  msg := ['"The test",:bright pred2English condit,'"evaluates to",
+    :bright '"false",'%l,'"   for argument",:bright argnum,_
+    '"to the function",:bright funname,'"and this indicates",'%l,_
+    '"   that the argument is not appropriate."]
+  errorSupervisor($AlgebraError,msg)
+
+queryUser msg ==
+  -- display message and return reply
+  sayBrightly msg
+  READ_-LINE _*TERMINAL_-IO_*
+
+-- errorSupervisor is the old style error message trapper
+
+errorSupervisor(errorType,errorMsg) ==
+  errorSupervisor1(errorType,errorMsg,$BreakMode)
+
+errorSupervisor1(errorType,errorMsg,$BreakMode) ==
+  $cclSystem and $BreakMode = 'trapNumerics => 
+    THROW('trapNumerics,$numericFailure)
+  BUMPCOMPERRORCOUNT()
+  errorLabel :=
+      errorType = $SystemError  => '"System error"
+      errorType = $UserError    => '"Apparent user error"
+      errorType = $AlgebraError =>
+        '"Error detected within library code"
+      STRINGP errorType         => errorType
+      '"Error with unknown classification"
+  msg :=
+    errorMsg is ['mathprint, :.] => errorMsg
+    not PAIRP errorMsg => ['"   ", errorMsg]
+    splitmsg := true
+    if MEMBER('%b,errorMsg) then splitmsg := nil
+      else if MEMBER('%d,errorMsg) then splitmsg := nil
+           else if MEMBER('%l,errorMsg) then splitmsg := nil
+    splitmsg => CDR [:['%l,'"   ",u] for u in errorMsg]
+    ['"   ",:errorMsg]
+  sayErrorly(errorLabel, msg)
+  handleLispBreakLoop($BreakMode)
+
+handleLispBreakLoop($BreakMode) ==
+  TERPRI()
+  -- The next line is to try to deal with some reported cases of unwanted
+  -- backtraces appearing, MCD.
+  ENABLE_-BACKTRACE(nil)
+  $BreakMode = 'break =>
+    sayBrightly '" "
+    BREAK()
+  $BreakMode = 'query =>
+    gotIt := nil
+    while not gotIt repeat
+      gotIt := true
+      msgQ := 
+       $cclSystem =>
+         ['%l,'"   You have two options. Enter:",'%l,_
+          '"    ",:bright '"top     ",'"  to return to top level, or",'%l,_
+          '"    ",:bright '"break   ",'"  to enter a LISP break loop.",'%l,_
+          '%l,'"   Please enter your choice now:"]
+       ['%l,'"   You have three options. Enter:",'%l,_
+        '"    ",:bright '"continue",'"  to continue processing,",'%l,_
+        '"    ",:bright '"top     ",'"  to return to top level, or",'%l,_
+        '"    ",:bright '"break   ",'"  to enter a LISP break loop.",'%l,_
+        '%l,'"   Please enter your choice now:"]
+      x := STRING2ID_-N(queryUser msgQ,1)
+      x := 
+        $cclSystem =>
+          selectOptionLC(x,'(top break),NIL)
+        selectOptionLC(x,'(top break continue),NIL)
+      null x =>
+        sayBrightly bright '"  That was not one of your choices!"
+        gotIt := NIL
+      x = 'top => returnToTopLevel()
+      x = 'break =>
+        $BreakMode := 'break
+        if not $cclSystem then
+          sayBrightly ['"   Enter",:bright '":C",
+            '"when you are ready to continue processing where you ",'%l,_
+            '"   interrupted the system, enter",:bright '"(TOP)",_
+            '"when you wish to return",'%l,'"   to top level.",'%l,'%l]
+        BREAK()
+      sayBrightly
+        '"   Processing will continue where it was interrupted."
+      THROW('SPAD__READER, nil)
+  $BreakMode = 'resume =>
+    returnToReader()
+  returnToTopLevel()
+
+TOP() == returnToTopLevel()
+
+returnToTopLevel() ==
+  SETQ(CHR, "ENDOFLINECHR")
+  SETQ(TOK, 'END__UNIT)
+  TOPLEVEL()
+
+returnToReader() ==
+  ^$ReadingFile => returnToTopLevel()
+  sayBrightly ['"   Continuing to read the file...", '%l]
+  THROW('SPAD__READER, nil)
+
+sayErrorly(errorLabel, msg) ==
+  $saturn => saturnSayErrorly(errorLabel, msg)
+  sayErrorly1(errorLabel, msg)
+
+saturnSayErrorly(errorLabel, msg) ==
+  _*STANDARD_-OUTPUT_* : fluid := $texOutputStream
+  old := pushSatOutput("line")
+  sayString '"\bgroup\color{red}"
+  sayString '"\begin{verbatim}"
+  sayErrorly1(errorLabel, msg)
+  sayString '"\end{verbatim}"
+  sayString '"\egroup"
+  popSatOutput(old)
+
+sayErrorly1(errorLabel, msg) ==
+  sayBrightly '" "
+  if $testingSystem then sayMSG $testingErrorPrefix
+  sayBrightly ['"   >> ",errorLabel,'":"]
+  m := msg
+  msg is ['mathprint, mathexpr] =>
+    mathprint mathexpr
+  sayBrightly msg
+
+-- systemError is being phased out. Please use keyedSystemError.
+systemError(:x) == errorSupervisor($SystemError,IFCAR x)
+
+-- unexpectedSystemError() ==
+--  systemError '"Oh, no.  Unexpected internal error."
+
+userError x == errorSupervisor($UserError,x)
+
+error(x) == errorSupervisor($AlgebraError,x)
+
+IdentityError(op) ==
+    error(["No identity element for reduce of empty list using operation",op])
+
+throwMessage(:msg) ==
+  if $compilingMap then clearCache $mapName
+  msg' := mkMessage concatList msg
+  sayMSG msg'
+  if $printMsgsToFile then sayMSG2File msg'
+  spadThrow()
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

@@ -1,0 +1,439 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra suts.spad}
+\author{Clifton J. Williamson}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{domain SUTS SparseUnivariateTaylorSeries}
+<<domain SUTS SparseUnivariateTaylorSeries>>=
+)abbrev domain SUTS SparseUnivariateTaylorSeries
+++ Author: Clifton J. Williamson
+++ Date Created: 16 February 1990
+++ Date Last Updated: 10 March 1995
+++ Basic Operations:
+++ Related Domains: InnerSparseUnivariatePowerSeries,
+++   SparseUnivariateLaurentSeries, SparseUnivariatePuiseuxSeries
+++ Also See:
+++ AMS Classifications:
+++ Keywords: Taylor series, sparse power series
+++ Examples:
+++ References:
+++ Description: Sparse Taylor series in one variable
+++   \spadtype{SparseUnivariateTaylorSeries} is a domain representing Taylor
+++   series in one variable with coefficients in an arbitrary ring.  The
+++   parameters of the type specify the coefficient ring, the power series
+++   variable, and the center of the power series expansion.  For example,
+++   \spadtype{SparseUnivariateTaylorSeries}(Integer,x,3) represents Taylor
+++   series in \spad{(x - 3)} with \spadtype{Integer} coefficients.
+SparseUnivariateTaylorSeries(Coef,var,cen): Exports == Implementation where
+  Coef : Ring
+  var  : Symbol
+  cen  : Coef
+  COM  ==> OrderedCompletion Integer
+  I    ==> Integer
+  L    ==> List
+  NNI  ==> NonNegativeInteger
+  OUT  ==> OutputForm
+  P    ==> Polynomial Coef
+  REF  ==> Reference OrderedCompletion Integer
+  RN   ==> Fraction Integer
+  Term ==> Record(k:Integer,c:Coef)
+  SG   ==> String
+  ST   ==> Stream Term
+  UP   ==> UnivariatePolynomial(var,Coef)
+
+  Exports ==> UnivariateTaylorSeriesCategory(Coef) with
+    coerce: UP -> %
+      ++\spad{coerce(p)} converts a univariate polynomial p in the variable
+      ++\spad{var} to a univariate Taylor series in \spad{var}.
+    univariatePolynomial: (%,NNI) -> UP
+      ++\spad{univariatePolynomial(f,k)} returns a univariate polynomial
+      ++ consisting of the sum of all terms of f of degree \spad{<= k}.
+    coerce: Variable(var) -> %
+      ++\spad{coerce(var)} converts the series variable \spad{var} into a
+      ++ Taylor series.
+    differentiate: (%,Variable(var)) -> %
+      ++ \spad{differentiate(f(x),x)} computes the derivative of
+      ++ \spad{f(x)} with respect to \spad{x}.
+    if Coef has Algebra Fraction Integer then
+      integrate: (%,Variable(var)) -> %
+        ++ \spad{integrate(f(x),x)} returns an anti-derivative of the power
+        ++ series \spad{f(x)} with constant coefficient 0.
+        ++ We may integrate a series when we can divide coefficients
+        ++ by integers.
+
+  Implementation ==> InnerSparseUnivariatePowerSeries(Coef) add
+    import REF
+
+    Rep := InnerSparseUnivariatePowerSeries(Coef)
+
+    makeTerm: (Integer,Coef) -> Term
+    makeTerm(exp,coef) == [exp,coef]
+    getCoef: Term -> Coef
+    getCoef term == term.c
+    getExpon: Term -> Integer
+    getExpon term == term.k
+
+    monomial(coef,expon) == monomial(coef,expon)$Rep
+    extend(x,n) == extend(x,n)$Rep
+
+    0 == monomial(0,0)$Rep
+    1 == monomial(1,0)$Rep
+
+    recip uts == iExquo(1,uts,true)
+
+    if Coef has IntegralDomain then
+      uts1 exquo uts2 == iExquo(uts1,uts2,true)
+
+    quoByVar uts == taylorQuoByVar(uts)$Rep
+
+    differentiate(x:%,v:Variable(var)) == differentiate x
+
+--% Creation and destruction of series
+
+    coerce(v: Variable(var)) ==
+      zero? cen => monomial(1,1)
+      monomial(1,1) + monomial(cen,0)
+
+    coerce(p:UP) ==
+      zero? p => 0
+      if not zero? cen then p := p(monomial(1,1)$UP + monomial(cen,0)$UP)
+      st : ST := empty()
+      while not zero? p repeat
+        st := concat(makeTerm(degree p,leadingCoefficient p),st)
+        p := reductum p
+      makeSeries(ref plusInfinity(),st)
+
+    univariatePolynomial(x,n) ==
+      extend(x,n); st := getStream x
+      ans : UP := 0; oldDeg : I := 0;
+      mon := monomial(1,1)$UP - monomial(center x,0)$UP; monPow : UP := 1
+      while explicitEntries? st repeat
+        (xExpon := getExpon(xTerm := frst st)) > n => return ans
+        pow := (xExpon - oldDeg) :: NNI; oldDeg := xExpon
+        monPow := monPow * mon ** pow
+        ans := ans + getCoef(xTerm) * monPow
+        st := rst st
+      ans
+
+    polynomial(x,n) ==
+      extend(x,n); st := getStream x
+      ans : P := 0; oldDeg : I := 0;
+      mon := (var :: P) - (center(x) :: P); monPow : P := 1
+      while explicitEntries? st repeat
+        (xExpon := getExpon(xTerm := frst st)) > n => return ans
+        pow := (xExpon - oldDeg) :: NNI; oldDeg := xExpon
+        monPow := monPow * mon ** pow
+        ans := ans + getCoef(xTerm) * monPow
+        st := rst st
+      ans
+
+    polynomial(x,n1,n2) == polynomial(truncate(x,n1,n2),n2)
+
+    truncate(x,n)     == truncate(x,n)$Rep
+    truncate(x,n1,n2) == truncate(x,n1,n2)$Rep
+
+    iCoefficients: (ST,REF,I) -> Stream Coef
+    iCoefficients(x,refer,n) == delay
+      -- when this function is called, we are computing the nth order
+      -- coefficient of the series
+      explicitlyEmpty? x => empty()
+      -- if terms up to order n have not been computed,
+      -- apply lazy evaluation
+      nn := n :: COM
+      while (nx := elt refer) < nn repeat lazyEvaluate x
+      -- must have nx >= n
+      explicitEntries? x =>
+        xCoef := getCoef(xTerm := frst x); xExpon := getExpon xTerm
+        xExpon = n => concat(xCoef,iCoefficients(rst x,refer,n + 1))
+        -- must have nx > n
+        concat(0,iCoefficients(x,refer,n + 1))
+      concat(0,iCoefficients(x,refer,n + 1))
+
+    coefficients uts ==
+      refer := getRef uts; x := getStream uts
+      iCoefficients(x,refer,0)
+
+    terms uts == terms(uts)$Rep pretend Stream Record(k:NNI,c:Coef)
+
+    iSeries: (Stream Coef,I,REF) -> ST
+    iSeries(st,n,refer) == delay
+      -- when this function is called, we are creating the nth order
+      -- term of a series
+      empty? st => (setelt(refer,plusInfinity()); empty())
+      setelt(refer,n :: COM)
+      zero? (coef := frst st) => iSeries(rst st,n + 1,refer)
+      concat(makeTerm(n,coef),iSeries(rst st,n + 1,refer))
+
+    series(st:Stream Coef) ==
+      refer := ref(-1)
+      makeSeries(refer,iSeries(st,0,refer))
+
+    nniToI: Stream Record(k:NNI,c:Coef) -> ST
+    nniToI st ==
+      empty? st => empty()
+      term : Term := [(frst st).k,(frst st).c]
+      concat(term,nniToI rst st)
+
+    series(st:Stream Record(k:NNI,c:Coef)) == series(nniToI st)$Rep
+
+--% Values
+
+    variable x == var
+    center   x == cen
+
+    coefficient(x,n) == coefficient(x,n)$Rep
+    elt(x:%,n:NonNegativeInteger) == coefficient(x,n)
+
+    pole? x == false
+
+    order x    == (order(x)$Rep) :: NNI
+    order(x,n) == (order(x,n)$Rep) :: NNI
+
+--% Composition
+
+    elt(uts1:%,uts2:%) ==
+      zero? uts2 => coefficient(uts1,0) :: %
+      not zero? coefficient(uts2,0) =>
+        error "elt: second argument must have positive order"
+      iCompose(uts1,uts2)
+
+--% Integration
+
+    if Coef has Algebra Fraction Integer then
+
+      integrate(x:%,v:Variable(var)) == integrate x
+
+--% Transcendental functions
+
+      (uts1:%) ** (uts2:%) == exp(log(uts1) * uts2)
+
+      if Coef has CommutativeRing then
+
+        (uts:%) ** (r:RN) == cRationalPower(uts,r)
+
+        exp uts == cExp uts
+        log uts == cLog uts
+
+        sin uts == cSin uts
+        cos uts == cCos uts
+        tan uts == cTan uts
+        cot uts == cCot uts
+        sec uts == cSec uts
+        csc uts == cCsc uts
+
+        asin uts == cAsin uts
+        acos uts == cAcos uts
+        atan uts == cAtan uts
+        acot uts == cAcot uts
+        asec uts == cAsec uts
+        acsc uts == cAcsc uts
+
+        sinh uts == cSinh uts
+        cosh uts == cCosh uts
+        tanh uts == cTanh uts
+        coth uts == cCoth uts
+        sech uts == cSech uts
+        csch uts == cCsch uts
+
+        asinh uts == cAsinh uts
+        acosh uts == cAcosh uts
+        atanh uts == cAtanh uts
+        acoth uts == cAcoth uts
+        asech uts == cAsech uts
+        acsch uts == cAcsch uts
+
+      else
+
+        ZERO    : SG := "series must have constant coefficient zero"
+        ONE     : SG := "series must have constant coefficient one"
+        NPOWERS : SG := "series expansion has terms of negative degree"
+
+        (uts:%) ** (r:RN) ==
+--          not one? coefficient(uts,0) =>
+          not (coefficient(uts,0) = 1) =>
+            error "**: constant coefficient must be one"
+          onePlusX : % := monomial(1,0) + monomial(1,1)
+          ratPow := cPower(uts,r :: Coef)
+          iCompose(ratPow,uts - 1)
+
+        exp uts ==
+          zero? coefficient(uts,0) =>
+            expx := cExp monomial(1,1)
+            iCompose(expx,uts)
+          error concat("exp: ",ZERO)
+
+        log uts ==
+--          one? coefficient(uts,0) =>
+          (coefficient(uts,0) = 1) =>
+            log1PlusX := cLog(monomial(1,0) + monomial(1,1))
+            iCompose(log1PlusX,uts - 1)
+          error concat("log: ",ONE)
+
+        sin uts ==
+          zero? coefficient(uts,0) =>
+            sinx := cSin monomial(1,1)
+            iCompose(sinx,uts)
+          error concat("sin: ",ZERO)
+
+        cos uts ==
+          zero? coefficient(uts,0) =>
+            cosx := cCos monomial(1,1)
+            iCompose(cosx,uts)
+          error concat("cos: ",ZERO)
+
+        tan uts ==
+          zero? coefficient(uts,0) =>
+            tanx := cTan monomial(1,1)
+            iCompose(tanx,uts)
+          error concat("tan: ",ZERO)
+
+        cot uts ==
+          zero? uts => error "cot: cot(0) is undefined"
+          zero? coefficient(uts,0) => error concat("cot: ",NPOWERS)
+          error concat("cot: ",ZERO)
+
+        sec uts ==
+          zero? coefficient(uts,0) =>
+            secx := cSec monomial(1,1)
+            iCompose(secx,uts)
+          error concat("sec: ",ZERO)
+
+        csc uts ==
+          zero? uts => error "csc: csc(0) is undefined"
+          zero? coefficient(uts,0) => error concat("csc: ",NPOWERS)
+          error concat("csc: ",ZERO)
+
+        asin uts ==
+          zero? coefficient(uts,0) =>
+            asinx := cAsin monomial(1,1)
+            iCompose(asinx,uts)
+          error concat("asin: ",ZERO)
+
+        atan uts ==
+          zero? coefficient(uts,0) =>
+            atanx := cAtan monomial(1,1)
+            iCompose(atanx,uts)
+          error concat("atan: ",ZERO)
+
+        acos z == error "acos: acos undefined on this coefficient domain"
+        acot z == error "acot: acot undefined on this coefficient domain"
+        asec z == error "asec: asec undefined on this coefficient domain"
+        acsc z == error "acsc: acsc undefined on this coefficient domain"
+
+        sinh uts ==
+          zero? coefficient(uts,0) =>
+            sinhx := cSinh monomial(1,1)
+            iCompose(sinhx,uts)
+          error concat("sinh: ",ZERO)
+
+        cosh uts ==
+          zero? coefficient(uts,0) =>
+            coshx := cCosh monomial(1,1)
+            iCompose(coshx,uts)
+          error concat("cosh: ",ZERO)
+
+        tanh uts ==
+          zero? coefficient(uts,0) =>
+            tanhx := cTanh monomial(1,1)
+            iCompose(tanhx,uts)
+          error concat("tanh: ",ZERO)
+
+        coth uts ==
+          zero? uts => error "coth: coth(0) is undefined"
+          zero? coefficient(uts,0) => error concat("coth: ",NPOWERS)
+          error concat("coth: ",ZERO)
+
+        sech uts ==
+          zero? coefficient(uts,0) =>
+            sechx := cSech monomial(1,1)
+            iCompose(sechx,uts)
+          error concat("sech: ",ZERO)
+
+        csch uts ==
+          zero? uts => error "csch: csch(0) is undefined"
+          zero? coefficient(uts,0) => error concat("csch: ",NPOWERS)
+          error concat("csch: ",ZERO)
+
+        asinh uts ==
+          zero? coefficient(uts,0) =>
+            asinhx := cAsinh monomial(1,1)
+            iCompose(asinhx,uts)
+          error concat("asinh: ",ZERO)
+
+        atanh uts ==
+          zero? coefficient(uts,0) =>
+            atanhx := cAtanh monomial(1,1)
+            iCompose(atanhx,uts)
+          error concat("atanh: ",ZERO)
+
+        acosh uts == error "acosh: acosh undefined on this coefficient domain"
+        acoth uts == error "acoth: acoth undefined on this coefficient domain"
+        asech uts == error "asech: asech undefined on this coefficient domain"
+        acsch uts == error "acsch: acsch undefined on this coefficient domain"
+
+    if Coef has Field then
+      if Coef has Algebra Fraction Integer then
+
+        (uts:%) ** (r:Coef) ==
+--          not one? coefficient(uts,1) =>
+          not (coefficient(uts,1) = 1) =>
+            error "**: constant coefficient should be 1"
+          cPower(uts,r)
+
+--% OutputForms
+
+    coerce(x:%): OUT ==
+      count : NNI := _$streamCount$Lisp
+      extend(x,count)
+      seriesToOutputForm(getStream x,getRef x,variable x,center x,1)
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<domain SUTS SparseUnivariateTaylorSeries>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

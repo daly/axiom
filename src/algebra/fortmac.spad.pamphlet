@@ -1,0 +1,461 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra fortmac.spad}
+\author{Mike Dewar}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{domain MINT MachineInteger}
+<<domain MINT MachineInteger>>=
+)abbrev domain MINT MachineInteger
+++ Author: Mike Dewar
+++ Date Created:  December 1993
+++ Date Last Updated:
+++ Basic Operations:
+++ Related Domains:
+++ Also See: FortranExpression, FortranMachineTypeCategory, MachineFloat,
+++  MachineComplex
+++ AMS Classifications:
+++ Keywords:
+++ Examples:
+++ References:
+++ Description: A domain which models the integer representation
+++ used by machines in the AXIOM-NAG link.
+MachineInteger(): Exports == Implementation where
+
+  S ==> String
+
+  Exports ==> Join(FortranMachineTypeCategory,IntegerNumberSystem) with
+    maxint : PositiveInteger -> PositiveInteger
+     ++ maxint(u) sets the maximum integer in the model to u
+    maxint : () -> PositiveInteger
+     ++ maxint() returns the maximum integer in the model
+    coerce : Expression Integer -> Expression $
+     ++ coerce(x) returns x with coefficients in the domain
+
+  Implementation  ==> Integer add
+
+    MAXINT : PositiveInteger := 2**32
+
+    maxint():PositiveInteger == MAXINT
+
+    maxint(new:PositiveInteger):PositiveInteger ==
+      old := MAXINT
+      MAXINT := new
+      old
+
+    coerce(u:Expression Integer):Expression($) ==
+      map(coerce,u)$ExpressionFunctions2(Integer,$)
+
+    coerce(u:Integer):$ ==
+      import S
+      abs(u) > MAXINT => 
+        message: S := concat [convert(u)@S,"  > MAXINT(",convert(MAXINT)@S,")"]
+        error message
+      u pretend $
+
+    retract(u:$):Integer == u pretend Integer
+
+    retractIfCan(u:$):Union(Integer,"failed") == u pretend Integer
+
+@
+\section{domain MFLOAT MachineFloat}
+<<domain MFLOAT MachineFloat>>=
+)abbrev domain MFLOAT MachineFloat
+++ Author: Mike Dewar
+++ Date Created:  December 1993
+++ Date Last Updated:
+++ Basic Operations:
+++ Related Domains:
+++ Also See: FortranExpression, FortranMachineTypeCategory, MachineInteger,
+++  MachineComplex
+++ AMS Classifications:
+++ Keywords:
+++ Examples:
+++ References:
+++ Description: A domain which models the floating point representation
+++ used by machines in the AXIOM-NAG link.
+MachineFloat(): Exports == Implementation where
+
+  PI  ==> PositiveInteger
+  NNI ==> NonNegativeInteger
+  F   ==> Float
+  I   ==> Integer
+  S   ==> String
+  FI  ==> Fraction Integer
+  SUP ==> SparseUnivariatePolynomial
+  SF  ==> DoubleFloat
+ 
+  Exports ==> Join(FloatingPointSystem,FortranMachineTypeCategory,Field,
+      RetractableTo(Float),RetractableTo(Fraction(Integer)),CharacteristicZero) with
+    precision : PI -> PI
+      ++ precision(p) sets the number of digits in the model to p
+    precision : () -> PI
+      ++ precision() returns the number of digits in the model 
+    base   : PI -> PI
+      ++ base(b) sets the base of the model to b
+    base   : () -> PI
+      ++ base() returns the base of the model
+    maximumExponent : I -> I
+      ++ maximumExponent(e) sets the maximum exponent in the model to e
+    maximumExponent : () -> I
+      ++ maximumExponent() returns the maximum exponent in the model
+    minimumExponent : I -> I
+      ++ minimumExponent(e) sets the minimum exponent in the model to e
+    minimumExponent : () -> I
+      ++ minimumExponent() returns the minimum exponent in the model
+    coerce : $ -> F
+      ++ coerce(u) transforms a MachineFloat to a standard Float
+    coerce : MachineInteger -> $
+      ++ coerce(u) transforms a MachineInteger into a MachineFloat
+    mantissa  : $ -> I
+      ++ mantissa(u) returns the mantissa of u
+    exponent  : $ -> I
+      ++ exponent(u) returns the exponent of u
+    changeBase : (I,I,PI) -> $
+      ++ changeBase(exp,man,base) \undocumented{}
+
+  Implementation ==> add
+
+    import F
+    import FI
+
+    Rep := Record(mantissa:I,exponent:I)
+
+    -- Parameters of the Floating Point Representation
+    P : PI := 16      -- Precision
+    B : PI := 2       -- Base
+    EMIN : I := -1021 -- Minimum Exponent
+    EMAX : I :=  1024 -- Maximum Exponent
+
+    -- Useful constants
+    POWER : PI := 53  -- The maximum power of B which will yield P
+                      -- decimal digits.
+    MMAX  : PI := B**POWER 
+    
+
+    -- locals
+    locRound:(FI)->I
+    checkExponent:($)->$
+    normalise:($)->$
+    newPower:(PI,PI)->Void
+ 
+    retractIfCan(u:$):Union(FI,"failed") == 
+      mantissa(u)*(B/1)**(exponent(u))
+
+    wholePart(u:$):Integer ==
+       man:I:=mantissa u
+       exp:I:=exponent u
+       f:=
+           positive? exp => man*B**(exp pretend PI)
+           zero? exp => man
+           wholePart(man/B**((-exp) pretend PI))
+    normalise(u:$):$ ==
+      -- We want the largest possible mantissa, to ensure a canonical
+      -- representation.
+      exp : I  := exponent u
+      man : I  := mantissa u
+      BB  : I  := B pretend I
+      sgn : I := sign man ; man := abs man
+      zero? man => [0,0]$Rep
+      if man < MMAX then 
+        while man < MMAX repeat
+          exp := exp - 1
+          man := man * BB
+      if man > MMAX then
+        q1:FI:= man/1
+        BBF:FI:=BB/1
+        while wholePart(q1) > MMAX repeat
+          q1:= q1 / BBF
+          exp:=exp + 1
+        man := locRound(q1)  
+      positive?(sgn) => checkExponent [man,exp]$Rep
+      checkExponent [-man,exp]$Rep
+
+    mantissa(u:$):I == elt(u,mantissa)$Rep
+    exponent(u:$):I == elt(u,exponent)$Rep
+
+    newPower(base:PI,prec:PI):Void ==
+      power   : PI := 1
+      target  : PI := 10**prec
+      current : PI := base
+      while (current := current*base) < target repeat power := power+1
+      POWER := power
+      MMAX  := B**POWER
+      void()
+
+    changeBase(exp:I,man:I,base:PI):$ ==
+      newExp : I  := 0
+      f      : FI := man*(base pretend I)::FI**exp
+      sign   : I  := sign f
+      f      : FI := abs f
+      newMan : I  := wholePart f
+      zero? f => [0,0]$Rep
+      BB     : FI := (B pretend I)::FI
+      if newMan < MMAX then
+        while newMan < MMAX repeat
+          newExp := newExp - 1
+          f := f*BB
+          newMan := wholePart f
+      if newMan > MMAX then
+        while newMan > MMAX repeat
+          newExp := newExp + 1
+          f := f/BB
+          newMan := wholePart f
+      [sign*newMan,newExp]$Rep
+
+    checkExponent(u:$):$ ==
+      exponent(u) < EMIN or exponent(u) > EMAX =>
+        message :S := concat(["Exponent out of range: ",
+                              convert(EMIN)@S, "..", convert(EMAX)@S])$S
+        error message
+      u
+    
+    coerce(u:$):OutputForm == 
+      coerce(u::F)
+
+    coerce(u:MachineInteger):$ ==
+      checkExponent changeBase(0,retract(u)@Integer,10)
+
+    coerce(u:$):F ==
+      oldDigits : PI := digits(P)$F
+      r : F := float(mantissa u,exponent u,B)$Float
+      digits(oldDigits)$F
+      r
+    
+    coerce(u:F):$ ==
+      checkExponent changeBase(exponent(u)$F,mantissa(u)$F,base()$F)
+
+    coerce(u:I):$ ==
+       checkExponent changeBase(0,u,10)
+
+    coerce(u:FI):$ == (numer u)::$/(denom u)::$
+
+    retract(u:$):FI == 
+      value : Union(FI,"failed") := retractIfCan(u)
+      value case "failed" => error "Cannot retract to a Fraction Integer"
+      value::FI
+
+    retract(u:$):F == u::F
+
+    retractIfCan(u:$):Union(F,"failed") == u::F::Union(F,"failed")
+
+    retractIfCan(u:$):Union(I,"failed") ==
+      value:FI := mantissa(u)*(B pretend I)::FI**exponent(u)
+      zero? fractionPart(value) => wholePart(value)::Union(I,"failed")
+      "failed"::Union(I,"failed")
+
+    retract(u:$):I ==
+      result : Union(I,"failed") := retractIfCan u
+      result = "failed" => error "Not an Integer"
+      result::I
+
+    precision(p: PI):PI ==
+      old : PI := P
+      newPower(B,p)
+      P := p
+      old
+
+    precision():PI == P
+
+    base(b:PI):PI ==
+      old : PI := b
+      newPower(b,P)
+      B := b
+      old
+
+    base():PI == B
+
+    maximumExponent(u:I):I ==
+      old : I := EMAX
+      EMAX := u
+      old
+
+    maximumExponent():I == EMAX
+
+    minimumExponent(u:I):I ==
+      old : I := EMIN
+      EMIN := u
+      old
+
+    minimumExponent():I == EMIN
+
+    0 == [0,0]$Rep
+    1 == changeBase(0,1,10)
+
+    zero?(u:$):Boolean == u=[0,0]$Rep
+
+
+
+    f1:$
+    f2:$
+
+
+    locRound(x:FI):I ==
+      abs(fractionPart(x)) >= 1/2 => wholePart(x)+sign(x)
+      wholePart(x)
+
+    recip f1 ==
+      zero? f1 => "failed"
+      normalise [ locRound(B**(2*POWER)/mantissa f1),-(exponent f1 + 2*POWER)]
+    
+    f1 * f2 == 
+      normalise [mantissa(f1)*mantissa(f2),exponent(f1)+exponent(f2)]$Rep
+    
+    f1 **(p:FI) ==
+      ((f1::F)**p)::%
+
+--inline
+    f1 / f2 == 
+      zero? f2 => error "division by zero"
+      zero? f1 => 0
+      f1=f2 => 1
+      normalise [locRound(mantissa(f1)*B**(2*POWER)/mantissa(f2)),
+         exponent(f1)-(exponent f2 + 2*POWER)]
+    
+    inv(f1) == 1/f1
+
+    f1 exquo f2 == f1/f2
+
+    divide(f1,f2) == [ f1/f2,0]
+
+    f1 quo f2 == f1/f2
+    f1 rem f2 == 0
+    u:I * f1 == 
+      normalise [u*mantissa(f1),exponent(f1)]$Rep
+
+    f1 = f2 == mantissa(f1)=mantissa(f2) and exponent(f1)=exponent(f2)
+
+    f1 + f2 == 
+      m1 : I := mantissa f1
+      m2 : I := mantissa f2
+      e1 : I := exponent f1
+      e2 : I := exponent f2
+      e1 > e2 => 
+--insignificance
+         e1 > e2 + POWER + 2 => 
+               zero? f1 => f2
+               f1 
+         normalise [m1*(B pretend I)**((e1-e2) pretend NNI)+m2,e2]$Rep
+      e2 > e1 + POWER +2 => 
+               zero? f2 => f1
+               f2
+      normalise [m2*(B pretend I)**((e2-e1) pretend NNI)+m1,e1]$Rep
+
+    - f1 == [- mantissa f1,exponent f1]$Rep
+
+    f1 - f2 == f1 + (-f2)
+
+    f1 < f2 == 
+      m1 : I := mantissa f1
+      m2 : I := mantissa f2
+      e1 : I := exponent f1
+      e2 : I := exponent f2
+      sign(m1) = sign(m2) =>
+        e1 < e2 => true
+        e1 = e2 and m1 < m2 => true
+        false
+      sign(m1) = 1 => false
+      sign(m1) = 0 and sign(m2) = -1 => false
+      true
+
+    characteristic():NNI == 0
+
+@
+\section{domain MCMPLX MachineComplex}
+<<domain MCMPLX MachineComplex>>=
+)abbrev domain MCMPLX MachineComplex
+++ Date Created:  December 1993
+++ Date Last Updated:
+++ Basic Operations:
+++ Related Domains:
+++ Also See: FortranExpression, FortranMachineTypeCategory, MachineInteger,
+++  MachineFloat
+++ AMS Classifications:
+++ Keywords:
+++ Examples:
+++ References:
+++ Description: A domain which models the complex number representation
+++ used by machines in the AXIOM-NAG link.
+MachineComplex():Exports == Implementation where
+
+  Exports ==> Join (FortranMachineTypeCategory,
+                    ComplexCategory(MachineFloat)) with
+    coerce : Complex Float -> $
+      ++ coerce(u) transforms u into a MachineComplex
+    coerce : Complex Integer -> $
+      ++ coerce(u) transforms u into a MachineComplex
+    coerce : Complex MachineFloat -> $
+      ++ coerce(u) transforms u into a MachineComplex
+    coerce : Complex MachineInteger -> $
+      ++ coerce(u) transforms u into a MachineComplex
+    coerce : $ -> Complex Float
+      ++ coerce(u) transforms u into a COmplex Float
+
+  Implementation ==> Complex MachineFloat add
+
+    coerce(u:Complex Float):$ == 
+      complex(real(u)::MachineFloat,imag(u)::MachineFloat)
+
+    coerce(u:Complex Integer):$ ==
+      complex(real(u)::MachineFloat,imag(u)::MachineFloat)
+
+    coerce(u:Complex MachineInteger):$ ==
+      complex(real(u)::MachineFloat,imag(u)::MachineFloat)
+
+    coerce(u:Complex MachineFloat):$ == 
+      complex(real(u),imag(u))
+
+    coerce(u:$):Complex Float ==
+      complex(real(u)::Float,imag(u)::Float)
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<domain MINT MachineInteger>>
+<<domain MFLOAT MachineFloat>>
+<<domain MCMPLX MachineComplex>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

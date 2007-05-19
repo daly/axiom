@@ -1,0 +1,226 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra rderf.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package RDETR TranscendentalRischDE}
+<<package RDETR TranscendentalRischDE>>=
+)abbrev package RDETR TranscendentalRischDE
+++ Risch differential equation, transcendental case.
+++ Author: Manuel Bronstein
+++ Date Created: Jan 1988
+++ Date Last Updated: 2 November 1995
+TranscendentalRischDE(F, UP): Exports == Implementation where
+  F  : Join(Field, CharacteristicZero, RetractableTo Integer)
+  UP : UnivariatePolynomialCategory F
+
+  N   ==> NonNegativeInteger
+  Z   ==> Integer
+  RF  ==> Fraction UP
+  REC ==> Record(a:UP, b:UP, c:UP, t:UP)
+  SPE ==> Record(b:UP, c:UP, m:Z, alpha:UP, beta:UP)
+  PSOL==> Record(ans:UP, nosol:Boolean)
+  ANS ==> Union(ans:PSOL, eq:SPE)
+  PSQ ==> Record(ans:RF, nosol:Boolean)
+
+  Exports ==> with
+    monomRDE: (RF,RF,UP->UP) -> Union(Record(a:UP,b:RF,c:RF,t:UP), "failed")
+      ++ monomRDE(f,g,D) returns \spad{[A, B, C, T]} such that
+      ++ \spad{y' + f y = g} has a solution if and only if \spad{y = Q / T},
+      ++ where Q satisfies \spad{A Q' + B Q = C} and has no normal pole.
+      ++ A and T are polynomials and B and C have no normal poles.
+      ++ D is the derivation to use.
+    baseRDE : (RF, RF) -> PSQ
+      ++ baseRDE(f, g) returns a \spad{[y, b]} such that \spad{y' + fy = g}
+      ++ if \spad{b = true}, y is a partial solution otherwise (no solution
+      ++ in that case).
+      ++ D is the derivation to use.
+    polyRDE : (UP, UP, UP, Z, UP -> UP) -> ANS
+      ++ polyRDE(a, B, C, n, D) returns either:
+      ++ 1. \spad{[Q, b]} such that \spad{degree(Q) <= n} and
+      ++    \spad{a Q'+ B Q = C} if \spad{b = true}, Q is a partial solution
+      ++    otherwise.
+      ++ 2. \spad{[B1, C1, m, \alpha, \beta]} such that any polynomial solution
+      ++    of degree at most n of \spad{A Q' + BQ = C} must be of the form
+      ++    \spad{Q = \alpha H + \beta} where \spad{degree(H) <= m} and
+      ++    H satisfies \spad{H' + B1 H = C1}.
+      ++ D is the derivation to use.
+
+  Implementation ==> add
+    import MonomialExtensionTools(F, UP)
+
+    getBound     : (UP, UP, Z) -> Z
+    SPDEnocancel1: (UP, UP, Z, UP -> UP) -> PSOL
+    SPDEnocancel2: (UP, UP, Z, Z, F, UP -> UP) -> ANS
+    SPDE         : (UP, UP, UP, Z, UP -> UP) -> Union(SPE, "failed")
+
+-- cancellation at infinity is possible, A is assumed nonzero
+-- needs tagged union because of branch choice problem
+-- always returns a PSOL in the base case (never a SPE)
+    polyRDE(aa, bb, cc, d, derivation) ==
+      n:Z
+      (u := SPDE(aa, bb, cc, d, derivation)) case "failed" => [[0, true]]
+      zero?(u.c) => [[u.beta, false]]
+--      baseCase? := one?(dt := derivation monomial(1, 1))
+      baseCase? := ((dt := derivation monomial(1, 1)) = 1)
+      n := degree(dt)::Z - 1
+      b0? := zero?(u.b)
+      (~b0?) and (baseCase? or degree(u.b) > max(0, n)) =>
+          answ := SPDEnocancel1(u.b, u.c, u.m, derivation)
+          [[u.alpha * answ.ans + u.beta, answ.nosol]]
+      (n > 0) and (b0? or degree(u.b) < n) =>
+          uansw := SPDEnocancel2(u.b,u.c,u.m,n,leadingCoefficient dt,derivation)
+          uansw case ans=> [[u.alpha * uansw.ans.ans + u.beta, uansw.ans.nosol]]
+          [[uansw.eq.b, uansw.eq.c, uansw.eq.m,
+            u.alpha * uansw.eq.alpha, u.alpha * uansw.eq.beta + u.beta]]
+      b0? and baseCase? =>
+          degree(u.c) >= u.m => [[0, true]]
+          [[u.alpha * integrate(u.c) + u.beta, false]]
+      [u::SPE]
+
+-- cancellation at infinity is possible, A is assumed nonzero
+-- if u.b = 0 then u.a = 1 already, but no degree check is done
+-- returns "failed" if a p' + b p = c has no soln of degree at most d,
+-- otherwise [B, C, m, \alpha, \beta] such that any soln p of degree at
+-- most d of  a p' + b p = c  must be of the form p = \alpha h + \beta,
+-- where h' + B h = C and h has degree at most m
+    SPDE(aa, bb, cc, d, derivation) ==
+      zero? cc => [0, 0, 0, 0, 0]
+      d < 0 => "failed"
+      (u := cc exquo (g := gcd(aa, bb))) case "failed" => "failed"
+      aa := (aa exquo g)::UP
+      bb := (bb exquo g)::UP
+      cc := u::UP
+      (ra := retractIfCan(aa)@Union(F, "failed")) case F =>
+        a1 := inv(ra::F)
+        [a1 * bb, a1 * cc, d, 1, 0]
+      bc := extendedEuclidean(bb, aa, cc)::Record(coef1:UP, coef2:UP)
+      qr := divide(bc.coef1, aa)
+      r  := qr.remainder         -- z = bc.coef2 + b * qr.quotient
+      (v  := SPDE(aa, bb + derivation aa,
+                  bc.coef2 + bb * qr.quotient - derivation r,
+                   d - degree(aa)::Z, derivation)) case "failed" => "failed"
+      [v.b, v.c, v.m, aa * v.alpha, aa * v.beta + r]
+
+-- solves q' + b q = c  with deg(q) <= d
+-- case (B <> 0) and (D = d/dt or degree(B) > max(0, degree(Dt) - 1))
+-- this implies no cancellation at infinity, BQ term dominates
+-- returns [Q, flag] such that Q is a solution if flag is false,
+-- a partial solution otherwise.
+    SPDEnocancel1(bb, cc, d, derivation) ==
+      q:UP := 0
+      db := (degree bb)::Z
+      lb := leadingCoefficient bb
+      while cc ^= 0 repeat
+        d < 0 or (n := (degree cc)::Z - db) < 0 or n > d => return [q, true]
+        r := monomial((leadingCoefficient cc) / lb, n::N)
+        cc := cc - bb * r - derivation r
+        d := n - 1
+        q := q + r
+      [q, false]
+
+-- case (t is a nonlinear monomial) and (B = 0 or degree(B) < degree(Dt) - 1)
+-- this implies no cancellation at infinity, DQ term dominates or degree(Q) = 0
+-- dtm1 = degree(Dt) - 1
+    SPDEnocancel2(bb, cc, d, dtm1, lt, derivation) ==
+      q:UP := 0
+      while cc ^= 0 repeat
+        d < 0 or (n := (degree cc)::Z - dtm1) < 0 or n > d => return [[q, true]]
+        if n > 0 then
+          r  := monomial((leadingCoefficient cc) / (n * lt), n::N)
+          cc := cc - bb * r - derivation r
+          d  := n - 1
+          q  := q + r
+        else        -- n = 0 so solution must have degree 0
+          db:N := (zero? bb => 0; degree bb);
+          db ^= degree(cc) => return [[q, true]]
+          zero? db => return [[bb, cc, 0, 1, q]]
+          r  := leadingCoefficient(cc) / leadingCoefficient(bb)
+          cc := cc - r * bb - derivation(r::UP)
+          d  := - 1
+          q := q + r::UP
+      [[q, false]]
+
+    monomRDE(f, g, derivation) ==
+      gg := gcd(d := normalDenom(f,derivation), e := normalDenom(g,derivation))
+      tt := (gcd(e, differentiate e) exquo gcd(gg,differentiate gg))::UP
+      (u := ((tt * (aa := d * tt)) exquo e)) case "failed" => "failed"
+      [aa, aa * f - (d * derivation tt)::RF, u::UP * e * g, tt]
+
+-- solve y' + f y = g for y in RF
+-- assumes that f is weakly normalized (no finite cancellation)
+-- base case: F' = 0
+    baseRDE(f, g) ==
+      (u := monomRDE(f, g, differentiate)) case "failed" => [0, true]
+      n := getBound(u.a,bb := retract(u.b)@UP,degree(cc := retract(u.c)@UP)::Z)
+      v := polyRDE(u.a, bb, cc, n, differentiate).ans
+      [v.ans / u.t, v.nosol]
+
+-- return an a bound on the degree of a solution of A P'+ B P = C,A ^= 0
+-- cancellation at infinity is possible
+-- base case: F' = 0
+    getBound(a, b, dc) ==
+      da := (degree a)::Z
+      zero? b => max(0, dc - da + 1)
+      db := (degree b)::Z
+      da > (db + 1) => max(0, dc - da + 1)
+      da < (db + 1) => dc - db
+      (n := retractIfCan(- leadingCoefficient(b) / leadingCoefficient(a)
+                      )@Union(Z, "failed")) case Z => max(n::Z, dc - db)
+      dc - db
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+-- SPAD files for the integration world should be compiled in the
+-- following order:
+--
+--   intaux  RDERF  intrf  rdeef  intef  irexpand  integrat
+
+<<package RDETR TranscendentalRischDE>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

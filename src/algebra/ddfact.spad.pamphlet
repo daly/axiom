@@ -1,0 +1,309 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra ddfact.spad}
+\author{Patrizia Gianni, Barry Trager}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package DDFACT DistinctDegreeFactorize}
+<<package DDFACT DistinctDegreeFactorize>>=
+)abbrev package DDFACT DistinctDegreeFactorize
+++ Author: P. Gianni, B.Trager
+++ Date Created: 1983
+++ Date Last Updated: 22 November 1993
+++ Basic Functions: factor, irreducible?
+++ Related Constructors: PrimeField, FiniteField
+++ Also See:
+++ AMS Classifications:
+++ Keywords:
+++ References:
+++ Description:
+++   Package for the factorization of a univariate polynomial with
+++   coefficients in a finite field. The algorithm used is the
+++   "distinct degree" algorithm of Cantor-Zassenhaus, modified
+++   to use trace instead of the norm and a table for computing
+++   Frobenius as suggested by Naudin and Quitte .
+    
+DistinctDegreeFactorize(F,FP): C == T
+  where
+   F  : FiniteFieldCategory
+   FP : UnivariatePolynomialCategory(F)
+ 
+   fUnion ==> Union("nil", "sqfr", "irred", "prime")
+   FFE    ==> Record(flg:fUnion, fctr:FP, xpnt:Integer)
+   NNI       == NonNegativeInteger
+   Z         == Integer
+   fact      == Record(deg : NNI,prod : FP)
+   ParFact   == Record(irr:FP,pow:Z)
+   FinalFact == Record(cont:F,factors:List(ParFact))
+ 
+   C == with
+      factor        :         FP      -> Factored FP
+        ++ factor(p) produces the complete factorization of the polynomial p.
+      factorSquareFree :         FP      -> Factored FP
+        ++ factorSquareFree(p) produces the complete factorization of the 
+        ++ square free polynomial p.
+      distdfact       :   (FP,Boolean)  -> FinalFact
+        ++ distdfact(p,sqfrflag) produces the complete factorization
+        ++ of the polynomial p returning an internal data structure.
+        ++ If argument sqfrflag is true, the polynomial is assumed square free.
+      separateDegrees :         FP      -> List fact
+        ++ separateDegrees(p) splits the square free polynomial p into 
+        ++ factors each of which is a product of irreducibles of the same degree.
+      separateFactors :  List fact  -> List FP
+        ++ separateFactors(lfact) takes the list produced by 
+        ++ \spadfunFrom{separateDegrees}{DistinctDegreeFactorization}
+        ++ and produces the complete list of factors.
+      exptMod         :   (FP,NNI,FP)   -> FP
+        ++ exptMod(u,k,v) raises the polynomial u to the kth power
+        ++ modulo the polynomial v.
+      trace2PowMod     :   (FP,NNI,FP)   -> FP
+        ++ trace2PowMod(u,k,v) produces the sum of \spad{u**(2**i)} for i running
+        ++ from 1 to k all computed modulo the polynomial v.
+      tracePowMod     :   (FP,NNI,FP)   -> FP
+        ++ tracePowMod(u,k,v) produces the sum of \spad{u**(q**i)} 
+        ++ for i running and q= size F
+      irreducible?    :         FP      -> Boolean
+        ++ irreducible?(p) tests whether the polynomial p is irreducible.
+ 
+ 
+   T == add
+      --declarations
+      D:=ModMonic(F,FP)
+      import UnivariatePolynomialSquareFree(F,FP)
+ 
+      --local functions
+      notSqFr : (FP,FP -> List(FP)) -> List(ParFact)
+      ddffact : FP -> List(FP)
+      ddffact1 : (FP,Boolean) -> List fact
+      ranpol :         NNI       -> FP
+      
+      charF : Boolean := characteristic()$F = 2
+
+      --construct a random polynomial of random degree < d
+      ranpol(d:NNI):FP ==
+        k1: NNI := 0
+        while k1 = 0 repeat k1 := random d
+        -- characteristic F = 2
+        charF =>
+           u:=0$FP
+           for j in 1..k1 repeat u:=u+monomial(random()$F,j)
+           u
+        u := monomial(1,k1)
+        for j in 0..k1-1 repeat u:=u+monomial(random()$F,j)
+        u
+ 
+      notSqFr(m:FP,appl: FP->List(FP)):List(ParFact) ==
+        factlist : List(ParFact) :=empty()
+        llf : List FFE
+        fln :List(FP) := empty()
+        if (lcm:=leadingCoefficient m)^=1 then m:=(inv lcm)*m
+        llf:= factorList(squareFree(m))
+        for lf in llf repeat
+          d1:= lf.xpnt
+          pol := lf.fctr
+          if (lcp:=leadingCoefficient pol)^=1 then pol := (inv lcp)*pol
+          degree pol=1 => factlist:=cons([pol,d1]$ParFact,factlist)
+          fln := appl(pol)
+          factlist :=append([[pf,d1]$ParFact for pf in fln],factlist)
+        factlist
+ 
+      -- compute u**k mod v (requires call to setPoly of multiple of v)
+      -- characteristic not equal 2
+      exptMod(u:FP,k:NNI,v:FP):FP == (reduce(u)$D**k):FP rem v
+ 
+      -- compute u**k mod v (requires call to setPoly of multiple of v)
+      -- characteristic equal 2
+      trace2PowMod(u:FP,k:NNI,v:FP):FP ==
+        uu:=u
+        for i in 1..k repeat uu:=(u+uu*uu) rem v
+        uu
+
+      -- compute u+u**q+..+u**(q**k) mod v 
+      -- (requires call to setPoly of multiple of v) where q=size< F
+      tracePowMod(u:FP,k:NNI,v:FP):FP ==
+        u1 :D :=reduce(u)$D
+        uu : D := u1
+        for i in 1..k repeat uu:=(u1+frobenius uu) 
+        (lift uu) rem v
+
+      -- compute u**(1+q+..+q**k) rem v where q=#F 
+      -- (requires call to setPoly of multiple of v)
+      -- frobenius map is used
+      normPowMod(u:FP,k:NNI,v:FP):FP ==
+        u1 :D :=reduce(u)$D
+        uu : D := u1
+        for i in 1..k repeat uu:=(u1*frobenius uu) 
+        (lift uu) rem v
+ 
+      --find the factorization of m as product of factors each containing
+      --terms of equal degree .
+      -- if testirr=true the function returns the first factor found
+      ddffact1(m:FP,testirr:Boolean):List(fact) ==
+        p:=size$F
+        dg:NNI :=0
+        ddfact:List(fact):=empty()
+        --evaluation of x**p mod m
+        k1:NNI
+        u:= m
+        du := degree u
+        setPoly u
+        mon: FP := monomial(1,1)
+        v := mon
+        for k1 in 1.. while k1 <= (du quo 2) repeat
+            v := lift frobenius reduce(v)$D
+            g := gcd(v-mon,u)
+            dg := degree g
+            dg =0  => "next k1"
+            if leadingCoefficient g ^=1 then g := (inv leadingCoefficient g)*g
+            ddfact := cons([k1,g]$fact,ddfact)
+            testirr => return ddfact
+            u := u quo g
+            du := degree u
+            du = 0 => return ddfact
+            setPoly u
+        cons([du,u]$fact,ddfact)
+ 
+      -- test irreducibility
+      irreducible?(m:FP):Boolean ==
+        mf:fact:=first ddffact1(m,true)
+        degree m = mf.deg
+ 
+      --export ddfact1
+      separateDegrees(m:FP):List(fact) == ddffact1(m,false)
+ 
+      --find the complete factorization of m, using the result of ddfact1
+      separateFactors(distf : List fact) :List FP ==
+        ddfact := distf
+        n1:Integer
+        p1:=size()$F
+        if charF then n1:=length(p1)-1
+        newaux,aux,ris : List FP
+        ris := empty()
+        t,fprod : FP
+        for ffprod in ddfact repeat
+          fprod := ffprod.prod
+          d := ffprod.deg
+          degree fprod = d => ris := cons(fprod,ris)
+          aux:=[fprod]
+          setPoly fprod
+          while ^(empty? aux) repeat
+            t := ranpol(2*d)
+            if charF then t:=trace2PowMod(t,(n1*d-1)::NNI,fprod)
+            else t:=exptMod(tracePowMod(t,(d-1)::NNI,fprod),
+                                     (p1 quo 2)::NNI,fprod)-1$FP
+            newaux:=empty()
+            for u in aux repeat
+                g := gcd(u,t)
+                dg:= degree g
+                dg=0 or dg = degree u => newaux:=cons(u,newaux)
+                v := u quo g
+                if dg=d then ris := cons(inv(leadingCoefficient g)*g,ris)
+                        else newaux := cons(g,newaux)
+                if degree v=d then ris := cons(inv(leadingCoefficient v)*v,ris)
+                              else newaux := cons(v,newaux)
+            aux:=newaux
+        ris
+ 
+      --distinct degree algorithm for monic ,square-free polynomial
+      ddffact(m:FP):List(FP)==
+        ddfact:=ddffact1(m,false)
+        empty? ddfact => [m]
+        separateFactors ddfact
+ 
+      --factorize a general polynomial with distinct degree algorithm
+      --if test=true no check is executed on square-free
+      distdfact(m:FP,test:Boolean):FinalFact ==
+        factlist: List(ParFact):= empty()
+        fln : List(FP) :=empty()
+ 
+        --make m monic
+        if (lcm := leadingCoefficient m) ^=1 then m := (inv lcm)*m
+ 
+        --is x**d factor of m?
+        if (d := minimumDegree m)>0 then
+          m := (monicDivide (m,monomial(1,d))).quotient
+          factlist := [[monomial(1,1),d]$ParFact]
+        d:=degree m
+ 
+        --is m constant?
+        d=0 => [lcm,factlist]$FinalFact
+ 
+        --is m linear?
+        d=1 => [lcm,cons([m,d]$ParFact,factlist)]$FinalFact
+ 
+        --m is square-free
+        test =>
+          fln := ddffact m
+          factlist := append([[pol,1]$ParFact for pol in fln],factlist)
+          [lcm,factlist]$FinalFact
+ 
+        --factorize the monic,square-free terms
+        factlist:= append(notSqFr(m,ddffact),factlist)
+        [lcm,factlist]$FinalFact
+ 
+      --factorize the polynomial m
+      factor(m:FP) ==
+        m = 0 => 0
+        flist := distdfact(m,false)
+        makeFR(flist.cont::FP,[["prime",u.irr,u.pow]$FFE 
+                                 for u in flist.factors])
+
+
+      --factorize the square free polynomial m
+      factorSquareFree(m:FP) ==
+        m = 0 => 0
+        flist := distdfact(m,true)
+        makeFR(flist.cont::FP,[["prime",u.irr,u.pow]$FFE 
+                                 for u in flist.factors])
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+ 
+--The Berlekamp package for the finite factorization is in FINFACT.
+ 
+<<package DDFACT DistinctDegreeFactorize>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

@@ -1,0 +1,768 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra limitps.spad}
+\author{Clifton J. Williamson, Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package LIMITPS PowerSeriesLimitPackage}
+<<package LIMITPS PowerSeriesLimitPackage>>=
+)abbrev package LIMITPS PowerSeriesLimitPackage
+++ Author: Clifton J. Williamson
+++ Date Created: 21 March 1989
+++ Date Last Updated: 30 March 1994
+++ Basic Operations:
+++ Related Domains: UnivariateLaurentSeries(FE,x,a),
+++   UnivariatePuiseuxSeries(FE,x,a),ExponentialExpansion(R,FE,x,a)
+++ Also See:
+++ AMS Classifications:
+++ Keywords: limit, functional expression, power series
+++ Examples:
+++ References:
+++ Description:
+++   PowerSeriesLimitPackage implements limits of expressions
+++   in one or more variables as one of the variables approaches a
+++   limiting value.  Included are two-sided limits, left- and right-
+++   hand limits, and limits at plus or minus infinity.
+PowerSeriesLimitPackage(R,FE): Exports == Implementation where
+  R  : Join(GcdDomain,OrderedSet,RetractableTo Integer,_
+            LinearlyExplicitRingOver Integer)
+  FE : Join(AlgebraicallyClosedField,TranscendentalFunctionCategory,_
+            FunctionSpace R)
+  Z       ==> Integer
+  RN      ==> Fraction Integer
+  RF      ==> Fraction Polynomial R
+  OFE     ==> OrderedCompletion FE
+  OPF     ==> OnePointCompletion FE
+  SY      ==> Symbol
+  EQ      ==> Equation
+  LF      ==> LiouvillianFunction
+  UTS     ==> UnivariateTaylorSeries
+  ULS     ==> UnivariateLaurentSeries
+  UPXS    ==> UnivariatePuiseuxSeries
+  EFULS   ==> ElementaryFunctionsUnivariateLaurentSeries
+  EFUPXS  ==> ElementaryFunctionsUnivariatePuiseuxSeries
+  FS2UPS  ==> FunctionSpaceToUnivariatePowerSeries
+  FS2EXPXP ==> FunctionSpaceToExponentialExpansion
+  Problem ==> Record(func:String,prob:String)
+  RESULT  ==> Union(OFE,"failed")
+  TwoSide ==> Record(leftHandLimit:RESULT,rightHandLimit:RESULT)
+  U       ==> Union(OFE,TwoSide,"failed")
+  SIGNEF  ==> ElementaryFunctionSign(R,FE)
+
+  Exports ==> with
+
+    limit: (FE,EQ OFE) -> U
+      ++ limit(f(x),x = a) computes the real limit \spad{lim(x -> a,f(x))}.
+
+    complexLimit: (FE,EQ OPF) -> Union(OPF, "failed")
+      ++ complexLimit(f(x),x = a) computes the complex limit
+      ++ \spad{lim(x -> a,f(x))}.
+
+    limit: (FE,EQ FE,String) -> RESULT
+      ++ limit(f(x),x=a,"left") computes the left hand real limit
+      ++ \spad{lim(x -> a-,f(x))};
+      ++ \spad{limit(f(x),x=a,"right")} computes the right hand real limit
+      ++ \spad{lim(x -> a+,f(x))}.
+
+  Implementation ==> add
+    import ToolsForSign(R)
+    import ElementaryFunctionStructurePackage(R,FE)
+
+    zeroFE:FE := 0
+    anyRootsOrAtrigs?   : FE -> Boolean
+    complLimit  : (FE,SY) -> Union(OPF,"failed")
+    okProblem?  : (String,String) -> Boolean
+    realLimit   : (FE,SY) -> U
+    xxpLimit    : (FE,SY) -> RESULT
+    limitPlus   : (FE,SY) -> RESULT
+    localsubst  : (FE,Kernel FE,Z,FE) -> FE
+    locallimit  : (FE,SY,OFE) -> U
+    locallimitcomplex : (FE,SY,OPF) -> Union(OPF,"failed")
+    poleLimit:(RN,FE,SY) -> U
+    poleLimitPlus:(RN,FE,SY) -> RESULT
+
+    noX?: (FE,SY) -> Boolean
+    noX?(fcn,x) == not member?(x,variables fcn)
+
+    constant?: FE -> Boolean
+    constant? fcn == empty? variables fcn
+
+    firstNonLogPtr: (FE,SY) -> List Kernel FE
+    firstNonLogPtr(fcn,x) ==
+      -- returns a pointer to the first element of kernels(fcn) which
+      -- has 'x' as a variable, which is not a logarithm, and which is
+      -- not simply 'x'
+      list := kernels fcn
+      while not empty? list repeat
+        ker := first list
+        not is?(ker,"log" :: Symbol) and member?(x,variables(ker::FE)) _
+               and not(x = name(ker)) =>
+          return list
+        list := rest list
+      empty()
+
+    finiteValueAtInfinity?: Kernel FE -> Boolean
+    finiteValueAtInfinity? ker ==
+      is?(ker,"erf" :: Symbol) => true
+      is?(ker,"sech" :: Symbol) => true
+      is?(ker,"csch" :: Symbol) => true
+      is?(ker,"tanh" :: Symbol) => true
+      is?(ker,"coth" :: Symbol) => true
+      is?(ker,"atan" :: Symbol) => true
+      is?(ker,"acot" :: Symbol) => true
+      is?(ker,"asec" :: Symbol) => true
+      is?(ker,"acsc" :: Symbol) => true
+      is?(ker,"acsch" :: Symbol) => true
+      is?(ker,"acoth" :: Symbol) => true
+      false
+
+    knownValueAtInfinity?: Kernel FE -> Boolean
+    knownValueAtInfinity? ker ==
+      is?(ker,"exp" :: Symbol) => true
+      is?(ker,"sinh" :: Symbol) => true
+      is?(ker,"cosh" :: Symbol) => true
+      false
+
+    leftOrRight: (FE,SY,FE) -> SingleInteger
+    leftOrRight(fcn,x,limVal) ==
+      -- function is called when limitPlus(fcn,x) = limVal
+      -- determines whether the limiting value is approached
+      -- from the left or from the right
+      (value := limitPlus(inv(fcn - limVal),x)) case "failed" => 0
+      (inf := whatInfinity(val := value :: OFE)) = 0 =>
+         error "limit package: internal error"
+      inf
+
+    specialLimit1: (FE,SY) -> RESULT
+    specialLimitKernel: (Kernel FE,SY) -> RESULT
+    specialLimitNormalize: (FE,SY) -> RESULT
+    specialLimit: (FE, SY) -> RESULT
+
+    specialLimit(fcn, x) ==
+      xkers := [k for k in kernels fcn | member?(x,variables(k::FE))]
+      #xkers = 1 => specialLimit1(fcn,x)
+      num := numerator fcn
+      den := denominator fcn
+      for k in xkers repeat
+        (fval := limitPlus(k::FE,x)) case "failed" =>
+            return specialLimitNormalize(fcn,x)
+        whatInfinity(val := fval::OFE) ^= 0 =>
+            return specialLimitNormalize(fcn,x)
+        (valu := retractIfCan(val)@Union(FE,"failed")) case "failed" =>
+            return specialLimitNormalize(fcn,x)
+        finVal := valu :: FE
+        num := eval(num, k, finVal)
+        den := eval(den, k, finVal)
+        den = 0 => return specialLimitNormalize(fcn,x)
+      (num/den) :: OFE :: RESULT
+
+    specialLimitNormalize(fcn,x) == -- tries to normalize result first
+      nfcn := normalize(fcn)
+      fcn ^= nfcn => limitPlus(nfcn,x)
+      xkers := [k for k in tower fcn | member?(x,variables(k::FE))]
+      # xkers ^= 2 => "failed"
+      expKers := [k for k in xkers | is?(k, "exp" :: Symbol)]
+      # expKers ^= 1 => "failed"
+    -- fcn is a rational function of x and exp(g(x)) for some rational function g
+      expKer := first expKers
+      (fval := limitPlus(expKer::FE,x)) case "failed" => "failed"
+      vv := new()$SY; eq : EQ FE := equation(expKer :: FE,vv :: FE)
+      cc := eval(fcn,eq)
+      expKerLim := fval :: OFE
+        -- following test for "failed" is needed due to compiler bug
+        -- limVal case OFE generates EQCAR(limVal, 1) which fails on atom "failed"
+      (limVal := locallimit(cc,vv,expKerLim)) case "failed" => "failed"
+      limVal case OFE =>
+         limm := limVal :: OFE
+         (lim := retractIfCan(limm)@Union(FE,"failed")) case "failed" =>
+               "failed" -- need special handling for directions at infinity
+         limitPlus(lim, x)
+      "failed"
+
+    -- limit of expression having only 1 kernel involving x
+    specialLimit1(fcn,x) ==
+      -- find the first interesting kernel in tower(fcn)
+      xkers := [k for k in kernels fcn | member?(x,variables(k::FE))]
+      #xkers ^= 1 => "failed"
+      ker := first xkers
+      vv := new()$SY; eq : EQ FE := equation(ker :: FE,vv :: FE)
+      cc := eval(fcn,eq)
+      member?(x,variables cc) => "failed"
+      (lim := specialLimitKernel(ker, x)) case "failed" => lim
+      argLim : OFE := lim :: OFE
+      (limVal := locallimit(cc,vv,argLim)) case "failed" => "failed"
+      limVal case OFE => limVal :: OFE
+      "failed"
+
+    -- limit of single kernel involving x
+    specialLimitKernel(ker,x) ==
+      is?(ker,"log" :: Symbol) =>
+          args := argument ker
+          empty? args => "failed" -- error "No argument"
+          not empty? rest args => "failed" -- error "Too many arugments"
+          arg := first args
+          -- compute limit(x -> 0+,arg)
+          (limm := limitPlus(arg,x)) case "failed" => "failed"
+          lim := limm :: OFE
+          (inf := whatInfinity lim) = -1 => "failed"
+          argLim : OFE :=
+            -- log(+infinity) = +infinity
+            inf = 1 => lim
+            -- now 'lim' must be finite
+            (li := retractIfCan(lim)@Union(FE,"failed") :: FE) = 0 =>
+              -- log(0) = -infinity
+              leftOrRight(arg,x,0) = 1 => minusInfinity()
+              return "failed"
+            log(li) :: OFE
+      -- kernel should be a function of one argument f(arg)
+      args := argument(ker)
+      empty? args => "failed"  -- error "No argument"
+      not empty? rest args => "failed" -- error "Too many arugments"
+      arg := first args
+      -- compute limit(x -> 0+,arg)
+      (limm := limitPlus(arg,x)) case "failed" => "failed"
+      lim := limm :: OFE
+      f := elt(operator ker,(var := new()$SY) :: FE)
+      -- compute limit(x -> 0+,f(arg))
+      -- case where 'lim' is finite
+      (inf := whatInfinity lim) = 0 =>
+         is?(ker,"erf" :: Symbol) => erf(retract(lim)@FE)$LF(R,FE) :: OFE
+         (kerValue := locallimit(f,var,lim)) case "failed" => "failed"
+         kerValue case OFE => kerValue :: OFE
+         "failed"
+      -- case where 'lim' is plus infinity
+      inf = 1 =>
+        finiteValueAtInfinity? ker =>
+          val : FE :=
+            is?(ker,"erf" :: Symbol) => 1
+            is?(ker,"sech" :: Symbol) => 0
+            is?(ker,"csch" :: Symbol) => 0
+            is?(ker,"tanh" :: Symbol) => 0
+            is?(ker,"coth" :: Symbol) => 0
+            is?(ker,"atan" :: Symbol) => pi()/(2 :: FE)
+            is?(ker,"acot" :: Symbol) => 0
+            is?(ker,"asec" :: Symbol) => pi()/(2 :: FE)
+            is?(ker,"acsc" :: Symbol) => 0
+            is?(ker,"acsch" :: Symbol) => 0
+            -- ker must be acoth
+            0
+          val :: OFE
+        knownValueAtInfinity? ker =>
+          lim -- limit(exp, cosh, sinh ,x=inf) = inf
+        "failed"
+      -- case where 'lim' is minus infinity
+      finiteValueAtInfinity? ker =>
+        val : FE :=
+          is?(ker,"erf" :: Symbol) => -1
+          is?(ker,"sech" :: Symbol) => 0
+          is?(ker,"csch" :: Symbol) => 0
+          is?(ker,"tanh" :: Symbol) => 0
+          is?(ker,"coth" :: Symbol) => 0
+          is?(ker,"atan" :: Symbol) => -pi()/(2 :: FE)
+          is?(ker,"acot" :: Symbol) => pi()
+          is?(ker,"asec" :: Symbol) => -pi()/(2 :: FE)
+          is?(ker,"acsc" :: Symbol) => -pi()
+          is?(ker,"acsch" :: Symbol) => 0
+          -- ker must be acoth
+          0
+        val :: OFE
+      knownValueAtInfinity? ker =>
+        is?(ker,"exp" :: Symbol) => (0@FE) :: OFE
+        is?(ker,"sinh" :: Symbol) => lim
+        is?(ker,"cosh" :: Symbol) => plusInfinity()
+        "failed"
+      "failed"
+
+    logOnlyLimit: (FE,SY) -> RESULT
+    logOnlyLimit(coef,x) ==
+      -- this function is called when the 'constant' coefficient involves
+      -- the variable 'x'. Its purpose is to compute a right hand limit
+      -- of an expression involving log x. Here log x is replaced by -1/v,
+      -- where v is a new variable. If the new expression no longer involves
+      -- x, then take the right hand limit as v -> 0+
+      vv := new()$SY
+      eq : EQ FE := equation(log(x :: FE),-inv(vv :: FE))
+      member?(x,variables(cc := eval(coef,eq))) => "failed"
+      limitPlus(cc,vv)
+
+    locallimit(fcn,x,a) ==
+      -- Here 'fcn' is a function f(x) = f(x,...) in 'x' and possibly
+      -- other variables, and 'a' is a limiting value.  The function
+      -- computes lim(x -> a,f(x)).
+      xK := retract(x::FE)@Kernel(FE)
+      (n := whatInfinity a) = 0 =>
+        realLimit(localsubst(fcn,xK,1,retract(a)@FE),x)
+      (u := limitPlus(eval(fcn,xK,n * inv(xK::FE)),x))
+                                                case "failed" => "failed"
+      u::OFE
+
+    localsubst(fcn, k, n, a) ==
+      a = 0 and n = 1 => fcn
+      eval(fcn,k,n * (k::FE) + a)
+
+    locallimitcomplex(fcn,x,a) ==
+      xK := retract(x::FE)@Kernel(FE)
+      (g := retractIfCan(a)@Union(FE,"failed")) case FE =>
+        complLimit(localsubst(fcn,xK,1,g::FE),x)
+      complLimit(eval(fcn,xK,inv(xK::FE)),x)
+
+    limit(fcn,eq,str) ==
+      (xx := retractIfCan(lhs eq)@Union(SY,"failed")) case "failed" =>
+        error "limit:left hand side must be a variable"
+      x := xx :: SY; a := rhs eq
+      xK := retract(x::FE)@Kernel(FE)
+      limitPlus(localsubst(fcn,xK,direction str,a),x)
+
+    anyRootsOrAtrigs? fcn ==
+      -- determines if 'fcn' has any kernels which are roots
+      -- or if 'fcn' has any kernels which are inverse trig functions
+      -- which could produce series expansions with fractional exponents
+      for kernel in tower fcn repeat
+        is?(kernel,"nthRoot" :: Symbol) => return true
+        is?(kernel,"asin" :: Symbol) => return true
+        is?(kernel,"acos" :: Symbol) => return true
+        is?(kernel,"asec" :: Symbol) => return true
+        is?(kernel,"acsc" :: Symbol) => return true
+      false
+
+    complLimit(fcn,x) ==
+      -- computes lim(x -> 0,fcn) using a Puiseux expansion of fcn,
+      -- if fcn is an expression involving roots, and using a Laurent
+      -- expansion of fcn otherwise
+      lim : FE :=
+        anyRootsOrAtrigs? fcn =>
+          ppack := FS2UPS(R,FE,RN,_
+              UPXS(FE,x,zeroFE),EFUPXS(FE,ULS(FE,x,zeroFE),UPXS(FE,x,zeroFE),_
+              EFULS(FE,UTS(FE,x,zeroFE),ULS(FE,x,zeroFE))),x)
+          pseries := exprToUPS(fcn,false,"complex")$ppack
+          pseries case %problem => return "failed"
+          if pole?(upxs := pseries.%series) then upxs := map(normalize,upxs)
+          pole? upxs => return infinity()
+          coefficient(upxs,0)
+        lpack := FS2UPS(R,FE,Z,ULS(FE,x,zeroFE),_
+                 EFULS(FE,UTS(FE,x,zeroFE),ULS(FE,x,zeroFE)),x)
+        lseries := exprToUPS(fcn,false,"complex")$lpack
+        lseries case %problem => return "failed"
+        if pole?(uls := lseries.%series) then uls := map(normalize,uls)
+        pole? uls => return infinity()
+        coefficient(uls,0)
+      -- can the following happen?
+      member?(x,variables lim) =>
+        member?(x,variables(answer := normalize lim)) =>
+          error "limit: can't evaluate limit"
+        answer :: OPF
+      lim :: FE :: OPF
+
+    okProblem?(function,problem) ==
+      (function = "log") or (function = "nth root") =>
+        (problem = "series of non-zero order") or _
+               (problem = "negative leading coefficient")
+      (function = "atan") => problem = "branch problem"
+      (function = "erf") => problem = "unknown kernel"
+      problem = "essential singularity"
+
+    poleLimit(order,coef,x) ==
+      -- compute limit for function with pole
+      not member?(x,variables coef) =>
+        (s := sign(coef)$SIGNEF) case Integer =>
+          rtLim := (s :: Integer) * plusInfinity()
+          even? numer order => rtLim
+          even? denom order => ["failed",rtLim]$TwoSide
+          [-rtLim,rtLim]$TwoSide
+        -- infinite limit, but cannot determine sign
+        "failed"
+      error "limit: can't evaluate limit"
+
+    poleLimitPlus(order,coef,x) ==
+      -- compute right hand limit for function with pole
+      not member?(x,variables coef) =>
+        (s := sign(coef)$SIGNEF) case Integer =>
+          (s :: Integer) * plusInfinity()
+        -- infinite limit, but cannot determine sign
+        "failed"
+      (clim := specialLimit(coef,x)) case "failed" => "failed"
+      zero? (lim := clim :: OFE) =>
+        -- in this event, we need to determine if the limit of
+        -- the coef is 0+ or 0-
+        (cclim := specialLimit(inv coef,x)) case "failed" => "failed"
+        ss := whatInfinity(cclim :: OFE) :: Z
+        zero? ss =>
+          error "limit: internal error"
+        ss * plusInfinity()
+      t := whatInfinity(lim :: OFE) :: Z
+      zero? t =>
+        (tt := sign(coef)$SIGNEF) case Integer =>
+          (tt :: Integer) * plusInfinity()
+        -- infinite limit, but cannot determine sign
+        "failed"
+      t * plusInfinity()
+
+    realLimit(fcn,x) ==
+      -- computes lim(x -> 0,fcn) using a Puiseux expansion of fcn,
+      -- if fcn is an expression involving roots, and using a Laurent
+      -- expansion of fcn otherwise
+      lim : Union(FE,"failed") :=
+        anyRootsOrAtrigs? fcn =>
+          ppack := FS2UPS(R,FE,RN,_
+               UPXS(FE,x,zeroFE),EFUPXS(FE,ULS(FE,x,zeroFE),UPXS(FE,x,zeroFE),_
+               EFULS(FE,UTS(FE,x,zeroFE),ULS(FE,x,zeroFE))),x)
+          pseries := exprToUPS(fcn,true,"real: two sides")$ppack
+          pseries case %problem =>
+            trouble := pseries.%problem
+            function := trouble.func; problem := trouble.prob
+            okProblem?(function,problem) =>
+              left :=
+                xK : Kernel FE := kernel x
+                fcn0 := eval(fcn,xK,-(xK :: FE))
+                limitPlus(fcn0,x)
+              right := limitPlus(fcn,x)
+              (left case "failed") and (right case "failed") =>
+                return "failed"
+              if (left case OFE) and (right case OFE) then
+                (left :: OFE) = (right :: OFE) => return (left :: OFE)
+              return([left,right]$TwoSide)
+            return "failed"
+          if pole?(upxs := pseries.%series) then upxs := map(normalize,upxs)
+          pole? upxs =>
+            cp := coefficient(upxs,ordp := order upxs)
+            return poleLimit(ordp,cp,x)
+          coefficient(upxs,0)
+        lpack := FS2UPS(R,FE,Z,ULS(FE,x,zeroFE),_
+                 EFULS(FE,UTS(FE,x,zeroFE),ULS(FE,x,zeroFE)),x)
+        lseries := exprToUPS(fcn,true,"real: two sides")$lpack
+        lseries case %problem =>
+          trouble := lseries.%problem
+          function := trouble.func; problem := trouble.prob
+          okProblem?(function,problem) =>
+            left :=
+              xK : Kernel FE := kernel x
+              fcn0 := eval(fcn,xK,-(xK :: FE))
+              limitPlus(fcn0,x)
+            right := limitPlus(fcn,x)
+            (left case "failed") and (right case "failed") =>
+              return "failed"
+            if (left case OFE) and (right case OFE) then
+              (left :: OFE) = (right :: OFE) => return (left :: OFE)
+            return([left,right]$TwoSide)
+          return "failed"
+        if pole?(uls := lseries.%series) then uls := map(normalize,uls)
+        pole? uls =>
+          cl := coefficient(uls,ordl := order uls)
+          return poleLimit(ordl :: RN,cl,x)
+        coefficient(uls,0)
+      lim case "failed" => "failed"
+      member?(x,variables(lim :: FE)) =>
+        member?(x,variables(answer := normalize(lim :: FE))) =>
+          error "limit: can't evaluate limit"
+        answer :: OFE
+      lim :: FE :: OFE
+
+    xxpLimit(fcn,x) ==
+      -- computes lim(x -> 0+,fcn) using an exponential expansion of fcn
+      xpack := FS2EXPXP(R,FE,x,zeroFE)
+      xxp := exprToXXP(fcn,true)$xpack
+      xxp case %problem => "failed"
+      limitPlus(xxp.%expansion)
+
+    limitPlus(fcn,x) ==
+      -- computes lim(x -> 0+,fcn) using a generalized Puiseux expansion
+      -- of fcn, if fcn is an expression involving roots, and using a
+      -- generalized Laurent expansion of fcn otherwise
+      lim : Union(FE,"failed") :=
+        anyRootsOrAtrigs? fcn =>
+          ppack := FS2UPS(R,FE,RN,_
+               UPXS(FE,x,zeroFE),EFUPXS(FE,ULS(FE,x,zeroFE),UPXS(FE,x,zeroFE),_
+               EFULS(FE,UTS(FE,x,zeroFE),ULS(FE,x,zeroFE))),x)
+          pseries := exprToGenUPS(fcn,true,"real: right side")$ppack
+          pseries case %problem =>
+            trouble := pseries.%problem
+            ff := trouble.func; pp := trouble.prob
+            (pp = "negative leading coefficient") => return "failed"
+            "failed"
+          -- pseries case %problem => return "failed"
+          if pole?(upxs := pseries.%series) then upxs := map(normalize,upxs)
+          pole? upxs =>
+            cp := coefficient(upxs,ordp := order upxs)
+            return poleLimitPlus(ordp,cp,x)
+          coefficient(upxs,0)
+        lpack := FS2UPS(R,FE,Z,ULS(FE,x,zeroFE),_
+                 EFULS(FE,UTS(FE,x,zeroFE),ULS(FE,x,zeroFE)),x)
+        lseries := exprToGenUPS(fcn,true,"real: right side")$lpack
+        lseries case %problem =>
+          trouble := lseries.%problem
+          ff := trouble.func; pp := trouble.prob
+          (pp = "negative leading coefficient") => return "failed"
+          "failed"
+        -- lseries case %problem => return "failed"
+        if pole?(uls := lseries.%series) then uls := map(normalize,uls)
+        pole? uls =>
+          cl := coefficient(uls,ordl := order uls)
+          return poleLimitPlus(ordl :: RN,cl,x)
+        coefficient(uls,0)
+      lim case "failed" =>
+        (xLim := xxpLimit(fcn,x)) case "failed" => specialLimit(fcn,x)
+        xLim
+      member?(x,variables(lim :: FE)) =>
+        member?(x,variables(answer := normalize(lim :: FE))) =>
+          (xLim := xxpLimit(answer,x)) case "failed" => specialLimit(answer,x)
+          xLim
+        answer :: OFE
+      lim :: FE :: OFE
+
+    limit(fcn:FE,eq:EQ OFE) ==
+      (f := retractIfCan(lhs eq)@Union(FE,"failed")) case "failed" =>
+        error "limit:left hand side must be a variable"
+      (xx := retractIfCan(f)@Union(SY,"failed")) case "failed" =>
+        error "limit:left hand side must be a variable"
+      x := xx :: SY; a := rhs eq
+      locallimit(fcn,x,a)
+
+    complexLimit(fcn:FE,eq:EQ OPF) ==
+      (f := retractIfCan(lhs eq)@Union(FE,"failed")) case "failed" =>
+        error "limit:left hand side must be a variable"
+      (xx := retractIfCan(f)@Union(SY,"failed")) case "failed" =>
+        error "limit:left hand side must be a variable"
+      x := xx :: SY; a := rhs eq
+      locallimitcomplex(fcn,x,a)
+
+@
+\section{package SIGNEF ElementaryFunctionSign}
+<<package SIGNEF ElementaryFunctionSign>>=
+)abbrev package SIGNEF ElementaryFunctionSign
+++ Author: Manuel Bronstein
+++ Date Created: 25 Aug 1989
+++ Date Last Updated: 4 May 1992
+++ Basic Operations:
+++ Related Domains:
+++ Also See:
+++ AMS Classifications:
+++ Keywords: elementary function, sign
+++ Examples:
+++ References:
+++ Description:
+++   This package provides functions to determine the sign of an
+++   elementary function around a point or infinity.
+ElementaryFunctionSign(R,F): Exports == Implementation where
+  R : Join(IntegralDomain,OrderedSet,RetractableTo Integer,_
+           LinearlyExplicitRingOver Integer,GcdDomain)
+  F : Join(AlgebraicallyClosedField,TranscendentalFunctionCategory,_
+            FunctionSpace R)
+
+  N  ==> NonNegativeInteger
+  Z  ==> Integer
+  SY ==> Symbol
+  RF ==> Fraction Polynomial R
+  ORF ==> OrderedCompletion RF
+  OFE ==> OrderedCompletion F
+  K  ==> Kernel F
+  P  ==> SparseMultivariatePolynomial(R, K)
+  U  ==> Union(Z, "failed")
+  FS2 ==> FunctionSpaceFunctions2
+  POSIT ==> "positive"
+  NEGAT ==> "negative"
+
+  Exports ==> with
+    sign: F -> U
+      ++ sign(f) returns the sign of f if it is constant everywhere.
+    sign: (F, SY, OFE) -> U
+      ++ sign(f, x, a) returns the sign of f as x nears \spad{a}, from both
+      ++ sides if \spad{a} is finite.
+    sign: (F, SY, F, String) -> U
+      ++ sign(f, x, a, s) returns the sign of f as x nears \spad{a} from below
+      ++ if s is "left", or above if s is "right".
+
+  Implementation ==> add
+    import ToolsForSign R
+    import RationalFunctionSign(R)
+    import PowerSeriesLimitPackage(R, F)
+    import TrigonometricManipulations(R, F)
+
+    smpsign : P -> U
+    sqfrSign: P -> U
+    termSign: P -> U
+    kerSign : K -> U
+    listSign: (List P,Z) -> U
+    insign  : (F,SY,OFE, N) -> U
+    psign   : (F,SY,F,String, N) -> U
+    ofesign : OFE -> U
+    overRF  : OFE -> Union(ORF, "failed")
+
+    sign(f, x, a) ==
+      not real? f => "failed"
+      insign(f, x, a, 0)
+
+    sign(f, x, a, st) ==
+      not real? f => "failed"
+      psign(f, x, a, st, 0)
+
+    sign f ==
+      not real? f => "failed"
+      (u := retractIfCan(f)@Union(RF,"failed")) case RF => sign(u::RF)
+      (un := smpsign numer f) case Z and (ud := smpsign denom f) case Z =>
+        un::Z * ud::Z
+      --abort if there are any variables
+      not empty? variables f => "failed"
+      -- abort in the presence of algebraic numbers
+      member?(coerce("rootOf")::Symbol,map(name,operators f)$ListFunctions2(BasicOperator,Symbol)) => "failed"
+      -- In the last resort try interval evaluation where feasible.
+      if R has ConvertibleTo Float then
+        import Interval(Float)
+        import Expression(Interval Float)
+        mapfun : (R -> Interval(Float)) := interval(convert(#1)$R)
+        f2 : Expression(Interval Float) := map(mapfun,f)$FS2(R,F,Interval(Float),Expression(Interval Float))
+        r : Union(Interval(Float),"failed") := retractIfCan f2
+        if r case "failed" then  return "failed"
+        negative? r => return(-1)
+        positive? r => return 1
+        zero? r => return 0
+        "failed"
+      "failed"
+
+    overRF a ==
+      (n := whatInfinity a) = 0 =>
+        (u := retractIfCan(retract(a)@F)@Union(RF,"failed")) _
+               case "failed" => "failed"
+        u::RF::ORF
+      n * plusInfinity()$ORF
+
+    ofesign a ==
+      (n := whatInfinity a) ^= 0 => convert(n)@Z
+      sign(retract(a)@F)
+
+    insign(f, x, a, m) ==
+      m > 10 => "failed"                 -- avoid infinite loops for now
+      (uf := retractIfCan(f)@Union(RF,"failed")) case RF and
+                   (ua := overRF a) case ORF => sign(uf::RF, x, ua::ORF)
+      eq : Equation OFE := equation(x :: F :: OFE,a)
+      (u := limit(f,eq)) case "failed" => "failed"
+      u case OFE =>
+        (n := whatInfinity(u::OFE)) ^= 0 => convert(n)@Z
+        (v := retract(u::OFE)@F) = 0 =>
+          (s := insign(differentiate(f, x), x, a, m + 1)) case "failed"
+                                                             => "failed"
+          - s::Z * n
+        sign v
+      (u.leftHandLimit case "failed") or
+         (u.rightHandLimit case "failed") => "failed"
+      (ul := ofesign(u.leftHandLimit::OFE))  case "failed" => "failed"
+      (ur := ofesign(u.rightHandLimit::OFE)) case "failed" => "failed"
+      (ul::Z) = (ur::Z) => ul
+      "failed"
+
+    psign(f, x, a, st, m) ==
+      m > 10 => "failed"                 -- avoid infinite loops for now
+      f = 0 => 0
+      (uf := retractIfCan(f)@Union(RF,"failed")) case RF and
+           (ua := retractIfCan(a)@Union(RF,"failed")) case RF =>
+            sign(uf::RF, x, ua::RF, st)
+      eq : Equation F := equation(x :: F,a)
+      (u := limit(f,eq,st)) case "failed" => "failed"
+      u case OFE =>
+        (n := whatInfinity(u::OFE)) ^= 0 => convert(n)@Z
+        (v := retract(u::OFE)@F) = 0 =>
+          (s := psign(differentiate(f,x),x,a,st,m + 1)) case "failed"=>
+            "failed"
+          direction(st) * s::Z
+        sign v
+
+    smpsign p ==
+      (r := retractIfCan(p)@Union(R,"failed")) case R => sign(r::R)
+      (u := sign(retract(unit(s := squareFree p))@R)) case "failed" =>
+        "failed"
+      ans := u::Z
+      for term in factorList s | odd?(term.xpnt) repeat
+        (u := sqfrSign(term.fctr)) case "failed" => return "failed"
+        ans := ans * u::Z
+      ans
+
+    sqfrSign p ==
+      (u := termSign first(l := monomials p)) case "failed" => "failed"
+      listSign(rest l, u::Z)
+
+    listSign(l, s) ==
+      for term in l repeat
+        (u := termSign term) case "failed" => return "failed"
+        not(s = u::Z) => return "failed"
+      s
+
+    termSign term ==
+      (us := sign leadingCoefficient term) case "failed" => "failed"
+      for var in (lv := variables term) repeat
+        odd? degree(term, var) =>
+          empty? rest lv and (vs := kerSign first lv) case Z =>
+                                                   return(us::Z * vs::Z)
+          return "failed"
+      us::Z
+
+    kerSign k ==
+      has?(op := operator k, "NEGAT") => -1
+      has?(op, "POSIT") or is?(op,  "pi"::SY) or is?(op,"exp"::SY) or
+                           is?(op,"cosh"::SY) or is?(op,"sech"::SY) => 1
+      empty?(arg := argument k) => "failed"
+      (s := sign first arg) case "failed" =>
+        is?(op,"nthRoot" :: SY) =>
+          even?(retract(second arg)@Z) => 1
+          "failed"
+        "failed"
+      is?(op,"log" :: SY) =>
+        s::Z < 0 => "failed"
+        sign(first arg - 1)
+      is?(op,"tanh" :: SY) or is?(op,"sinh" :: SY) or
+                     is?(op,"csch" :: SY) or is?(op,"coth" :: SY) => s
+      is?(op,"nthRoot" :: SY) =>
+        even?(retract(second arg)@Z) =>
+          s::Z < 0 => "failed"
+          s
+        s
+      "failed"
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package LIMITPS PowerSeriesLimitPackage>>
+<<package SIGNEF ElementaryFunctionSign>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

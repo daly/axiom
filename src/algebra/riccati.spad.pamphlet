@@ -1,0 +1,600 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra riccati.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package ODEPRRIC PrimitiveRatRicDE}
+<<package ODEPRRIC PrimitiveRatRicDE>>=
+)abbrev package ODEPRRIC PrimitiveRatRicDE
+++ Author: Manuel Bronstein
+++ Date Created: 22 October 1991
+++ Date Last Updated: 2 February 1993
+++ Description: In-field solution of Riccati equations, primitive case.
+PrimitiveRatRicDE(F, UP, L, LQ): Exports == Implementation where
+  F  : Join(Field, CharacteristicZero, RetractableTo Fraction Integer)
+  UP : UnivariatePolynomialCategory F
+  L  : LinearOrdinaryDifferentialOperatorCategory UP
+  LQ : LinearOrdinaryDifferentialOperatorCategory Fraction UP
+
+  N    ==> NonNegativeInteger
+  Z    ==> Integer
+  RF   ==> Fraction UP
+  UP2  ==> SparseUnivariatePolynomial UP
+  REC  ==> Record(deg:N, eq:UP)
+  REC2 ==> Record(deg:N, eq:UP2)
+  POL  ==> Record(poly:UP, eq:L)
+  FRC  ==> Record(frac:RF, eq:L)
+  CNT  ==> Record(constant:F, eq:L)
+  IJ   ==> Record(ij: List Z, deg:N)
+
+  Exports ==> with
+    denomRicDE: L -> UP
+      ++ denomRicDE(op) returns a polynomial \spad{d} such that any rational
+      ++ solution of the associated Riccati equation of \spad{op y = 0} is
+      ++ of the form \spad{p/d + q'/q + r} for some polynomials p and q
+      ++ and a reduced r. Also, \spad{deg(p) < deg(d)} and {gcd(d,q) = 1}.
+    leadingCoefficientRicDE:  L -> List REC
+      ++ leadingCoefficientRicDE(op) returns
+      ++ \spad{[[m1, p1], [m2, p2], ... , [mk, pk]]} such that the polynomial
+      ++ part of any rational solution of the associated Riccati equation of
+      ++ \spad{op y = 0} must have degree mj for some j, and its leading
+      ++ coefficient is then a zero of pj. In addition,\spad{m1>m2> ... >mk}.
+    constantCoefficientRicDE: (L, UP -> List F) -> List CNT
+      ++ constantCoefficientRicDE(op, ric) returns
+      ++ \spad{[[a1, L1], [a2, L2], ... , [ak, Lk]]} such that any rational
+      ++ solution with no polynomial part of the associated Riccati equation of
+      ++ \spad{op y = 0} must be one of the ai's in which case the equation for
+      ++ \spad{z = y e^{-int ai}} is \spad{Li z = 0}.
+      ++ \spad{ric} is a Riccati equation solver over \spad{F}, whose input
+      ++ is the associated linear equation.
+    polyRicDE: (L, UP -> List F) -> List POL
+      ++ polyRicDE(op, zeros) returns
+      ++ \spad{[[p1, L1], [p2, L2], ... , [pk, Lk]]} such that the polynomial
+      ++ part of any rational solution of the associated Riccati equation of
+      ++ \spad{op y=0} must be one of the pi's (up to the constant coefficient),
+      ++ in which case the equation for \spad{z=y e^{-int p}} is \spad{Li z =0}.
+      ++ \spad{zeros} is a zero finder in \spad{UP}.
+    singRicDE: (L, (UP, UP2) -> List UP, UP -> Factored UP) -> List FRC
+      ++ singRicDE(op, zeros, ezfactor) returns
+      ++ \spad{[[f1, L1], [f2, L2], ... , [fk, Lk]]} such that the singular
+      ++ part of any rational solution of the associated Riccati equation of
+      ++ \spad{op y=0} must be one of the fi's (up to the constant coefficient),
+      ++ in which case the equation for \spad{z=y e^{-int p}} is \spad{Li z=0}.
+      ++ \spad{zeros(C(x),H(x,y))} returns all the \spad{P_i(x)}'s such that
+      ++ \spad{H(x,P_i(x)) = 0 modulo C(x)}.
+      ++ Argument \spad{ezfactor} is a factorisation in \spad{UP},
+      ++ not necessarily into irreducibles.
+    changeVar: (L, UP) -> L
+      ++ changeVar(+/[ai D^i], a) returns the operator \spad{+/[ai (D+a)^i]}.
+    changeVar: (L, RF) -> L
+      ++ changeVar(+/[ai D^i], a) returns the operator \spad{+/[ai (D+a)^i]}.
+
+  Implementation ==> add
+    import PrimitiveRatDE(F, UP, L, LQ)
+    import BalancedFactorisation(F, UP)
+
+    bound             : (UP, L) -> N
+    lambda            : (UP, L) -> List IJ
+    infmax            : (IJ, L) -> List Z
+    dmax              : (IJ, UP, L) -> List Z
+    getPoly           : (IJ, L, List Z) -> UP
+    getPol            : (IJ, UP, L, List Z) -> UP2
+    innerlb           : (L, UP -> Z) -> List IJ
+    innermax          : (IJ, L, UP -> Z) -> List Z
+    tau0              : (UP, UP) -> UP
+    poly1             : (UP, UP, Z) -> UP2
+    getPol1           : (List Z, UP, L) -> UP2
+    getIndices        : (N, List IJ) -> List Z
+    refine            : (List UP, UP -> Factored UP) -> List UP
+    polysol           : (L, N, Boolean, UP -> List F) -> List POL
+    fracsol           : (L, (UP, UP2) -> List UP, List UP) -> List FRC
+    padicsol      l   : (UP, L, N, Boolean, (UP, UP2) -> List UP) -> List FRC
+    leadingDenomRicDE : (UP, L) -> List REC2
+    factoredDenomRicDE: L -> List UP
+    constantCoefficientOperator: (L, N) -> UP
+    infLambda: L -> List IJ
+      -- infLambda(op) returns
+      -- \spad{[[[i,j], (\deg(a_i)-\deg(a_j))/(i-j) ]]} for all the pairs
+      -- of indices \spad{i,j} such that \spad{(\deg(a_i)-\deg(a_j))/(i-j)} is
+      -- an integer.
+
+    diff  := D()$L
+    diffq := D()$LQ
+
+    lambda(c, l)        == innerlb(l, order(#1, c)::Z)
+    infLambda l         == innerlb(l, -(degree(#1)::Z))
+    infmax(rec, l)      == innermax(rec, l, degree(#1)::Z)
+    dmax(rec, c, l)     == innermax(rec, l, - order(#1, c)::Z)
+    tau0(p, q)          == ((q exquo (p ** order(q, p)))::UP) rem p
+    poly1(c, cp, i)     == */[monomial(1,1)$UP2 - (j * cp)::UP2 for j in 0..i-1]
+    getIndices(n, l)    == removeDuplicates_! concat [r.ij for r in l | r.deg=n]
+    denomRicDE l        == */[c ** bound(c, l) for c in factoredDenomRicDE l]
+    polyRicDE(l, zeros) == concat([0, l], polysol(l, 0, false, zeros))
+
+-- refine([p1,...,pn], foo) refines the list of factors using foo
+    refine(l, ezfactor) ==
+      concat [[r.factor for r in factors ezfactor p] for p in l]
+
+-- returns [] if the solutions of l have no p-adic component at c
+    padicsol(c, op, b, finite?, zeros) ==
+      ans:List(FRC) := empty()
+      finite? and zero? b => ans
+      lc := leadingDenomRicDE(c, op)
+      if finite? then lc := select_!(#1.deg <= b, lc)
+      for rec in lc repeat
+        for r in zeros(c, rec.eq) | r ^= 0 repeat
+          rcn := r /$RF (c ** rec.deg)
+          neweq := changeVar(op, rcn)
+          sols := padicsol(c, neweq, (rec.deg-1)::N, true, zeros)
+          ans :=
+            empty? sols => concat([rcn, neweq], ans)
+            concat_!([[rcn + sol.frac, sol.eq] for sol in sols], ans)
+      ans
+
+    leadingDenomRicDE(c, l) ==
+      ind:List(Z)          -- to cure the compiler... (won't compile without)
+      lb := lambda(c, l)
+      done:List(N) := empty()
+      ans:List(REC2) := empty()
+      for rec in lb | (not member?(rec.deg, done)) and
+        not(empty?(ind := dmax(rec, c, l))) repeat
+          ans := concat([rec.deg, getPol(rec, c, l, ind)], ans)
+          done := concat(rec.deg, done)
+      sort_!(#1.deg > #2.deg, ans)
+
+    getPol(rec, c, l, ind) ==
+--      one?(rec.deg) => getPol1(ind, c, l)
+      (rec.deg = 1) => getPol1(ind, c, l)
+      +/[monomial(tau0(c, coefficient(l, i::N)), i::N)$UP2 for i in ind]
+
+    getPol1(ind, c, l) ==
+      cp := diff c
+      +/[tau0(c, coefficient(l, i::N)) * poly1(c, cp, i) for i in ind]
+
+    constantCoefficientRicDE(op, ric) ==
+      m := "max"/[degree p for p in coefficients op]
+      [[a, changeVar(op,a::UP)] for a in ric constantCoefficientOperator(op,m)]
+
+    constantCoefficientOperator(op, m) ==
+      ans:UP := 0
+      while op ^= 0 repeat
+        if degree(p := leadingCoefficient op) = m then
+          ans := ans + monomial(leadingCoefficient p, degree op)
+        op := reductum op
+      ans
+
+    getPoly(rec, l, ind) ==
+      +/[monomial(leadingCoefficient coefficient(l,i::N),i::N)$UP for i in ind]
+
+-- returns empty() if rec is does not reach the max,
+-- the list of indices (including rec) that reach the max otherwise
+    innermax(rec, l, nu) ==
+      n := degree l
+      i := first(rec.ij)
+      m := i * (d := rec.deg) + nu coefficient(l, i::N)
+      ans:List(Z) := empty()
+      for j in 0..n | (f := coefficient(l, j)) ^= 0 repeat
+        if ((k := (j * d + nu f)) > m) then return empty()
+        else if (k = m) then ans := concat(j, ans)
+      ans
+
+    leadingCoefficientRicDE l ==
+      ind:List(Z)          -- to cure the compiler... (won't compile without)
+      lb := infLambda l
+      done:List(N) := empty()
+      ans:List(REC) := empty()
+      for rec in lb | (not member?(rec.deg, done)) and
+        not(empty?(ind := infmax(rec, l))) repeat
+          ans := concat([rec.deg, getPoly(rec, l, ind)], ans)
+          done := concat(rec.deg, done)
+      sort_!(#1.deg > #2.deg, ans)
+
+    factoredDenomRicDE l ==
+      bd := factors balancedFactorisation(leadingCoefficient l, coefficients l)
+      [dd.factor for dd in bd]
+
+    changeVar(l:L, a:UP) ==
+      dpa := diff + a::L            -- the operator (D + a)
+      dpan:L := 1                   -- will accumulate the powers of (D + a)
+      op:L := 0
+      for i in 0..degree l repeat
+        op   := op + coefficient(l, i) * dpan
+        dpan := dpa * dpan
+      primitivePart op
+
+    changeVar(l:L, a:RF) ==
+      dpa := diffq + a::LQ          -- the operator (D + a)
+      dpan:LQ := 1                  -- will accumulate the powers of (D + a)
+      op:LQ := 0
+      for i in 0..degree l repeat
+        op   := op + coefficient(l, i)::RF * dpan
+        dpan := dpa * dpan
+      splitDenominator(op, empty()).eq
+
+    bound(c, l) ==
+      empty?(lb := lambda(c, l)) => 1
+      "max"/[rec.deg for rec in lb]
+
+-- returns all the pairs [[i, j], n] such that
+-- n = (nu(i) - nu(j)) / (i - j) is an integer
+    innerlb(l, nu) ==
+      lb:List(IJ) := empty()
+      n := degree l
+      for i in 0..n | (li := coefficient(l, i)) ^= 0repeat
+        for j in i+1..n | (lj := coefficient(l, j)) ^= 0 repeat
+          u := (nu li - nu lj) exquo (i-j)
+          if (u case Z) and ((b := u::Z) > 0) then
+            lb := concat([[i, j], b::N], lb)
+      lb
+
+    singRicDE(l, zeros, ezfactor) ==
+      concat([0, l], fracsol(l, zeros, refine(factoredDenomRicDE l, ezfactor)))
+
+-- returns [] if the solutions of l have no singular component
+    fracsol(l, zeros, lc) ==
+      ans:List(FRC) := empty()
+      empty? lc => ans
+      empty?(sols := padicsol(first lc, l, 0, false, zeros)) =>
+        fracsol(l, zeros, rest lc)
+      for rec in sols repeat
+        neweq := changeVar(l, rec.frac)
+        sols := fracsol(neweq, zeros, rest lc)
+        ans :=
+          empty? sols => concat(rec, ans)
+          concat_!([[rec.frac + sol.frac, sol.eq] for sol in sols], ans)
+      ans
+
+-- returns [] if the solutions of l have no polynomial component
+    polysol(l, b, finite?, zeros) ==
+      ans:List(POL) := empty()
+      finite? and zero? b => ans
+      lc := leadingCoefficientRicDE l
+      if finite? then lc := select_!(#1.deg <= b, lc)
+      for rec in lc repeat
+        for a in zeros(rec.eq) | a ^= 0 repeat
+          atn:UP := monomial(a, rec.deg)
+          neweq := changeVar(l, atn)
+          sols := polysol(neweq, (rec.deg - 1)::N, true, zeros)
+          ans :=
+            empty? sols => concat([atn, neweq], ans)
+            concat_!([[atn + sol.poly, sol.eq] for sol in sols], ans)
+      ans
+
+@
+\section{package ODERTRIC RationalRicDE}
+<<package ODERTRIC RationalRicDE>>=
+)abbrev package ODERTRIC RationalRicDE
+++ Author: Manuel Bronstein
+++ Date Created: 22 October 1991
+++ Date Last Updated: 11 April 1994
+++ Description: In-field solution of Riccati equations, rational case.
+RationalRicDE(F, UP): Exports == Implementation where
+  F  : Join(Field, CharacteristicZero, RetractableTo Integer,
+                                       RetractableTo Fraction Integer)
+  UP : UnivariatePolynomialCategory F
+
+  N   ==> NonNegativeInteger
+  Z   ==> Integer
+  SY  ==> Symbol
+  P   ==> Polynomial F
+  RF  ==> Fraction P
+  EQ  ==> Equation RF
+  QF  ==> Fraction UP
+  UP2 ==> SparseUnivariatePolynomial UP
+  SUP ==> SparseUnivariatePolynomial P
+  REC ==> Record(poly:SUP, vars:List SY)
+  SOL ==> Record(var:List SY, val:List F)
+  POL ==> Record(poly:UP, eq:L)
+  FRC ==> Record(frac:QF, eq:L)
+  CNT ==> Record(constant:F, eq:L)
+  UTS ==> UnivariateTaylorSeries(F, dummy, 0)
+  UPS ==> SparseUnivariatePolynomial UTS
+  L   ==> LinearOrdinaryDifferentialOperator2(UP, QF)
+  LQ  ==> LinearOrdinaryDifferentialOperator1 QF
+
+  Exports ==> with
+    ricDsolve: (LQ, UP -> List F) -> List QF
+      ++ ricDsolve(op, zeros) returns the rational solutions of the associated
+      ++ Riccati equation of \spad{op y = 0}.
+      ++ \spad{zeros} is a zero finder in \spad{UP}.
+    ricDsolve: (LQ, UP -> List F, UP -> Factored UP) -> List QF
+      ++ ricDsolve(op, zeros, ezfactor) returns the rational
+      ++ solutions of the associated Riccati equation of \spad{op y = 0}.
+      ++ \spad{zeros} is a zero finder in \spad{UP}.
+      ++ Argument \spad{ezfactor} is a factorisation in \spad{UP},
+      ++ not necessarily into irreducibles.
+    ricDsolve: (L, UP -> List F) -> List QF
+      ++ ricDsolve(op, zeros) returns the rational solutions of the associated
+      ++ Riccati equation of \spad{op y = 0}.
+      ++ \spad{zeros} is a zero finder in \spad{UP}.
+    ricDsolve: (L, UP -> List F, UP -> Factored UP) -> List QF
+      ++ ricDsolve(op, zeros, ezfactor) returns the rational
+      ++ solutions of the associated Riccati equation of \spad{op y = 0}.
+      ++ \spad{zeros} is a zero finder in \spad{UP}.
+      ++ Argument \spad{ezfactor} is a factorisation in \spad{UP},
+      ++ not necessarily into irreducibles.
+    singRicDE: (L, UP -> Factored UP) -> List FRC
+      ++ singRicDE(op, ezfactor) returns \spad{[[f1,L1], [f2,L2],..., [fk,Lk]]}
+      ++ such that the singular ++ part of any rational solution of the
+      ++ associated Riccati equation of \spad{op y = 0} must be one of the fi's
+      ++ (up to the constant coefficient), in which case the equation for
+      ++ \spad{z = y e^{-int ai}} is \spad{Li z = 0}.
+      ++ Argument \spad{ezfactor} is a factorisation in \spad{UP},
+      ++ not necessarily into irreducibles.
+    polyRicDE: (L, UP -> List F) -> List POL
+      ++ polyRicDE(op, zeros) returns \spad{[[p1, L1], [p2, L2], ... , [pk,Lk]]}
+      ++ such that the polynomial part of any rational solution of the
+      ++ associated Riccati equation of \spad{op y = 0} must be one of the pi's
+      ++ (up to the constant coefficient), in which case the equation for
+      ++ \spad{z = y e^{-int p}} is \spad{Li z = 0}.
+      ++ \spad{zeros} is a zero finder in \spad{UP}.
+    if F has AlgebraicallyClosedField then
+      ricDsolve: LQ -> List QF
+        ++ ricDsolve(op) returns the rational solutions of the associated
+        ++ Riccati equation of \spad{op y = 0}.
+      ricDsolve: (LQ, UP -> Factored UP) -> List QF
+        ++ ricDsolve(op, ezfactor) returns the rational solutions of the
+        ++ associated Riccati equation of \spad{op y = 0}.
+        ++ Argument \spad{ezfactor} is a factorisation in \spad{UP},
+        ++ not necessarily into irreducibles.
+      ricDsolve: L -> List QF
+        ++ ricDsolve(op) returns the rational solutions of the associated
+        ++ Riccati equation of \spad{op y = 0}.
+      ricDsolve: (L, UP -> Factored UP) -> List QF
+        ++ ricDsolve(op, ezfactor) returns the rational solutions of the
+        ++ associated Riccati equation of \spad{op y = 0}.
+        ++ Argument \spad{ezfactor} is a factorisation in \spad{UP},
+        ++ not necessarily into irreducibles.
+
+  Implementation ==> add
+    import RatODETools(P, SUP)
+    import RationalLODE(F, UP)
+    import NonLinearSolvePackage F
+    import PrimitiveRatDE(F, UP, L, LQ)
+    import PrimitiveRatRicDE(F, UP, L, LQ)
+
+    FifCan           : RF -> Union(F, "failed")
+    UP2SUP           : UP -> SUP
+    innersol         : (List UP, Boolean) -> List QF
+    mapeval          : (SUP, List SY, List F) -> UP
+    ratsol           : List List EQ -> List SOL
+    ratsln           : List EQ -> Union(SOL, "failed")
+    solveModulo      : (UP, UP2) -> List UP
+    logDerOnly       : L -> List QF
+    nonSingSolve     : (N, L, UP -> List F) -> List QF
+    constantRic      : (UP, UP -> List F) -> List F
+    nopoly           : (N, UP, L, UP -> List F) -> List QF
+    reverseUP        : UP -> UTS
+    reverseUTS       : (UTS, N) -> UP
+    newtonSolution   : (L, F, N, UP -> List F) -> UP
+    newtonSolve      : (UPS, F, N) -> Union(UTS, "failed")
+    genericPolynomial: (SY, Z) -> Record(poly:SUP, vars:List SY)
+      -- genericPolynomial(s, n) returns
+      -- \spad{[[s0 + s1 X +...+ sn X^n],[s0,...,sn]]}.
+
+    dummy := new()$SY
+
+    UP2SUP p == map(#1::P,p)$UnivariatePolynomialCategoryFunctions2(F,UP,P,SUP)
+    logDerOnly l == [differentiate(s) / s for s in ratDsolve(l, 0).basis]
+    ricDsolve(l:LQ, zeros:UP -> List F) == ricDsolve(l, zeros, squareFree)
+    ricDsolve(l:L,  zeros:UP -> List F) == ricDsolve(l, zeros, squareFree)
+    singRicDE(l, ezfactor)              == singRicDE(l, solveModulo, ezfactor)
+
+    ricDsolve(l:LQ, zeros:UP -> List F, ezfactor:UP -> Factored UP) ==
+      ricDsolve(splitDenominator(l, empty()).eq, zeros, ezfactor)
+
+    mapeval(p, ls, lv) ==
+      map(ground eval(#1, ls, lv),
+          p)$UnivariatePolynomialCategoryFunctions2(P, SUP, F, UP)
+
+    FifCan f ==
+      ((n := retractIfCan(numer f))@Union(F, "failed") case F) and
+        ((d := retractIfCan(denom f))@Union(F, "failed") case F) =>
+           (n::F) / (d::F)
+      "failed"
+
+-- returns [0, []] if n < 0
+    genericPolynomial(s, n) ==
+      ans:SUP := 0
+      l:List(SY) := empty()
+      for i in 0..n repeat
+        ans := ans + monomial((sy := new s)::P, i::N)
+        l := concat(sy, l)
+      [ans, reverse_! l]
+
+    ratsln l ==
+      ls:List(SY) := empty()
+      lv:List(F) := empty()
+      for eq in l repeat
+        ((u := FifCan rhs eq) case "failed") or
+          ((v := retractIfCan(lhs eq)@Union(SY, "failed")) case "failed")
+             => return "failed"
+        lv := concat(u::F, lv)
+        ls := concat(v::SY, ls)
+      [ls, lv]
+
+    ratsol l ==
+      ans:List(SOL) := empty()
+      for sol in l repeat
+        if ((u := ratsln sol) case SOL) then ans := concat(u::SOL, ans)
+      ans
+
+-- returns [] if the solutions of l have no polynomial component
+    polyRicDE(l, zeros) ==
+      ans:List(POL) := [[0, l]]
+      empty?(lc := leadingCoefficientRicDE l) => ans
+      rec := first lc                            -- one with highest degree
+      for a in zeros(rec.eq) | a ^= 0 repeat
+        if (p := newtonSolution(l, a, rec.deg, zeros)) ^= 0 then
+            ans := concat([p, changeVar(l, p)], ans)
+      ans
+
+-- reverseUP(a_0 + a_1 x + ... + an x^n) = a_n + ... + a_0 x^n
+    reverseUP p ==
+      ans:UTS := 0
+      n := degree(p)::Z
+      while p ^= 0 repeat
+        ans := ans + monomial(leadingCoefficient p, (n - degree p)::N)
+        p   := reductum p
+      ans
+
+-- reverseUTS(a_0 + a_1 x + ..., n) = a_n + ... + a_0 x^n
+    reverseUTS(s, n) ==
+      +/[monomial(coefficient(s, i), (n - i)::N)$UP for i in 0..n]
+
+-- returns a potential polynomial solution p with leading coefficient a*?**n
+    newtonSolution(l, a, n, zeros) ==
+      i:N
+      m:Z := 0
+      aeq:UPS := 0
+      op := l
+      while op ^= 0 repeat
+        mu := degree(op) * n + degree leadingCoefficient op
+        op := reductum op
+        if mu > m then m := mu
+      while l ^= 0 repeat
+        c := leadingCoefficient l
+        d := degree l
+        s:UTS := monomial(1, (m - d * n - degree c)::N)$UTS * reverseUP c
+        aeq := aeq + monomial(s, d)
+        l := reductum l
+      (u := newtonSolve(aeq, a, n)) case UTS => reverseUTS(u::UTS, n)
+      -- newton lifting failed, so revert to traditional method
+      atn := monomial(a, n)$UP
+      neq := changeVar(l, atn)
+      sols := [sol.poly for sol in polyRicDE(neq, zeros) | degree(sol.poly) < n]
+      empty? sols => atn
+      atn + first sols
+
+-- solves the algebraic equation eq for y, returns a solution of degree n with
+-- initial term a
+-- uses naive newton approximation for now
+-- an example where this fails is   y^2 + 2 x y + 1 + x^2 = 0
+-- which arises from the differential operator D^2 + 2 x D + 1 + x^2
+    newtonSolve(eq, a, n) ==
+      deq := differentiate eq
+      sol := a::UTS
+      for i in 1..n repeat
+        (xquo := eq(sol) exquo deq(sol)) case "failed" => return "failed"
+        sol := truncate(sol - xquo::UTS, i)
+      sol
+
+-- there could be the same solutions coming in different ways, so we
+-- stop when the number of solutions reaches the order of the equation
+    ricDsolve(l:L, zeros:UP -> List F, ezfactor:UP -> Factored UP) ==
+      n := degree l
+      ans:List(QF) := empty()
+      for rec in singRicDE(l, ezfactor) repeat
+        ans := removeDuplicates_! concat_!(ans,
+                         [rec.frac + f for f in nonSingSolve(n, rec.eq, zeros)])
+        #ans = n => return ans
+      ans
+
+-- there could be the same solutions coming in different ways, so we
+-- stop when the number of solutions reaches the order of the equation
+    nonSingSolve(n, l, zeros) ==
+      ans:List(QF) := empty()
+      for rec in polyRicDE(l, zeros) repeat
+        ans := removeDuplicates_! concat_!(ans, nopoly(n,rec.poly,rec.eq,zeros))
+        #ans = n => return ans
+      ans
+
+    constantRic(p, zeros) ==
+      zero? degree p => empty()
+      zeros squareFreePart p
+
+-- there could be the same solutions coming in different ways, so we
+-- stop when the number of solutions reaches the order of the equation
+    nopoly(n, p, l, zeros) ==
+      ans:List(QF) := empty()
+      for rec in constantCoefficientRicDE(l, constantRic(#1, zeros)) repeat
+        ans := removeDuplicates_! concat_!(ans,
+                  [(rec.constant::UP + p)::QF + f for f in logDerOnly(rec.eq)])
+        #ans = n => return ans
+      ans
+
+-- returns [p1,...,pn] s.t. h(x,pi(x)) = 0 mod c(x)
+    solveModulo(c, h) ==
+      rec := genericPolynomial(dummy, degree(c)::Z - 1)
+      unk:SUP := 0
+      while not zero? h repeat
+        unk := unk + UP2SUP(leadingCoefficient h) * (rec.poly ** degree h)
+        h   := reductum h
+      sol := ratsol solve(coefficients(monicDivide(unk,UP2SUP c).remainder),
+                          rec.vars)
+      [mapeval(rec.poly, s.var, s.val) for s in sol]
+
+    if F has AlgebraicallyClosedField then
+      zro1: UP -> List F
+      zro : (UP, UP -> Factored UP) -> List F
+
+      ricDsolve(l:L)  == ricDsolve(l, squareFree)
+      ricDsolve(l:LQ) == ricDsolve(l, squareFree)
+
+      ricDsolve(l:L, ezfactor:UP -> Factored UP) ==
+        ricDsolve(l, zro(#1, ezfactor), ezfactor)
+
+      ricDsolve(l:LQ, ezfactor:UP -> Factored UP) ==
+        ricDsolve(l, zro(#1, ezfactor), ezfactor)
+
+      zro(p, ezfactor) ==
+        concat [zro1(r.factor) for r in factors ezfactor p]
+
+      zro1 p ==
+        [zeroOf(map(#1, p)$UnivariatePolynomialCategoryFunctions2(F, UP,
+                                              F, SparseUnivariatePolynomial F))]
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+-- Compile order for the differential equation solver:
+-- oderf.spad  odealg.spad  nlode.spad  nlinsol.spad  riccati.spad  odeef.spad
+
+<<package ODEPRRIC PrimitiveRatRicDE>>
+<<package ODERTRIC RationalRicDE>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

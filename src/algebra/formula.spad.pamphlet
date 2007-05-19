@@ -1,0 +1,519 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra formula.spad}
+\author{Robert S. Sutor}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{domain FORMULA ScriptFormulaFormat}
+<<domain FORMULA ScriptFormulaFormat>>=
+)abbrev domain FORMULA ScriptFormulaFormat
+++ Author: Robert S. Sutor
+++ Date Created: 1987 through 1990
+++ Change History:
+++ Basic Operations: coerce, convert, display, epilogue,
+++   formula, new, prologue, setEpilogue!, setFormula!, setPrologue!
+++ Related Constructors: ScriptFormulaFormat1
+++ Also See: TexFormat
+++ AMS Classifications:
+++ Keywords: output, format, SCRIPT, BookMaster, formula
+++ References:
+++   SCRIPT Mathematical Formula Formatter User's Guide, SH20-6453,
+++   IBM Corporation, Publishing Systems Information Development,
+++   Dept. G68, P.O. Box 1900, Boulder, Colorado, USA 80301-9191.
+++ Description:
+++   \spadtype{ScriptFormulaFormat} provides a coercion from
+++   \spadtype{OutputForm} to IBM SCRIPT/VS Mathematical Formula Format.
+++   The basic SCRIPT formula format object consists of three parts:  a
+++   prologue, a formula part and an epilogue.  The functions
+++   \spadfun{prologue}, \spadfun{formula} and \spadfun{epilogue}
+++   extract these parts, respectively.  The central parts of the expression
+++   go into the formula part.  The other parts can be set
+++   (\spadfun{setPrologue!}, \spadfun{setEpilogue!}) so that contain the
+++   appropriate tags for printing.  For example, the prologue and
+++   epilogue might simply contain ":df."  and ":edf."  so that the
+++   formula section will be printed in display math mode.
+
+ScriptFormulaFormat(): public == private where
+  E      ==> OutputForm
+  I      ==> Integer
+  L      ==> List
+  S      ==> String
+
+  public == SetCategory with
+    coerce:   E -> %
+      ++ coerce(o) changes o in the standard output format to
+      ++ SCRIPT formula format.
+    convert:  (E,I) -> %
+      ++ convert(o,step) changes o in standard output format to
+      ++ SCRIPT formula format and also adds the given step number.
+      ++ This is useful if you want to create equations with given numbers
+      ++ or have the equation numbers correspond to the interpreter step
+      ++ numbers.
+    display:  (%, I) -> Void
+      ++ display(t,width) outputs the formatted code t so that each
+      ++ line has length less than or equal to \spadvar{width}.
+    display:  % -> Void
+      ++ display(t) outputs the formatted code t so that each
+      ++ line has length less than or equal to the value set by
+      ++ the system command \spadsyscom{set output length}.
+    epilogue: % -> L S
+      ++ epilogue(t) extracts the epilogue section of a formatted object t.
+    formula:      % -> L S
+      ++ formula(t) extracts the formula section of a formatted object t.
+    new:      () -> %
+      ++ new() create a new, empty object. Use \spadfun{setPrologue!},
+      ++ \spadfun{setFormula!} and \spadfun{setEpilogue!} to set the
+      ++ various components of this object.
+    prologue: % -> L S
+      ++ prologue(t) extracts the prologue section of a formatted object t.
+    setEpilogue!: (%, L S) -> L S
+      ++ setEpilogue!(t,strings) sets the epilogue section of a
+      ++ formatted object t to strings.
+    setFormula!:  (%, L S) -> L S
+      ++ setFormula!(t,strings) sets the formula section of a
+      ++ formatted object t to strings.
+    setPrologue!: (%, L S) -> L S
+      ++ setPrologue!(t,strings) sets the prologue section of a
+      ++ formatted object t to strings.
+
+  private == add
+    import OutputForm
+    import Character
+    import Integer
+    import List OutputForm
+    import List String
+
+    Rep := Record(prolog : L S, formula : L S, epilog : L S)
+
+    -- local variables declarations and definitions
+
+    expr: E
+    prec,opPrec: I
+    str:  S
+    blank         : S := " @@ "
+
+    maxPrec       : I   := 1000000
+    minPrec       : I   := 0
+
+    splitChars    : S   := " <>[](){}+*=,-%"
+
+    unaryOps      : L S := ["-","^"]$(L S)
+    unaryPrecs    : L I := [700,260]$(L I)
+
+    -- the precedence of / in the following is relatively low because
+    -- the bar obviates the need for parentheses.
+    binaryOps     : L S := ["+->","|","**","/","<",">","=","OVER"]$(L S)
+    binaryPrecs   : L I := [0,0,900, 700,400,400,400,   700]$(L I)
+
+    naryOps       : L S := ["-","+","*",blank,",",";"," ","ROW","",
+                            " habove "," here "," labove "]$(L S)
+    naryPrecs     : L I := [700,700,800,  800,110,110,  0,    0, 0,
+                            0,  0,  0]$(L I)
+--  naryNGOps     : L S := ["ROW"," here "]$(L S)
+    naryNGOps     : L S := nil$(L S)
+
+    plexOps       : L S := ["SIGMA","PI","INTSIGN","INDEFINTEGRAL"]$(L S)
+    plexPrecs     : L I := [    700, 800,      700,            700]$(L I)
+
+    specialOps    : L S := ["MATRIX","BRACKET","BRACE","CONCATB",     _
+                            "AGGLST","CONCAT","OVERBAR","ROOT","SUB", _
+                            "SUPERSUB","ZAG","AGGSET","SC","PAREN"]
+
+    -- the next two lists provide translations for some strings for
+    -- which the formula formatter provides special variables.
+
+    specialStrings : L S :=
+      ["5","..."]
+    specialStringsInFormula : L S :=
+      [" alpha "," ellipsis "]
+
+    -- local function signatures
+
+    addBraces:      S -> S
+    addBrackets:    S -> S
+    group:          S -> S
+    formatBinary:   (S,L E, I) -> S
+    formatFunction: (S,L E, I) -> S
+    formatMatrix:   L E -> S
+    formatNary:     (S,L E, I) -> S
+    formatNaryNoGroup: (S,L E, I) -> S
+    formatNullary:  S -> S
+    formatPlex:     (S,L E, I) -> S
+    formatSpecial:  (S,L E, I) -> S
+    formatUnary:    (S,  E, I) -> S
+    formatFormula:      (E,I) -> S
+    parenthesize:   S -> S
+    precondition:   E -> E
+    postcondition:  S -> S
+    splitLong:      (S,I) -> L S
+    splitLong1:     (S,I) -> L S
+    stringify:      E -> S
+
+    -- public function definitions
+
+    new() : % == [[".eq set blank @",":df."]$(L S),
+      [""]$(L S), [":edf."]$(L S)]$Rep
+
+    coerce(expr : E): % ==
+      f : % := new()$%
+      f.formula := [postcondition
+        formatFormula(precondition expr, minPrec)]$(L S)
+      f
+
+    convert(expr : E, stepNum : I): % ==
+      f : % := new()$%
+      f.formula := concat(["<leqno lparen ",string(stepNum)$S,
+        " rparen>"], [postcondition
+          formatFormula(precondition expr, minPrec)]$(L S))
+      f
+
+    display(f : %, len : I) ==
+      s,t : S
+      for s in f.prolog repeat sayFORMULA(s)$Lisp
+      for s in f.formula repeat
+        for t in splitLong(s, len) repeat sayFORMULA(t)$Lisp
+      for s in f.epilog repeat sayFORMULA(s)$Lisp
+      void()$Void
+
+    display(f : %) ==
+      display(f, _$LINELENGTH$Lisp pretend I)
+
+    prologue(f : %) == f.prolog
+    formula(f : %)  == f.formula
+    epilogue(f : %) == f.epilog
+
+    setPrologue!(f : %, l : L S) == f.prolog := l
+    setFormula!(f : %, l : L S)  == f.formula := l
+    setEpilogue!(f : %, l : L S) == f.epilog := l
+
+    coerce(f : %): E ==
+      s,t : S
+      l : L S := nil
+      for s in f.prolog repeat l := concat(s,l)
+      for s in f.formula repeat
+        for t in splitLong(s, (_$LINELENGTH$Lisp pretend Integer) - 4) repeat
+          l := concat(t,l)
+      for s in f.epilog repeat l := concat(s,l)
+      (reverse l) :: E
+
+    -- local function definitions
+
+    postcondition(str: S): S ==
+      len : I := #str
+      len < 4 => str
+      plus : Character := char "+"
+      minus: Character := char "-"
+      for i in 1..(len-1) repeat
+        if (str.i =$Character plus) and (str.(i+1) =$Character minus)
+          then setelt(str,i,char " ")$S
+      str
+
+    stringify expr == object2String(expr)$Lisp pretend S
+
+    splitLong(str : S, len : I): L S ==
+      -- this blocks into lines
+      if len < 20 then len := _$LINELENGTH$Lisp
+      splitLong1(str, len)
+
+    splitLong1(str : S, len : I) ==
+      l : List S := nil
+      s : S := ""
+      ls : I := 0
+      ss : S
+      lss : I
+      for ss in split(str,char " ") repeat
+        lss := #ss
+        if ls + lss > len then
+          l := concat(s,l)$List(S)
+          s := ""
+          ls := 0
+        lss > len => l := concat(ss,l)$List(S)
+        ls := ls + lss + 1
+        s := concat(s,concat(ss," ")$S)$S
+      if ls > 0 then l := concat(s,l)$List(S)
+      reverse l
+
+    group str ==
+      concat ["<",str,">"]
+
+    addBraces str ==
+      concat ["left lbrace ",str," right rbrace"]
+
+    addBrackets str ==
+      concat ["left lb ",str," right rb"]
+
+    parenthesize str ==
+      concat ["left lparen ",str," right rparen"]
+
+    precondition expr ==
+      outputTran(expr)$Lisp
+
+    formatSpecial(op : S, args : L E, prec : I) : S ==
+      op = "AGGLST" =>
+        formatNary(",",args,prec)
+      op = "AGGSET" =>
+        formatNary(";",args,prec)
+      op = "CONCATB" =>
+        formatNary(" ",args,prec)
+      op = "CONCAT" =>
+        formatNary("",args,prec)
+      op = "BRACKET" =>
+        group addBrackets formatFormula(first args, minPrec)
+      op = "BRACE" =>
+        group addBraces formatFormula(first args, minPrec)
+      op = "PAREN" =>
+        group parenthesize formatFormula(first args, minPrec)
+      op = "OVERBAR" =>
+        null args => ""
+        group concat [formatFormula(first args, minPrec)," bar"]
+      op = "ROOT" =>
+        null args => ""
+        tmp : S := formatFormula(first args, minPrec)
+        null rest args => group concat ["sqrt ",tmp]
+        group concat ["midsup adjust(u 1.5 r 9) ",
+          formatFormula(first rest args, minPrec)," sqrt ",tmp]
+      op = "SC" =>
+        formatNary(" labove ",args,prec)
+      op = "SUB" =>
+        group concat [formatFormula(first args, minPrec)," sub ",
+          formatSpecial("AGGLST",rest args,minPrec)]
+      op = "SUPERSUB" =>
+        -- variable name
+        form : List S := [formatFormula(first args, minPrec)]
+        -- subscripts
+        args := rest args
+        null args => concat form
+        tmp : S := formatFormula(first args, minPrec)
+        if tmp ^= "" then form := append(form,[" sub ",tmp])$(List S)
+        -- superscripts
+        args := rest args
+        null args => group concat form
+        tmp : S := formatFormula(first args, minPrec)
+        if tmp ^= "" then form := append(form,[" sup ",tmp])$(List S)
+        -- presuperscripts
+        args := rest args
+        null args => group concat form
+        tmp : S := formatFormula(first args, minPrec)
+        if tmp ^= "" then form := append(form,[" presup ",tmp])$(List S)
+        -- presubscripts
+        args := rest args
+        null args => group concat form
+        tmp : S := formatFormula(first args, minPrec)
+        if tmp ^= "" then form := append(form,[" presub ",tmp])$(List S)
+        group concat form
+      op = "MATRIX" => formatMatrix rest args
+--    op = "ZAG" =>
+--      concat ["\zag{",formatFormula(first args, minPrec),"}{",
+--        formatFormula(first rest args,minPrec),"}"]
+      concat ["not done yet for ",op]
+
+    formatPlex(op : S, args : L E, prec : I) : S ==
+      hold : S
+      p : I := position(op,plexOps)
+      p < 1 => error "unknown Script Formula Formatter unary op"
+      opPrec := plexPrecs.p
+      n : I := #args
+      (n ^= 2) and (n ^= 3) => error "wrong number of arguments for plex"
+      s : S :=
+        op = "SIGMA"   => "sum"
+        op = "PI"      => "product"
+        op = "INTSIGN" => "integral"
+        op = "INDEFINTEGRAL" => "integral"
+        "????"
+      hold := formatFormula(first args,minPrec)
+      args := rest args
+      if op ^= "INDEFINTEGRAL" then
+        if hold ^= "" then
+          s := concat [s," from",group concat ["\displaystyle ",hold]]
+        if not null rest args then
+          hold := formatFormula(first args,minPrec)
+          if hold ^= "" then
+            s := concat [s," to",group concat ["\displaystyle ",hold]]
+          args := rest args
+        s := concat [s," ",formatFormula(first args,minPrec)]
+      else
+        hold := group concat [hold," ",formatFormula(first args,minPrec)]
+        s := concat [s," ",hold]
+      if opPrec < prec then s := parenthesize s
+      group s
+
+    formatMatrix(args : L E) : S ==
+      -- format for args is [[ROW ...],[ROW ...],[ROW ...]]
+      group addBrackets formatNary(" habove ",args,minPrec)
+
+    formatFunction(op : S, args : L E, prec : I) : S ==
+      group concat [op, " ", parenthesize formatNary(",",args,minPrec)]
+
+    formatNullary(op : S) ==
+      op = "NOTHING" => ""
+      group concat [op,"()"]
+
+    formatUnary(op : S, arg : E, prec : I) ==
+      p : I := position(op,unaryOps)
+      p < 1 => error "unknown Script Formula Formatter unary op"
+      opPrec := unaryPrecs.p
+      s : S := concat [op,formatFormula(arg,opPrec)]
+      opPrec < prec => group parenthesize s
+      op = "-" => s
+      group s
+
+    formatBinary(op : S, args : L E, prec : I) : S ==
+      p : I := position(op,binaryOps)
+      p < 1 => error "unknown Script Formula Formatter binary op"
+      op :=
+        op = "**"    => " sup "
+        op = "/"     => " over "
+        op = "OVER"  => " over "
+        op
+      opPrec := binaryPrecs.p
+      s : S := formatFormula(first args, opPrec)
+      s := concat [s,op,formatFormula(first rest args, opPrec)]
+      group
+        op = " over " => s
+        opPrec < prec => parenthesize s
+        s
+
+    formatNary(op : S, args : L E, prec : I) : S ==
+      group formatNaryNoGroup(op, args, prec)
+
+    formatNaryNoGroup(op : S, args : L E, prec : I) : S ==
+      null args => ""
+      p : I := position(op,naryOps)
+      p < 1 => error "unknown Script Formula Formatter nary op"
+      op :=
+        op = ","     => ", @@ "
+        op = ";"     => "; @@ "
+        op = "*"     => blank
+        op = " "     => blank
+        op = "ROW"   => " here "
+        op
+      l : L S := nil
+      opPrec := naryPrecs.p
+      for a in args repeat
+        l := concat(op,concat(formatFormula(a,opPrec),l)$L(S))$L(S)
+      s : S := concat reverse rest l
+      opPrec < prec => parenthesize s
+      s
+
+    formatFormula(expr,prec) ==
+      i : Integer
+      ATOM(expr)$Lisp pretend Boolean =>
+        str := stringify expr
+        FIXP(expr)$Lisp =>
+          i := expr : Integer
+          if (i < 0) or (i > 9) then group str else str
+        (i := position(str,specialStrings)) > 0 =>
+          specialStringsInFormula.i
+        str
+      l : L E := (expr pretend L E)
+      null l => blank
+      op : S := stringify first l
+      args : L E := rest l
+      nargs : I := #args
+
+      -- special cases
+      member?(op, specialOps) => formatSpecial(op,args,prec)
+      member?(op, plexOps)    => formatPlex(op,args,prec)
+
+      -- nullary case
+      0 = nargs => formatNullary op
+
+      -- unary case
+      (1 = nargs) and member?(op, unaryOps) =>
+        formatUnary(op, first args, prec)
+
+      -- binary case
+      (2 = nargs) and member?(op, binaryOps) =>
+        formatBinary(op, args, prec)
+
+      -- nary case
+      member?(op,naryNGOps) => formatNaryNoGroup(op,args, prec)
+      member?(op,naryOps) => formatNary(op,args, prec)
+      op := formatFormula(first l,minPrec)
+      formatFunction(op,args,prec)
+
+@
+\section{package FORMULA1 ScriptFormulaFormat1}
+<<package FORMULA1 ScriptFormulaFormat1>>=
+)abbrev package FORMULA1 ScriptFormulaFormat1
+++ Author: Robert S. Sutor
+++ Date Created: 1987 through 1990
+++ Change History:
+++ Basic Operations: coerce
+++ Related Constructors: ScriptFormulaFormat
+++ Also See: TexFormat, TexFormat1
+++ AMS Classifications:
+++ Keywords: output, format, SCRIPT, BookMaster, formula
+++ References:
+++   SCRIPT Mathematical Formula Formatter User's Guide, SH20-6453,
+++   IBM Corporation, Publishing Systems Information Development,
+++   Dept. G68, P.O. Box 1900, Boulder, Colorado, USA 80301-9191.
+++ Description:
+++   \spadtype{ScriptFormulaFormat1} provides a utility coercion for
+++   changing to SCRIPT formula format anything that has a coercion to
+++   the standard output format.
+
+ScriptFormulaFormat1(S : SetCategory): public == private where
+  public  ==  with
+    coerce: S -> ScriptFormulaFormat()
+      ++ coerce(s) provides a direct coercion from an expression s of domain S to
+      ++ SCRIPT formula format. This allows the user to skip the step of
+      ++ first manually coercing the object to standard output format
+      ++ before it is coerced to SCRIPT formula format.
+
+  private == add
+    import ScriptFormulaFormat()
+
+    coerce(s : S): ScriptFormulaFormat ==
+      coerce(s :: OutputForm)$ScriptFormulaFormat
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<domain FORMULA ScriptFormulaFormat>>
+<<package FORMULA1 ScriptFormulaFormat1>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

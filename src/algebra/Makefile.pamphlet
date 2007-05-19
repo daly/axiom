@@ -1,0 +1,2096 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra Makefile}
+\author{Timothy Daly}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{Adding new algebra}
+This is a complex process by its very nature. Developers and Maintainers
+who undertake the process need to understand quite a lot of detail. The
+ultimate steps to add algebra are tedious but simple. Note that only
+algebra code that gets shipped with the system needs to undergo this
+process. User code can be compiled once the distributed algebra exists
+and does not need either this Makefile or this installation process.
+
+NOTE: If you add new algebra to this file you must also update
+
+[[src/algebra/exposed.lsp.pamphlet]]
+
+otherwise the new algebra won't be loaded by the interpreter when needed.
+
+Since understanding is the key to making correct changes to this file
+I'll work on explaining the details of why things need to exist. 
+
+The first idea that you need to understand is the overall process
+of adding algebra code. Lets assume that you have a brand new spad
+file, called [[foo.spad]] containing a simple domain [[BAR]]. The
+steps in the process of adding this file are:
+\begin{enumerate}
+\item Find out where the algebra code lives in the lattice.
+
+You do this by 
+\begin{enumerate}
+\item starting a new interpsys session
+\item collecting all the names of the algebra files BAR requires
+\item determining which layer each of the required files resides
+\item determine the highest layer (e.g. 14) that contains the required files
+\end{enumerate}
+
+\item insert the documentation into the next layer (e.g. 15)
+\item insert the [[\${OUT}/BAR.o]] file into the layer's file list
+\end{enumerate}
+
+\section{Rebuilding the algebra from scratch}
+Compile order is important. Here we try to define the ordered lattice
+of spad file dependencies. However this is, in reality, a graph rather
+than a lattice. In order to break cycles in this graph we explicitly
+cache a few of the intermediate generated lisp code for certain files.
+These are marked throughout (both here and in the various pamphlet
+files) with the word {\bf BOOTSTRAP}.
+
+If we take a cycle such as {\bf RING} we discover that in order to
+compile the spad code we must load the compiled definition of {\bf RING}.
+In this case we must compile the cached lisp code before we try to 
+compile the spad file.
+
+The cycle for {\bf SETCAT} is longer consisting of: {\bf SETCAT} needs
+{\bf SINT} needs {\bf UFD} needs {\bf GCDDOM} needs {\bf COMRING} needs
+{\bf RING} needs {\bf RNG} needs {\bf ABELGRP} needs {\bf CABMON} needs
+{\bf ABELMON} needs {\bf ABELSG} needs {\bf SETCAT}.
+
+It is highly recommended that you try to become a developer of Axiom
+and read the archived mailing lists before you decide to change a
+cached file. In the fullness of time we will rewrite the whole algebra
+structure into a proper lattice if possible. Alternatively we'll
+reimplement the compiler to handle graphs. Or deeply adopt the
+extensible domains. Whatever we do will be much discussed (and cause
+much disgust) around the campfire. If you come up with a brilliant
+plan that gets adopted we'll even inscribe your name on a log and add
+it to the fire.
+
+In the code that follows we find the categories, packages and domains
+that compile with no dependencies and call this set ``layer 0''. Next
+we find the categories, packages and domains that will compile using
+only ``layer 0'' code and call this ``layer 1''. We walk up the
+lattice in this fashion adding layers. Note that at layer 3 this
+process runs into cycles and we create the ``layer 3 bootstrap''
+stanzas before continuing upward.
+
+\section{The Algebra Lattice Layers}
+\subsection{Layer 0 Bootstrap}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+si.spad.pamphlet (INS SINT)
+\end{verbatim}
+Note well that none of the algebra stanzas should include these
+files in the preconditions otherwise we have an infinite compile
+loop. These files are originally bootstrapped from lisp code
+when we build the system for the first time but they are
+forcibly recompiled at the end of the build so they reflect
+current code (just in case someone changes the spad code but
+does not re-cache the generated lisp). If you add these files
+as preconditions (note that they are all in the {\bf MID} 
+directory rather than the {\bf OUT} directory like everything
+else) then the final recompile will invalidate all of the
+rest of the algebra targets which will get rebuilt again causing
+these targets to be out of date. The rest of the loop is left
+up to the student.
+
+The bootstrap process works because first we ask for the compiled
+lisp code stanzas (the [[\${MID}/BAR.o]] files), THEN we ask for
+the final algebra code stanzas (the [[\${OUT}/BAR.o]] files). This
+is a very subtle point so think it through carefully. Notice that
+this is the only layer calling for [[\${MID}]] files. All other 
+layers call for [[\${OUT}]] files. If you break this the world
+will no longer compile so don't change it if you don't understand it.
+
+\begin{verbatim}
+LAYER0BOOTSTRAP=${OUT}/XPR.o 
+\end{verbatim}
+
+<<layer0 bootstrap>>=
+
+LAYER0BOOTSTRAP=\
+  ${MID}/ABELGRP.o  ${MID}/ABELGRP-.o ${MID}/ABELMON.o  ${MID}/ABELMON-.o \
+  ${MID}/ABELSG.o   ${MID}/ABELSG-.o  ${MID}/ALAGG.o    ${MID}/BOOLEAN.o  \
+  ${MID}/CABMON.o   ${MID}/CHAR.o     ${MID}/CLAGG.o    ${MID}/CLAGG-.o   \
+  ${MID}/COMRING.o  ${MID}/DFLOAT.o   ${MID}/DIFRING.o  ${MID}/DIFRING-.o \
+  ${MID}/DIVRING.o  ${MID}/DIVRING-.o ${MID}/ENTIRER.o  ${MID}/ES.o       \
+  ${MID}/ES-.o      ${MID}/EUCDOM.o   ${MID}/EUCDOM-.o  ${MID}/FFIELDC.o  \
+  ${MID}/FFIELDC-.o ${MID}/FPS.o      ${MID}/FPS-.o     ${MID}/GCDDOM.o   \
+  ${MID}/GCDDOM-.o  ${MID}/HOAGG.o    ${MID}/HOAGG-.o   ${MID}/ILIST.o    \
+  ${MID}/INS.o      ${MID}/INS-.o     ${MID}/INT.o      ${MID}/INTDOM.o   \
+  ${MID}/INTDOM-.o  ${MID}/ISTRING.o  ${MID}/LIST.o     ${MID}/LNAGG.o    \
+  ${MID}/LNAGG-.o   ${MID}/LSAGG.o    ${MID}/LSAGG-.o   ${MID}/MONOID.o   \
+  ${MID}/MONOID-.o  ${MID}/MTSCAT.o   ${MID}/NNI.o      ${MID}/OINTDOM.o  \
+  ${MID}/ORDRING.o  ${MID}/ORDRING-.o ${MID}/OUTFORM.o  ${MID}/PI.o       \
+  ${MID}/PRIMARR.o  ${MID}/POLYCAT.o  ${MID}/POLYCAT-.o ${MID}/PSETCAT.o  \
+  ${MID}/PSETCAT-.o ${MID}/QFCAT.o    ${MID}/QFCAT-.o   ${MID}/RCAGG.o    \
+  ${MID}/RCAGG-.o   ${MID}/REF.o      ${MID}/RING.o     ${MID}/RING-.o    \
+  ${MID}/RNG.o      ${MID}/RNS.o      ${MID}/RNS-.o     ${MID}/SETAGG.o   \
+  ${MID}/SETAGG-.o  ${MID}/SETCAT.o   ${MID}/SETCAT-.o  ${MID}/SINT.o     \
+  ${MID}/STAGG.o    ${MID}/STAGG-.o   ${MID}/SYMBOL.o   ${MID}/TSETCAT.o  \
+  ${MID}/TSETCAT-.o ${MID}/UFD.o      ${MID}/UFD-.o     ${MID}/ULSCAT.o   \
+  ${MID}/UPOLYC.o   ${MID}/UPOLYC-.o  ${MID}/URAGG.o    ${MID}/URAGG-.o   \
+  ${MID}/VECTOR.o \
+  layer0bootstrap
+
+@
+<<layer0 copy>>=
+
+LAYER0COPY=\
+  ${OUT}/ABELGRP.o  ${OUT}/ABELGRP-.o ${OUT}/ABELMON.o  ${OUT}/ABELMON-.o \
+  ${OUT}/ABELSG.o   ${OUT}/ABELSG-.o  ${OUT}/ALAGG.o    ${OUT}/BOOLEAN.o  \
+  ${OUT}/CABMON.o   ${OUT}/CHAR.o     ${OUT}/CLAGG.o    ${OUT}/CLAGG-.o   \
+  ${OUT}/COMRING.o  ${OUT}/DFLOAT.o   ${OUT}/DIFRING.o  ${OUT}/DIFRING-.o \
+  ${OUT}/DIVRING.o  ${OUT}/DIVRING-.o ${OUT}/ENTIRER.o  ${OUT}/ES.o       \
+  ${OUT}/ES-.o      ${OUT}/EUCDOM.o   ${OUT}/EUCDOM-.o  ${OUT}/FFIELDC.o  \
+  ${OUT}/FFIELDC-.o ${OUT}/FPS.o      ${OUT}/FPS-.o     ${OUT}/GCDDOM.o   \
+  ${OUT}/GCDDOM-.o  ${OUT}/HOAGG.o    ${OUT}/HOAGG-.o   ${OUT}/ILIST.o    \
+  ${OUT}/INS.o      ${OUT}/INS-.o     ${OUT}/INT.o      ${OUT}/INTDOM.o   \
+  ${OUT}/INTDOM-.o  ${OUT}/ISTRING.o  ${OUT}/LIST.o     ${OUT}/LNAGG.o    \
+  ${OUT}/LNAGG-.o   ${OUT}/LSAGG.o    ${OUT}/LSAGG-.o   ${OUT}/MONOID.o   \
+  ${OUT}/MONOID-.o  ${OUT}/MTSCAT.o   ${OUT}/NNI.o      ${OUT}/OINTDOM.o  \
+  ${OUT}/ORDRING.o  ${OUT}/ORDRING-.o ${OUT}/OUTFORM.o  ${OUT}/PI.o       \
+  ${OUT}/PRIMARR.o  ${OUT}/POLYCAT.o  ${OUT}/POLYCAT-.o ${OUT}/PSETCAT.o  \
+  ${OUT}/PSETCAT-.o ${OUT}/QFCAT.o    ${OUT}/QFCAT-.o   ${OUT}/RCAGG.o    \
+  ${OUT}/RCAGG-.o   ${OUT}/REF.o      ${OUT}/RING.o     ${OUT}/RING-.o    \
+  ${OUT}/RNG.o      ${OUT}/RNS.o      ${OUT}/RNS-.o     ${OUT}/SETAGG.o   \
+  ${OUT}/SETAGG-.o  ${OUT}/SETCAT.o   ${OUT}/SETCAT-.o  ${OUT}/SINT.o     \
+  ${OUT}/STAGG.o    ${OUT}/STAGG-.o   ${OUT}/SYMBOL.o   ${OUT}/TSETCAT.o  \
+  ${OUT}/TSETCAT-.o ${OUT}/UFD.o      ${OUT}/UFD-.o     ${OUT}/ULSCAT.o   \
+  ${OUT}/UPOLYC.o   ${OUT}/UPOLYC-.o  ${OUT}/URAGG.o    ${OUT}/URAGG-.o   \
+  ${OUT}/VECTOR.o \
+  layer0copy
+
+@
+\subsection{Layer 0}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+attreg.spad.pamphlet  (ATTREG)
+dhmatrix.spad.pamphlet (DHMATRIX)
+omcat.spad.pamphlet   (OM)
+print.spad.pamphlet   (PRINT)
+ptranfn.spad.pamphlet (PTRANFN)
+system.spad.pamphlet  (MSYSCMD)
+\end{verbatim}
+
+<<layer0>>=
+
+LAYER0=\
+  ${OUT}/AHYP.o    ${OUT}/ATTREG.o  ${OUT}/CFCAT.o   ${OUT}/ELTAB.o    \
+  ${OUT}/KOERCE.o  ${OUT}/KONVERT.o ${OUT}/MSYSCMD.o ${OUT}/ODEIFTBL.o \
+  ${OUT}/OM.o      ${OUT}/OMCONN.o  ${OUT}/OMDEV.o   ${OUT}/OUT.o      \
+  ${OUT}/PRIMCAT.o ${OUT}/PRINT.o   ${OUT}/PTRANFN.o ${OUT}/SPFCAT.o   \
+  ${OUT}/TYPE.o \
+  layer0done
+
+@
+\subsection{Layer 1}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+ituple.spad.pamphlet   (ITFUN2 ITFUN3 ITUPLE)
+mkrecord.spad.pamphlet (MKRECORD)
+pcurve.spad.pamphlet   (PPCURVE PSCURVE)
+coerce.spad.pamphlet   (TYPE KOERCE KONVERT RETRACT)
+\end{verbatim}
+
+<<layer1>>=
+
+LAYER1=\
+  ${OUT}/ANY1.o     ${OUT}/COMBOPC.o  ${OUT}/DROPT1.o   ${OUT}/EQ2.o      \
+  ${OUT}/FORTCAT.o  ${OUT}/ITFUN2.o   ${OUT}/ITFUN3.o   ${OUT}/ITUPLE.o   \
+  ${OUT}/MKBCFUNC.o ${OUT}/MKRECORD.o ${OUT}/MKUCFUNC.o ${OUT}/NONE1.o    \
+  ${OUT}/PATAB.o    ${OUT}/PLOT1.o    ${OUT}/PPCURVE.o  ${OUT}/PSCURVE.o  \
+  ${OUT}/REAL.o     ${OUT}/RESLATC.o  ${OUT}/RETRACT.o  ${OUT}/RETRACT-.o \
+  ${OUT}/SEGBIND2.o ${OUT}/SEGCAT.o   ${OUT}/STREAM1.o  ${OUT}/STREAM2.o  \
+  ${OUT}/STREAM3.o \
+  layer1done
+
+@
+\subsection{Layer 2}
+\subsubsection{Completed spad files}
+
+<<layer2>>=
+
+LAYER2=\
+  ${OUT}/FMC.o   ${OUT}/FMFUN.o   ${OUT}/FORTFN.o  ${OUT}/FVC.o  \
+  ${OUT}/FVFUN.o ${OUT}/INTRET.o  ${OUT}/SEGXCAT.o  \
+  layer2done
+
+@
+\subsection{Layer 3}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+grdef.spad.pamphlet (GRDEF)
+\end{verbatim}
+
+<<layer3>>=
+
+LAYER3=\
+  ${OUT}/AGG.o   ${OUT}/AGG-.o  ${OUT}/BASTYPE.o ${OUT}/BASTYPE-.o \
+  ${OUT}/GRDEF.o ${OUT}/LIST3.o ${OUT}/MKFUNC.o \
+  layer3done
+
+@
+
+\subsubsection{Completed spad files}
+\begin{verbatim}
+annacat.spad.pamphlet (NIPROB ODEPROB PDEPROB OPTPROB NUMINT ODECAT PDECAT
+                       OPTCAT)
+color.spad.pamphlet (COLOR PALETTE)
+mappkg.spad.pamphlet (MAPHACK1 MAPHACK2 MAPHACK3 MAPPKG1 MAPPKG2 MAPPKG3)
+paramete.spad.pamphlet (PARPCURV PARPC2 PARSCURV PARSC2 PARSURF PARSU2
+suchthat.spad.pamphlet (SUCH)
+ystream.spad.pamphlet (YSTREAM)
+\end{verbatim}
+
+<<layer4>>=
+
+LAYER4=\
+  ${OUT}/ANON.o     ${OUT}/COLOR.o    ${OUT}/COMM.o     ${OUT}/COMPPROP.o \
+  ${OUT}/ELTAGG.o   ${OUT}/ELTAGG-.o  ${OUT}/ESCONT1.o  ${OUT}/EXIT.o     \
+  ${OUT}/FAMONC.o   ${OUT}/FILECAT.o  ${OUT}/FINITE.o   ${OUT}/FNCAT.o    \
+  ${OUT}/FORMULA1.o ${OUT}/IDPC.o     ${OUT}/IEVALAB.o  ${OUT}/IEVALAB-.o \
+  ${OUT}/INTBIT.o   ${OUT}/LMODULE.o  ${OUT}/LOGIC.o    ${OUT}/LOGIC-.o   \
+  ${OUT}/MAPHACK1.o ${OUT}/MAPHACK2.o ${OUT}/MAPHACK3.o ${OUT}/MAPPKG1.o  \
+  ${OUT}/MAPPKG2.o  ${OUT}/MAPPKG3.o  ${OUT}/MONAD.o    ${OUT}/MONAD-.o   \
+  ${OUT}/NIPROB.o   ${OUT}/NONE.o     ${OUT}/NUMINT.o   ${OUT}/ODECAT.o   \
+  ${OUT}/ODEPROB.o  ${OUT}/OMENC.o    ${OUT}/ONECOMP2.o ${OUT}/OPTCAT.o   \
+  ${OUT}/OPTPROB.o  ${OUT}/ORDSET.o   ${OUT}/ORDSET-.o  ${OUT}/PALETTE.o  \
+  ${OUT}/PARPCURV.o ${OUT}/PARPC2.o   ${OUT}/PARSCURV.o ${OUT}/PARSC2.o   \
+  ${OUT}/PARSURF.o  ${OUT}/PARSU2.o   ${OUT}/PATMAB.o   ${OUT}/PATRES2.o  \
+  ${OUT}/PATTERN1.o ${OUT}/PDECAT.o   ${OUT}/PDEPROB.o  ${OUT}/REPSQ.o    \
+  ${OUT}/REPDB.o    ${OUT}/RFDIST.o   ${OUT}/RIDIST.o   ${OUT}/RMODULE.o  \
+  ${OUT}/SEXCAT.o   ${OUT}/SGROUP.o   ${OUT}/SGROUP-.o  ${OUT}/SPACEC.o   \
+  ${OUT}/SPLNODE.o  ${OUT}/STEP.o     ${OUT}/SUCH.o     ${OUT}/TEX1.o     \
+  ${OUT}/UDVO.o     ${OUT}/YSTREAM.o \
+  layer4done
+
+@
+\subsection{Layer 5}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+equation1.spad.pamphlet (EVALAB IEVALAB)
+\end{verbatim}
+
+<<layer5>>=
+
+LAYER5=\
+  ${OUT}/ATRIG.o    ${OUT}/ATRIG-.o   ${OUT}/BMODULE.o  ${OUT}/CACHSET.o  \
+  ${OUT}/CHARNZ.o   ${OUT}/CHARZ.o    ${OUT}/DVARCAT.o  ${OUT}/DVARCAT-.o \
+  ${OUT}/ELEMFUN.o  ${OUT}/ELEMFUN-.o ${OUT}/ESTOOLS2.o ${OUT}/EVALAB.o   \
+  ${OUT}/EVALAB-.o  ${OUT}/FCOMP.o    ${OUT}/FEVALAB.o  ${OUT}/FEVALAB-.o \
+  ${OUT}/FPATMAB.o  ${OUT}/GROUP.o    ${OUT}/GROUP-.o   ${OUT}/IDPAM.o    \
+  ${OUT}/IDPO.o     ${OUT}/INCRMAPS.o ${OUT}/IXAGG.o    ${OUT}/IXAGG-.o   \
+  ${OUT}/KERNEL2.o  ${OUT}/LALG.o     ${OUT}/LALG-.o    ${OUT}/LINEXP.o   \
+  ${OUT}/MODMONOM.o ${OUT}/MONADWU.o  ${OUT}/MONADWU-.o ${OUT}/MRF2.o     \
+  ${OUT}/NARNG.o    ${OUT}/NARNG-.o   ${OUT}/NSUP2.o    ${OUT}/OASGP.o    \
+  ${OUT}/ODVAR.o    ${OUT}/OPQUERY.o  ${OUT}/ORDFIN.o   ${OUT}/ORDMON.o   \
+  ${OUT}/PATMATCH.o ${OUT}/PERMCAT.o  ${OUT}/PDRING.o   ${OUT}/PDRING-.o  \
+  ${OUT}/SDVAR.o    ${OUT}/SUP2.o     ${OUT}/TRIGCAT.o  ${OUT}/TRIGCAT-.o \
+  ${OUT}/ULS2.o     ${OUT}/UP2.o \
+  layer5done
+
+@
+\subsection{Layer6}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+fmod.spad.pamphlet (ZMOD)
+sortpak.spad.pamphlet (SORTPAK)
+\end{verbatim}
+
+<<layer6>>=
+
+LAYER6=\
+  ${OUT}/AUTOMOR.o  ${OUT}/BGAGG.o   ${OUT}/BGAGG-.o   ${OUT}/BRAGG.o    \
+  ${OUT}/BRAGG-.o   ${OUT}/CARTEN2.o ${OUT}/CHARPOL.o  ${OUT}/COMPLEX2.o \
+  ${OUT}/DIFEXT.o   ${OUT}/DIFEXT-.o ${OUT}/DLAGG.o    ${OUT}/ELAGG.o    \
+  ${OUT}/ELAGG-.o   ${OUT}/ES1.o     ${OUT}/ES2.o      ${OUT}/GRMOD.o    \
+  ${OUT}/GRMOD-.o   ${OUT}/HYPCAT.o  ${OUT}/HYPCAT-.o  ${OUT}/MKCHSET.o  \
+  ${OUT}/MODRING.o  ${OUT}/MODULE.o  ${OUT}/MODULE-.o  ${OUT}/NASRING.o  \
+  ${OUT}/NASRING-.o ${OUT}/OAMON.o   ${OUT}/SORTPAK.o  ${OUT}/ZMOD.o \
+  layer6done
+
+@
+\subsection{Layer7}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+\end{verbatim}
+
+<<layer7>>=
+
+LAYER7=\
+  ${OUT}/ALGEBRA.o ${OUT}/ALGEBRA-.o ${OUT}/BTCAT.o  ${OUT}/BTCAT-.o \
+  ${OUT}/FMCAT.o   ${OUT}/IDPOAM.o   ${OUT}/IFAMON.o ${OUT}/GRALG.o  \
+  ${OUT}/GRALG-.o  ${OUT}/OCAMON.o   ${OUT}/PRQAGG.o ${OUT}/QUAGG.o  \
+  ${OUT}/SKAGG.o  \
+  layer7done
+
+@
+\subsection{Layer8}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+card.spad.pamphlet (CARD)
+fortcat.spad.pamphlet (FORTFN FMC FORTCAT FVC FMTC FMFUN FVFUN)
+\end{verbatim}
+
+<<layer8>>=
+
+LAYER8=\
+  ${OUT}/BSTREE.o  ${OUT}/BTOURN.o   ${OUT}/CARD.o    ${OUT}/DRAWHACK.o \
+  ${OUT}/DQAGG.o   ${OUT}/FACTFUNC.o ${OUT}/FMTC.o    ${OUT}/FR2.o      \
+  ${OUT}/FRAC2.o   ${OUT}/FRUTIL.o   ${OUT}/ITAYLOR.o ${OUT}/MLO.o      \
+  ${OUT}/NAALG.o   ${OUT}/NAALG-.o   ${OUT}/OAGROUP.o ${OUT}/OAMONS.o   \
+  ${OUT}/OP.o      ${OUT}/ORDCOMP2.o ${OUT}/PID.o     ${OUT}/RANDSRC.o  \
+  ${OUT}/UNISEG2.o ${OUT}/XALG.o  \
+  layer8done
+
+@
+\subsection{Layer9}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+degred.spad.pamphlet (DEGRED)
+indexedp.spad.pamphlet (IDPC IDPO IDPAM IDPOAM  IDPOAMS IDPAG)
+product.spad.pamphlet (PRODUCT)
+retract.spad.pamphlet (RETRACT FRETRCT RATRET)
+sf.spad.pamphlet (REAL RADCAT RNS FPS DFLOAT)
+\end{verbatim}
+
+<<layer9>>=
+
+LAYER9=\
+  ${OUT}/AMR.o      ${OUT}/AMR-.o     ${OUT}/DEGRED.o  ${OUT}/DLP.o      \
+  ${OUT}/EAB.o      ${OUT}/ESTOOLS1.o ${OUT}/FAGROUP.o ${OUT}/FAMONOID.o \
+  ${OUT}/FIELD.o    ${OUT}/FIELD-.o   ${OUT}/FLAGG.o   ${OUT}/FLAGG-.o   \
+  ${OUT}/FLINEXP.o  ${OUT}/FLINEXP-.o ${OUT}/FRETRCT.o ${OUT}/FRETRCT-.o \
+  ${OUT}/FSERIES.o  ${OUT}/FT.o       ${OUT}/IDPAG.o   ${OUT}/IDPOAMS.o  \
+  ${OUT}/INFINITY.o ${OUT}/LA.o       ${OUT}/OMLO.o    ${OUT}/ORTHPOL.o  \
+  ${OUT}/PRODUCT.o  ${OUT}/PADICCT.o  ${OUT}/PMPRED.o  ${OUT}/PMASS.o    \
+  ${OUT}/PTFUNC2.o  ${OUT}/RADCAT.o   ${OUT}/RADCAT-.o ${OUT}/RATRET.o   \
+  ${OUT}/RADUTIL.o  ${OUT}/UPXS2.o    ${OUT}/XFALG.o   ${OUT}/ZLINDEP.o \
+  layer9done
+
+@
+\subsection{Layer10}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+complet.spad.pamphlet (ORDCOMP ORDCOMP2 ONECOMP ONECOMP2 INFINITY)
+cra.spad.pamphlet (CRAPACK)
+defaults.spad.pamphlet (REPSQ REPDB FLASORT)
+drawpak.spad.pamphlet (DRAWCX)
+free.spad.pamphlet (LMOPS FMONOID FGROUP FAMONC IFAMON FAMONOID FAGROUP)
+fourier.spad.pamphlet (FCOMP FSERIES)
+functions.spad.pamphlet (BFUNCT)
+mesh.spad.pamphlet (MESH)
+moebius.spad.pamphlet (MOEBIUS)
+mring.spad.pamphlet (MRING MRF2)
+opalg.spad.pamphlet (MODOP OP)
+partperm.spad.pamphlet (PARTPERM)
+pgrobner.spad.pamphlet (PGROEB)
+plottool.spad.pamphlet (PLOTTOOL)
+setorder.spad.pamphlet (UDPO UDVO)
+sttaylor.spad.pamphlet (STTAYLOR)
+tableau.spad.pamphlet (TABLBUMP TABLEAU)
+viewpack.spad.pamphlet (VIEW)
+\end{verbatim}
+
+<<layer10>>=
+
+LAYER10=\
+  ${OUT}/A1AGG.o    ${OUT}/A1AGG-.o   ${OUT}/ARR2CAT.o  ${OUT}/ARR2CAT-.o \
+  ${OUT}/ASP34.o    ${OUT}/BBTREE.o   ${OUT}/BFUNCT.o   ${OUT}/BPADIC.o   \
+  ${OUT}/BTREE.o    ${OUT}/CRAPACK.o  ${OUT}/DEQUEUE.o  ${OUT}/DLIST.o    \
+  ${OUT}/DRAWCX.o   ${OUT}/D01GBFA.o  ${OUT}/D02EJFA.o  ${OUT}/D03FAFA.o  \
+  ${OUT}/DRAWPT.o   ${OUT}/FAMR.o     ${OUT}/FAMR-.o    ${OUT}/FLASORT.o  \
+  ${OUT}/FLAGG2.o   ${OUT}/FGROUP.o   ${OUT}/FM.o       ${OUT}/FM1.o      \
+  ${OUT}/FPC.o      ${OUT}/FPC-.o     ${OUT}/FMONOID.o  ${OUT}/INDE.o     \
+  ${OUT}/IPADIC.o   ${OUT}/IROOT.o    ${OUT}/IR2.o      ${OUT}/LEXP.o     \
+  ${OUT}/LIECAT.o   ${OUT}/LIECAT-.o  ${OUT}/LIST2.o    ${OUT}/LIST2MAP.o \
+  ${OUT}/LMOPS.o    ${OUT}/LZSTAGG.o  ${OUT}/LZSTAGG-.o ${OUT}/MAGMA.o    \
+  ${OUT}/MESH.o     ${OUT}/MOEBIUS.o  ${OUT}/MODFIELD.o ${OUT}/MODOP.o    \
+  ${OUT}/MRING.o    ${OUT}/MTHING.o   ${OUT}/NCNTFRAC.o ${OUT}/NCODIV.o   \
+  ${OUT}/NUMTUBE.o  ${OUT}/ODR.o      ${OUT}/OFMONOID.o ${OUT}/ONECOMP.o  \
+  ${OUT}/ORDCOMP.o  ${OUT}/OREPCAT.o  ${OUT}/OREPCAT-.o ${OUT}/OWP.o      \
+  ${OUT}/PADIC.o    ${OUT}/PATTERN2.o ${OUT}/PATLRES.o  ${OUT}/PARTPERM.o \
+  ${OUT}/PBWLB.o    ${OUT}/PENDTREE.o ${OUT}/PGE.o      ${OUT}/PGROEB.o   \
+  ${OUT}/PINTERP.o  ${OUT}/PLOTTOOL.o ${OUT}/PFR.o      ${OUT}/PMDOWN.o   \
+  ${OUT}/PRTITION.o ${OUT}/PMINS.o    ${OUT}/PMLSAGG.o  ${OUT}/PMTOOLS.o  \
+  ${OUT}/PSCAT.o    ${OUT}/PSCAT-.o   ${OUT}/QFORM.o    ${OUT}/QUEUE.o    \
+  ${OUT}/SCACHE.o   ${OUT}/SEG.o      ${OUT}/SEG2.o     ${OUT}/SEXOF.o    \
+  ${OUT}/STACK.o    ${OUT}/STTAYLOR.o ${OUT}/TABLBUMP.o ${OUT}/TABLEAU.o  \
+  ${OUT}/TOPSP.o    ${OUT}/TRANFUN.o  ${OUT}/TRANFUN-.o ${OUT}/TUBE.o     \
+  ${OUT}/UDPO.o     ${OUT}/UNISEG.o   ${OUT}/VIEW.o     ${OUT}/VSPACE.o   \
+  ${OUT}/VSPACE-.o  ${OUT}/XPOLYC.o   ${OUT}/XPR.o \
+  layer10done
+
+@
+\subsection{Layer11}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+array1.spad.pamphlet (PRIMARR PRIMARR2 TUPLE IFARRAY FARRAY IARRAY1 ARRAY1
+                      ARRAY12)
+bags.spad.pamphlet (STACK ASTACK QUEUE DEQUEUE HEAP)
+combinat.spad.pamphlet (COMBINAT)
+ffx.spad.pamphlet (IRREDFFX)
+galutil.spad.pamphlet (GALUTIL)
+matstor.spad.pamphlet (MATSTOR)
+ore.spad.pamphlet (OREPCAT APPLYORE AUTOMOR OREPCTO ORESUP OREUP)
+plot3d.spad.pamphlet (PLOT3D)
+prtition.spad.pamphlet (PRTITION SYMPOLY)
+stream.spad.pamphlet (LZSTAGG CSTTOOLS STREAM STREAM1 STREAM2 STREAM3)
+trigcat.spad.pamphlet (ELEMFUN AHYP ATRIG HYPCAT TRANFUN TRIGCAT PRIMCAT
+                       LFCAT CFCAT SPFCAT)
+xlpoly.spad.pamphlet (MAGMA LWORD LIECAT FLALG XEXPPKG LPOLY PBWLB XPBWPOLY
+                      LEXP)
+xpoly.spad.pamphlet (OFMONOID FMCAT FM1 XALG XFALG XPOLYC XPR XDPOLY XRPOLY
+                     XPOLY)
+\end{verbatim}
+
+<<layer11>>=
+
+LAYER11=\
+  ${OUT}/APPLYORE.o ${OUT}/ARRAY1.o   ${OUT}/ARRAY12.o  ${OUT}/ARRAY2.o   \
+  ${OUT}/ASTACK.o   ${OUT}/BTAGG.o    ${OUT}/BTAGG-.o   ${OUT}/COMBINAT.o \
+  ${OUT}/CSTTOOLS.o ${OUT}/D01FCFA.o  ${OUT}/E04MBFA.o  ${OUT}/FARRAY.o   \
+  ${OUT}/FLALG.o    ${OUT}/GALUTIL.o  ${OUT}/HEAP.o     ${OUT}/IARRAY1.o  \
+  ${OUT}/IARRAY2.o  ${OUT}/IFARRAY.o  ${OUT}/INTCAT.o   ${OUT}/INTHEORY.o \
+  ${OUT}/IRREDFFX.o ${OUT}/LFCAT.o    ${OUT}/LODOCAT.o  ${OUT}/LODOCAT-.o \
+  ${OUT}/LWORD.o    ${OUT}/MATCAT.o   ${OUT}/MATCAT-.o  ${OUT}/MATSTOR.o  \
+  ${OUT}/ORESUP.o   ${OUT}/OREPCTO.o  ${OUT}/OREUP.o    ${OUT}/PLOT3D.o   \
+  ${OUT}/PR.o       ${OUT}/PREASSOC.o ${OUT}/PRIMARR2.o ${OUT}/REDORDER.o \
+  ${OUT}/SRAGG.o    ${OUT}/SRAGG-.o   ${OUT}/STREAM.o   ${OUT}/SYMPOLY.o  \
+  ${OUT}/TS.o       ${OUT}/TUPLE.o    ${OUT}/UPSCAT.o   ${OUT}/UPSCAT-.o  \
+  ${OUT}/VECTCAT.o  ${OUT}/VECTCAT-.o ${OUT}/XDPOLY.o   ${OUT}/XEXPPKG.o  \
+  ${OUT}/XF.o       ${OUT}/XF-.o      ${OUT}/XPBWPOLY.o ${OUT}/XPOLY.o    \
+  ${OUT}/XRPOLY.o \
+  layer11done
+
+@
+\subsection{Layer12}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+\end{verbatim}
+
+<<layer12>>=
+
+LAYER12=\
+ ${OUT}/BITS.o    ${OUT}/DIRPROD2.o ${OUT}/IMATRIX.o  ${OUT}/IVECTOR.o \
+ ${OUT}/LPOLY.o   ${OUT}/LSMP.o     ${OUT}/LSMP1.o    ${OUT}/MATCAT2.o \
+ ${OUT}/PTCAT.o   ${OUT}/STRICAT.o  ${OUT}/TRIMAT.o  \
+  layer12done
+
+@
+\subsection{Layer13}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+carten.spad.pamphlet (GRMOD GRALG CARTEN CARTEN2)
+catdef.spad.pamphlet (ABELGRP ABELMON ABELSG ALGEBRA BASTYPE BMODULE CABMON
+                      CHARNZ CHARZ COMRING DIFRING DIFEXT DIVRING ENTIRER
+                      EUCDOM FIELD FINITE FLINEXP GCDDOM GROUP INTDOM LMODULE
+                      LINEXP MODULE MONOID OAGROUP OAMON OAMONS OASGP OCAMON
+                      ORDFIN OINTDOM ORDMON ORDRING ORDSET PDRING PFECAT PID
+                      RMODULE RING RNG SGROUP SETCAT STEP UFD VSPACE)
+clifford.spad.pamphlet (QFORM CLIF)
+clip.spad.pamphlet (CLIP)
+coordsys.spad.pamphlet (COORDSYS)
+dhmatrix.spad.pamphlet (DHMATRIX)
+d02routine.spad.pamphlet (D02BBFA D02BHFA D02CJFA D02EJFA)
+ffpoly2.spad.pamphlet (FFPOLY2)
+irsn.spad.pamphlet (IRSN)
+numode.spad.pamphlet (NUMODE)
+numquad.spad.pamphlet (NUMQUAD)
+perman.spad.pamphlet (GRAY PERMAN)
+pseudolin.spad.pamphlet (PSEUDLIN)
+rep2.spad.pamphlet (REP2)
+sex.spad.pamphlet (SEXCAT SEXOF SEX)
+solvedio.spad.pamphlet (DIOSP)
+\end{verbatim}
+
+<<layer13>>=
+
+LAYER13=\
+  ${OUT}/ASSOCEQ.o  ${OUT}/CARTEN.o   ${OUT}/CLIF.o     ${OUT}/CLIP.o     \
+  ${OUT}/COORDSYS.o ${OUT}/DBASE.o    ${OUT}/DHMATRIX.o ${OUT}/DIOSP.o    \
+  ${OUT}/DIRPCAT.o  ${OUT}/DIRPCAT-.o ${OUT}/D02BBFA.o  ${OUT}/D02BHFA.o  \
+  ${OUT}/D02CJFA.o  ${OUT}/FAXF.o     ${OUT}/FAXF-.o    ${OUT}/FFPOLY2.o  \
+  ${OUT}/FNLA.o     ${OUT}/GRAY.o     ${OUT}/HB.o       ${OUT}/IRSN.o     \
+  ${OUT}/MCALCFN.o  ${OUT}/MHROWRED.o ${OUT}/NUMODE.o   ${OUT}/NUMQUAD.o  \
+  ${OUT}/ODESYS.o   ${OUT}/ODETOOLS.o ${OUT}/ORDFUNS.o  ${OUT}/PERMAN.o   \
+  ${OUT}/PFECAT.o   ${OUT}/PFECAT-.o  ${OUT}/POINT.o    ${OUT}/PSEUDLIN.o \
+  ${OUT}/PTPACK.o   ${OUT}/REP2.o     ${OUT}/SETMN.o    ${OUT}/SEX.o      \
+  ${OUT}/STRING.o   ${OUT}/SYMFUNC.o  ${OUT}/VECTOR2.o \
+  layer13done
+
+@
+\subsection{Layer14}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+allfact.spad.pamphlet (MRATFAC MPRFF MPCPF GENMFACT RFFACTOR SUPFRACF)
+array2.spad.pamphlet (ARR2CAT IIARRAY2 IARRAY2 ARRAY2)
+bezout.spad.pamphlet (BEZOUT)
+boolean.spad.pamphlet (REF LOGIC BOOLEAN IBITS BITS)
+brill.spad.pamphlet (BRILL)
+cden.spad.pamphlet (ICDEN CDEN UPCDEN MCDEN)
+contfrac.spad.pamphlet (CONTFRAC NCNTFRAC)
+cycles.spad.pamphlet (CYCLES EVALCYC)
+cyclotom.spad.pamphlet (CYCLOTOM)
+ddfact.spad.pamphlet (DDFACT)
+equation2.spad.pamphlet (EQ EQ2 FEVALAB)
+error.spad.pamphlet (ERROR)
+facutil.spad.pamphlet (FACUTIL PUSHVAR)
+ffcat.spad.pamphlet (FPC XF FAXF DLP FFIELDC FFSLPE)
+fff.spad.pamphlet (FFF)
+ffhom.spad.pamphlet (FFHOM)
+ffpoly.spad.pamphlet (FFPOLY)
+fname.spad.pamphlet (FNCAT FNAME)
+formula.spad.pamphlet (FORMULA FORMULA1)
+fraction.spad.pamphlet (LO LA QFCAT QFCAT2 FRAC LPEFRAC FRAC2)
+galfactu.spad.pamphlet (GALFACTU)
+galpolyu.spad.pamphlet (GALPOLYU)
+gb.spad.pamphlet (GB)
+gbeuclid.spad.pamphlet (GBEUCLID)
+gbintern.spad.pamphlet (GBINTERN)
+gdirprod.spad.pamphlet (ORDFUNS ODP HDP SHDP)
+geneez.spad.pamphlet (GENEEZ)
+ghensel.spad.pamphlet (GHENSEL)
+gpgcd.spad.pamphlet (GENPGCD)
+gpol.spad.pamphlet (LAUPOL)
+groebf.spad.pamphlet (GBF)
+groebsol.spad.pamphlet (GROEBSOL)
+intrf.spad.pamphlet (SUBRESP MONOTOOL INTHERTR INTTR INTRAT INTRF)
+idecomp.spad.pamphlet (IDECOMP)
+leadcdet.spad.pamphlet (LEADCDET)
+lindep.spad.pamphlet (LINDEP ZLINDEP)
+lingrob.spad.pamphlet (LGROBP)
+listgcd.spad.pamphlet (HEUGCD)
+matfuns.spad.pamphlet (IMATLIN MATCAT2 RMCAT2 IMATQF MATLIN)
+mfinfact.spad.pamphlet (MFINFACT)
+mlift.spad.pamphlet (MLIST)
+moddfact.spad.pamphlet (MDDFACT)
+modmon.spad.pamphlet (MODMON)
+modring.spad.pamphlet (MODRING EMR MODFIELD)
+mts.spad.pamphlet (SMTS TS)
+multsqfr.spad.pamphlet (MULTSQFR)
+newpoint.spad.pamphlet (PTCAT POINT COMPPROP SUBSPACE PTPACK PTFUNC2)
+numtheor.spad.pamphlet (INTHEORY PNTHEORY)
+npcoef.spad.pamphlet (NPCOEF)
+omdev.spad.pamphlet (OMENC OMDEV OMCONN OMPKG)
+omserver.spad.pamphlet (OMSERVER)
+padic.spad.pamphlet (PADICCT IPADIC PADIC BPADIC PADICRC PADICRAT BPADICRT)
+pdecomp.spad.pamphlet (PCOMP PDECOMP)
+pfbr.spad.pamphlet (PFBRU PFBR)
+pfr.spad.pamphlet (PFR PFRPAC)
+pgcd.spad.pamphlet (PGCD)
+pinterp.spad.pamphlet (PINTERPA PINTERP)
+pleqn.spad.pamphlet (PLEQN)
+poltopol.spad.pamphlet (MPC2 MPC3 POLTOPOL)
+poly.spad.pamphlet (FM PR SUP SUP2 UP UP2 POLY2UP UPSQFREE PSQFR UPMP)
+polycat.spad.pamphlet (AMR FAMR POLYCAT POLYLIFT UPOLYC UPOLYC2 COMMUPC)
+prs.spad.pamphlet (PRS)
+radix.spad.pamphlet (RADIX BINARY DECIMAL HEXADEC RADUTIL)
+ratfact.spad.pamphlet (RATFACT)
+rderf.spad.pamphlet (RDETR)
+realzero.spad.pamphlet (REAL0)
+real0q.spad.pamphlet (REAL0Q)
+resring.spad.pamphlet (RESRING)
+rf.spad.pamphlet (POLYCATQ RF)
+solvefor.spad.pamphlet (SOLVEFOR)
+solvelin.spad.pamphlet (LSMP LSMP1 LSPP)
+smith.spad.pamphlet (SMITH)
+sttf.spad.pamphlet (STTF STTFNC)
+sturm.spad.pamphlet (SHP)
+sum.spad.pamphlet (ISUMP GOSPER SUMRF)
+tex.spad.pamphlet (TEX)
+tree.spad.pamphlet (TREE BTCAT BTREE BSTREE BTOURN BBTREE PENDTREE)
+twofact.spad.pamphlet (NORMRETR TWOFACT)
+unifact.spad.pamphlet (UNIFACT)
+updecomp.spad.pamphlet (UPDECOMP)
+updivp.spad.pamphlet (UPDIVP)
+viewDef.spad.pamphlet (VIEWDEF)
+vector.spad.pamphlet (VECTCAT IVECTOR VECTOR VECTOR2 DIRPCAT DIRPROD DIRPROD2)
+view2D.spad.pamphlet (GRIMAGE VIEW2D)
+void.spad.pamphlet (VOID EXIT)
+weier.spad.pamphlet (WEIER)
+wtpol.spad.pamphlet (WP OWP)
+\end{verbatim}
+
+<<layer14>>=
+
+LAYER14=\
+  ${OUT}/ASP1.o     ${OUT}/ASP10.o    ${OUT}/ASP24.o    ${OUT}/ASP4.o     \
+  ${OUT}/ASP50.o    ${OUT}/ASP6.o     ${OUT}/ASP73.o    ${OUT}/BALFACT.o  \
+  ${OUT}/BEZOUT.o   ${OUT}/BINARY.o   ${OUT}/BINFILE.o  ${OUT}/BOUNDZRO.o \
+  ${OUT}/BPADICRT.o ${OUT}/BRILL.o    ${OUT}/CDEN.o     ${OUT}/CHVAR.o    \
+  ${OUT}/COMMUPC.o  ${OUT}/CONTFRAC.o ${OUT}/CVMP.o     ${OUT}/CYCLOTOM.o \
+  ${OUT}/CYCLES.o   ${OUT}/DDFACT.o   ${OUT}/DECIMAL.o  ${OUT}/DIOPS.o    \
+  ${OUT}/DIOPS-.o   ${OUT}/DIRPROD.o  ${OUT}/DISPLAY.o  ${OUT}/DMP.o      \
+  ${OUT}/DPMO.o     ${OUT}/DPOLCAT.o  ${OUT}/DPOLCAT-.o ${OUT}/D01AJFA.o  \
+  ${OUT}/D01AKFA.o  ${OUT}/D01ALFA.o  ${OUT}/D01AMFA.o  ${OUT}/D01APFA.o  \
+  ${OUT}/D01AQFA.o  ${OUT}/EMR.o      ${OUT}/EQ.o       ${OUT}/ERROR.o    \
+  ${OUT}/EVALCYC.o  ${OUT}/E04DGFA.o  ${OUT}/E04FDFA.o  ${OUT}/E04GCFA.o  \
+  ${OUT}/E04JAFA.o  ${OUT}/FACUTIL.o  ${OUT}/FF.o       ${OUT}/FFCG.o     \
+  ${OUT}/FFCGX.o    ${OUT}/FFHOM.o    ${OUT}/FFNB.o     ${OUT}/FFNBX.o    \
+  ${OUT}/FFPOLY.o   ${OUT}/FFX.o      ${OUT}/FFSLPE.o   ${OUT}/FGLMICPK.o \
+  ${OUT}/FILE.o     ${OUT}/FINAALG.o  ${OUT}/FINAALG-.o ${OUT}/FINRALG.o  \
+  ${OUT}/FINRALG-.o ${OUT}/FFF.o      ${OUT}/FLOATRP.o  ${OUT}/FNAME.o    \
+  ${OUT}/FOP.o      ${OUT}/FORMULA.o  ${OUT}/FORT.o     ${OUT}/FRAC.o     \
+  ${OUT}/FTEM.o     ${OUT}/GENEEZ.o   ${OUT}/GENMFACT.o ${OUT}/GENPGCD.o  \
+  ${OUT}/GALFACTU.o ${OUT}/GALPOLYU.o ${OUT}/GB.o       ${OUT}/GBEUCLID.o \
+  ${OUT}/GBF.o      ${OUT}/GBINTERN.o ${OUT}/GHENSEL.o  ${OUT}/GMODPOL.o  \
+  ${OUT}/GOSPER.o   ${OUT}/GRIMAGE.o  ${OUT}/GROEBSOL.o ${OUT}/HDMP.o     \
+  ${OUT}/HDP.o      ${OUT}/HEXADEC.o  ${OUT}/HEUGCD.o   ${OUT}/IBPTOOLS.o \
+  ${OUT}/IFF.o      ${OUT}/IBITS.o    ${OUT}/ICARD.o    ${OUT}/ICDEN.o    \
+  ${OUT}/IDECOMP.o  ${OUT}/IIARRAY2.o ${OUT}/IMATLIN.o  ${OUT}/IMATQF.o   \
+  ${OUT}/INMODGCD.o ${OUT}/INNMFACT.o ${OUT}/INPSIGN.o  ${OUT}/INTHERTR.o \
+  ${OUT}/INTRAT.o   ${OUT}/INTRF.o    ${OUT}/INTSLPE.o  ${OUT}/INTTR.o    \
+  ${OUT}/ISUMP.o    ${OUT}/LAUPOL.o   ${OUT}/LEADCDET.o ${OUT}/LGROBP.o   \
+  ${OUT}/LIMITRF.o  ${OUT}/LINDEP.o   ${OUT}/LO.o       ${OUT}/LPEFRAC.o  \
+  ${OUT}/LSPP.o     ${OUT}/MATLIN.o   ${OUT}/MCDEN.o    ${OUT}/MDDFACT.o  \
+  ${OUT}/MFINFACT.o ${OUT}/MFLOAT.o   ${OUT}/MINT.o     ${OUT}/MLIFT.o    \
+  ${OUT}/MMAP.o     ${OUT}/MODMON.o   ${OUT}/MONOTOOL.o ${OUT}/MPCPF.o    \
+  ${OUT}/MPC2.o     ${OUT}/MPC3.o     ${OUT}/MPOLY.o    ${OUT}/MPRFF.o    \
+  ${OUT}/MRATFAC.o  ${OUT}/MULTSQFR.o ${OUT}/NORMRETR.o ${OUT}/NPCOEF.o   \
+  ${OUT}/NSUP.o     ${OUT}/NTPOLFN.o  ${OUT}/ODP.o      ${OUT}/ODEPRIM.o  \
+  ${OUT}/ODEPRRIC.o ${OUT}/OMPKG.o    ${OUT}/OMSERVER.o ${OUT}/PADEPAC.o  \
+  ${OUT}/PADICRAT.o ${OUT}/PADICRC.o  ${OUT}/PCOMP.o    ${OUT}/PDECOMP.o  \
+  ${OUT}/PF.o       ${OUT}/PFBR.o     ${OUT}/PFBRU.o    ${OUT}/PFOTOOLS.o \
+  ${OUT}/PFRPAC.o   ${OUT}/PGCD.o     ${OUT}/PINTERPA.o ${OUT}/PLEQN.o    \
+  ${OUT}/PMPLCAT.o  ${OUT}/PMQFCAT.o  ${OUT}/PNTHEORY.o ${OUT}/POLUTIL.o  \
+  ${OUT}/POLTOPOL.o ${OUT}/POLYCATQ.o ${OUT}/POLYLIFT.o ${OUT}/POLYROOT.o \
+  ${OUT}/POLY2.o    ${OUT}/POLY2UP.o  ${OUT}/PRS.o      ${OUT}/PSQFR.o    \
+  ${OUT}/PUSHVAR.o  ${OUT}/QALGSET.o  ${OUT}/QFCAT2.o   ${OUT}/RADIX.o    \
+  ${OUT}/RATFACT.o  ${OUT}/RCFIELD.o  ${OUT}/RCFIELD-.o ${OUT}/RDETR.o    \
+  ${OUT}/RDETRS.o   ${OUT}/REAL0.o    ${OUT}/REAL0Q.o   ${OUT}/REALSOLV.o \
+  ${OUT}/RESRING.o  ${OUT}/RETSOL.o   ${OUT}/RF.o       ${OUT}/RFFACTOR.o \
+  ${OUT}/RMATCAT.o  ${OUT}/RMATCAT-.o ${OUT}/RRCC.o     ${OUT}/RRCC-.o    \
+  ${OUT}/SCPKG.o    ${OUT}/SHDP.o     ${OUT}/SHP.o      ${OUT}/SIGNRF.o   \
+  ${OUT}/SMITH.o    ${OUT}/SMP.o      ${OUT}/SMTS.o     ${OUT}/SOLVEFOR.o \
+  ${OUT}/SPLTREE.o  ${OUT}/STINPROD.o ${OUT}/STTFNC.o   ${OUT}/SUBRESP.o  \
+  ${OUT}/SUMRF.o    ${OUT}/SUP.o      ${OUT}/SUPFRACF.o ${OUT}/TANEXP.o   \
+  ${OUT}/TEMUTL.o   ${OUT}/TEX.o      ${OUT}/TEXTFILE.o ${OUT}/TREE.o     \
+  ${OUT}/TWOFACT.o  ${OUT}/UNIFACT.o  ${OUT}/UP.o       ${OUT}/UPCDEN.o   \
+  ${OUT}/UPDECOMP.o ${OUT}/UPDIVP.o   ${OUT}/UPMP.o     ${OUT}/UPOLYC2.o  \
+  ${OUT}/UPXSCAT.o  ${OUT}/UPSQFREE.o ${OUT}/VIEWDEF.o  ${OUT}/VIEW2D.o   \
+  ${OUT}/VOID.o     ${OUT}/WEIER.o    ${OUT}/WP.o \
+  layer14done
+
+@
+\subsection{Layer15}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+dpolcat.spad.pamphlet (DVARCAT ODVAR SDVAR DPOLCAT DSMP ODPOL SDPOL)
+matcat.spad.pamphlet (MATCAT RMATCAT SMATCAT)
+plot.spad.pamphlet (PLOT PLOT1)
+\end{verbatim}
+
+<<layer15>>=
+
+LAYER15=\
+  ${OUT}/DIAGG.o   ${OUT}/DIAGG-.o   ${OUT}/DSMP.o     ${OUT}/EXPUPXS.o \
+  ${OUT}/FRAMALG.o ${OUT}/FRAMALG-.o ${OUT}/MDAGG.o    ${OUT}/ODPOL.o   \
+  ${OUT}/PLOT.o    ${OUT}/RMCAT2.o   ${OUT}/ROIRC.o    ${OUT}/SDPOL.o   \
+  ${OUT}/SMATCAT.o ${OUT}/SMATCAT-.o ${OUT}/TUBETOOL.o ${OUT}/UPXSCCA.o \
+  ${OUT}/UPXSCCA-.o \
+  layer15done
+
+@
+\subsection{Layer16}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+efupxs.spad.pamphlet (EFUPXS)
+lodop.spad.pamphlet (MLO OMLO NCODIV ODR DPMO DPMM)
+space.spad.pamphlet (SPACEC SPACE3 TOPSP)
+\end{verbatim}
+
+<<layer16>>=
+
+LAYER16=\
+  ${OUT}/DPMM.o     ${OUT}/EFUPXS.o  ${OUT}/FFINTBAS.o ${OUT}/FRIDEAL.o  \
+  ${OUT}/FRIDEAL2.o ${OUT}/FRMOD.o   ${OUT}/FSAGG.o    ${OUT}/FSAGG-.o   \
+  ${OUT}/IBATOOL.o  ${OUT}/INTFACT.o ${OUT}/KDAGG.o    ${OUT}/KDAGG-.o   \
+  ${OUT}/MSETAGG.o  ${OUT}/MONOGEN.o ${OUT}/MONOGEN-.o ${OUT}/NFINTBAS.o \
+  ${OUT}/SPACE3.o  \
+  layer16done
+
+@
+\subsection{Layer17}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+algext.spad.pamphlet (SAE)
+aggcat.spad.pamphlet (AGG HOAGG CLAGG BGAGG SKAGG QUAGG DQAGG PRQAGG DIOPS
+                      DIAGG MDAGG SETAGG FSAGG MSETAGG OMSAGG KDAGG ELTAB
+                      ELTAGG ISAGG TBAGG RCAGG BRAGG DLAGG URAGG STAGG LNAGG
+                      FLAGG A1AGG ELAGG LSAGG ALAGG SRAGG BTAGG ITAGG) 
+aggcat2.spad.pamphlet (FLAGG2 FSAGG2)
+galfact.spad.pamphlet (GALFACT)
+intfact.spad.pamphlet (PRIMES IROOT INTFACT)
+padiclib.spad.pamphlet (IBPTOOLS IBACHIN PWFFINTB)
+perm.spad.pamphlet (PERMCAT PERM)
+permgrps.spad.pamphlet (PERMGRP PGE)
+random.spad.pamphlet (RANDSRC RDIST INTBIT RIDIST RFDIST)
+sgcf.spad.pamphlet (SGCF)
+string.spad.pamphlet (CHAR CCLASS ISTRING STRING STRICAT)
+view3D.spad.pamphlet (VIEW3D)
+\end{verbatim}
+
+<<layer17>>=
+
+LAYER17=\
+  ${OUT}/CCLASS.o  ${OUT}/FSAGG2.o  ${OUT}/GALFACT.o ${OUT}/IALGFACT.o \
+  ${OUT}/IBACHIN.o ${OUT}/NORMMA.o  ${OUT}/ODERED.o  ${OUT}/OMSAGG.o   \
+  ${OUT}/PERM.o    ${OUT}/PERMGRP.o ${OUT}/PRIMES.o  ${OUT}/PWFFINTB.o \
+  ${OUT}/RDIST.o   ${OUT}/SAE.o     ${OUT}/SAEFACT.o ${OUT}/SAERFFC.o  \
+  ${OUT}/SGCF.o    ${OUT}/TBAGG.o   ${OUT}/TBAGG-.o  ${OUT}/VIEW3D.o  \
+  layer17done
+
+@
+\subsection{Layer18}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+d01Package.spad.pamphlet (INTPACK)
+list.spad.pamphlet (ILIST LIST LIST2 LIST3 LIST2MAP ALIST)
+pf.spad.pamphlet (IPF PF)
+table.spad.pamphlet (HASHTBL INTABL TABLE EQTBL STRTBL GSTBL STBL)
+\end{verbatim}
+
+<<layer18>>=
+
+LAYER18=\
+  ${OUT}/ALIST.o   ${OUT}/EQTBL.o   ${OUT}/GSTBL.o   ${OUT}/HASHTBL.o \
+  ${OUT}/INTABL.o  ${OUT}/INTFTBL.o ${OUT}/INTPACK.o ${OUT}/IPF.o     \
+  ${OUT}/KAFILE.o  ${OUT}/PATRES.o  ${OUT}/STBL.o    ${OUT}/STRTBL.o  \
+  ${OUT}/TABLE.o   ${OUT}/TBCMPPK.o  \
+  layer18done
+
+@
+\subsection{Layer19}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+acplot.spad.pamphlet (REALSOLV ACPLOT)
+alql.spad.pamphlet (DLIST ICARD DBASE QEQUAT MTHING OPQUERY)
+any.spad.pamphlet (NONE NONE1 ANY ANY1)
+c02.spad.pamphlet (NAGC02)
+c05.spad.pamphlet (NAGC05)
+c06.spad.pamphlet (NAGC06)
+d01routine.spad.pamphlet (D01AJFA D01AKFA D01AMFA D01APFA D01AQFA D01ALFA 
+                          D01ANFA D01ASFA D01GBFA D01FCFA)
+d02Package.spad.pamphlet (ODEPACK)
+d03agents.spad.pamphlet (D03AGNT)
+d03Package.spad.pamphlet (PDEPACK)
+drawopt.spad.pamphlet (DROPT DROPT1 DROPT0)
+eigen.spad.pamphlet (EP CHARPOL)
+e01.spad.pamphlet (NAGE01)
+e02.spad.pamphlet (NAGE02)
+e04.spad.pamphlet (NAGE04)
+e04agents.spad.pamphlet (E04AGNT)
+e04Package.spad.pamphlet (OPTPACK)
+ffcg.spad.pamphlet (FFCGP FFCGX FFCG)
+ffp.spad.pamphlet (FFP FFX IFF FF)
+files.spad.pamphlet (FILECAT FILE TEXTFILE BINFILE KAFILE LIB)
+float.spad.pamphlet (FLOAT)
+fnla.spad.pamphlet (OSI COMM HB FNLA)
+fortpak.spad.pamphlet (FCPAK1 NAGSP FORT FOP TEMUTL MCALCFN)
+forttyp.spad.pamphlet (FST FT SYMTAB SYMS)
+fparfrac.spad.pamphlet (FPARFRAC)
+fr.spad.pamphlet (FR FRUTIL FR2)
+f07.spad.pamphlet (NAGF07)
+gdpoly.spad.pamphlet (GDMP DMP HDMP)
+ideal.spad.pamphlet (IDEAL)
+intaux.spad.pamphlet (IR IR2)
+intclos.spad.pamphlet (TRIMAT IBATOOL FFINTBAS WFFINTBS NFINTBAS)
+integer.spad.pamphlet (INTSLPE INT NNI PI ROMAN)
+kl.spad.pamphlet (CACHSET SCACHE MKCHSET KERNEL KERNEL2)
+lmdict.spad.pamphlet (LMDICT)
+matrix.spad.pamphlet (IMATRIX MATRIX RMATRIX SQMATRIX)
+misc.spad.pamphlet (SAOS)
+mkfunc.spad.pamphlet (INFORM INFORM1 MKFUNC MKUCFUNC MKBCFUNC MKFLCFN)
+modgcd.spad.pamphlet (INMODGCD)
+mset.spad.pamphlet (MSET)
+multpoly.spad.pamphlet (POLY POLY2 MPOLY SMP INDE)
+naalgc.spad.pamphlet (MONAD MONADWU NARNG NASRING NAALG FINAALG FRNAALG)
+newdata.spad.pamphlet (IPRNTPK TBCMPPK SPLNODE SPLTREE)
+omerror.spad.pamphlet (OMERRK OMERR)
+op.spad.pamphlet (BOP BOP1 COMMONOP)
+out.spad.pamphlet (OUT SPECOUT DISPLAY)
+outform.spad.pamphlet (NUMFMT OUTFORM)
+patmatch1.spad.pamphlet (PATRES PATRES2 PATLRES PATMAB FPATMAB PMSYM PMKERNEL
+                         PMDOWN PMTOOLS PMLSAGG)
+pattern.spad.pamphlet (PATTERN PATTERN1 PATTERN2 PATAB)
+pscat.spad.pamphlet (PSCAT UPSCAT UTSCAT ULSCAT UPXSCAT MTSCAT)
+qalgset.spad.pamphlet (QALGSET QALGSET2)
+reclos.spad.pamphlet (POLUTIL RRCC RCFIELD ROIRC RECLOS)
+rep1.spad.pamphlet (REP1)
+routines.spad.pamphlet (ROUTINE ATTRBUT)
+s.spad.pamphlet (NAGS)
+seg.spad.pamphlet (SEGCAT SEGXCAT SEG SEG2 SEGBIND SETBIND2 UNISEG UNISEG2
+                   INCRMAPS)
+sets.spad.pamphlet (SET)
+sups.spad.pamphlet (ISUPS)
+syssolp.spad.pamphlet (SYSSOLP)
+variable.spad.pamphlet (OVAR VARIABLE RULECOLD FUNCTION ANON)
+\end{verbatim}
+
+<<layer19>>=
+
+LAYER19=\
+  ${OUT}/ACF.o      ${OUT}/ACF-.o     ${OUT}/ACPLOT.o   ${OUT}/ANTISYM.o \
+  ${OUT}/ANY.o      ${OUT}/ASP12.o    ${OUT}/ASP27.o    ${OUT}/ASP28.o   \
+  ${OUT}/ASP33.o    ${OUT}/ASP49.o    ${OUT}/ASP55.o    ${OUT}/ASP7.o    \
+  ${OUT}/ASP78.o    ${OUT}/ASP8.o     ${OUT}/ASP9.o     ${OUT}/ATTRBUT.o \
+  ${OUT}/BOP.o      ${OUT}/BOP1.o     ${OUT}/COMMONOP.o ${OUT}/COMPCAT.o \
+  ${OUT}/COMPCAT-.o ${OUT}/DRAW.o     ${OUT}/DRAWCFUN.o ${OUT}/DROPT.o   \
+  ${OUT}/DROPT0.o   ${OUT}/D01ANFA.o  ${OUT}/D01ASFA.o  ${OUT}/D03AGNT.o \
+  ${OUT}/EP.o       ${OUT}/E04AGNT.o  ${OUT}/FCPAK1.o   ${OUT}/FEXPR.o   \
+  ${OUT}/FFCAT.o    ${OUT}/FFCAT-.o   ${OUT}/FFCGP.o    ${OUT}/FFNBP.o   \
+  ${OUT}/FFP.o      ${OUT}/FLOAT.o    ${OUT}/FPARFRAC.o ${OUT}/FR.o      \
+  ${OUT}/FRNAALG.o  ${OUT}/FRNAALG-.o ${OUT}/FS.o       ${OUT}/FS-.o     \
+  ${OUT}/FST.o      ${OUT}/FUNCTION.o ${OUT}/GDMP.o     ${OUT}/HACKPI.o  \
+  ${OUT}/IDEAL.o    ${OUT}/INFORM.o   ${OUT}/INFORM1.o  ${OUT}/IPRNTPK.o \
+  ${OUT}/IR.o       ${OUT}/ISUPS.o    ${OUT}/KERNEL.o   ${OUT}/LIB.o     \
+  ${OUT}/LMDICT.o   ${OUT}/LODOOPS.o  ${OUT}/MATRIX.o   ${OUT}/MKFLCFN.o \
+  ${OUT}/MSET.o     ${OUT}/M3D.o      ${OUT}/NAGC02.o   ${OUT}/NAGC05.o  \
+  ${OUT}/NAGC06.o   ${OUT}/NAGD03.o   ${OUT}/NAGE01.o   ${OUT}/NAGE02.o  \
+  ${OUT}/NAGE04.o   ${OUT}/NAGF07.o   ${OUT}/NAGS.o     ${OUT}/NAGSP.o   \
+  ${OUT}/NREP.o     ${OUT}/NUMFMT.o   ${OUT}/OC.o       ${OUT}/OC-.o     \
+  ${OUT}/ODEPACK.o  ${OUT}/ODERAT.o   ${OUT}/OMERR.o    ${OUT}/OMERRK.o  \
+  ${OUT}/OPTPACK.o  ${OUT}/OSI.o      ${OUT}/PATTERN.o  ${OUT}/OVAR.o    \
+  ${OUT}/PMKERNEL.o ${OUT}/PMSYM.o    ${OUT}/POLY.o     ${OUT}/PRIMELT.o \
+  ${OUT}/QALGSET2.o ${OUT}/QEQUAT.o   ${OUT}/RECLOS.o   ${OUT}/REP1.o    \
+  ${OUT}/RESULT.o   ${OUT}/QUATCAT.o  ${OUT}/QUATCAT-.o ${OUT}/RFFACT.o  \
+  ${OUT}/RMATRIX.o  ${OUT}/ROMAN.o    ${OUT}/ROUTINE.o  ${OUT}/RPOLCAT.o \
+  ${OUT}/RPOLCAT-.o ${OUT}/RULECOLD.o ${OUT}/SAOS.o     ${OUT}/SEGBIND.o \
+  ${OUT}/SET.o      ${OUT}/SPECOUT.o  ${OUT}/SQMATRIX.o ${OUT}/SWITCH.o  \
+  ${OUT}/SYMS.o     ${OUT}/SYMTAB.o   ${OUT}/SYSSOLP.o  ${OUT}/UTSCAT.o  \
+  ${OUT}/UTSCAT-.o  ${OUT}/VARIABLE.o ${OUT}/WFFINTBS.o  \
+  layer19done
+
+
+@
+\subsection{Layer20}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+algfact.spad.pamphlet (IALGFACT SAEFACT RFFACT SAERFFC ALGFACT)
+algfunc.spad.pamphlet (ACF ACFS AF)
+asp.spad.pamphlet (ASP1 ASP10 ASP12 ASP19 ASP20 ASP24 ASP27 ASP28 ASP29 ASP30
+                   ASP31 ASP33 ASP34 ASP35 ASP4 ASP41 ASP42 ASP49 ASP50 ASP55
+                   ASP6 ASP7 ASP73 ASP74 ASP77 ASP78 ASP8 ASP80 ASP9)
+constant.spad.pamphlet (IAN AN)
+cmplxrt.spad.pamphlet (CMPLXRT)
+crfp.spad.pamphlet (CRFP)
+curve.spad.pamphlet (FFCAT MMAP FFCAT2 CHAVAR RDFF ALGFF)
+derham.spad.pamphlet (LALG EAB ANTISYM DERHAM)
+draw.spad.pamphlet (DRAWCFUN DRAW DRAWCURV DRAWPT)
+d01.spad.pamphlet (NAGD01)
+efstruc.spad.pamphlet (SYMFUNC TANEXP EFSTRUC ITRIGMNP TRIGMNIP CTRIGMNP)
+elemntry.spad.pamphlet (EF)
+elfuts.spad.pamphlet (ELFUTS)
+expexpan.spad.pamphlet (EXPUPXS UPXSSING EXPEXPAN)
+exprode.spad.pamphlet (EXPRODE)
+e04routine.spad.pamphlet (E04DFGA E04FDFA E04GCFA E04JAFA E04MBFA E04NAFA 
+                          E04UCFA)
+f01.spad.pamphlet (NAGF01)
+f02.spad.pamphlet (NAGF02)
+f04.spad.pamphlet (NAGF04)
+fortmac.spad.pamphlet (MINT MFLOAT MCMPLX)
+fortran.spad.pamphlet (RESULT FC FORTRAN M3D SFORT SWITCH FTEM FEXPR)
+fspace.spad.pamphlet (ES ES1 ES2 FS FS2)
+fs2ups.spad.pamphlet (FS2UPS)
+funcpkgs.spad.pamphlet (FSUPFACT)
+gaussfac.spad.pamphlet (GAUSSFAC)
+gaussian.spad.pamphlet (COMPCAT COMPLPAT CPMATCH COMPLEX COMPLEX2 COMPFACT
+                        CINTSLPE)
+generic.spad.pamphlet (GCNAALG CVMP)
+genufact.spad.pamphlet (GENUFACT)
+genups.spad.pamphlet (GENUPS)
+infprod.spad.pamphlet (STINPROD INFPROD0 INPRODPF INPRODFF)
+intaf.spad.pamphlet (INTG0 INTPAF INTAF)
+intalg.spad.pamphlet (DBLRESP INTHERAL INTALG)
+intef.spad.pamphlet (INTEF)
+intpm.spad.pamphlet (INTPM)
+kovacic.spad.pamphlet (KOVACIC)
+lie.spad.pamphlet (LIE JORDAN LSQM)
+liouv.spad.pamphlet (LF)
+lodof.spad.pamphlet (SETMN PREASSOC ASSOCEQ LODOF)
+manip.spad.pamphlet (FACTFUNC POLYROOT ALGMANIP SIMPAN TRMANIP)
+multfact.spad.pamphlet (INNMFACT MULTFACT ALGMFACT)
+naalg.spad.pamphlet (ALGSC SCPKG ALGPKG FRNAAF2)
+newpoly.spad.pamphlet (NSUP NSUP2 RPOLCAT NSMP)
+nlinsol.spad.pamphlet (RETSOL NLINSOL)
+numeigen.spad.pamphlet (IFSPRMELT.oNEP NREP NCEP)
+numeric.spad.pamphlet (NUMERIC DRAWHACK)
+numsolve.spad.pamphlet (INFSP FLOATRP FLOATCP)
+oct.spad.pamphlet (OC OCT OCTCT2)
+odealg.spad.pamphlet (ODESYS ODERED ODEPAL)
+openmath.spad.pamphlet (OMEXPR)
+pade.spad.pamphlet (PADEPAC PADE)
+patmatch2.spad.pamphlet (PMINS PMQFCAT PMPLCT PMFS PATMATCH)
+pfo.spad.pamphlet (FORDER RDIV PFOTOOLS PFOQ FSRED PFO)
+polset.spad.pamphlet (PSETCAT GPOLSET)
+primelt.spad.pamphlet (PRIMELT FSPRMELT)
+quat.spad.pamphlet (QUATCAT QUAT QUATCT2)
+rdeef.spad.pamphlet (INTTOOLS RDEEF)
+rdesys.spad.pamphlet (RDETRS RDEEFS)
+riccati.spad.pamphlet (ODEPRRIC ODERTRIC)
+rule.spad.pamphlet (RULE APPRULE RULESET)
+sign.spad.pamphlet (TOOLSIGN INPSIGN SIGNRF LIMITRF)
+special.spad.pamphlet (DFSFUN ORTHPOL NTPOLFN)
+suts.spad.pamphlet (SUTS)
+tools.spad.pamphlet (ESTOOLS ESTOOLS1 ESTOOLS2)
+triset.spad.pamphlet (TSETCAT GTSET PSETPK)
+tube.spad.pamphlet (TUBE TUBETOOL EXPRTUBE NUMTUBE)
+utsode.spad.pamphlet (UTSODE)
+\end{verbatim}
+
+<<layer20>>=
+
+LAYER20=\
+  ${OUT}/ACFS.o     ${OUT}/ACFS-.o    ${OUT}/AF.o       ${OUT}/ALGFACT.o  \
+  ${OUT}/ALGFF.o    ${OUT}/ALGMANIP.o ${OUT}/ALGMFACT.o ${OUT}/ALGPKG.o   \
+  ${OUT}/ALGSC.o    ${OUT}/AN.o       ${OUT}/APPRULE.o  ${OUT}/ASP19.o    \
+  ${OUT}/ASP20.o    ${OUT}/ASP30.o    ${OUT}/ASP31.o    ${OUT}/ASP35.o    \
+  ${OUT}/ASP41.o    ${OUT}/ASP42.o    ${OUT}/ASP74.o    ${OUT}/ASP77.o    \
+  ${OUT}/ASP80.o    ${OUT}/CINTSLPE.o ${OUT}/COMPFACT.o ${OUT}/COMPLEX.o  \
+  ${OUT}/COMPLPAT.o ${OUT}/CMPLXRT.o  ${OUT}/CPMATCH.o  ${OUT}/CRFP.o     \
+  ${OUT}/CTRIGMNP.o ${OUT}/D01WGTS.o  ${OUT}/D02AGNT.o  ${OUT}/D03EEFA.o  \
+  ${OUT}/DBLRESP.o  ${OUT}/DERHAM.o   ${OUT}/DFSFUN.o   ${OUT}/DRAWCURV.o \
+  ${OUT}/E04NAFA.o  ${OUT}/E04UCFA.o  ${OUT}/EF.o       ${OUT}/EFSTRUC.o  \
+  ${OUT}/ELFUTS.o   ${OUT}/ESTOOLS.o  ${OUT}/EXPEXPAN.o ${OUT}/EXPRODE.o  \
+  ${OUT}/EXPRTUBE.o ${OUT}/EXPR2.o    ${OUT}/FC.o       ${OUT}/FDIVCAT.o  \
+  ${OUT}/FDIVCAT-.o ${OUT}/FDIV2.o    ${OUT}/FFCAT2.o   ${OUT}/FLOATCP.o  \
+  ${OUT}/FORDER.o   ${OUT}/FORTRAN.o  ${OUT}/FSRED.o    ${OUT}/FSUPFACT.o \
+  ${OUT}/FRNAAF2.o  ${OUT}/FSPECF.o   ${OUT}/FS2.o      ${OUT}/FS2UPS.o   \
+  ${OUT}/GAUSSFAC.o ${OUT}/GCNAALG.o  ${OUT}/GENUFACT.o ${OUT}/GENUPS.o   \
+  ${OUT}/GTSET.o    ${OUT}/GPOLSET.o  ${OUT}/IAN.o      ${OUT}/INEP.o     \
+  ${OUT}/INFPROD0.o ${OUT}/INFSP.o    ${OUT}/INPRODFF.o ${OUT}/INPRODPF.o \
+  ${OUT}/INTAF.o    ${OUT}/INTALG.o   ${OUT}/INTEF.o    ${OUT}/INTG0.o    \
+  ${OUT}/INTHERAL.o ${OUT}/INTPAF.o   ${OUT}/INTPM.o    ${OUT}/INTTOOLS.o \
+  ${OUT}/ITRIGMNP.o ${OUT}/JORDAN.o   ${OUT}/KOVACIC.o  ${OUT}/LF.o       \
+  ${OUT}/LIE.o      ${OUT}/LODOF.o    ${OUT}/LSQM.o     ${OUT}/OMEXPR.o   \
+  ${OUT}/MCMPLX.o   ${OUT}/MULTFACT.o ${OUT}/NAGD01.o   ${OUT}/NAGD02.o   \
+  ${OUT}/NAGF01.o   ${OUT}/NAGF02.o   ${OUT}/NAGF04.o   ${OUT}/NCEP.o     \
+  ${OUT}/NLINSOL.o  ${OUT}/NSMP.o     ${OUT}/NUMERIC.o  ${OUT}/OCT.o      \
+  ${OUT}/OCTCT2.o   ${OUT}/ODEPAL.o   ${OUT}/ODERTRIC.o ${OUT}/PADE.o     \
+  ${OUT}/PAN2EXPR.o ${OUT}/PDEPACK.o  ${OUT}/PFO.o      ${OUT}/PFOQ.o     \
+  ${OUT}/PICOERCE.o ${OUT}/PMASSFS.o  ${OUT}/PMFS.o     ${OUT}/PMPREDFS.o \
+  ${OUT}/PSETPK.o   ${OUT}/QUAT.o     ${OUT}/QUATCT2.o  ${OUT}/RADFF.o    \
+  ${OUT}/RDEEF.o    ${OUT}/RDEEFS.o   ${OUT}/RDIV.o     ${OUT}/RSETCAT.o  \
+  ${OUT}/RSETCAT-.o ${OUT}/RULE.o     ${OUT}/RULESET.o  ${OUT}/SIMPAN.o   \
+  ${OUT}/SFORT.o    ${OUT}/SOLVESER.o ${OUT}/SUMFS.o    ${OUT}/SUTS.o     \
+  ${OUT}/TOOLSIGN.o ${OUT}/TRIGMNIP.o ${OUT}/TRMANIP.o  ${OUT}/ULSCCAT.o  \
+  ${OUT}/ULSCCAT-.o ${OUT}/UPXSSING.o ${OUT}/UTSODE.o   ${OUT}/UTSODETL.o \
+  ${OUT}/UTS2.o     ${OUT}/WUTSET.o  \
+  layer20done
+    
+@
+\subsection{Layer21}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+cont.spad.pamphlet (ESCONT ESCONT1)
+ddfact.spad.pamphlet (DDFACT)
+defintef.spad.pamphlet (DEFINTEF)
+defintrf.spad.pamphlet (DFINTTLS DEFINTRF)
+divisor.spad.pamphlet (FRIDEAL FRIDEAL2 MHROWRED FRMOD FDIVCAT HELLFDIV FDIV
+                       FDIV2)
+d01transform.spad.pamphlet (D01TRNS)
+efuls.spad.pamphlet (EFULS)
+expr.spad.pamphlet (EXPR PAN2EXPR EXPR2 PMPREDFS PMASSFS PMPRED PMASS HACKPI
+                    PICOERCE)
+expr2ups.spad.pamphlet (EXPR2UPS)
+fs2expxp.spad.pamphlet (FS2EXPXP)
+gseries.spad.pamphlet (GSERIES)
+integrat.spad.pamphlet (FSCINT FSINT)
+irexpand.spad.pamphlet (IR2F IRRF2F)
+laplace.spad.pamphlet (LAPLACE INVLAPLA)
+laurent.spad.pamphlet (ULSCCAT ULSCONS ULS USL2)
+nlode.spad.pamphlet (NODE1)
+oderf.spad.pamphlet (BALFACT BOUNDZRO ODEPRIM UTSODETL ODERAT ODETOOLS ODEINT
+                     ODECONST)
+puiseux.spad.pamphlet (UPXSCCA UPXSCONS UPXS UPXS2)
+radeigen.spad.pamphlet (REP)
+solverad.spad.pamphlet (SOLVERAD)
+suls.spad.pamphlet (SULS)
+supxs.spad.pamphlet (SUPXS)
+taylor.spad.pamphlet (ITAYLOR UTS UTS2)
+\end{verbatim}
+
+<<layer21>>=
+
+LAYER21=\
+  ${OUT}/DEFINTEF.o ${OUT}/DFINTTLS.o ${OUT}/DEFINTRF.o ${OUT}/D01TRNS.o  \
+  ${OUT}/EFULS.o    ${OUT}/ESCONT.o   ${OUT}/EXPR.o     ${OUT}/EXPR2UPS.o \
+  ${OUT}/FDIV.o     ${OUT}/FSCINT.o   ${OUT}/FSINT.o    ${OUT}/FS2EXPXP.o \
+  ${OUT}/GSERIES.o  ${OUT}/HELLFDIV.o ${OUT}/INVLAPLA.o ${OUT}/IR2F.o     \
+  ${OUT}/IRRF2F.o   ${OUT}/LAPLACE.o  ${OUT}/LIMITPS.o  ${OUT}/LODEEF.o   \
+  ${OUT}/NODE1.o    ${OUT}/ODECONST.o ${OUT}/ODEINT.o   ${OUT}/REP.o      \
+  ${OUT}/SOLVERAD.o ${OUT}/SULS.o     ${OUT}/SUPXS.o    ${OUT}/ULS.o      \
+  ${OUT}/ULSCONS.o  ${OUT}/UPXS.o     ${OUT}/UPXSCONS.o ${OUT}/UTS.o \
+  layer21done
+
+@
+\subsection{Layer22}
+\subsubsection{Completed spad files}
+\begin{verbatim}
+asp.spad.pamphlet (ASP29)
+combfunc.spad.pamphlet (COMBF)
+d01agents.spad.pamphlet (D01AGNT SNTSCAT)
+ffnb.spad.pamphlet (INBFF)
+limitps.spad.pamphlet (SIGNEF)
+lodo.spad.pamphlet (LODO LODO1 LODO2)
+newpoint.spad.pamphlet (SUBSPACE)
+nregset.spad.pamphlet (NTSCAT)
+primelt.spad.pamphlet (FSPRMELT)
+regset.spad.pamphlet (REGSET RSETGCD RSDCMPK)
+sregset.spad.pamphlet (SFRTCAT SRDCMPK SREGSET)
+sttf.spad.pamphlet (STTF)
+transsolve.spad.pamphlet (SOLVETRA)
+zerodim.spad.pamphlet (RGCHAIN ZDSOLVE)
+\end{verbatim}
+<<layer22>>=
+
+LAYER22=\
+  ${OUT}/ASP29.o    ${OUT}/COMBF.o    ${OUT}/D01AGNT.o  ${OUT}/FSPRMELT.o \
+  ${OUT}/INBFF.o    ${OUT}/LODO.o     ${OUT}/LODO1.o    ${OUT}/LODO2.o    \
+  ${OUT}/NTSCAT.o   ${OUT}/REGSET.o   ${OUT}/RGCHAIN.o  ${OUT}/RSETGCD.o  \
+  ${OUT}/RSDCMPK.o  ${OUT}/SFRTCAT.o  ${OUT}/SIGNEF.o   ${OUT}/SNTSCAT.o  \
+  ${OUT}/SOLVETRA.o ${OUT}/SRDCMPK.o  ${OUT}/SREGSET.o  ${OUT}/STTF.o     \
+  ${OUT}/SUBSPACE.o ${OUT}/ZDSOLVE.o \
+  layer22done
+
+@
+\subsection{Final layer spad files}
+These files have not yet been fully analyzed for dependencies but
+have added in alphabetical order in this final layer. This
+ordering is apparently adequate.
+
+These files all depend on layer22.
+\begin{verbatim}
+algcat.spad.pamphlet (CPIMA)
+nregset.spad.pamphlet (NORMPK)
+nsregset.spad.pamphlet (LAZM3PK)
+regset.spad.pamphlet (QCMPACK)
+sregset.spad.pamphlet (SFRGCD SFQCMPK)
+zerodim.spad.pamphlet (LEXTRIPK IRURPK RURPK)
+\end{verbatim}
+
+<<layer23>>=
+
+LAYER23=\
+  ${OUT}/CPIMA.o    ${OUT}/IRURPK.o   ${OUT}/LAZM3PK.o  ${OUT}/LEXTRIPK.o \
+  ${OUT}/NORMPK.o   ${OUT}/QCMPACK.o  ${OUT}/RURPK.o    ${OUT}/SFRGCD.o   \
+  ${OUT}/SFQCMPK.o  ${OUT}/INTRVL.o   ${OUT}/ODEEF.o \
+  layer23done
+
+@
+\subsection{User Layer for newly added algebra}
+Rather than classify newly created algebra into the existing type lattice
+we add it here.
+<<USERLAYER>>=
+
+USERLAYER=\
+  ${OUT}/RINTERP.o
+@
+\subsection{Order}
+The final order of the layers is determined here.
+<<order>>=
+
+ORDER=\
+  ${LAYER0BOOTSTRAP}     ${LAYER0}  ${LAYER1}  ${LAYER2}  ${LAYER3}  \
+  ${LAYER4}   ${LAYER5}  ${LAYER6}  ${LAYER7}  ${LAYER8}  ${LAYER9}  \
+  ${LAYER10}  ${LAYER11} ${LAYER12} ${LAYER13} ${LAYER14} ${LAYER15} \
+  ${LAYER16}  ${LAYER17} ${LAYER18} ${LAYER19} ${LAYER20} ${LAYER21} \
+  ${LAYER22}  ${LAYER23} ${USERLAYER} ${LAYER0COPY}
+
+@
+\section{Broken Files}
+These files are Aldor files
+\begin{verbatim}
+axtimer.as Timer
+iviews.as  InventorRenderPackage IVREND
+ffrac.as   FormalFraction FORMAL
+iviews.as  InventorViewPort IVVIEW
+iviews.as  InventorDataSink IVDATA
+herm.as    PackedHermitianSequence PACKED
+nsfip.as   NagSpecialFunctionsInterfacePackage NAGSPE
+nrc.as     NagResultChecks NAGRES
+nqip.as    NagQuadratureInterfacePackage NAGQUA
+noptip.as  NagOptimizationInterfacePackage NAGOPT
+nepip.as   NagEigenInterfacePackage NAGEIG
+ndftip.as  NagDiscreteFourierTransformInterfacePackage NAGDIS
+\end{verbatim}
+
+These domains are referenced but don't exist
+\begin{verbatim}
+OBJECT
+\end{verbatim}
+
+\section{The Environment}
+\subsection{The working directories}
+We define 5 directories for this build. The{\bf IN} directory
+contains the pamphlet files for the algebra. These are expanded
+into the{\bf MID} directory as either .spad or .as files. The
+.spad files are compiled by the native spad internal compiler.
+The .as files are compiled using the Aldor compiler. The output
+of the compilation has two purposes. Part of the information is
+used to build various database files (daase files). The other
+part is executable code which is placed in the {\bf OUT}
+directory. When invoked as ``make document'' we construct
+the .dvi files in the{\bf DOC} directory.
+
+The [[OUTSRC=${MNT}/${SYS}/src/algebra]] subdirectory contains the 
+algebra source files extracted from the pamphlet files. These sources 
+allow the end user to change the algebra if needed.
+
+<<environment>>=
+
+IN=${SRC}/algebra
+MID=${INT}/algebra
+OUT=${MNT}/${SYS}/algebra
+DOC=${MNT}/${SYS}/doc/src/algebra
+OUTSRC=${MNT}/${SYS}/src/algebra
+INPUT=${INT}/input
+
+@
+\subsection{The depsys variable}
+The {\bf depsys} image is the compile-time environment for boot and lisp
+files.
+
+<<environment>>=
+
+DEPSYS=${OBJ}/${SYS}/bin/depsys
+
+@
+\subsection{The interpsys variable}
+The {\bf interpsys} image is the compile-time environment for algebra
+files.
+
+<<environment>>=
+
+INTERPSYS=${OBJ}/${SYS}/bin/interpsys
+
+@
+\subsection{The SPADFILES list}
+Note that we have excluded {\bf mlift.spad.jhd} from this list.
+We need to figure out which mlift.spad to keep.
+
+<<environment>>=
+
+SPADFILES= \
+ ${OUTSRC}/acplot.spad ${OUTSRC}/aggcat2.spad ${OUTSRC}/aggcat.spad \
+ ${OUTSRC}/algcat.spad ${OUTSRC}/algext.spad ${OUTSRC}/algfact.spad \
+ ${OUTSRC}/algfunc.spad ${OUTSRC}/allfact.spad ${OUTSRC}/alql.spad \
+ ${OUTSRC}/annacat.spad ${OUTSRC}/any.spad ${OUTSRC}/array1.spad \
+ ${OUTSRC}/array2.spad ${OUTSRC}/asp.spad ${OUTSRC}/attreg.spad \
+ ${OUTSRC}/bags.spad ${OUTSRC}/bezout.spad ${OUTSRC}/boolean.spad \
+ ${OUTSRC}/brill.spad \
+ ${OUTSRC}/c02.spad ${OUTSRC}/c05.spad ${OUTSRC}/c06.spad \
+ ${OUTSRC}/card.spad ${OUTSRC}/carten.spad ${OUTSRC}/catdef.spad \
+ ${OUTSRC}/cden.spad ${OUTSRC}/clifford.spad ${OUTSRC}/clip.spad \
+ ${OUTSRC}/cmplxrt.spad ${OUTSRC}/coerce.spad ${OUTSRC}/color.spad \
+ ${OUTSRC}/combfunc.spad ${OUTSRC}/combinat.spad ${OUTSRC}/complet.spad \
+ ${OUTSRC}/constant.spad ${OUTSRC}/contfrac.spad ${OUTSRC}/cont.spad \
+ ${OUTSRC}/coordsys.spad ${OUTSRC}/cra.spad ${OUTSRC}/crfp.spad \
+ ${OUTSRC}/curve.spad ${OUTSRC}/cycles.spad ${OUTSRC}/cyclotom.spad \
+ ${OUTSRC}/d01agents.spad ${OUTSRC}/d01Package.spad \
+ ${OUTSRC}/d01routine.spad ${OUTSRC}/d01.spad ${OUTSRC}/d01transform.spad \
+ ${OUTSRC}/d01weights.spad ${OUTSRC}/d02agents.spad \
+ ${OUTSRC}/d02Package.spad ${OUTSRC}/d02routine.spad ${OUTSRC}/d02.spad \
+ ${OUTSRC}/d03agents.spad ${OUTSRC}/d03Package.spad \
+ ${OUTSRC}/d03routine.spad ${OUTSRC}/d03.spad ${OUTSRC}/ddfact.spad \
+ ${OUTSRC}/defaults.spad ${OUTSRC}/defintef.spad ${OUTSRC}/defintrf.spad \
+ ${OUTSRC}/degred.spad ${OUTSRC}/derham.spad ${OUTSRC}/dhmatrix.spad \
+ ${OUTSRC}/divisor.spad ${OUTSRC}/dpolcat.spad ${OUTSRC}/drawopt.spad \
+ ${OUTSRC}/drawpak.spad ${OUTSRC}/draw.spad \
+ ${OUTSRC}/e01.spad ${OUTSRC}/e02.spad ${OUTSRC}/e04agents.spad \
+ ${OUTSRC}/e04Package.spad ${OUTSRC}/e04routine.spad ${OUTSRC}/e04.spad \
+ ${OUTSRC}/efstruc.spad ${OUTSRC}/efuls.spad ${OUTSRC}/efupxs.spad \
+ ${OUTSRC}/eigen.spad ${OUTSRC}/elemntry.spad ${OUTSRC}/elfuts.spad \
+ ${OUTSRC}/equation1.spad ${OUTSRC}/equation2.spad ${OUTSRC}/error.spad \
+ ${OUTSRC}/expexpan.spad ${OUTSRC}/expr2ups.spad \
+ ${OUTSRC}/exprode.spad ${OUTSRC}/expr.spad \
+ ${OUTSRC}/f01.spad ${OUTSRC}/f02.spad ${OUTSRC}/f04.spad \
+ ${OUTSRC}/f07.spad ${OUTSRC}/facutil.spad ${OUTSRC}/ffcat.spad \
+ ${OUTSRC}/ffcg.spad ${OUTSRC}/fff.spad ${OUTSRC}/ffhom.spad \
+ ${OUTSRC}/ffnb.spad ${OUTSRC}/ffpoly2.spad ${OUTSRC}/ffpoly.spad \
+ ${OUTSRC}/ffp.spad ${OUTSRC}/ffx.spad \
+ ${OUTSRC}/files.spad ${OUTSRC}/float.spad ${OUTSRC}/fmod.spad \
+ ${OUTSRC}/fname.spad ${OUTSRC}/fnla.spad ${OUTSRC}/formula.spad \
+ ${OUTSRC}/fortcat.spad ${OUTSRC}/fortmac.spad ${OUTSRC}/fortpak.spad \
+ ${OUTSRC}/fortran.spad ${OUTSRC}/forttyp.spad ${OUTSRC}/fourier.spad \
+ ${OUTSRC}/fparfrac.spad ${OUTSRC}/fraction.spad ${OUTSRC}/free.spad \
+ ${OUTSRC}/fr.spad ${OUTSRC}/fs2expxp.spad ${OUTSRC}/fs2ups.spad \
+ ${OUTSRC}/fspace.spad ${OUTSRC}/funcpkgs.spad ${OUTSRC}/functions.spad \
+ ${OUTSRC}/galfact.spad ${OUTSRC}/galfactu.spad ${OUTSRC}/galpolyu.spad \
+ ${OUTSRC}/galutil.spad ${OUTSRC}/gaussfac.spad ${OUTSRC}/gaussian.spad \
+ ${OUTSRC}/gbeuclid.spad ${OUTSRC}/gbintern.spad ${OUTSRC}/gb.spad \
+ ${OUTSRC}/gdirprod.spad ${OUTSRC}/gdpoly.spad ${OUTSRC}/geneez.spad \
+ ${OUTSRC}/generic.spad ${OUTSRC}/genufact.spad ${OUTSRC}/genups.spad \
+ ${OUTSRC}/ghensel.spad ${OUTSRC}/gpgcd.spad ${OUTSRC}/gpol.spad \
+ ${OUTSRC}/grdef.spad ${OUTSRC}/groebf.spad ${OUTSRC}/groebsol.spad \
+ ${OUTSRC}/gseries.spad \
+ ${OUTSRC}/ideal.spad ${OUTSRC}/idecomp.spad ${OUTSRC}/indexedp.spad \
+ ${OUTSRC}/infprod.spad ${OUTSRC}/intaf.spad ${OUTSRC}/intalg.spad \
+ ${OUTSRC}/intaux.spad ${OUTSRC}/intclos.spad ${OUTSRC}/intef.spad \
+ ${OUTSRC}/integer.spad ${OUTSRC}/integrat.spad \
+ ${OUTSRC}/interval.spad \
+ ${OUTSRC}/intfact.spad ${OUTSRC}/intpm.spad \
+ ${OUTSRC}/intrf.spad \
+ ${OUTSRC}/irexpand.spad \
+ ${OUTSRC}/irsn.spad ${OUTSRC}/ituple.spad \
+ ${OUTSRC}/kl.spad ${OUTSRC}/kovacic.spad \
+ ${OUTSRC}/laplace.spad ${OUTSRC}/laurent.spad ${OUTSRC}/leadcdet.spad \
+ ${OUTSRC}/lie.spad ${OUTSRC}/limitps.spad ${OUTSRC}/lindep.spad \
+ ${OUTSRC}/lingrob.spad ${OUTSRC}/liouv.spad ${OUTSRC}/listgcd.spad \
+ ${OUTSRC}/list.spad ${OUTSRC}/lmdict.spad ${OUTSRC}/lodof.spad \
+ ${OUTSRC}/lodop.spad ${OUTSRC}/lodo.spad \
+ ${OUTSRC}/manip.spad ${OUTSRC}/mappkg.spad ${OUTSRC}/matcat.spad \
+ ${OUTSRC}/matfuns.spad ${OUTSRC}/matrix.spad ${OUTSRC}/matstor.spad \
+ ${OUTSRC}/mesh.spad ${OUTSRC}/mfinfact.spad ${OUTSRC}/misc.spad \
+ ${OUTSRC}/mkfunc.spad ${OUTSRC}/mkrecord.spad \
+ ${OUTSRC}/mlift.spad ${OUTSRC}/moddfact.spad ${OUTSRC}/modgcd.spad \
+ ${OUTSRC}/modmonom.spad ${OUTSRC}/modmon.spad ${OUTSRC}/modring.spad \
+ ${OUTSRC}/moebius.spad ${OUTSRC}/mring.spad ${OUTSRC}/mset.spad \
+ ${OUTSRC}/mts.spad ${OUTSRC}/multfact.spad ${OUTSRC}/multpoly.spad \
+ ${OUTSRC}/multsqfr.spad \
+ ${OUTSRC}/naalgc.spad ${OUTSRC}/naalg.spad \
+ ${OUTSRC}/newdata.spad ${OUTSRC}/newpoint.spad \
+ ${OUTSRC}/newpoly.spad ${OUTSRC}/nlinsol.spad ${OUTSRC}/nlode.spad \
+ ${OUTSRC}/npcoef.spad \
+ ${OUTSRC}/nregset.spad \
+ ${OUTSRC}/nsregset.spad ${OUTSRC}/numeigen.spad ${OUTSRC}/numeric.spad \
+ ${OUTSRC}/numode.spad ${OUTSRC}/numquad.spad ${OUTSRC}/numsolve.spad \
+ ${OUTSRC}/numtheor.spad \
+ ${OUTSRC}/oct.spad ${OUTSRC}/odealg.spad ${OUTSRC}/odeef.spad \
+ ${OUTSRC}/oderf.spad ${OUTSRC}/omcat.spad ${OUTSRC}/omdev.spad \
+ ${OUTSRC}/omerror.spad ${OUTSRC}/omserver.spad ${OUTSRC}/opalg.spad \
+ ${OUTSRC}/openmath.spad ${OUTSRC}/op.spad ${OUTSRC}/ore.spad \
+ ${OUTSRC}/outform.spad ${OUTSRC}/out.spad \
+ ${OUTSRC}/pade.spad ${OUTSRC}/padiclib.spad ${OUTSRC}/padic.spad \
+ ${OUTSRC}/paramete.spad ${OUTSRC}/partperm.spad ${OUTSRC}/patmatch1.spad \
+ ${OUTSRC}/patmatch2.spad ${OUTSRC}/pattern.spad ${OUTSRC}/pcurve.spad \
+ ${OUTSRC}/pdecomp.spad ${OUTSRC}/perman.spad ${OUTSRC}/permgrps.spad \
+ ${OUTSRC}/perm.spad ${OUTSRC}/pfbr.spad ${OUTSRC}/pfo.spad \
+ ${OUTSRC}/pfr.spad ${OUTSRC}/pf.spad ${OUTSRC}/pgcd.spad \
+ ${OUTSRC}/pgrobner.spad ${OUTSRC}/pinterp.spad ${OUTSRC}/pleqn.spad \
+ ${OUTSRC}/plot3d.spad ${OUTSRC}/plot.spad ${OUTSRC}/plottool.spad \
+ ${OUTSRC}/polset.spad ${OUTSRC}/poltopol.spad ${OUTSRC}/polycat.spad \
+ ${OUTSRC}/poly.spad ${OUTSRC}/primelt.spad ${OUTSRC}/print.spad \
+ ${OUTSRC}/product.spad ${OUTSRC}/prs.spad ${OUTSRC}/prtition.spad \
+ ${OUTSRC}/pscat.spad ${OUTSRC}/pseudolin.spad ${OUTSRC}/ptranfn.spad \
+ ${OUTSRC}/puiseux.spad \
+ ${OUTSRC}/qalgset.spad ${OUTSRC}/quat.spad \
+ ${OUTSRC}/radeigen.spad ${OUTSRC}/radix.spad ${OUTSRC}/random.spad \
+ ${OUTSRC}/ratfact.spad ${OUTSRC}/rdeef.spad ${OUTSRC}/rderf.spad \
+ ${OUTSRC}/rdesys.spad ${OUTSRC}/real0q.spad ${OUTSRC}/realzero.spad \
+ ${OUTSRC}/reclos.spad ${OUTSRC}/regset.spad ${OUTSRC}/rep1.spad \
+ ${OUTSRC}/rep2.spad ${OUTSRC}/resring.spad ${OUTSRC}/retract.spad \
+ ${OUTSRC}/rf.spad ${OUTSRC}/riccati.spad ${OUTSRC}/rinterp.spad \
+ ${OUTSRC}/routines.spad \
+ ${OUTSRC}/rule.spad \
+ ${OUTSRC}/seg.spad ${OUTSRC}/setorder.spad ${OUTSRC}/sets.spad \
+ ${OUTSRC}/sex.spad ${OUTSRC}/sf.spad ${OUTSRC}/sgcf.spad \
+ ${OUTSRC}/sign.spad ${OUTSRC}/si.spad ${OUTSRC}/smith.spad \
+ ${OUTSRC}/solvedio.spad ${OUTSRC}/solvefor.spad ${OUTSRC}/solvelin.spad \
+ ${OUTSRC}/solverad.spad ${OUTSRC}/sortpak.spad ${OUTSRC}/space.spad \
+ ${OUTSRC}/special.spad ${OUTSRC}/sregset.spad ${OUTSRC}/s.spad \
+ ${OUTSRC}/stream.spad ${OUTSRC}/string.spad ${OUTSRC}/sttaylor.spad \
+ ${OUTSRC}/sttf.spad ${OUTSRC}/sturm.spad ${OUTSRC}/suchthat.spad \
+ ${OUTSRC}/suls.spad ${OUTSRC}/sum.spad ${OUTSRC}/sups.spad \
+ ${OUTSRC}/supxs.spad ${OUTSRC}/suts.spad ${OUTSRC}/symbol.spad \
+ ${OUTSRC}/syssolp.spad ${OUTSRC}/system.spad \
+ ${OUTSRC}/tableau.spad ${OUTSRC}/table.spad ${OUTSRC}/taylor.spad \
+ ${OUTSRC}/tex.spad ${OUTSRC}/tools.spad ${OUTSRC}/transsolve.spad \
+ ${OUTSRC}/tree.spad ${OUTSRC}/trigcat.spad ${OUTSRC}/triset.spad \
+ ${OUTSRC}/tube.spad ${OUTSRC}/twofact.spad \
+ ${OUTSRC}/unifact.spad ${OUTSRC}/updecomp.spad ${OUTSRC}/updivp.spad \
+ ${OUTSRC}/utsode.spad \
+ ${OUTSRC}/variable.spad ${OUTSRC}/vector.spad ${OUTSRC}/view2D.spad \
+ ${OUTSRC}/view3D.spad ${OUTSRC}/viewDef.spad ${OUTSRC}/viewpack.spad \
+ ${OUTSRC}/void.spad \
+ ${OUTSRC}/weier.spad ${OUTSRC}/wtpol.spad \
+ ${OUTSRC}/xlpoly.spad ${OUTSRC}/xpoly.spad \
+ ${OUTSRC}/ystream.spad \
+ ${OUTSRC}/zerodim.spad
+
+@
+\subsection{The ALDORFILES list}
+<<environment>>=
+
+ALDORFILES= \
+ ${MID}/axtimer.as \
+ ${MID}/ffrac.as \
+ ${MID}/herm.as \
+ ${MID}/interval.as \
+ ${MID}/invnode.as ${MID}/invrender.as \
+ ${MID}/invtypes.as ${MID}/invutils.as \
+ ${MID}/iviews.as \
+ ${MID}/ndftip.as \
+ ${MID}/nepip.as \
+ ${MID}/noptip.as ${MID}/nqip.as \
+ ${MID}/nrc.as ${MID}/nsfip.as 
+
+@
+\subsection{The DOCFILES list}
+<<environment>>=
+
+DOCFILES= \
+ ${DOC}/acplot.spad.dvi ${DOC}/aggcat2.spad.dvi ${DOC}/aggcat.spad.dvi \
+ ${DOC}/algcat.spad.dvi ${DOC}/algext.spad.dvi ${DOC}/algfact.spad.dvi \
+ ${DOC}/algfunc.spad.dvi ${DOC}/allfact.spad.dvi ${DOC}/alql.spad.dvi \
+ ${DOC}/annacat.spad.dvi ${DOC}/any.spad.dvi ${DOC}/array1.spad.dvi \
+ ${DOC}/array2.spad.dvi ${DOC}/asp.spad.dvi ${DOC}/attreg.spad.dvi \
+ ${DOC}/axtimer.as.dvi \
+ ${DOC}/bags.spad.dvi ${DOC}/bezout.spad.dvi ${DOC}/boolean.spad.dvi \
+ ${DOC}/brill.spad.dvi \
+ ${DOC}/c02.spad.dvi ${DOC}/c05.spad.dvi ${DOC}/c06.spad.dvi \
+ ${DOC}/card.spad.dvi ${DOC}/carten.spad.dvi ${DOC}/catdef.spad.dvi \
+ ${DOC}/cden.spad.dvi ${DOC}/clifford.spad.dvi ${DOC}/clip.spad.dvi \
+ ${DOC}/cmplxrt.spad.dvi ${DOC}/coerce.spad.dvi ${DOC}/color.spad.dvi \
+ ${DOC}/combfunc.spad.dvi ${DOC}/combinat.spad.dvi ${DOC}/complet.spad.dvi \
+ ${DOC}/constant.spad.dvi ${DOC}/contfrac.spad.dvi ${DOC}/cont.spad.dvi \
+ ${DOC}/coordsys.spad.dvi ${DOC}/cra.spad.dvi ${DOC}/crfp.spad.dvi \
+ ${DOC}/curve.spad.dvi ${DOC}/cycles.spad.dvi ${DOC}/cyclotom.spad.dvi \
+ ${DOC}/d01agents.spad.dvi ${DOC}/d01Package.spad.dvi \
+ ${DOC}/d01routine.spad.dvi ${DOC}/d01.spad.dvi ${DOC}/d01transform.spad.dvi \
+ ${DOC}/d01weights.spad.dvi ${DOC}/d02agents.spad.dvi \
+ ${DOC}/d02Package.spad.dvi ${DOC}/d02routine.spad.dvi ${DOC}/d02.spad.dvi \
+ ${DOC}/d03agents.spad.dvi ${DOC}/d03Package.spad.dvi \
+ ${DOC}/d03routine.spad.dvi ${DOC}/d03.spad.dvi ${DOC}/ddfact.spad.dvi \
+ ${DOC}/defaults.spad.dvi ${DOC}/defintef.spad.dvi ${DOC}/defintrf.spad.dvi \
+ ${DOC}/degred.spad.dvi ${DOC}/derham.spad.dvi ${DOC}/dhmatrix.spad.dvi \
+ ${DOC}/divisor.spad.dvi ${DOC}/dpolcat.spad.dvi ${DOC}/drawopt.spad.dvi \
+ ${DOC}/drawpak.spad.dvi ${DOC}/draw.spad.dvi \
+ ${DOC}/e01.spad.dvi ${DOC}/e02.spad.dvi ${DOC}/e04agents.spad.dvi \
+ ${DOC}/e04Package.spad.dvi ${DOC}/e04routine.spad.dvi ${DOC}/e04.spad.dvi \
+ ${DOC}/efstruc.spad.dvi ${DOC}/efuls.spad.dvi ${DOC}/efupxs.spad.dvi \
+ ${DOC}/eigen.spad.dvi ${DOC}/elemntry.spad.dvi ${DOC}/elfuts.spad.dvi \
+ ${DOC}/equation1.spad.dvi ${DOC}/equation2.spad.dvi ${DOC}/error.spad.dvi \
+ ${DOC}/expexpan.spad.dvi ${DOC}/exposed.lsp.dvi ${DOC}/expr2ups.spad.dvi \
+ ${DOC}/exprode.spad.dvi ${DOC}/expr.spad.dvi \
+ ${DOC}/f01.spad.dvi ${DOC}/f02.spad.dvi ${DOC}/f04.spad.dvi \
+ ${DOC}/f07.spad.dvi ${DOC}/facutil.spad.dvi ${DOC}/ffcat.spad.dvi \
+ ${DOC}/ffcg.spad.dvi ${DOC}/fff.spad.dvi ${DOC}/ffhom.spad.dvi \
+ ${DOC}/ffnb.spad.dvi ${DOC}/ffpoly2.spad.dvi ${DOC}/ffpoly.spad.dvi \
+ ${DOC}/ffp.spad.dvi ${DOC}/ffrac.as.dvi ${DOC}/ffx.spad.dvi \
+ ${DOC}/files.spad.dvi ${DOC}/float.spad.dvi ${DOC}/fmod.spad.dvi \
+ ${DOC}/fname.spad.dvi ${DOC}/fnla.spad.dvi ${DOC}/formula.spad.dvi \
+ ${DOC}/fortcat.spad.dvi ${DOC}/fortmac.spad.dvi ${DOC}/fortpak.spad.dvi \
+ ${DOC}/fortran.spad.dvi ${DOC}/forttyp.spad.dvi ${DOC}/fourier.spad.dvi \
+ ${DOC}/fparfrac.spad.dvi ${DOC}/fraction.spad.dvi ${DOC}/free.spad.dvi \
+ ${DOC}/fr.spad.dvi ${DOC}/fs2expxp.spad.dvi ${DOC}/fs2ups.spad.dvi \
+ ${DOC}/fspace.spad.dvi ${DOC}/funcpkgs.spad.dvi ${DOC}/functions.spad.dvi \
+ ${DOC}/galfact.spad.dvi ${DOC}/galfactu.spad.dvi ${DOC}/galpolyu.spad.dvi \
+ ${DOC}/galutil.spad.dvi ${DOC}/gaussfac.spad.dvi ${DOC}/gaussian.spad.dvi \
+ ${DOC}/gbeuclid.spad.dvi ${DOC}/gbintern.spad.dvi ${DOC}/gb.spad.dvi \
+ ${DOC}/gdirprod.spad.dvi ${DOC}/gdpoly.spad.dvi ${DOC}/geneez.spad.dvi \
+ ${DOC}/generic.spad.dvi ${DOC}/genufact.spad.dvi ${DOC}/genups.spad.dvi \
+ ${DOC}/ghensel.spad.dvi ${DOC}/gpgcd.spad.dvi ${DOC}/gpol.spad.dvi \
+ ${DOC}/grdef.spad.dvi ${DOC}/groebf.spad.dvi ${DOC}/groebsol.spad.dvi \
+ ${DOC}/gseries.spad.dvi \
+ ${DOC}/herm.as.dvi \
+ ${DOC}/ideal.spad.dvi ${DOC}/idecomp.spad.dvi ${DOC}/indexedp.spad.dvi \
+ ${DOC}/infprod.spad.dvi ${DOC}/intaf.spad.dvi ${DOC}/intalg.spad.dvi \
+ ${DOC}/intaux.spad.dvi ${DOC}/intclos.spad.dvi ${DOC}/intef.spad.dvi \
+ ${DOC}/integer.spad.dvi ${DOC}/integrat.spad.dvi \
+ ${DOC}/interval.as.dvi ${DOC}/interval.spad.dvi \
+ ${DOC}/intfact.spad.dvi ${DOC}/intpm.spad.dvi \
+ ${DOC}/intrf.spad.dvi ${DOC}/invnode.as.dvi ${DOC}/invrender.as.dvi \
+ ${DOC}/invtypes.as.dvi ${DOC}/invutils.as.dvi ${DOC}/irexpand.spad.dvi \
+ ${DOC}/irsn.spad.dvi ${DOC}/ituple.spad.dvi ${DOC}/iviews.as.dvi \
+ ${DOC}/kl.spad.dvi ${DOC}/kovacic.spad.dvi \
+ ${DOC}/laplace.spad.dvi ${DOC}/laurent.spad.dvi ${DOC}/leadcdet.spad.dvi \
+ ${DOC}/lie.spad.dvi ${DOC}/limitps.spad.dvi ${DOC}/lindep.spad.dvi \
+ ${DOC}/lingrob.spad.dvi ${DOC}/liouv.spad.dvi ${DOC}/listgcd.spad.dvi \
+ ${DOC}/list.spad.dvi ${DOC}/lmdict.spad.dvi ${DOC}/lodof.spad.dvi \
+ ${DOC}/lodop.spad.dvi ${DOC}/lodo.spad.dvi \
+ ${DOC}/manip.spad.dvi ${DOC}/mappkg.spad.dvi ${DOC}/matcat.spad.dvi \
+ ${DOC}/matfuns.spad.dvi ${DOC}/matrix.spad.dvi ${DOC}/matstor.spad.dvi \
+ ${DOC}/mesh.spad.dvi ${DOC}/mfinfact.spad.dvi ${DOC}/misc.spad.dvi \
+ ${DOC}/mkfunc.spad.dvi ${DOC}/mkrecord.spad.dvi ${DOC}/mlift.spad.jhd.dvi \
+ ${DOC}/mlift.spad.dvi ${DOC}/moddfact.spad.dvi ${DOC}/modgcd.spad.dvi \
+ ${DOC}/modmonom.spad.dvi ${DOC}/modmon.spad.dvi ${DOC}/modring.spad.dvi \
+ ${DOC}/moebius.spad.dvi ${DOC}/mring.spad.dvi ${DOC}/mset.spad.dvi \
+ ${DOC}/mts.spad.dvi ${DOC}/multfact.spad.dvi ${DOC}/multpoly.spad.dvi \
+ ${DOC}/multsqfr.spad.dvi \
+ ${DOC}/naalgc.spad.dvi ${DOC}/naalg.spad.dvi ${DOC}/ndftip.as.dvi \
+ ${DOC}/nepip.as.dvi ${DOC}/newdata.spad.dvi ${DOC}/newpoint.spad.dvi \
+ ${DOC}/newpoly.spad.dvi ${DOC}/nlinsol.spad.dvi ${DOC}/nlode.spad.dvi \
+ ${DOC}/noptip.as.dvi ${DOC}/npcoef.spad.dvi ${DOC}/nqip.as.dvi \
+ ${DOC}/nrc.as.dvi ${DOC}/nregset.spad.dvi ${DOC}/nsfip.as.dvi \
+ ${DOC}/nsregset.spad.dvi ${DOC}/numeigen.spad.dvi ${DOC}/numeric.spad.dvi \
+ ${DOC}/numode.spad.dvi ${DOC}/numquad.spad.dvi ${DOC}/numsolve.spad.dvi \
+ ${DOC}/numtheor.spad.dvi \
+ ${DOC}/oct.spad.dvi ${DOC}/odealg.spad.dvi ${DOC}/odeef.spad.dvi \
+ ${DOC}/oderf.spad.dvi ${DOC}/omcat.spad.dvi ${DOC}/omdev.spad.dvi \
+ ${DOC}/omerror.spad.dvi ${DOC}/omserver.spad.dvi ${DOC}/opalg.spad.dvi \
+ ${DOC}/openmath.spad.dvi ${DOC}/op.spad.dvi ${DOC}/ore.spad.dvi \
+ ${DOC}/outform.spad.dvi ${DOC}/out.spad.dvi \
+ ${DOC}/pade.spad.dvi ${DOC}/padiclib.spad.dvi ${DOC}/padic.spad.dvi \
+ ${DOC}/paramete.spad.dvi ${DOC}/partperm.spad.dvi ${DOC}/patmatch1.spad.dvi \
+ ${DOC}/patmatch2.spad.dvi ${DOC}/pattern.spad.dvi ${DOC}/pcurve.spad.dvi \
+ ${DOC}/pdecomp.spad.dvi ${DOC}/perman.spad.dvi ${DOC}/permgrps.spad.dvi \
+ ${DOC}/perm.spad.dvi ${DOC}/pfbr.spad.dvi ${DOC}/pfo.spad.dvi \
+ ${DOC}/pfr.spad.dvi ${DOC}/pf.spad.dvi ${DOC}/pgcd.spad.dvi \
+ ${DOC}/pgrobner.spad.dvi ${DOC}/pinterp.spad.dvi ${DOC}/pleqn.spad.dvi \
+ ${DOC}/plot3d.spad.dvi ${DOC}/plot.spad.dvi ${DOC}/plottool.spad.dvi \
+ ${DOC}/polset.spad.dvi ${DOC}/poltopol.spad.dvi ${DOC}/polycat.spad.dvi \
+ ${DOC}/poly.spad.dvi ${DOC}/primelt.spad.dvi ${DOC}/print.spad.dvi \
+ ${DOC}/product.spad.dvi ${DOC}/prs.spad.dvi ${DOC}/prtition.spad.dvi \
+ ${DOC}/pscat.spad.dvi ${DOC}/pseudolin.spad.dvi ${DOC}/ptranfn.spad.dvi \
+ ${DOC}/puiseux.spad.dvi \
+ ${DOC}/qalgset.spad.dvi ${DOC}/quat.spad.dvi \
+ ${DOC}/radeigen.spad.dvi ${DOC}/radix.spad.dvi ${DOC}/random.spad.dvi \
+ ${DOC}/ratfact.spad.dvi ${DOC}/rdeef.spad.dvi ${DOC}/rderf.spad.dvi \
+ ${DOC}/rdesys.spad.dvi ${DOC}/real0q.spad.dvi ${DOC}/realzero.spad.dvi \
+ ${DOC}/reclos.spad.dvi ${DOC}/regset.spad.dvi ${DOC}/rep1.spad.dvi \
+ ${DOC}/rep2.spad.dvi ${DOC}/resring.spad.dvi ${DOC}/retract.spad.dvi \
+ ${DOC}/rf.spad.dvi ${DOC}/riccati.spad.dvi ${DOC}/rinterp.spad.dvi \
+ ${DOC}/routines.spad.dvi \
+ ${DOC}/rule.spad.dvi \
+ ${DOC}/seg.spad.dvi ${DOC}/setorder.spad.dvi ${DOC}/sets.spad.dvi \
+ ${DOC}/sex.spad.dvi ${DOC}/sf.spad.dvi ${DOC}/sgcf.spad.dvi \
+ ${DOC}/sign.spad.dvi ${DOC}/si.spad.dvi ${DOC}/smith.spad.dvi \
+ ${DOC}/solvedio.spad.dvi ${DOC}/solvefor.spad.dvi ${DOC}/solvelin.spad.dvi \
+ ${DOC}/solverad.spad.dvi ${DOC}/sortpak.spad.dvi ${DOC}/space.spad.dvi \
+ ${DOC}/special.spad.dvi ${DOC}/sregset.spad.dvi ${DOC}/s.spad.dvi \
+ ${DOC}/stream.spad.dvi ${DOC}/string.spad.dvi ${DOC}/sttaylor.spad.dvi \
+ ${DOC}/sttf.spad.dvi ${DOC}/sturm.spad.dvi ${DOC}/suchthat.spad.dvi \
+ ${DOC}/suls.spad.dvi ${DOC}/sum.spad.dvi ${DOC}/sups.spad.dvi \
+ ${DOC}/supxs.spad.dvi ${DOC}/suts.spad.dvi ${DOC}/symbol.spad.dvi \
+ ${DOC}/syssolp.spad.dvi ${DOC}/system.spad.dvi \
+ ${DOC}/tableau.spad.dvi ${DOC}/table.spad.dvi ${DOC}/taylor.spad.dvi \
+ ${DOC}/tex.spad.dvi ${DOC}/tools.spad.dvi ${DOC}/transsolve.spad.dvi \
+ ${DOC}/tree.spad.dvi ${DOC}/trigcat.spad.dvi ${DOC}/triset.spad.dvi \
+ ${DOC}/tube.spad.dvi ${DOC}/twofact.spad.dvi \
+ ${DOC}/unifact.spad.dvi ${DOC}/updecomp.spad.dvi ${DOC}/updivp.spad.dvi \
+ ${DOC}/utsode.spad.dvi \
+ ${DOC}/variable.spad.dvi ${DOC}/vector.spad.dvi ${DOC}/view2D.spad.dvi \
+ ${DOC}/view3D.spad.dvi ${DOC}/viewDef.spad.dvi ${DOC}/viewpack.spad.dvi \
+ ${DOC}/void.spad.dvi \
+ ${DOC}/weier.spad.dvi ${DOC}/wtpol.spad.dvi \
+ ${DOC}/xlpoly.spad.dvi ${DOC}/xpoly.spad.dvi \
+ ${DOC}/ystream.spad.dvi \
+ ${DOC}/zerodim.spad.dvi
+
+@
+\section{Test Cases}
+<<environment>>=
+
+TESTS=${INPUT}/ACPLOT.input ${INPUT}/INTHEORY.input ${INPUT}/PERM.input \
+      ${INPUT}/REALSOLV.input ${INPUT}/TESTFR.input ${INPUT}/VIEW2D.input 
+
+@
+<<testrules>>=
+
+${INPUT}/ACPLOT.input: ${IN}/acplot.spad.pamphlet
+	@ echo making ${INPUT}/ACPLOT.input from ${IN}/acplot.spad.pamphlet
+	@(cd ${INPUT} ; \
+	 ${TANGLE} -R"TEST ACPLOT" ${IN}/acplot.spad.pamphlet >ACPLOT.input )
+
+${INPUT}/TESTFR.input: ${IN}/fr.spad.pamphlet
+	@ echo making ${INPUT}/frtest.input from ${IN}/fr.spad.pamphlet
+	@(cd ${INPUT} ; \
+	 ${TANGLE} -R"TEST FR" ${IN}/fr.spad.pamphlet >TESTFR.input )
+
+${INPUT}/INTHEORY.input: ${IN}/numtheor.spad.pamphlet
+	@ echo making ${INPUT}/INTHEORY.input from ${IN}/numtheor.spad.pamphlet
+	@(cd ${INPUT} ; \
+	 ${TANGLE} -R"TEST INTHEORY" ${IN}/numtheor.spad.pamphlet \
+            >INTHEORY.input )
+
+${INPUT}/PERM.input: ${IN}/perm.spad.pamphlet
+	@ echo making ${INPUT}/PERM.input from ${IN}/perm.spad.pamphlet
+	@(cd ${INPUT} ; \
+	 ${TANGLE} -R"TEST PERM" ${IN}/perm.spad.pamphlet \
+            >PERM.input )
+
+${INPUT}/REALSOLV.input: ${IN}/acplot.spad.pamphlet
+	@ echo making ${INPUT}/REALSOLV.input from ${IN}/acplot.spad.pamphlet
+	@(cd ${INPUT} ; \
+	 ${TANGLE} -R"TEST REALSOLV" ${IN}/acplot.spad.pamphlet \
+          >REALSOLV.input )
+
+${INPUT}/VIEW2D.input: ${IN}/view2D.spad.pamphlet
+	@ echo making ${INPUT}/VIEW2D.input from ${IN}/view2D.spad.pamphlet
+	@(cd ${INPUT} ; \
+	 ${TANGLE} -R"TEST VIEW2D" ${IN}/view2D.spad.pamphlet >VIEW2D.input )
+
+@
+\section{The Makefile Stanzas}
+A [[spad]] pamphlet can contain many Axiom [[categories]], [[domains]], and
+[[packages]]. 
+
+For the purpose of explanation we assume that the pamphlet file is 
+named [[foo.spad.pamphlet]]. It contains the domains [[BAR]], [[BAX]],
+and [[BAZ]]. Thus there will be a subsection named [[foo.spad]].
+
+Since pamphlet files (e.g. [[foo.spad.pamphlet]] contain a spad file
+e.g. [[foo.spad]], it follows that every subsection contains a Makefile
+stanza that extract the [[foo.spad]] file using [[notangle]].
+
+Since pamphlet files are intended as documents it follows that each
+subsection contains a Makefile stanza that extracts a [[dvi]] file
+using [[noweave]].
+
+We could have a category, domain, or package that is in
+the ``bootstrap'' list. Bootstrap spad files contain their generated
+lisp code in special sections. The way bootstrapping works is that
+we extract the lisp code and compile it rather than extracting the
+spad code. We do this because we need the domain to exist before we
+can compile the domain. Some domains depend on themselves directly.
+Some domains depend on themselves thru a long chain of other domains.
+In either case we can't compile the domain until it exists so we
+cache the generated lisp code and, when we need to bootstrap the
+domain, we compile the raw lisp rather than the spad.
+
+This will only happen when the system is built from scratch. Once
+the system has been built the bootstrap code is no longer executed
+and these algebra files will appear as normal algebra files. That
+means that once the system has been built once only the last three
+rules will ever be executed. The first two rules happen when the
+system is built from scratch.
+
+A 5 stanza group for this case performs the following functions:
+\begin{enumerate}
+\item extract the lisp [[BAR.lsp]] from the pamphlet [[foo.spad.pamphlet]]
+\item compile and copy the bootstrap lisp to the final algebra directory
+\item extract the bootstrap [[BAR.lsp]] from the spad file [[foo.spad]]
+\item compile the extracted [[BAR]] domain
+\item copy the compiled [[BAR]] to the final algebra directory
+\end{enumerate}
+
+The subtle point here occurs in the first item. The bootstrap code
+group (in the [[layer0 bootstrap]] code chunk above) asks for the
+compiled [[.o]] files in the [[\${MID}]] directory. Essentially this
+code group calls for intermediate compiled files. This triggers the
+bootstrap stanzas (items 1 and 2 above). All of the other layer 
+chunks ask for compiled code in the [[\${OUT}]] directory which is
+the final algebra directory. 
+
+The bootstrap process works because first we ask for the compiled
+lisp code stanzas (the [[\${MID}/BAR.o]] files), THEN we ask for
+the final algebra code stanzas (the [[\${OUT}/BAR.o]] files). This
+is a very subtle point so think it through carefully. The layer0
+bootstrap list is the only file list that calls for [[\${MID}]] files.
+All other layers ask for [[\${OUT}]] files. Make sure you
+understand this before you change things. If you break it the
+world will no longer compile.
+
+So we have a 3 stanza group for normal files, a 3+2 (5) stanza
+group for normal files with default code, and a 3+2 (5) stanza
+group for normal files that need to be bootstrapped. There is
+another combination that occurs, namely bootstrap code that
+also contains default code which gives a 3+2+2+2 (9) stanza case.
+(see TSETCAT for an example. Be sure to read the items in reverse order).
+
+A 9 stanza group for this case performs the following functions:
+\begin{enumerate}
+\item extract the bootstrap [[BAR.lsp]] from the [[foo.spad.pamphlet]]
+\item compile the bootstrap [[BAR.lsp]] and copy to the intermediate directory
+\item extract the bootstrap [[BAR-.lsp]] from the [[foo.spad.pamphlet]]
+\item compile the bootstrap [[BAR-.lsp]] and copy to intermediate directory
+\item extract the spad [[BAR.spad]] from the pamphlet [[foo.spad.pamphlet]]
+\item compile the extracted [[BAR.spad]] domain (to get [[BAR.o]])
+\item copy the [[BAR.o]] to the final algebra directory
+\item compile the extracted [[BAR.spad]] domain (to get [[BAR-.o]])
+\item copy the [[BAR-.o]] to the final algebra directory
+\end{enumerate}
+
+As you can see this is just the combination of the two possible 5
+stanza case. We just have to deal with the [[BAR-]] both in regular
+and bootstrap files. The first four stanzas will only happen when
+the system is built from scratch. Once the system is built these
+four rules no longer apply and these stanzas effectively act like
+the 5 stanza rules above.
+
+I'm sure all of this seems confusing but it is very stylized code.
+Basically you need to figure out which kind of stanza group you need,
+copy an existing stanza group, and do a correct renaming of the parts.
+The decision tree looks something like:
+\begin{verbatim}
+IF (you have a regular spad domain)
+ THEN use a 3 stanza form (see YSTREAM)
+IF (you have a default spad domain (it generates [[-]] files)) AND
+   (it does not require bootstrapping)
+ THEN use the first 5 stanza form explained above (see LIECAT)
+IF (you have a normal spad domain) AND
+   (it requires bootstrapping)
+ THEN use the second 5 stanza form explained above (see VECTOR)
+IF (you have a default spad domain (it generates [[-]] files)) AND
+   (it requires bootstrapping)
+ THEN use the 9 stanza form explained above (see TSETCAT)
+\end{verbatim}
+
+\section{Generic Make Rules}
+The idea is to use generic rules to try to cut down the size of this file.
+
+This Makefile works very hard to cache
+intermediate results in order to minimize the re-build time. The cached
+files are kept in the [[int]] or [[obj]] directories. If one of these
+files disappears but the original pamphlet file is unchanged we only
+need to rebuild the intermediate file. These rule will attempt to do
+that and they succeed however these are intermediate files created by
+implicit rules so they would normally be deleted. To prevent the removal
+the NRLIB directory and its contents, the files are marked as .PRECIOUS.
+
+The output of the compile step is saved in a file of the same name
+and extension .out in the \${MID} directory. These files are useful for
+deriving the dependencies by scanning the ``Loading ...'' messages.
+
+<<genericDotOfiles>>=
+
+${OUT}/%.o: ${MID}/%.NRLIB/code.o
+	@ echo copying $*.NRLIB to $*.o
+	@ cp ${MID}/$*.NRLIB/code.o ${OUT}/$*.o
+
+@ 
+<<genericNRLIBfiles>>=
+
+.PRECIOUS: ${MID}/%.NRLIB/code.o
+${MID}/%.NRLIB/code.o: ${MID}/%.spad
+	@ echo compiling $*.spad to $*.NRLIB
+	@ (cd ${MID} ; \
+	   if [ -z "${NOISE}" ] ; then \
+	    echo ")co $*.spad" | ${INTERPSYS}  ; \
+           else \
+	     echo ")co $*.spad" | ${INTERPSYS} >${TMP}/trace ; \
+	   fi )
+
+@
+<<genericBOOTSTRAPfiles>>=
+
+${MID}/%.o: ${MID}/%.lsp
+	@ echo compiling $*.lsp to $*.o
+	@ (cd ${MID} ; \
+	  if [ -z "${NOISE}" ] ; then \
+	   echo '(progn (in-package (quote boot)) (compile-file "$*.lsp" :output-file "$*.o"))' | ${DEPSYS} ; \
+	  else \
+	   echo '(progn (in-package (quote boot)) (compile-file "$*.lsp" :output-file "$*.o"))' | ${DEPSYS} >${TMP}/trace ; \
+	  fi )
+	@ cp ${MID}/$*.o ${OUT}/$*.o
+
+@
+<<genericSPADfiles>>=
+
+${OUTSRC}/%.spad: ${IN}/%.spad.pamphlet
+	@ echo tangling $*.spad.pamphlet to $*.spad
+	@(cd ${OUTSRC} ; \
+	 ${TANGLE} ${IN}/$*.spad.pamphlet >$*.spad )
+
+@
+<<genericDOCfiles>>=
+
+${DOC}/%.dvi: ${IN}/%.pamphlet ${DOC}/ps
+	@ echo latexing $*.pamphlet to ${DOC}/$*.dvi
+	@ (cd ${DOC} ; \
+	cp ${IN}/$*.pamphlet ${DOC} ; \
+	${DOCUMENT} ${NOISE} $* ; \
+	rm -f ${DOC}/$*.pamphlet ; \
+	rm -f ${DOC}/$*.tex ; \
+	rm -f ${DOC}/$* )
+
+@
+<<genericRules>>=
+
+<<genericDotOfiles>>
+<<genericNRLIBfiles>>
+<<genericBOOTSTRAPfiles>>
+<<genericSPADfiles>>
+<<genericDOCfiles>>
+
+@
+
+<<libdb.text (OUT from IN)>>=
+${OUT}/libdb.text: ${IN}/libdb.text
+	@ echo 4300a copying ${IN}/libdb.text to ${OUT}/libdb.text
+	@ cp ${IN}/libdb.text ${OUT}/libdb.text
+
+@
+<<ps (DOC from SRC)>>=
+${DOC}/ps: ${SRC}/doc/ps
+	@echo 4300c making ${DOC}/ps from ${SRC}/doc/ps
+	@cp -pr ${SRC}/doc/ps ${DOC}
+
+@
+
+
+\section{Pamphlet file structure}
+Because the individual .spad files are grouped into higher-level
+algebra pamphlet files, the rules for extracting them are coded
+below as simple ``awk'' scripts that are called when the Makefile
+is constructed.
+
+<<findAlgebraFiles>>=
+
+<<findSpadFiles>>
+<<findBootstrapFiles>>
+@
+
+There are, at present, 3 kinds of algebra files to be handled.
+First we have [[.as]] files which use the [[aldor]] compiler.
+These are ignored here as the compiler is not yet integrated.
+
+Second, there are the bootstrap files. These files live within
+their respective pamphlet files and are "captured" lisp code.
+These are necessary to create the algebra. See the 
+[[src/algebra/Makefile.pamphlet]] for details.
+
+Third, there are 3 "types" of algebra which are all treated 
+the same at compile time, namely the "domain", "category", and
+"package" algebra.
+
+\subsection{Finding the algebra code}
+Step 1 is to scan all of the algebra pamphlet files for the
+chunk names which contain the string "domain", "package", or
+"category". This is done using egrep (same as grep -E, which
+means that the pattern is an extended regular expression) because
+extended regular expressions allows the use of alternatives
+written as (domain|package|category). Thus the command
+\begin{verbatim}
+ egrep '@<<(domain|package|category) .*>>=' *.spad.pamphlet 
+\end{verbatim}
+will scan the algebra files looking for special chunknames.
+Axiom's chunk names are written in a stylized form so that each
+algebra chunk name begins with one of those three symbols. Thus 
+in zerodim.spad.pamphlet the LexTriangularPackage chunkname is:
+\begin{verbatim}
+@<<package LEXTRIPK LexTriangularPackage>>
+\end{verbatim}
+so this egrep will generate an output line, prefixed by the filename
+that looks like:
+\begin{verbatim}
+zerodim.spad.pamphlet:@<<package LEXTRIPK LexTriangularPackage>>=
+\end{verbatim}
+There can be many lines of output per pamphlet file, one for
+each domain, package and category cod chunk contained in the file.
+
+Step 2 is an [[awk]] command line.
+
+\subsection{Write the Makefile stanzas for the algebra files}
+
+<<findSpadFiles>>=
+
+egrep '@<<(domain|package|category) .*>>=' *.spad.pamphlet | sort | uniq | \
+awk -F: '{
+  chunk=substr($2,3,length($2)-5);
+  split(chunk,part," ");
+  spadfile="${MID}/"part[2]".spad";
+  print spadfile": ${IN}/"$1;
+  print "\t@${TANGLE} -R\""chunk"\" ${IN}/"$1">"spadfile;
+  print "";
+}'
+
+@
+[awk] processes each line of the [[egrep]] output. 
+
+The awk script uses [[-F:]] which is a flag that says that a [[:]] is
+the field separator. As a result the \$1 and \$2 in the awk script
+refer to the parts of the egrep output that come before and after the
+[[:]] respectively.
+
+The variable [[chunk]] is assigned the actual chunk name minus
+the @<< and >>= delimiters. In the example given above this will become
+\begin{verbatim}
+package LEXTRIPK LexTriangularPackage
+\end{verbatim}
+The call to [[split]] splits the chunk into parts separated
+by spaces. Thus
+\begin{verbatim}
+  part[1]=package
+  part[2]=LEXTRIPK
+  part[3]=LexTriangularPackage
+\end{verbatim}
+The variable [[spadfile]] in the above example is set to
+\begin{verbatim}
+${MID}/LEXTRIPK.spad
+\end{verbatim}
+Finally, in the domain example given above we print two lines.
+The first line is the Makefile stanza header which depends on the
+original [[zerodim.spad.pamphlet]] file.
+
+The second line is the body of the makefile stanza which calls 
+notangle to extract the algebra from the original pamphlet using
+the chunk name and writes it to the intermediate subdirectory. In
+the case above this would resolve to [[\${MID}/LEXTRIPK.spad]].
+
+For the line given above it outputs the following:
+\begin{verbatim}
+${MID}/LEXTRIPK.spad: ${IN}/zerodim.spad.pamphlet
+	${TANGLE} -R"package LEXTRIPK LexTriangularPackage" ${IN}/zerodim.spad.pamphlet > ${MID}/LEXTRIPK.spad
+\end{verbatim}
+
+\subsection{Find the algebra bootstrap code}
+Step 3 works like step 1 above except that we are looking for
+chunk names that have the "BOOTSTRAP" string. The output will look like:
+\begin{verbatim}
+vector.spad.pamphlet:@<<VECTOR.lsp BOOTSTRAP>>=
+\end{verbatim}
+This output, which can consist of many lines per input file is piped
+into [[awk]].
+
+\subsection{Write the Makefile stanzas for the bootstrap files}
+For each of the above output lines we run an [[egrep]] command:
+
+<<findBootstrapFiles>>=
+
+egrep '@<<.*BOOTSTRAP>>=' *.spad.pamphlet | sort | uniq | \
+awk -F: '{
+  chunk=substr($2,3,length($2)-5);
+  split(chunk,part," ");
+  lspfile="${MID}/"part[1];
+  print lspfile": ${IN}/"$1;
+  print "\t@${TANGLE} -R\""chunk"\" ${IN}/"$1">"lspfile;
+  print "";
+}'
+
+@
+
+The process is the same way as described above except that
+there are only two parts to the chunk names
+\begin{verbatim}
+  part[1]=VECTOR.lsp
+  part[2]=BOOTSTRAP
+\end{verbatim}
+The [[lspfile]] variable is assigned
+\begin{verbatim}
+${MID}/VECTOR.lsp
+\end{verbatim}
+Finally we output two lines:
+\begin{verbatim}
+${MID}/vector.spad.pamphlet: ${IN}/vector.spad.pamphlet
+	${TANGLE} -R"VECTOR.lsp BOOTSTRAP" ${IN}/vector.spad.pamphlet >${MID}/VECTOR.lsp
+\end{verbatim}
+
+The first line is the stanza head and creates a dependence between
+the intermediate file, in this case [[int/algebra/VECTOR.lsp]] and
+the input file [[src/algebra/vector.spad.pamphlet]]
+
+The second line calls [[notangle]] to extract the required chunk
+from the source file.
+
+\section{Stage markers}
+We output these as each stage completes.
+<<stages>>=
+
+layer0bootstrap:
+	@ echo =====================================
+	@ echo === algebra bootstrap complete ======
+	@ echo =====================================
+
+layer0copy:
+	@ echo ==================================
+	@ echo === layer  0 copy complete  ======
+	@ echo ==================================
+
+layer0done:
+	@ echo ==================================
+	@ echo === layer  0 of 23 complete ======
+	@ echo ==================================
+
+layer1done:
+	@ echo ==================================
+	@ echo === layer  1 of 23 complete ======
+	@ echo ==================================
+
+layer2done:
+	@ echo ==================================
+	@ echo === layer  2 of 23 complete ======
+	@ echo ==================================
+
+layer3done:
+	@ echo ==================================
+	@ echo === layer  3 of 23 complete ======
+	@ echo ==================================
+
+layer4done:
+	@ echo ==================================
+	@ echo === layer  4 of 23 complete ======
+	@ echo ==================================
+
+layer5done:
+	@ echo ==================================
+	@ echo === layer  5 of 23 complete ======
+	@ echo ==================================
+
+layer6done:
+	@ echo ==================================
+	@ echo === layer  6 of 23 complete ======
+	@ echo ==================================
+
+layer7done:
+	@ echo ==================================
+	@ echo === layer  7 of 23 complete ======
+	@ echo ==================================
+
+layer8done:
+	@ echo ==================================
+	@ echo === layer  8 of 23 complete ======
+	@ echo ==================================
+
+layer9done:
+	@ echo ==================================
+	@ echo === layer 9 of 23 complete ======
+	@ echo ==================================
+
+layer10done:
+	@ echo ==================================
+	@ echo === layer 10 of 23 complete ======
+	@ echo ==================================
+
+layer11done:
+	@ echo ==================================
+	@ echo === layer 11 of 23 complete ======
+	@ echo ==================================
+
+layer12done:
+	@ echo ==================================
+	@ echo === layer 12 of 23 complete ======
+	@ echo ==================================
+
+layer13done:
+	@ echo ==================================
+	@ echo === layer 13 of 23 complete ======
+	@ echo ==================================
+
+layer14done:
+	@ echo ==================================
+	@ echo === layer 14 of 23 complete ======
+	@ echo ==================================
+
+layer15done:
+	@ echo ==================================
+	@ echo === layer 15 of 23 complete ======
+	@ echo ==================================
+
+layer16done:
+	@ echo ==================================
+	@ echo === layer 16 of 23 complete ======
+	@ echo ==================================
+
+layer17done:
+	@ echo ==================================
+	@ echo === layer 17 of 23 complete ======
+	@ echo ==================================
+
+layer18done:
+	@ echo ==================================
+	@ echo === layer 18 of 23 complete ======
+	@ echo ==================================
+
+layer19done:
+	@ echo ==================================
+	@ echo === layer 19 of 23 complete ======
+	@ echo ==================================
+
+layer20done:
+	@ echo ==================================
+	@ echo === layer 20 of 23 complete ======
+	@ echo ==================================
+
+layer21done:
+	@ echo ==================================
+	@ echo === layer 21 of 23 complete ======
+	@ echo ==================================
+
+layer22done:
+	@ echo ==================================
+	@ echo === layer 22 of 23 complete ======
+	@ echo ==================================
+
+layer23done:
+	@ echo ==================================
+	@ echo === layer 23 of 23 complete ======
+	@ echo ==================================
+
+@
+\section{The Makefile}
+
+<<*>>=
+
+<<environment>>
+
+<<layer0 bootstrap>>
+<<layer0 copy>>
+<<layer0>> 
+<<layer1>>
+<<layer2>>
+<<layer3>>
+<<layer4>>
+<<layer5>>
+<<layer6>>
+<<layer7>>
+<<layer8>>
+<<layer9>>
+<<layer10>>
+<<layer11>>
+<<layer12>>
+<<layer13>>
+<<layer14>>
+<<layer15>>
+<<layer16>>
+<<layer17>>
+<<layer18>>
+<<layer19>>
+<<layer20>>
+<<layer21>>
+<<layer22>>
+<<layer23>>
+<<USERLAYER>>
+<<order>>
+
+all: src ${OUT}/libdb.text ${DOCFILES} ${TESTS} ${SPADBIN}/index.html
+	@ echo 4302 finished ${IN}
+
+${SPADBIN}/index.html:
+	@ echo 5000 making ${SPADBIN}/index.html
+	@ echo "<html><head>Axiom Algebra</head><body>" >${SPADBIN}/index.html
+	@- (for i in ${IN}/*.pamphlet ; do \
+	   ${TANGLE} -R'algebra html' $$i 2>/dev/null | \
+             sed -e 's?DOC?${DOC}?g' >>${SPADBIN}/index.html ; \
+	   done)
+	@ echo "</body></html>" >>${SPADBIN}/index.html
+
+#all:	${SUBPART}
+
+everything: check lib db cmd gloss
+	@ echo 4303 invoking make in `pwd` with parms:
+	@ echo SYS= ${SYS} LSP= ${LSP} PART= ${PART} SUBPART= ${SUBPART}
+	@ echo SPAD= ${SPAD} SRC= ${SRC} INT= ${INT}
+	@ echo OBJ= ${OBJ} MNT= ${MNT} O=${O} LISP=${LISP} BYE=${BYE}
+
+#src:	${AS}
+src:	${SPADFILES} ${ORDER}
+	@ echo 4304 Building NRLIBS from spad sources
+
+#	@ (cd ${MID} ; \
+#	   echo '(progn (let ((*package* (find-package "BOOT"))) (boot::makespad "${MID}" "${MID}" "${LISP}")) (${BYE}))' | ${DEPSYS} )
+
+check:
+	@ echo 4305 Checking that INTERP.EXPOSED and NRLIBs are consistent
+	@ echo 4306 libcheck needs to use exposed.lsp, not INTERP.EXPOSED
+#	@ (cd ${MID} ; \
+#           echo '(progn (let ((*package* (find-package "BOOT"))) (boot::libcheck "${IN}" "${MID}" "${OUT}" "${MAIL}")) (${BYE}))' | ${DEPSYS} )
+
+
+document: ${DOCFILES}
+
+<<genericRules>>
+
+<<testrules>>
+<<ps (DOC from SRC)>>
+<<libdb.text (OUT from IN)>>
+<<stages>>
+
+clean:
+	@echo src/algebra cleaned
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

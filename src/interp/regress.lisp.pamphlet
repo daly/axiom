@@ -1,0 +1,254 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp regress.lisp}
+\author{Timothy Daly}
+\maketitle
+\begin{abstract}
+This is the regression test mechanism. The input files have been
+rewritten to have a standard structure. This fixed format identifies
+the tests within a file. Each test is run and any mismatch between
+the actual and expected results is reported.
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{Regress}
+In order to regression test axiom results we created a standard
+file format. This format has 3 kinds of markers:
+\begin{itemize}
+\item ``--S'' marker which must have a integer test number
+\item ``--R'' marker lines, one per expected output from axiom
+\item ``--E'' marker which has an integer matching the preceeding ``--S''
+\item ``--I'' marker ignores the line, useful for gensyms and random
+\end{itemize}
+Because these markers use Axiom's standard comment prefix they
+are valid lines in input files and are ignored by the ``)read''
+command. They are simply copied to the output file. This allows
+us to include the expected output in the output file so we can
+compare what Axiom computes with what it should compute.
+
+To create these regression files all you need to do is create an
+input file and run it through Axiom. Then, for each test case in
+the file you mark it up by putting a ``--S number'' {\bf before}
+the Axiom input line. You put ``--R'' prefixes on each line of
+Axiom output, including the blank lines. Then you put a ``--E number''
+line after the last output line, usually the {\tt Type:} line.
+This newly marked-up input file is now a regression test.
+
+To actually run the regression test you simply include the
+marked up the input file in the {\tt src/input} subdirectory.
+This file will automatically be run at build time and any failing
+tests will be marked. This code will ignore any input that does
+not contain proper regression markups.
+
+Ideally the regression test files should be pamphlet files that
+explain the content and purpose of each regression test case.
+
+Thus you run the marked-up input file {\tt foo.input}
+and spool the result to {\tt foo.output} and then run the 
+lisp function\\ 
+{\tt (regress ``foo.output'')}
+
+If the file does not contain proper regression markups it is
+ignored. Comments or any other commands in the file that are not
+surrounded by ``--S'' and ``--E'' boundaries are ignored.
+
+\subsection{defun regress}
+This function takes an output file which has been created by the
+Axiom {\tt )spool} command and looks for regression test markups.
+Each regression test is checked against the actual result and any
+failures are marked. 
+<<*>>=
+(in-package "BOOT")
+
+(defun regress (infile)
+ (let (name comment test (count 0) (passed 0) (failed 0))
+  (with-open-file (stream infile :direction :input)
+   (setq name (getspoolname stream)) 
+   (when name
+    (format t "testing ~a~%" name)
+    (loop
+     (multiple-value-setq (comment test) (findnexttest stream))
+     (unless comment (return))
+     (setq count (+ count 1))
+     (if (testpassed test)
+      (progn
+       (setq passed (+ passed 1))
+       (format t "passed ~a ~a~%" name comment))
+      (progn
+       (setq failed (+ failed 1))
+       (format t "FAILED ~a ~a~%" name comment))))
+   (if (= failed 0)
+    (format t "regression result passed ~a of ~a stanzas ~Tfile ~a~%"
+     passed count name)
+    (format t "regression result FAILED ~a of ~a stanzas ~Tfile ~a~%"
+     failed count name))))))
+
+@
+\subsection{defun getspoolname}
+We need to parse out the name of the test. The ``)spool'' command
+writes a line into the output file containing the name of the test.
+We parse out the name of the test from this line.
+<<*>>=
+(defun getspoolname (stream)
+ (let (line point)
+  (setq line (read-line stream))
+  (setq point (position #\. line))
+  (if (or (null point) 
+      (< (length line) 30)
+      (not (string= (subseq line (+ point 1) (+ point 7)) "output")))
+    nil
+  (subseq line 20 point))))
+
+@
+\subsection{defun findnexttest}
+We need to break the file into separate test cases. This routine
+looks for the ``--S'' line which indicates a test is starting. It
+collects up input lines until it encounters the ``--E'' line marking
+the end of the test case. These lines are returned as a list of strings.
+<<*>>=
+(defun findnexttest (stream)
+ (let (teststart result)
+  (do ((line (read-line stream nil 'done) (read-line stream nil 'done)))
+      ((or (eq line 'done) (endedp line))
+        (values (if line teststart) result))
+   (if teststart 
+    (push line result) 
+    (setq teststart (testnumberp line))))))
+
+@
+\subsection{defun testnumberp}
+The ``--S'' line has a test number on the line. We parse out the
+test number for printing.
+<<*>>=
+(defun testnumberp (oneline)
+ (when (startp oneline) (subseq oneline 3)))
+;  (parse-integer (string-trim '(#\Space) (subseq oneline 3)))))
+
+@
+\subsection{defun testpassed}
+This routine takes the test input, passes it to split to clean up
+and break into two lists, and then compares the resulting lists
+element by element, complaining about any mismatches. The result
+is either true if everything passes or false if a mismatch occurs.
+
+A test line can also be considered at passing if the expected line
+is the string ``ignore''.
+<<*>>=
+(defun testpassed (test)
+ (let (answer expected (passed t))
+  (multiple-value-setq (answer expected) (split test))
+  (dotimes (i (length answer))
+   (unless 
+    (or (string= (first expected) "ignore")
+        (string= (first expected) (first answer)))
+    (setq passed nil)
+    (format t "MISMATCH~%expected:~s~%     got:~s~%" 
+     (first expected) (first answer)))
+   (pop answer)
+   (pop expected))
+  passed))
+
+@
+\subsection{defun split}
+We have a list containing all of the lines in a test. The input is of
+the form:
+\begin{verbatim}
+("--R                                         Type: List Integer"
+ "--R   (1)  [1,4,2,- 6,0,3,5,4,2,3]" 
+ "--R" 
+ "--R "
+ "                                         Type: List Integer"
+ "   (1)  [1,4,2,- 6,0,3,5,4,2,3]" 
+ "" 
+ " "
+ "l := [1,4,2,-6,0,3,5,4,2,3]")
+\end{verbatim}
+It removes the ``--R'' prefix from the result strings
+and generates two hopefully equal-length lists, thus:
+\begin{verbatim}
+("                                         Type: List Integer"
+ "   (1)  [1,4,2,- 6,0,3,5,4,2,3]" 
+ "" 
+ " ")
+("                                         Type: List Integer"
+ "   (1)  [1,4,2,- 6,0,3,5,4,2,3]" 
+ "" 
+ " "))
+\end{verbatim}
+Thus the first line is the start line, the second line is the Axiom 
+input line, followed by the Axiom output. Then we have the lines marked
+``--R'' which are the expected result. We split these into two separate
+lists and throw way the lines that are the start and end lines. 
+
+Once we
+have classified all of the lines we need to throw away the input lines.
+By assumption there will be more answer lines than expected lines because
+the input lines are included. And given the way we process the file these
+input lines are on the top of the answer stack. Since the number of
+answer lines should equal the number of expected lines we pop the
+stack until the numbers are equal.
+
+Each element of the answer list should
+be {\tt string=} to the corresponding element of the result list.
+
+If the input line starts with ``--I'' we push the string ``ignore''.
+This is useful for handling random results or gensym symbols.
+<<*>>=
+(defun split (test)
+ (let (answer (acnt 0) expected (ecnt 0))
+  (dolist (oneline test)
+   (cond
+    ((startp oneline))
+    ((endedp oneline))
+    ((ignorep oneline)
+      (setq ecnt (+ ecnt 1))
+      (push "ignore" expected))
+    ((resultp oneline)
+      (setq ecnt (+ ecnt 1))
+      (push (subseq oneline 3) expected))
+    (t 
+      (setq acnt (+ acnt 1))
+      (push oneline answer))))
+  (dotimes (i (- acnt ecnt)) (pop answer))
+  (values (nreverse answer) (nreverse expected))))
+
+@
+\subsection{defun startp}
+This test returns true if we have a ``start'' line. That is, a line
+with a ``--S'' prefix.
+<<*>>=
+(defun startp (oneline)
+ (and (>= (length oneline) 3) (string= (subseq oneline 0 3) "--S")))
+
+@
+\subsection{defun endedp}
+This test returns true if we have a ``ended'' line. That is, a line
+with a ``--E'' prefix.
+<<*>>=
+(defun endedp (oneline)
+ (and (>= (length oneline) 3) (string= (subseq oneline 0 3) "--E")))
+
+@
+\subsection{defun resultp}
+This test returns true if we have a ``results'' line. That is, a line
+with a ``--R'' prefix.
+<<*>>=
+(defun resultp (oneline)
+ (and (>= (length oneline) 3) (string= (subseq oneline 0 3) "--R")))
+
+@
+\subsection{defun ignorep}
+This test returns true if we have an ``ignore'' line. That is, a line
+with a ``--I'' prefix.
+<<*>>=
+(defun ignorep (oneline)
+ (and (>= (length oneline) 3) (string= (subseq oneline 0 3) "--I")))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

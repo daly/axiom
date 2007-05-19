@@ -1,0 +1,377 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra intpm.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package INTPM PatternMatchIntegration}
+<<package INTPM PatternMatchIntegration>>=
+)abbrev package INTPM PatternMatchIntegration
+++ Author: Manuel Bronstein
+++ Date Created: 5 May 1992
+++ Date Last Updated: 27 September 1995
+++ Description:
+++ \spadtype{PatternMatchIntegration} provides functions that use
+++ the pattern matcher to find some indefinite and definite integrals
+++ involving special functions and found in the litterature.
+PatternMatchIntegration(R, F): Exports == Implementation where
+  R : Join(OrderedSet, RetractableTo Integer, GcdDomain,
+           LinearlyExplicitRingOver Integer)
+  F : Join(AlgebraicallyClosedField, TranscendentalFunctionCategory,
+           FunctionSpace R)
+
+  N   ==> NonNegativeInteger
+  Z   ==> Integer
+  SY  ==> Symbol
+  K   ==> Kernel F
+  P   ==> SparseMultivariatePolynomial(R, K)
+  SUP ==> SparseUnivariatePolynomial F
+  PAT ==> Pattern Z
+  RES ==> PatternMatchResult(Z, F)
+  OFE ==> OrderedCompletion F
+  REC ==> Record(which: Z, exponent: F, coeff: F)
+  ANS ==> Record(special:F, integrand:F)
+  NONE ==> 0
+  EI   ==> 1
+  ERF  ==> 2
+  SI   ==> 3
+  CI   ==> 4
+  GAM2 ==> 5
+  CI0  ==> 6
+
+  Exports ==> with
+    splitConstant: (F, SY) -> Record(const:F, nconst:F)
+      ++ splitConstant(f, x) returns \spad{[c, g]} such that
+      ++ \spad{f = c * g} and \spad{c} does not involve \spad{t}.
+    if R has ConvertibleTo Pattern Integer and
+       R has PatternMatchable Integer then
+         if F has LiouvillianFunctionCategory then
+           pmComplexintegrate: (F, SY) -> Union(ANS, "failed")
+             ++ pmComplexintegrate(f, x) returns either "failed" or
+             ++ \spad{[g,h]} such that
+             ++ \spad{integrate(f,x) = g + integrate(h,x)}.
+             ++ It only looks for special complex integrals that pmintegrate
+             ++ does not return.
+           pmintegrate: (F, SY) -> Union(ANS, "failed")
+             ++ pmintegrate(f, x) returns either "failed" or \spad{[g,h]} such
+             ++ that \spad{integrate(f,x) = g + integrate(h,x)}.
+         if F has SpecialFunctionCategory then
+           pmintegrate: (F, SY, OFE, OFE) -> Union(F, "failed")
+             ++ pmintegrate(f, x = a..b) returns the integral of
+             ++ \spad{f(x)dx} from a to b
+             ++ if it can be found by the built-in pattern matching rules.
+
+  Implementation ==> add
+    import PatternMatch(Z, F, F)
+    import ElementaryFunctionSign(R, F)
+    import FunctionSpaceAssertions(R, F)
+    import TrigonometricManipulations(R, F)
+    import FunctionSpaceAttachPredicates(R, F, F)
+
+    mkalist   : RES -> AssociationList(SY, F)
+
+    pm := new()$SY
+    pmw := new pm
+    pmm := new pm
+    pms := new pm
+    pmc := new pm
+    pma := new pm
+    pmb := new pm
+
+    c := optional(pmc::F)
+    w := suchThat(optional(pmw::F), empty? variables #1)
+    s := suchThat(optional(pms::F), empty? variables #1 and real? #1)
+    m := suchThat(optional(pmm::F),
+                    (retractIfCan(#1)@Union(Z,"failed") case Z) and #1 >= 0)
+
+    spi := sqrt(pi()$F)
+
+    half := 1::F / 2::F
+
+    mkalist res == construct destruct res
+
+    splitConstant(f, x) ==
+      not member?(x, variables f) => [f, 1]
+      (retractIfCan(f)@Union(K, "failed")) case K => [1, f]
+      (u := isTimes f) case List(F) =>
+        cc := nc := 1$F
+        for g in u::List(F) repeat
+          rec := splitConstant(g, x)
+          cc  := cc * rec.const
+          nc  := nc * rec.nconst
+        [cc, nc]
+      (u := isPlus f) case List(F) =>
+        rec := splitConstant(first(u::List(F)), x)
+        cc  := rec.const
+        nc  := rec.nconst
+        for g in rest(u::List(F)) repeat
+          rec := splitConstant(g, x)
+          if rec.nconst = nc then cc := cc + rec.const
+          else if rec.nconst = -nc then cc := cc - rec.const
+          else return [1, f]
+        [cc, nc]
+      if (v := isPower f) case Record(val:F, exponent:Z) then
+        vv := v::Record(val:F, exponent:Z)
+        (vv.exponent ^= 1) =>
+          rec := splitConstant(vv.val, x)
+          return [rec.const ** vv.exponent, rec.nconst ** vv.exponent]
+      error "splitConstant: should not happen"
+
+    if R has ConvertibleTo Pattern Integer and
+       R has PatternMatchable Integer then
+         if F has LiouvillianFunctionCategory then
+           import ElementaryFunctionSign(R, F)
+
+           insqrt     : F -> F
+           matchei    : (F, SY) -> REC
+           matcherfei : (F, SY, Boolean) -> REC
+           matchsici  : (F, SY) -> REC
+           matchli    : (F, SY) -> List F
+           matchli0   : (F, K, SY) -> List F
+           matchdilog : (F, SY) -> List F
+           matchdilog0: (F, K, SY, P, F) -> List F
+           goodlilog? : (K, P) -> Boolean
+           gooddilog? : (K, P, P) -> Boolean
+
+--           goodlilog?(k, p) == is?(k, "log"::SY) and one? minimumDegree(p, k)
+           goodlilog?(k, p) == is?(k, "log"::SY) and (minimumDegree(p, k) = 1)
+
+           gooddilog?(k, p, q) ==
+--             is?(k, "log"::SY) and one? degree(p, k) and zero? degree(q, k)
+             is?(k, "log"::SY) and (degree(p, k) = 1) and zero? degree(q, k)
+
+-- matches the integral to a result of the form d * erf(u) or d * ei(u)
+-- returns [case, u, d]
+           matcherfei(f, x, comp?) ==
+             res0 := new()$RES
+             pat := c * exp(pma::F)
+             failed?(res := patternMatch(f, convert(pat)@PAT, res0)) =>
+               comp? => [NONE, 0,0]
+               matchei(f,x)
+             l := mkalist res
+             da := differentiate(a := l.pma, x)
+             d := a * (cc := l.pmc) / da
+             zero? differentiate(d, x) => [EI, a, d]
+             comp? or (((u := sign a) case Z) and (u::Z) < 0) =>
+               d := cc * (sa := insqrt(- a)) / da
+               zero? differentiate(d, x) => [ERF, sa, - d * spi]
+               [NONE, 0, 0]
+             [NONE, 0, 0]
+
+-- matches the integral to a result of the form d * ei(k * log u)
+-- returns [case, k * log u, d]
+           matchei(f, x) ==
+             res0 := new()$RES
+             a := pma::F
+             pat := c * a**w / log a
+             failed?(res := patternMatch(f, convert(pat)@PAT, res0)) =>
+               [NONE, 0, 0]
+             l := mkalist res
+             da := differentiate(a := l.pma, x)
+             d := (cc := l.pmc) / da
+             zero? differentiate(d, x) => [EI, (1 + l.pmw) * log a, d]
+             [NONE, 0, 0]
+
+-- matches the integral to a result of the form d * dilog(u) + int(v),
+-- returns [u,d,v] or []
+           matchdilog(f, x) ==
+             n := numer f
+             df := (d := denom f)::F
+             for k in select_!(gooddilog?(#1, n, d), variables n)$List(K) repeat
+               not empty?(l := matchdilog0(f, k, x, n, df)) => return l
+             empty()
+
+-- matches the integral to a result of the form d * dilog(a) + int(v)
+-- where k = log(a)
+-- returns [a,d,v] or []
+           matchdilog0(f, k, x, p, q) ==
+             zero?(da := differentiate(a := first argument k, x)) => empty()
+             a1 := 1 - a
+             d := coefficient(univariate(p, k), 1)::F * a1 / (q * da)
+             zero? differentiate(d, x) => [a, d, f - d * da * (k::F) / a1]
+             empty()
+
+-- matches the integral to a result of the form d * li(u) + int(v),
+-- returns [u,d,v] or []
+           matchli(f, x) ==
+             d := denom f
+             for k in select_!(goodlilog?(#1, d), variables d)$List(K) repeat
+               not empty?(l := matchli0(f, k, x)) => return l
+             empty()
+
+-- matches the integral to a result of the form d * li(a) + int(v)
+-- where k = log(a)
+-- returns [a,d,v] or []
+           matchli0(f, k, x) ==
+             g := (lg := k::F) * f
+             zero?(da := differentiate(a := first argument k, x)) => empty()
+             zero? differentiate(d := g / da, x) => [a, d, 0]
+             ug := univariate(g, k)
+             (u:=retractIfCan(ug)@Union(SUP,"failed")) case "failed" => empty()
+             degree(p := u::SUP) > 1 => empty()
+             zero? differentiate(d := coefficient(p, 0) / da, x) =>
+               [a, d, leadingCoefficient p]
+             empty()
+
+-- matches the integral to a result of the form d * Si(u) or d * Ci(u)
+-- returns [case, u, d]
+           matchsici(f, x) ==
+             res0 := new()$RES
+             b := pmb::F
+             t := tan(a := pma::F)
+             patsi := c * t / (patden := b + b * t**2)
+             patci := (c - c * t**2) / patden
+             patci0 := c / patden
+             ci0?:Boolean
+             (ci? := failed?(res := patternMatch(f, convert(patsi)@PAT, res0)))
+               and (ci0?:=failed?(res:=patternMatch(f,convert(patci)@PAT,res0)))
+                 and failed?(res := patternMatch(f,convert(patci0)@PAT,res0)) =>
+                   [NONE, 0, 0]
+             l := mkalist res
+             (b := l.pmb) ^= 2 * (a := l.pma) => [NONE, 0, 0]
+             db := differentiate(b, x)
+             d := (cc := l.pmc) / db
+             zero? differentiate(d, x) =>
+               ci? =>
+                  ci0? => [CI0, b, d / (2::F)]
+                  [CI, b, d]
+               [SI, b, d / (2::F)]
+             [NONE, 0, 0]
+
+-- returns a simplified sqrt(y)
+           insqrt y ==
+             rec := froot(y, 2)$PolynomialRoots(IndexedExponents K, K, R, P, F)
+--             one?(rec.exponent) => rec.coef * rec.radicand
+             ((rec.exponent) = 1) => rec.coef * rec.radicand
+             rec.exponent ^=2 => error "insqrt: hould not happen"
+             rec.coef * sqrt(rec.radicand)
+
+           pmintegrate(f, x) ==
+             (rc := splitConstant(f, x)).const ^= 1 =>
+               (u := pmintegrate(rc.nconst, x)) case "failed" => "failed"
+               rec := u::ANS
+               [rc.const * rec.special, rc.const * rec.integrand]
+             not empty?(l := matchli(f, x)) => [second l * li first l, third l]
+             not empty?(l := matchdilog(f, x)) =>
+                                            [second l * dilog first l, third l]
+             cse := (rec := matcherfei(f, x, false)).which
+             cse = EI   => [rec.coeff * Ei(rec.exponent), 0]
+             cse = ERF  => [rec.coeff * erf(rec.exponent), 0]
+             cse := (rec := matchsici(f, x)).which
+             cse = SI => [rec.coeff * Si(rec.exponent), 0]
+             cse = CI => [rec.coeff * Ci(rec.exponent), 0]
+             cse = CI0 => [rec.coeff * Ci(rec.exponent)
+                           + rec.coeff * log(rec.exponent), 0]
+             "failed"
+
+           pmComplexintegrate(f, x) ==
+             (rc := splitConstant(f, x)).const ^= 1 =>
+               (u := pmintegrate(rc.nconst, x)) case "failed" => "failed"
+               rec := u::ANS
+               [rc.const * rec.special, rc.const * rec.integrand]
+             cse := (rec := matcherfei(f, x, true)).which
+             cse = ERF  => [rec.coeff * erf(rec.exponent), 0]
+             "failed"
+
+         if F has SpecialFunctionCategory then
+           match1    : (F, SY, F, F) -> List F
+           formula1  : (F, SY, F, F) -> Union(F, "failed")
+
+-- tries only formula (1) of the Geddes & al, AAECC 1 (1990) paper
+           formula1(f, x, t, cc) ==
+             empty?(l := match1(f, x, t, cc)) => "failed"
+             mw := first l
+             zero?(ms := third l) or ((sgs := sign ms) case "failed")=> "failed"
+             ((sgz := sign(z := (mw + 1) / ms)) case "failed") or (sgz::Z < 0)
+                => "failed"
+             mmi := retract(mm := second l)@Z
+             sgs * (last l) * ms**(- mmi - 1) *
+                 eval(differentiate(Gamma(x::F), x, mmi::N), [kernel(x)@K], [z])
+
+-- returns [w, m, s, c] or []
+-- matches only formula (1) of the Geddes & al, AAECC 1 (1990) paper
+           match1(f, x, t, cc) ==
+             res0 := new()$RES
+             pat := cc * log(t)**m * exp(-t**s)
+             not failed?(res := patternMatch(f, convert(pat)@PAT, res0)) =>
+               l := mkalist res
+               [0, l.pmm, l.pms, l.pmc]
+             pat := cc * t**w * exp(-t**s)
+             not failed?(res := patternMatch(f, convert(pat)@PAT, res0)) =>
+               l := mkalist res
+               [l.pmw, 0, l.pms, l.pmc]
+             pat := cc / t**w * exp(-t**s)
+             not failed?(res := patternMatch(f, convert(pat)@PAT, res0)) =>
+               l := mkalist res
+               [- l.pmw, 0, l.pms, l.pmc]
+             pat := cc * t**w * log(t)**m * exp(-t**s)
+             not failed?(res := patternMatch(f, convert(pat)@PAT, res0)) =>
+               l := mkalist res
+               [l.pmw, l.pmm, l.pms, l.pmc]
+             pat := cc / t**w * log(t)**m * exp(-t**s)
+             not failed?(res := patternMatch(f, convert(pat)@PAT, res0)) =>
+               l := mkalist res
+               [- l.pmw, l.pmm, l.pms, l.pmc]
+             empty()
+
+           pmintegrate(f, x, a, b) ==
+--             zero? a and one? whatInfinity b =>
+             zero? a and ((whatInfinity b) = 1) =>
+               formula1(f, x, constant(x::F), suchThat(c, freeOf?(#1, x)))
+             "failed"
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+-- SPAD files for the integration world should be compiled in the
+-- following order:
+--
+--   intaux  rderf  intrf  curve  curvepkg  divisor  pfo
+--   intalg  intaf  efstruc  rdeef  INTPM  intef  irexpand  integrat
+
+<<package INTPM PatternMatchIntegration>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

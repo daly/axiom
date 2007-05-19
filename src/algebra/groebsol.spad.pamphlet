@@ -1,0 +1,245 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra groebsol.spad}
+\author{Patrizia Gianni}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package GROEBSOL GroebnerSolve}
+<<package GROEBSOL GroebnerSolve>>=
+)abbrev package GROEBSOL GroebnerSolve
+++ Author : P.Gianni, Summer '88, revised November '89
+++ Solve systems of polynomial equations using Groebner bases
+++ Total order Groebner bases are computed and then converted to lex ones
+++ This package is mostly intended for internal use.
+GroebnerSolve(lv,F,R) : C == T
+
+  where
+   R      :   GcdDomain
+   F      :   GcdDomain
+   lv     :   List Symbol
+
+   NNI    ==>  NonNegativeInteger
+   I      ==>  Integer
+   S      ==>  Symbol
+
+   OV     ==>  OrderedVariableList(lv)
+   IES    ==>  IndexedExponents Symbol
+
+   DP     ==>  DirectProduct(#lv,NonNegativeInteger)
+   DPoly  ==>  DistributedMultivariatePolynomial(lv,F)
+
+   HDP    ==>  HomogeneousDirectProduct(#lv,NonNegativeInteger)
+   HDPoly ==>  HomogeneousDistributedMultivariatePolynomial(lv,F)
+
+   SUP    ==>  SparseUnivariatePolynomial(DPoly)
+   L      ==>  List
+   P      ==>  Polynomial
+
+   C == with
+      groebSolve   : (L DPoly,L OV)  -> L L DPoly
+        ++ groebSolve(lp,lv) reduces the polynomial system lp in variables lv
+        ++ to triangular form. Algorithm based on groebner bases algorithm
+        ++ with linear algebra for change of ordering.
+        ++ Preprocessing for the general solver.
+        ++ The polynomials in input are of type \spadtype{DMP}.
+
+      testDim     : (L HDPoly,L OV)  -> Union(L HDPoly,"failed")
+        ++ testDim(lp,lv) tests if the polynomial system lp
+        ++ in variables lv is zero dimensional.
+
+      genericPosition : (L DPoly, L OV) -> Record(dpolys:L DPoly, coords: L I)
+        ++ genericPosition(lp,lv) puts a radical zero dimensional ideal
+        ++ in general position, for system lp in variables lv.
+
+   T == add
+     import PolToPol(lv,F)
+     import GroebnerPackage(F,DP,OV,DPoly)
+     import GroebnerInternalPackage(F,DP,OV,DPoly)
+     import GroebnerPackage(F,HDP,OV,HDPoly)
+     import LinGroebnerPackage(lv,F)
+
+     nv:NNI:=#lv
+
+          ---- test if f is power of a linear mod (rad lpol) ----
+                     ----  f is monic  ----
+     testPower(uf:SUP,x:OV,lpol:L DPoly) : Union(DPoly,"failed") ==
+       df:=degree(uf)
+       trailp:DPoly := coefficient(uf,(df-1)::NNI)
+       (testquo := trailp exquo (df::F)) case "failed" => "failed"
+       trailp := testquo::DPoly
+       gg:=gcd(lc:=leadingCoefficient(uf),trailp)
+       trailp := (trailp exquo gg)::DPoly
+       lc := (lc exquo gg)::DPoly
+       linp:SUP:=monomial(lc,1$NNI)$SUP + monomial(trailp,0$NNI)$SUP
+       g:DPoly:=multivariate(uf-linp**df,x)
+       redPol(g,lpol) ^= 0 => "failed"
+       multivariate(linp,x)
+
+            -- is the 0-dimensional ideal I in general position ?  --
+                     ----  internal function  ----
+     testGenPos(lpol:L DPoly,lvar:L OV):Union(L DPoly,"failed") ==
+       rlpol:=reverse lpol
+       f:=rlpol.first
+       #lvar=1 => [f]
+       rlvar:=rest reverse lvar
+       newlpol:List(DPoly):=[f]
+       for f in rlpol.rest repeat
+         x:=first rlvar
+         fi:= univariate(f,x)
+         if (mainVariable leadingCoefficient fi case "failed") then
+           if ((g:= testPower(fi,x,newlpol)) case "failed")
+           then return "failed"
+           newlpol :=concat(redPol(g::DPoly,newlpol),newlpol)
+           rlvar:=rest rlvar
+         else if redPol(f,newlpol)^=0 then return"failed"
+       newlpol
+
+
+        -- change coordinates and out the ideal in general position  ----
+     genPos(lp:L DPoly,lvar:L OV): Record(polys:L HDPoly, lpolys:L DPoly,
+                                           coord:L I, univp:HDPoly) ==
+           rlvar:=reverse lvar
+           lnp:=[dmpToHdmp(f) for f in lp]
+           x := first rlvar;rlvar:=rest rlvar
+           testfail:=true
+           for count in 1.. while testfail repeat
+             ranvals:L I:=[1+(random()$I rem (count*(# lvar))) for vv in rlvar]
+             val:=+/[rv*(vv::HDPoly)
+                        for vv in rlvar for rv in ranvals]
+             val:=val+x::HDPoly
+             gb:L HDPoly:= [elt(univariate(p,x),val) for p in lnp]
+             gb:=groebner gb
+             gbt:=totolex gb
+             (gb1:=testGenPos(gbt,lvar)) case "failed"=>"try again"
+             testfail:=false
+           [gb,gbt,ranvals,dmpToHdmp(last (gb1::L DPoly))]
+
+     genericPosition(lp:L DPoly,lvar:L OV) ==
+        nans:=genPos(lp,lvar)
+        [nans.lpolys, nans.coord]
+
+        ---- select  the univariate factors
+     select(lup:L L HDPoly) : L L HDPoly ==
+       lup=[] => list []
+       [:[cons(f,lsel) for lsel in select lup.rest] for f in lup.first]
+
+        ---- in the non generic case, we compute the prime ideals ----
+           ---- associated to leq, basis is the algebra basis  ----
+     findCompon(leq:L HDPoly,lvar:L OV):L L DPoly ==
+       teq:=totolex(leq)
+       #teq = #lvar => [teq]
+      -- ^((teq1:=testGenPos(teq,lvar)) case "failed") => [teq1::L DPoly]
+       gp:=genPos(teq,lvar)
+       lgp:= gp.polys
+       g:HDPoly:=gp.univp
+       fg:=(factor g)$GeneralizedMultivariateFactorize(OV,HDP,R,F,HDPoly)
+       lfact:=[ff.factor for ff in factors(fg::Factored(HDPoly))]
+       result: L L HDPoly := []
+       #lfact=1 => [teq]
+       for tfact in lfact repeat
+         tlfact:=concat(tfact,lgp)
+         result:=concat(tlfact,result)
+       ranvals:L I:=gp.coord
+       rlvar:=reverse lvar
+       x:=first rlvar
+       rlvar:=rest rlvar
+       val:=+/[rv*(vv::HDPoly) for vv in rlvar for rv in ranvals]
+       val:=(x::HDPoly)-val
+       ans:=[totolex groebner [elt(univariate(p,x),val) for p in lp]
+                           for lp in result]
+       [ll for ll in ans | ll^=[1]]
+
+     zeroDim?(lp: List HDPoly,lvar:L OV) : Boolean ==
+       empty? lp => false
+       n:NNI := #lvar
+       #lp < n => false
+       lvint1 := lvar
+       for f in lp while not empty?(lvint1) repeat
+          g:= f - reductum f
+          x:=mainVariable(g)::OV
+          if ground?(leadingCoefficient(univariate(g,x))) then
+               lvint1 := remove(x, lvint1)
+       empty? lvint1
+
+     -- general solve, gives an error if the system not 0-dimensional
+     groebSolve(leq: L DPoly,lvar:L OV) : L L DPoly ==
+       lnp:=[dmpToHdmp(f) for f in leq]
+       leq1:=groebner lnp
+       #(leq1) = 1 and first(leq1) = 1 => list empty()
+       ^(zeroDim?(leq1,lvar)) =>
+         error "system does not have a finite number of solutions"
+       -- add computation of dimension, for a more useful error
+       basis:=computeBasis(leq1)
+       lup:L HDPoly:=[]
+       llfact:L Factored(HDPoly):=[]
+       for x in lvar repeat
+         g:=minPol(leq1,basis,x)
+         fg:=(factor g)$GeneralizedMultivariateFactorize(OV,HDP,R,F,HDPoly)
+         llfact:=concat(fg::Factored(HDPoly),llfact)
+         if degree(g,x) = #basis then leave "stop factoring"
+       result: L L DPoly := []
+       -- selecting a factor from the lists of the univariate factors
+       lfact:=select [[ff.factor for ff in factors llf]
+                       for llf in llfact]
+       for tfact in lfact repeat
+         tfact:=groebner concat(tfact,leq1)
+         tfact=[1] => "next value"
+         result:=concat(result,findCompon(tfact,lvar))
+       result
+
+     -- test if the system is zero dimensional
+     testDim(leq : L HDPoly,lvar : L OV) : Union(L HDPoly,"failed") ==
+       leq1:=groebner leq
+       #(leq1) = 1 and first(leq1) = 1 => empty()
+       ^(zeroDim?(leq1,lvar)) => "failed"
+       leq1
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package GROEBSOL GroebnerSolve>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

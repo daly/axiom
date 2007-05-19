@@ -1,0 +1,915 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra expr.spad}
+\author{Manuel Bronstein, Barry Trager}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{domain EXPR Expression}
+<<domain EXPR Expression>>=
+)abbrev domain EXPR Expression
+++ Top-level mathematical expressions
+++ Author: Manuel Bronstein
+++ Date Created: 19 July 1988
+++ Date Last Updated: October 1993 (P.Gianni), February 1995 (MB)
+++ Description: Expressions involving symbolic functions.
+++ Keywords: operator, kernel, function.
+Expression(R:OrderedSet): Exports == Implementation where
+  Q   ==> Fraction Integer
+  K   ==> Kernel %
+  MP  ==> SparseMultivariatePolynomial(R, K)
+  AF  ==> AlgebraicFunction(R, %)
+  EF  ==> ElementaryFunction(R, %)
+  CF  ==> CombinatorialFunction(R, %)
+  LF  ==> LiouvillianFunction(R, %)
+  AN  ==> AlgebraicNumber
+  KAN ==> Kernel AN
+  FSF ==> FunctionalSpecialFunction(R, %)
+  ESD ==> ExpressionSpace_&(%)
+  FSD ==> FunctionSpace_&(%, R)
+  SYMBOL ==> "%symbol"
+  ALGOP  ==> "%alg"
+  POWER  ==> "%power"::Symbol
+  SUP    ==> SparseUnivariatePolynomial
+
+  Exports ==> FunctionSpace R with
+    if R has IntegralDomain then
+      AlgebraicallyClosedFunctionSpace R
+      TranscendentalFunctionCategory
+      CombinatorialOpsCategory
+      LiouvillianFunctionCategory
+      SpecialFunctionCategory
+      reduce: % -> %
+        ++ reduce(f) simplifies all the unreduced algebraic quantities
+        ++ present in f by applying their defining relations.
+      number?: % -> Boolean
+	++ number?(f) tests if f is rational
+      simplifyPower: (%,Integer) -> %
+	++ simplifyPower?(f,n) \undocumented{}
+      if R has GcdDomain then
+        factorPolynomial : SUP  % -> Factored SUP %
+	   ++ factorPolynomial(p) \undocumented{}
+        squareFreePolynomial : SUP % -> Factored SUP %
+	   ++ squareFreePolynomial(p) \undocumented{}
+      if R has RetractableTo Integer then RetractableTo AN
+
+  Implementation ==> add
+    import KernelFunctions2(R, %)
+
+    retNotUnit     : % -> R
+    retNotUnitIfCan: % -> Union(R, "failed")
+
+    belong? op == true
+
+    retNotUnit x ==
+      (u := constantIfCan(k := retract(x)@K)) case R => u::R
+      error "Not retractable"
+
+    retNotUnitIfCan x ==
+      (r := retractIfCan(x)@Union(K,"failed")) case "failed" => "failed"
+      constantIfCan(r::K)
+
+    if R has IntegralDomain then
+      reduc  : (%, List Kernel %) -> %
+      commonk   : (%, %) -> List K
+      commonk0  : (List K, List K) -> List K
+      toprat    : % -> %
+      algkernels: List K -> List K
+      evl       : (MP, K, SparseUnivariatePolynomial %) -> Fraction MP
+      evl0      : (MP, K) -> SparseUnivariatePolynomial Fraction MP
+
+      Rep := Fraction MP
+      0                == 0$Rep
+      1                == 1$Rep
+--      one? x           == one?(x)$Rep
+      one? x           == (x = 1)$Rep
+      zero? x          == zero?(x)$Rep
+      - x:%            == -$Rep x
+      n:Integer * x:%  == n *$Rep x
+      coerce(n:Integer) ==  coerce(n)$Rep@Rep::%
+      x:% * y:%        == reduc(x *$Rep y, commonk(x, y))
+      x:% + y:%        == reduc(x +$Rep y, commonk(x, y))
+      (x:% - y:%):%    == reduc(x -$Rep y, commonk(x, y))
+      x:% / y:%        == reduc(x /$Rep y, commonk(x, y))
+
+      number?(x:%):Boolean ==
+        if R has RetractableTo(Integer) then
+          ground?(x) or ((retractIfCan(x)@Union(Q,"failed")) case Q)
+        else
+          ground?(x)
+
+      simplifyPower(x:%,n:Integer):% ==
+        k : List K := kernels x
+        is?(x,POWER) =>
+          -- Look for a power of a number in case we can do a simplification
+          args : List % := argument first k
+          not(#args = 2) => error "Too many arguments to **"
+          number?(args.1) =>
+             reduc((args.1) **$Rep n, algkernels kernels (args.1))**(args.2)
+          (first args)**(n*second(args))
+        reduc(x **$Rep n, algkernels k)
+
+      x:% ** n:NonNegativeInteger ==
+        n = 0 => 1$%
+        n = 1 => x
+        simplifyPower(numerator x,n pretend Integer) / simplifyPower(denominator x,n pretend Integer)
+
+      x:% ** n:Integer ==
+        n = 0 => 1$%
+        n = 1 => x
+        n = -1 => 1/x
+        simplifyPower(numerator x,n) / simplifyPower(denominator x,n)
+
+      x:% ** n:PositiveInteger == 
+        n = 1 => x
+        simplifyPower(numerator x,n pretend Integer) / simplifyPower(denominator x,n pretend Integer)
+
+      x:% < y:%        == x <$Rep y
+      x:% = y:%        == x =$Rep y
+      numer x          == numer(x)$Rep
+      denom x          == denom(x)$Rep
+      coerce(p:MP):%   == coerce(p)$Rep
+      reduce x         == reduc(x, algkernels kernels x)
+      commonk(x, y)    == commonk0(algkernels kernels x, algkernels kernels y)
+      algkernels l     == select_!(has?(operator #1, ALGOP), l)
+      toprat f == ratDenom(f, algkernels kernels f)$AlgebraicManipulations(R, %)
+
+      x:MP / y:MP ==
+        reduc(x /$Rep y,commonk0(algkernels variables x,algkernels variables y))
+
+-- since we use the reduction from FRAC SMP which asssumes that the
+-- variables are independent, we must remove algebraic from the denominators
+      reducedSystem(m:Matrix %):Matrix(R) ==
+        mm:Matrix(MP) := reducedSystem(map(toprat, m))$Rep
+        reducedSystem(mm)$MP
+
+-- since we use the reduction from FRAC SMP which asssumes that the
+-- variables are independent, we must remove algebraic from the denominators
+      reducedSystem(m:Matrix %, v:Vector %):
+       Record(mat:Matrix R, vec:Vector R) ==
+        r:Record(mat:Matrix MP, vec:Vector MP) :=
+          reducedSystem(map(toprat, m), map(toprat, v))$Rep
+        reducedSystem(r.mat, r.vec)$MP
+
+-- The result MUST be left sorted deepest first   MB 3/90
+      commonk0(x, y) ==
+        ans := empty()$List(K)
+        for k in reverse_! x repeat if member?(k, y) then ans := concat(k, ans)
+        ans
+
+      rootOf(x:SparseUnivariatePolynomial %, v:Symbol) == rootOf(x,v)$AF
+      pi()                      == pi()$EF
+      exp x                     == exp(x)$EF
+      log x                     == log(x)$EF
+      sin x                     == sin(x)$EF
+      cos x                     == cos(x)$EF
+      tan x                     == tan(x)$EF
+      cot x                     == cot(x)$EF
+      sec x                     == sec(x)$EF
+      csc x                     == csc(x)$EF
+      asin x                    == asin(x)$EF
+      acos x                    == acos(x)$EF
+      atan x                    == atan(x)$EF
+      acot x                    == acot(x)$EF
+      asec x                    == asec(x)$EF
+      acsc x                    == acsc(x)$EF
+      sinh x                    == sinh(x)$EF
+      cosh x                    == cosh(x)$EF
+      tanh x                    == tanh(x)$EF
+      coth x                    == coth(x)$EF
+      sech x                    == sech(x)$EF
+      csch x                    == csch(x)$EF
+      asinh x                   == asinh(x)$EF
+      acosh x                   == acosh(x)$EF
+      atanh x                   == atanh(x)$EF
+      acoth x                   == acoth(x)$EF
+      asech x                   == asech(x)$EF
+      acsch x                   == acsch(x)$EF
+
+      abs x                     == abs(x)$FSF
+      Gamma x                   == Gamma(x)$FSF
+      Gamma(a, x)               == Gamma(a, x)$FSF
+      Beta(x,y)                 == Beta(x,y)$FSF
+      digamma x                 == digamma(x)$FSF
+      polygamma(k,x)            == polygamma(k,x)$FSF
+      besselJ(v,x)              == besselJ(v,x)$FSF
+      besselY(v,x)              == besselY(v,x)$FSF
+      besselI(v,x)              == besselI(v,x)$FSF
+      besselK(v,x)              == besselK(v,x)$FSF
+      airyAi x                  == airyAi(x)$FSF
+      airyBi x                  == airyBi(x)$FSF
+
+      x:% ** y:%                == x **$CF y
+      factorial x               == factorial(x)$CF
+      binomial(n, m)            == binomial(n, m)$CF
+      permutation(n, m)         == permutation(n, m)$CF
+      factorials x              == factorials(x)$CF
+      factorials(x, n)          == factorials(x, n)$CF
+      summation(x:%, n:Symbol)           == summation(x, n)$CF
+      summation(x:%, s:SegmentBinding %) == summation(x, s)$CF
+      product(x:%, n:Symbol)             == product(x, n)$CF
+      product(x:%, s:SegmentBinding %)   == product(x, s)$CF
+
+      erf x                              == erf(x)$LF
+      Ei x                               == Ei(x)$LF
+      Si x                               == Si(x)$LF
+      Ci x                               == Ci(x)$LF
+      li x                               == li(x)$LF
+      dilog x                            == dilog(x)$LF
+      integral(x:%, n:Symbol)            == integral(x, n)$LF
+      integral(x:%, s:SegmentBinding %)  == integral(x, s)$LF
+
+      operator op ==
+        belong?(op)$AF  => operator(op)$AF
+        belong?(op)$EF  => operator(op)$EF
+        belong?(op)$CF  => operator(op)$CF
+        belong?(op)$LF  => operator(op)$LF
+        belong?(op)$FSF => operator(op)$FSF
+        belong?(op)$FSD => operator(op)$FSD
+        belong?(op)$ESD => operator(op)$ESD
+        nullary? op and has?(op, SYMBOL) => operator(kernel(name op)$K)
+        (n := arity op) case "failed" => operator name op
+        operator(name op, n::NonNegativeInteger)
+
+      reduc(x, l) ==
+        for k in l repeat
+          p := minPoly k
+          x := evl(numer x, k, p) /$Rep evl(denom x, k, p)
+        x
+
+      evl0(p, k) ==
+        numer univariate(p::Fraction(MP),
+                     k)$PolynomialCategoryQuotientFunctions(IndexedExponents K,
+                                                            K,R,MP,Fraction MP)
+
+      -- uses some operations from Rep instead of % in order not to
+      -- reduce recursively during those operations.
+      evl(p, k, m) ==
+        degree(p, k) < degree m => p::Fraction(MP)
+        (((evl0(p, k) pretend SparseUnivariatePolynomial($)) rem m)
+           pretend SparseUnivariatePolynomial Fraction MP) (k::MP::Fraction(MP))
+
+      if R has GcdDomain then
+        noalg?: SUP % -> Boolean
+
+        noalg? p ==
+          while p ^= 0 repeat
+            not empty? algkernels kernels leadingCoefficient p => return false
+            p := reductum p
+          true
+
+        gcdPolynomial(p:SUP %, q:SUP %) ==
+          noalg? p and noalg? q => gcdPolynomial(p, q)$Rep
+          gcdPolynomial(p, q)$GcdDomain_&(%)
+
+        factorPolynomial(x:SUP %) : Factored SUP % ==
+          uf:= factor(x pretend SUP(Rep))$SupFractionFactorizer(
+                                          IndexedExponents K,K,R,MP)
+          uf pretend Factored SUP %
+
+        squareFreePolynomial(x:SUP %) : Factored SUP % ==
+          uf:= squareFree(x pretend SUP(Rep))$SupFractionFactorizer(
+                                          IndexedExponents K,K,R,MP)
+          uf pretend Factored SUP %
+
+      if R is AN then
+        -- this is to force the coercion R -> EXPR R to be used
+        -- instead of the coercioon AN -> EXPR R which loops.
+        -- simpler looking code will fail! MB 10/91
+        coerce(x:AN):% == (monomial(x, 0$IndexedExponents(K))$MP)::%
+
+      if (R has RetractableTo Integer) then
+        x:% ** r:Q                           == x **$AF r
+        minPoly k                            == minPoly(k)$AF
+        definingPolynomial x                 == definingPolynomial(x)$AF
+        retract(x:%):Q                       == retract(x)$Rep
+        retractIfCan(x:%):Union(Q, "failed") == retractIfCan(x)$Rep
+
+        if not(R is AN) then
+          k2expr  : KAN -> %
+          smp2expr: SparseMultivariatePolynomial(Integer, KAN) -> %
+          R2AN    : R  -> Union(AN, "failed")
+          k2an    : K  -> Union(AN, "failed")
+          smp2an  : MP -> Union(AN, "failed")
+
+
+          coerce(x:AN):% == smp2expr(numer x) / smp2expr(denom x)
+          k2expr k       == map(#1::%, k)$ExpressionSpaceFunctions2(AN, %)
+
+          smp2expr p ==
+            map(k2expr,#1::%,p)$PolynomialCategoryLifting(IndexedExponents KAN,
+                   KAN, Integer, SparseMultivariatePolynomial(Integer, KAN), %)
+
+          retractIfCan(x:%):Union(AN, "failed") ==
+            ((n:= smp2an numer x) case AN) and ((d:= smp2an denom x) case AN)
+                 => (n::AN) / (d::AN)
+            "failed"
+
+          R2AN r ==
+            (u := retractIfCan(r::%)@Union(Q, "failed")) case Q => u::Q::AN
+            "failed"
+
+          k2an k ==
+            not(belong?(op := operator k)$AN) => "failed"
+            arg:List(AN) := empty()
+            for x in argument k repeat
+              if (a := retractIfCan(x)@Union(AN, "failed")) case "failed" then
+                return "failed"
+              else arg := concat(a::AN, arg)
+            (operator(op)$AN) reverse_!(arg)
+
+          smp2an p ==
+            (x1 := mainVariable p) case "failed" => R2AN leadingCoefficient p
+            up := univariate(p, k := x1::K)
+            (t  := k2an k) case "failed" => "failed"
+            ans:AN := 0
+            while not ground? up repeat
+              (c:=smp2an leadingCoefficient up) case "failed" => return "failed"
+              ans := ans + (c::AN) * (t::AN) ** (degree up)
+              up  := reductum up
+            (c := smp2an leadingCoefficient up) case "failed" => "failed"
+            ans + c::AN
+
+      if R has ConvertibleTo InputForm then
+        convert(x:%):InputForm == convert(x)$Rep
+        import MakeUnaryCompiledFunction(%, %, %)
+        eval(f:%, op: BasicOperator, g:%, x:Symbol):% == 
+          eval(f,[op],[g],x)
+        eval(f:%, ls:List BasicOperator, lg:List %, x:Symbol) ==
+	  -- handle subsrcipted symbols by renaming -> eval -> renaming back
+          llsym:List List Symbol:=[variables g for g in lg]
+          lsym:List Symbol:= removeDuplicates concat llsym
+          lsd:List Symbol:=select (scripted?,lsym)
+          empty? lsd=> eval(f,ls,[compiledFunction(g, x) for g in lg])
+          ns:List Symbol:=[new()$Symbol for i in lsd]
+          lforwardSubs:List Equation % := [(i::%)= (j::%) for i in lsd for j in ns]
+          lbackwardSubs:List Equation % := [(j::%)= (i::%) for i in lsd for j in ns]
+          nlg:List % :=[subst(g,lforwardSubs) for g in lg]
+          res:% :=eval(f, ls, [compiledFunction(g, x) for g in nlg])
+          subst(res,lbackwardSubs)
+      if R has PatternMatchable Integer then
+        patternMatch(x:%, p:Pattern Integer,
+         l:PatternMatchResult(Integer, %)) ==
+          patternMatch(x, p, l)$PatternMatchFunctionSpace(Integer, R, %)
+
+      if R has PatternMatchable Float then
+        patternMatch(x:%, p:Pattern Float,
+         l:PatternMatchResult(Float, %)) ==
+          patternMatch(x, p, l)$PatternMatchFunctionSpace(Float, R, %)
+
+    else  -- R is not an integral domain
+      operator op ==
+        belong?(op)$FSD => operator(op)$FSD
+        belong?(op)$ESD => operator(op)$ESD
+        nullary? op and has?(op, SYMBOL) => operator(kernel(name op)$K)
+        (n := arity op) case "failed" => operator name op
+        operator(name op, n::NonNegativeInteger)
+
+      if R has Ring then
+        Rep := MP
+        0              == 0$Rep
+        1              == 1$Rep
+        - x:%          == -$Rep x
+        n:Integer *x:% == n *$Rep x
+        x:% * y:%      == x *$Rep y
+        x:% + y:%      == x +$Rep y
+        x:% = y:%      == x =$Rep y
+        x:% < y:%      == x <$Rep y
+        numer x        == x@Rep
+        coerce(p:MP):% == p
+
+        reducedSystem(m:Matrix %):Matrix(R) ==
+          reducedSystem(m)$Rep
+
+        reducedSystem(m:Matrix %, v:Vector %):
+         Record(mat:Matrix R, vec:Vector R) ==
+          reducedSystem(m, v)$Rep
+
+        if R has ConvertibleTo InputForm then
+          convert(x:%):InputForm == convert(x)$Rep
+
+        if R has PatternMatchable Integer then
+          kintmatch: (K,Pattern Integer,PatternMatchResult(Integer,Rep))
+                                     -> PatternMatchResult(Integer, Rep)
+
+          kintmatch(k, p, l) ==
+            patternMatch(k, p, l pretend PatternMatchResult(Integer, %)
+              )$PatternMatchKernel(Integer, %)
+                pretend PatternMatchResult(Integer, Rep)
+
+          patternMatch(x:%, p:Pattern Integer,
+           l:PatternMatchResult(Integer, %)) ==
+            patternMatch(x@Rep, p,
+                         l pretend PatternMatchResult(Integer, Rep),
+                          kintmatch
+                           )$PatternMatchPolynomialCategory(Integer,
+                            IndexedExponents K, K, R, Rep)
+                              pretend PatternMatchResult(Integer, %)
+
+        if R has PatternMatchable Float then
+          kfltmatch: (K, Pattern Float, PatternMatchResult(Float, Rep))
+                                     -> PatternMatchResult(Float, Rep)
+
+          kfltmatch(k, p, l) ==
+            patternMatch(k, p, l pretend PatternMatchResult(Float, %)
+              )$PatternMatchKernel(Float, %)
+                pretend PatternMatchResult(Float, Rep)
+
+          patternMatch(x:%, p:Pattern Float,
+           l:PatternMatchResult(Float, %)) ==
+            patternMatch(x@Rep, p,
+                         l pretend PatternMatchResult(Float, Rep),
+                          kfltmatch
+                           )$PatternMatchPolynomialCategory(Float,
+                            IndexedExponents K, K, R, Rep)
+                              pretend PatternMatchResult(Float, %)
+
+      else   -- R is not even a ring
+        if R has AbelianMonoid then
+          import ListToMap(K, %)
+
+          kereval        : (K, List K, List %) -> %
+          subeval        : (K, List K, List %) -> %
+
+          Rep := FreeAbelianGroup K
+
+          0              == 0$Rep
+          x:% + y:%      == x +$Rep y
+          x:% = y:%      == x =$Rep y
+          x:% < y:%      == x <$Rep y
+          coerce(k:K):%  == coerce(k)$Rep
+          kernels x      == [f.gen for f in terms x]
+          coerce(x:R):%  == (zero? x => 0; constantKernel(x)::%)
+          retract(x:%):R == (zero? x => 0; retNotUnit x)
+          coerce(x:%):OutputForm == coerce(x)$Rep
+          kereval(k, lk, lv) == match(lk, lv, k, map(eval(#1, lk, lv), #1))
+
+          subeval(k, lk, lv) ==
+            match(lk, lv, k,
+              kernel(operator #1, [subst(a, lk, lv) for a in argument #1]))
+
+          isPlus x ==
+            empty?(l := terms x) or empty? rest l => "failed"
+            [t.exp *$Rep t.gen for t in l]$List(%)
+
+          isMult x ==
+            empty?(l := terms x) or not empty? rest l => "failed"
+            t := first l
+            [t.exp, t.gen]
+
+          eval(x:%, lk:List K, lv:List %) ==
+            _+/[t.exp * kereval(t.gen, lk, lv) for t in terms x]
+
+          subst(x:%, lk:List K, lv:List %) ==
+            _+/[t.exp * subeval(t.gen, lk, lv) for t in terms x]
+
+          retractIfCan(x:%):Union(R, "failed") ==
+            zero? x => 0
+            retNotUnitIfCan x
+
+          if R has AbelianGroup then -(x:%) == -$Rep x
+
+--      else      -- R is not an AbelianMonoid
+--        if R has SemiGroup then
+--    Rep := FreeGroup K
+--    1              == 1$Rep
+--    x:% * y:%      == x *$Rep y
+--    x:% = y:%      == x =$Rep y
+--    coerce(k:K):%  == k::Rep
+--    kernels x      == [f.gen for f in factors x]
+--    coerce(x:R):%  == (one? x => 1; constantKernel x)
+--    retract(x:%):R == (one? x => 1; retNotUnit x)
+--    coerce(x:%):OutputForm == coerce(x)$Rep
+
+--    retractIfCan(x:%):Union(R, "failed") ==
+--      one? x => 1
+--      retNotUnitIfCan x
+
+--    if R has Group then inv(x:%):% == inv(x)$Rep
+
+        else   -- R is nothing
+            import ListToMap(K, %)
+
+            Rep := K
+
+            x:% < y:%      == x <$Rep y
+            x:% = y:%      == x =$Rep y
+            coerce(k:K):%  == k
+            kernels x      == [x pretend K]
+            coerce(x:R):%  == constantKernel x
+            retract(x:%):R == retNotUnit x
+            retractIfCan(x:%):Union(R, "failed") == retNotUnitIfCan x
+            coerce(x:%):OutputForm               == coerce(x)$Rep
+
+            eval(x:%, lk:List K, lv:List %) ==
+              match(lk, lv, x pretend K, map(eval(#1, lk, lv), #1))
+
+            subst(x, lk, lv) ==
+              match(lk, lv, x pretend K,
+                kernel(operator #1, [subst(a, lk, lv) for a in argument #1]))
+
+            if R has ConvertibleTo InputForm then
+              convert(x:%):InputForm == convert(x)$Rep
+
+--          if R has PatternMatchable Integer then
+--            convert(x:%):Pattern(Integer) == convert(x)$Rep
+--
+--            patternMatch(x:%, p:Pattern Integer,
+--             l:PatternMatchResult(Integer, %)) ==
+--              patternMatch(x pretend K,p,l)$PatternMatchKernel(Integer, %)
+--
+--          if R has PatternMatchable Float then
+--            convert(x:%):Pattern(Float) == convert(x)$Rep
+--
+--            patternMatch(x:%, p:Pattern Float,
+--             l:PatternMatchResult(Float, %)) ==
+--              patternMatch(x pretend K, p, l)$PatternMatchKernel(Float, %)
+
+@
+\section{package PAN2EXPR PolynomialAN2Expression}
+<<package PAN2EXPR PolynomialAN2Expression>>=
+)abbrev package PAN2EXPR PolynomialAN2Expression
+++ Author: Barry Trager
+++ Date Created: 8 Oct 1991
+++ Description: This package provides a coerce from polynomials over
+++ algebraic numbers to \spadtype{Expression AlgebraicNumber}.
+PolynomialAN2Expression():Target == Implementation where
+  EXPR ==> Expression(Integer)
+  AN ==> AlgebraicNumber
+  PAN ==> Polynomial AN
+  SY ==> Symbol
+  Target ==> with
+      coerce: Polynomial AlgebraicNumber -> Expression(Integer)
+        ++ coerce(p) converts the polynomial \spad{p} with algebraic number
+        ++ coefficients to \spadtype{Expression Integer}.
+      coerce: Fraction Polynomial AlgebraicNumber -> Expression(Integer)
+        ++ coerce(rf) converts \spad{rf}, a fraction of polynomial \spad{p} with
+        ++ algebraic number coefficients to \spadtype{Expression Integer}.
+  Implementation ==> add
+    coerce(p:PAN):EXPR ==
+        map(#1::EXPR, #1::EXPR, p)$PolynomialCategoryLifting(
+                                  IndexedExponents SY, SY, AN, PAN, EXPR)
+    coerce(rf:Fraction PAN):EXPR ==
+        numer(rf)::EXPR / denom(rf)::EXPR
+
+@
+\section{package EXPR2 ExpressionFunctions2}
+<<package EXPR2 ExpressionFunctions2>>=
+)abbrev package EXPR2 ExpressionFunctions2
+++ Lifting of maps to Expressions
+++ Author: Manuel Bronstein
+++ Description: Lifting of maps to Expressions.
+++ Date Created: 16 Jan 1989
+++ Date Last Updated: 22 Jan 1990
+ExpressionFunctions2(R:OrderedSet, S:OrderedSet):
+ Exports == Implementation where
+  K   ==> Kernel R
+  F2  ==> FunctionSpaceFunctions2(R, Expression R, S, Expression S)
+  E2  ==> ExpressionSpaceFunctions2(Expression R, Expression S)
+
+  Exports ==> with
+    map: (R -> S, Expression R) -> Expression S
+      ++ map(f, e) applies f to all the constants appearing in e.
+
+  Implementation == add
+    if S has Ring and R has Ring then
+      map(f, r) == map(f, r)$F2
+    else
+      map(f, r) == map(map(f, #1), retract r)$E2
+
+@
+\section{package PMPREDFS FunctionSpaceAttachPredicates}
+<<package PMPREDFS FunctionSpaceAttachPredicates>>=
+)abbrev package PMPREDFS FunctionSpaceAttachPredicates
+++ Predicates for pattern-matching.
+++ Author: Manuel Bronstein
+++ Description: Attaching predicates to symbols for pattern matching.
+++ Date Created: 21 Mar 1989
+++ Date Last Updated: 23 May 1990
+++ Keywords: pattern, matching.
+FunctionSpaceAttachPredicates(R, F, D): Exports == Implementation where
+  R: OrderedSet
+  F: FunctionSpace R
+  D: Type
+
+  K  ==> Kernel F
+  PMPRED  ==> "%pmpredicate"
+
+  Exports ==> with
+    suchThat: (F, D -> Boolean) -> F
+      ++ suchThat(x, foo) attaches the predicate foo to x;
+      ++ error if x is not a symbol.
+    suchThat: (F, List(D -> Boolean)) -> F
+      ++ suchThat(x, [f1, f2, ..., fn]) attaches the predicate
+      ++ f1 and f2 and ... and fn to x.
+      ++ Error: if x is not a symbol.
+
+  Implementation ==> add
+    import AnyFunctions1(D -> Boolean)
+
+    st   : (K, List Any) -> F
+    preds: K -> List Any
+    mkk  : BasicOperator -> F
+
+    suchThat(p:F, f:D -> Boolean) == suchThat(p, [f])
+    mkk op                        == kernel(op, empty()$List(F))
+
+    preds k ==
+      (u := property(operator k, PMPRED)) case "failed" => empty()
+      (u::None) pretend List(Any)
+
+    st(k, l) ==
+      mkk assert(setProperty(copy operator k, PMPRED,
+                 concat(preds k, l) pretend None), string(new()$Symbol))
+
+    suchThat(p:F, l:List(D -> Boolean)) ==
+      retractIfCan(p)@Union(Symbol, "failed") case Symbol =>
+        st(retract(p)@K, [f::Any for f in l])
+      error "suchThat must be applied to symbols only"
+
+@
+\section{package PMASSFS FunctionSpaceAssertions}
+<<package PMASSFS FunctionSpaceAssertions>>=
+)abbrev package PMASSFS FunctionSpaceAssertions
+++ Assertions for pattern-matching
+++ Author: Manuel Bronstein
+++ Description: Attaching assertions to symbols for pattern matching;
+++ Date Created: 21 Mar 1989
+++ Date Last Updated: 23 May 1990
+++ Keywords: pattern, matching.
+FunctionSpaceAssertions(R, F): Exports == Implementation where
+  R: OrderedSet
+  F: FunctionSpace R
+
+  K  ==> Kernel F
+  PMOPT   ==> "%pmoptional"
+  PMMULT  ==> "%pmmultiple"
+  PMCONST ==> "%pmconstant"
+
+  Exports ==> with
+    assert  : (F, String) -> F
+      ++ assert(x, s) makes the assertion s about x.
+      ++ Error: if x is not a symbol.
+    constant: F -> F
+      ++ constant(x) tells the pattern matcher that x should
+      ++ match only the symbol 'x and no other quantity.
+      ++ Error: if x is not a symbol.
+    optional: F -> F
+      ++ optional(x) tells the pattern matcher that x can match
+      ++ an identity (0 in a sum, 1 in a product or exponentiation).
+      ++ Error: if x is not a symbol.
+    multiple: F -> F
+      ++ multiple(x) tells the pattern matcher that x should
+      ++ preferably match a multi-term quantity in a sum or product.
+      ++ For matching on lists, multiple(x) tells the pattern matcher
+      ++ that x should match a list instead of an element of a list.
+      ++ Error: if x is not a symbol.
+
+  Implementation ==> add
+    ass  : (K, String) -> F
+    asst : (K, String) -> F
+    mkk  : BasicOperator -> F
+
+    mkk op == kernel(op, empty()$List(F))
+
+    ass(k, s) ==
+      has?(op := operator k, s) => k::F
+      mkk assert(copy op, s)
+
+    asst(k, s) ==
+      has?(op := operator k, s) => k::F
+      mkk assert(op, s)
+
+    assert(x, s) ==
+      retractIfCan(x)@Union(Symbol, "failed") case Symbol =>
+        asst(retract(x)@K, s)
+      error "assert must be applied to symbols only"
+
+    constant x ==
+      retractIfCan(x)@Union(Symbol, "failed") case Symbol =>
+        ass(retract(x)@K, PMCONST)
+      error "constant must be applied to symbols only"
+
+    optional x ==
+      retractIfCan(x)@Union(Symbol, "failed") case Symbol =>
+        ass(retract(x)@K, PMOPT)
+      error "optional must be applied to symbols only"
+
+    multiple x ==
+      retractIfCan(x)@Union(Symbol, "failed") case Symbol =>
+        ass(retract(x)@K, PMMULT)
+      error "multiple must be applied to symbols only"
+
+@
+\section{package PMPRED AttachPredicates}
+<<package PMPRED AttachPredicates>>=
+)abbrev package PMPRED AttachPredicates
+++ Predicates for pattern-matching
+++ Author: Manuel Bronstein
+++ Description: Attaching predicates to symbols for pattern matching.
+++ Date Created: 21 Mar 1989
+++ Date Last Updated: 23 May 1990
+++ Keywords: pattern, matching.
+AttachPredicates(D:Type): Exports == Implementation where
+  FE ==> Expression Integer
+
+  Exports ==> with
+    suchThat: (Symbol, D -> Boolean) -> FE
+      ++ suchThat(x, foo) attaches the predicate foo to x.
+    suchThat: (Symbol, List(D -> Boolean)) -> FE
+      ++ suchThat(x, [f1, f2, ..., fn]) attaches the predicate
+      ++ f1 and f2 and ... and fn to x.
+
+  Implementation ==> add
+    import FunctionSpaceAttachPredicates(Integer, FE, D)
+
+    suchThat(p:Symbol, f:D -> Boolean)       == suchThat(p::FE, f)
+    suchThat(p:Symbol, l:List(D -> Boolean)) == suchThat(p::FE, l)
+
+@
+\section{package PMASS PatternMatchAssertions}
+<<package PMASS PatternMatchAssertions>>=
+)abbrev package PMASS PatternMatchAssertions
+++ Assertions for pattern-matching
+++ Author: Manuel Bronstein
+++ Description: Attaching assertions to symbols for pattern matching.
+++ Date Created: 21 Mar 1989
+++ Date Last Updated: 23 May 1990
+++ Keywords: pattern, matching.
+PatternMatchAssertions(): Exports == Implementation where
+  FE ==> Expression Integer
+
+  Exports ==> with
+    assert  : (Symbol, String) -> FE
+      ++ assert(x, s) makes the assertion s about x.
+    constant: Symbol -> FE
+      ++ constant(x) tells the pattern matcher that x should
+      ++ match only the symbol 'x and no other quantity.
+    optional: Symbol -> FE
+      ++ optional(x) tells the pattern matcher that x can match
+      ++ an identity (0 in a sum, 1 in a product or exponentiation).;
+    multiple: Symbol -> FE
+      ++ multiple(x) tells the pattern matcher that x should
+      ++ preferably match a multi-term quantity in a sum or product.
+      ++ For matching on lists, multiple(x) tells the pattern matcher
+      ++ that x should match a list instead of an element of a list.
+
+  Implementation ==> add
+    import FunctionSpaceAssertions(Integer, FE)
+
+    constant x   == constant(x::FE)
+    multiple x   == multiple(x::FE)
+    optional x   == optional(x::FE)
+    assert(x, s) == assert(x::FE, s)
+
+@
+\section{domain HACKPI Pi}
+<<domain HACKPI Pi>>=
+)abbrev domain HACKPI Pi
+++ Expressions in %pi only
+++ Author: Manuel Bronstein
+++ Description:
+++  Symbolic fractions in %pi with integer coefficients;
+++  The point for using Pi as the default domain for those fractions
+++  is that Pi is coercible to the float types, and not Expression.
+++ Date Created: 21 Feb 1990
+++ Date Last Updated: 12 Mai 1992
+Pi(): Exports == Implementation where
+  PZ ==> Polynomial Integer
+  UP ==> SparseUnivariatePolynomial Integer
+  RF ==> Fraction UP
+
+  Exports ==> Join(Field, CharacteristicZero, RetractableTo Integer,
+                   RetractableTo Fraction Integer, RealConstant,
+                   CoercibleTo DoubleFloat, CoercibleTo Float,
+                   ConvertibleTo RF, ConvertibleTo InputForm) with
+    pi: () -> % ++ pi() returns the symbolic %pi.
+  Implementation ==> RF add
+    Rep := RF
+
+    sympi := "%pi"::Symbol
+
+    p2sf: UP -> DoubleFloat
+    p2f : UP -> Float
+    p2o : UP -> OutputForm
+    p2i : UP -> InputForm
+    p2p:  UP -> PZ
+
+    pi()                    == (monomial(1, 1)$UP :: RF) pretend %
+    convert(x:%):RF         == x pretend RF
+    convert(x:%):Float      == x::Float
+    convert(x:%):DoubleFloat == x::DoubleFloat
+    coerce(x:%):DoubleFloat  == p2sf(numer x) / p2sf(denom x)
+    coerce(x:%):Float       == p2f(numer x) / p2f(denom x)
+    p2o p                   == outputForm(p, sympi::OutputForm)
+    p2i p                   == convert p2p p
+
+    p2p p ==
+      ans:PZ := 0
+      while p ^= 0 repeat
+        ans := ans + monomial(leadingCoefficient(p)::PZ, sympi, degree p)
+        p   := reductum p
+      ans
+
+    coerce(x:%):OutputForm ==
+      (r := retractIfCan(x)@Union(UP, "failed")) case UP => p2o(r::UP)
+      p2o(numer x) / p2o(denom x)
+
+    convert(x:%):InputForm ==
+      (r := retractIfCan(x)@Union(UP, "failed")) case UP => p2i(r::UP)
+      p2i(numer x) / p2i(denom x)
+
+    p2sf p ==
+      map(#1::DoubleFloat, p)$SparseUnivariatePolynomialFunctions2(
+        Integer, DoubleFloat) (pi()$DoubleFloat)
+
+    p2f p ==
+      map(#1::Float, p)$SparseUnivariatePolynomialFunctions2(
+        Integer, Float) (pi()$Float)
+
+@
+\section{package PICOERCE PiCoercions}
+<<package PICOERCE PiCoercions>>=
+)abbrev package PICOERCE PiCoercions
+++ Coercions from %pi to symbolic or numeric domains
+++ Author: Manuel Bronstein
+++ Description:
+++  Provides a coercion from the symbolic fractions in %pi with
+++ integer coefficients to any Expression type.
+++ Date Created: 21 Feb 1990
+++ Date Last Updated: 21 Feb 1990
+PiCoercions(R:Join(OrderedSet, IntegralDomain)): with
+  coerce: Pi -> Expression R
+    ++ coerce(f) returns f as an Expression(R).
+ == add
+  p2e: SparseUnivariatePolynomial Integer -> Expression R
+
+  coerce(x:Pi):Expression(R) ==
+    f := convert(x)@Fraction(SparseUnivariatePolynomial Integer)
+    p2e(numer f) / p2e(denom f)
+
+  p2e p ==
+    map(#1::Expression(R), p)$SparseUnivariatePolynomialFunctions2(
+        Integer, Expression R) (pi()$Expression(R))
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+-- SPAD files for the functional world should be compiled in the
+-- following order:
+--
+--   op  kl  fspace  algfunc elemntry combfunc EXPR
+
+<<domain EXPR Expression>>
+<<package PAN2EXPR PolynomialAN2Expression>>
+<<package EXPR2 ExpressionFunctions2>>
+<<package PMPREDFS FunctionSpaceAttachPredicates>>
+<<package PMASSFS FunctionSpaceAssertions>>
+<<package PMPRED AttachPredicates>>
+<<package PMASS PatternMatchAssertions>>
+<<domain HACKPI Pi>>
+<<package PICOERCE PiCoercions>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

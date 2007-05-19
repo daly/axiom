@@ -1,0 +1,232 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra solvedio.spad}
+\author{Albrecht Fortenbacher}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package DIOSP DiophantineSolutionPackage}
+<<package DIOSP DiophantineSolutionPackage>>=
+)abbrev package DIOSP DiophantineSolutionPackage
+++ Author: A. Fortenbacher
+++ Date Created: 29 March 1991
+++ Date Last Updated: 29 March 1991
+++ Basic Operations: dioSolve
+++ Related Constructors: Equation, Vector
+++ Also See:
+++ AMS Classifications:
+++ Keywords: Diophantine equation, nonnegative solutions,
+++   basis, depth-first-search
+++ Reference:
+++   M. Clausen, A. Fortenbacher: Efficient Solution of
+++   Linear Diophantine Equations. in JSC (1989) 8, 201-216
+++ Description:
+++   any solution of a homogeneous linear Diophantine equation
+++   can be represented as a sum of minimal solutions, which
+++   form a "basis" (a minimal solution cannot be represented
+++   as a nontrivial sum of solutions)
+++   in the case of an inhomogeneous linear Diophantine equation,
+++   each solution is the sum of a inhomogeneous solution and
+++   any number of homogeneous solutions
+++   therefore, it suffices to compute two sets:
+++      1. all minimal inhomogeneous solutions
+++      2. all minimal homogeneous solutions
+++   the algorithm implemented is a completion procedure, which
+++   enumerates all solutions in a recursive depth-first-search
+++   it can be seen as finding monotone paths in a graph
+++   for more details see Reference
+ 
+DiophantineSolutionPackage(): Cat == Capsule where
+ 
+  B ==> Boolean
+  I ==> Integer
+  NI ==> NonNegativeInteger
+ 
+  LI ==> List(I)
+  VI ==> Vector(I)
+  VNI ==> Vector(NI)
+ 
+  POLI ==> Polynomial(I)
+  EPOLI ==> Equation(POLI)
+  LPOLI ==> List(POLI)
+ 
+  S ==> Symbol
+  LS ==> List(S)
+ 
+  ListSol ==> List(VNI)
+  Solutions ==> Record(varOrder: LS, inhom: Union(ListSol,"failed"),
+                       hom: ListSol)
+ 
+  Node ==> Record(vert: VI, free: B)
+  Graph ==> Record(vn: Vector(Node), dim : NI, zeroNode: I)
+ 
+  Cat ==> with
+ 
+    dioSolve: EPOLI -> Solutions
+      ++ dioSolve(u) computes a basis of all minimal solutions for 
+      ++ linear homogeneous Diophantine equation u,
+      ++ then all minimal solutions of inhomogeneous equation
+ 
+  Capsule ==> add
+ 
+    import I
+    import POLI
+ 
+    -- local function specifications
+ 
+    initializeGraph: (LPOLI, I) -> Graph
+    createNode: (I, VI, NI, I) -> Node
+    findSolutions: (VNI, I, I, I, Graph, B) -> ListSol
+    verifyMinimality: (VNI, Graph, B) -> B
+    verifySolution: (VNI, I, I, I, Graph) -> B
+ 
+    -- exported functions
+ 
+    dioSolve(eq) ==
+      p := lhs(eq) - rhs(eq)
+      n := totalDegree(p)
+      n = 0 or n > 1 =>
+        error "a linear Diophantine equation is expected"
+      mon := empty()$LPOLI
+      c : I := 0
+      for x in monomials(p) repeat
+        ground?(x) =>
+          c := ground(x) :: I
+        mon := cons(x, mon)$LPOLI
+      graph := initializeGraph(mon, c)
+      sol := zero(graph.dim)$VNI
+      hs := findSolutions(sol, graph.zeroNode, 1, 1, graph, true)
+      ihs : ListSol :=
+        c = 0 => [sol]
+        findSolutions(sol, graph.zeroNode + c, 1, 1, graph, false)
+      vars := [first(variables(x))$LS for x in mon]
+      [vars, if empty?(ihs)$ListSol then "failed" else ihs, hs]
+ 
+    -- local functions
+ 
+    initializeGraph(mon, c) ==
+      coeffs := vector([first(coefficients(x))$LI for x in mon])$VI
+      k := #coeffs
+      m := min(c, reduce(min, coeffs)$VI)
+      n := max(c, reduce(max, coeffs)$VI)
+      [[createNode(i, coeffs, k, 1 - m) for i in m..n], k, 1 - m]
+ 
+    createNode(ind, coeffs, k, zeroNode) ==
+      -- create vertices from node ind to other nodes
+      v := zero(k)$VI
+      for i in 1..k repeat
+        ind > 0 =>
+          coeffs.i < 0 =>
+            v.i := zeroNode + ind + coeffs.i
+        coeffs.i > 0 =>
+          v.i := zeroNode + ind + coeffs.i
+      [v, true]
+ 
+    findSolutions(sol, ind, m, n, graph, flag) ==
+      -- return all solutions (paths) from node ind to node zeroNode
+      sols := empty()$ListSol
+      node := graph.vn.ind
+      node.free =>
+        node.free := false
+        v := node.vert
+        k := if ind < graph.zeroNode then m else n
+        for i in k..graph.dim repeat
+          x := sol.i
+          v.i > 0 =>  -- vertex exists to other node
+            sol.i := x + 1
+            v.i = graph.zeroNode =>  -- solution found
+              verifyMinimality(sol, graph, flag) =>
+                sols := cons(copy(sol)$VNI, sols)$ListSol
+                sol.i := x
+              sol.i := x
+            s :=
+              ind < graph.zeroNode =>
+                findSolutions(sol, v.i, i, n, graph, flag)
+              findSolutions(sol, v.i, m, i, graph, flag)
+            sols := append(s, sols)$ListSol
+            sol.i := x
+        node.free := true
+        sols
+      sols
+ 
+    verifyMinimality(sol, graph, flag) ==
+      -- test whether sol contains a minimal homogeneous solution
+      flag =>  -- sol is a homogeneous solution
+        i := 1
+        while sol.i = 0 repeat
+          i := i + 1
+        x := sol.i
+        sol.i := (x - 1) :: NI
+        flag := verifySolution(sol, graph.zeroNode, 1, 1, graph)
+        sol.i := x
+        flag
+      verifySolution(sol, graph.zeroNode, 1, 1, graph)
+ 
+    verifySolution(sol, ind, m, n, graph) ==
+      -- test whether sol contains a path from ind to zeroNode
+      flag := true
+      node := graph.vn.ind
+      v := node.vert
+      k := if ind < graph.zeroNode then m else n
+      for i in k..graph.dim while flag repeat
+        x := sol.i
+        x > 0 and v.i > 0 =>  -- vertex exists to other node
+          sol.i := (x - 1) :: NI
+          v.i = graph.zeroNode =>  -- solution found
+            flag := false
+            sol.i := x
+          flag :=
+            ind < graph.zeroNode =>
+              verifySolution(sol, v.i, i, n, graph)
+            verifySolution(sol, v.i, m, i, graph)
+          sol.i := x
+      flag
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+ 
+<<package DIOSP DiophantineSolutionPackage>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

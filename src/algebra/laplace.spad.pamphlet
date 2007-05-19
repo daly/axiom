@@ -1,0 +1,337 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra laplace.spad}
+\author{Manuel Bronstein, Barry Trager}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package LAPLACE LaplaceTransform}
+<<package LAPLACE LaplaceTransform>>=
+)abbrev package LAPLACE LaplaceTransform
+++ Laplace transform
+++ Author: Manuel Bronstein
+++ Date Created: 30 May 1990
+++ Date Last Updated: 13 December 1995
+++ Description: This package computes the forward Laplace Transform.
+LaplaceTransform(R, F): Exports == Implementation where
+  R : Join(EuclideanDomain, OrderedSet, CharacteristicZero,
+           RetractableTo Integer, LinearlyExplicitRingOver Integer)
+  F : Join(TranscendentalFunctionCategory, PrimitiveFunctionCategory,
+           AlgebraicallyClosedFunctionSpace R)
+
+  SE  ==> Symbol
+  PI  ==> PositiveInteger
+  N   ==> NonNegativeInteger
+  K   ==> Kernel F
+  OFE ==> OrderedCompletion F
+  EQ  ==> Equation OFE
+
+  ALGOP       ==> "%alg"
+  SPECIALDIFF ==> "%specialDiff"
+
+  Exports ==> with
+    laplace: (F, SE, SE) -> F
+      ++ laplace(f, t, s) returns the Laplace transform of \spad{f(t)}
+      ++ using \spad{s} as the new variable.
+      ++ This is \spad{integral(exp(-s*t)*f(t), t = 0..%plusInfinity)}.
+      ++ Returns the formal object \spad{laplace(f, t, s)} if it cannot
+      ++ compute the transform.
+
+  Implementation ==> add
+    import IntegrationTools(R, F)
+    import ElementaryIntegration(R, F)
+    import PatternMatchIntegration(R, F)
+    import PowerSeriesLimitPackage(R, F)
+    import FunctionSpaceIntegration(R, F)
+    import TrigonometricManipulations(R, F)
+
+    locallaplace : (F, SE, F, SE, F) -> F
+    lapkernel    : (F, SE, F, F) -> Union(F, "failed")
+    intlaplace   : (F, F, F, SE, F) -> Union(F, "failed")
+    isLinear     : (F, SE) -> Union(Record(const:F, nconst:F), "failed")
+    mkPlus       : F -> Union(List F, "failed")
+    dvlap        : (List F, SE) -> F
+    tdenom       : (F, F) -> Union(F, "failed")
+    atn          : (F, SE) -> Union(Record(coef:F, deg:PI), "failed")
+    aexp         : (F, SE) -> Union(Record(coef:F, coef1:F, coef0:F), "failed")
+    algebraic?   : (F, SE) -> Boolean
+
+    oplap := operator("laplace"::Symbol, 3)$BasicOperator
+
+    laplace(f,t,s) == locallaplace(complexElementary(f,t),t,t::F,s,s::F)
+
+-- returns true if the highest kernel of f is algebraic over something
+    algebraic?(f, t) ==
+      l := varselect(kernels f, t)
+      m:N := reduce(max, [height k for k in l], 0)$List(N)
+      for k in l repeat
+         height k = m and has?(operator k, ALGOP) => return true
+      false
+
+-- differentiate a kernel of the form  laplace(l.1,l.2,l.3) w.r.t x.
+-- note that x is not necessarily l.3
+-- if x = l.3, then there is no use recomputing the laplace transform,
+-- it will remain formal anyways
+    dvlap(l, x) ==
+      l1 := first l
+      l2 := second l
+      x = (v := retract(l3 := third l)@SE) => - oplap(l2 * l1, l2, l3)
+      e := exp(- l3 * l2)
+      locallaplace(differentiate(e * l1, x) / e, retract(l2)@SE, l2, v, l3)
+
+-- returns [b, c] iff f = c * t + b
+-- and b and c do not involve t
+    isLinear(f, t) ==
+      ff := univariate(f, kernel(t)@K)
+      ((d := retractIfCan(denom ff)@Union(F, "failed")) case "failed")
+        or (degree(numer ff) > 1) => "failed"
+      freeOf?(b := coefficient(numer ff, 0) / d, t) and
+        freeOf?(c := coefficient(numer ff, 1) / d, t) => [b, c]
+      "failed"
+
+-- returns [a, n] iff f = a * t**n
+    atn(f, t) ==
+      if ((v := isExpt f) case Record(var:K, exponent:Integer)) then
+        w := v::Record(var:K, exponent:Integer)
+        (w.exponent > 0) and
+          ((vv := symbolIfCan(w.var)) case SE) and (vv::SE = t) =>
+            return [1, w.exponent::PI]
+      (u := isTimes f) case List(F) =>
+        c:F  := 1
+        d:N  := 0
+        for g in u::List(F) repeat
+          if (rec := atn(g, t)) case Record(coef:F, deg:PI) then
+            r := rec::Record(coef:F, deg:PI)
+            c := c * r.coef
+            d := d + r.deg
+          else c := c * g
+        zero? d => "failed"
+        [c, d::PI]
+      "failed"
+
+-- returns [a, c, b] iff f = a * exp(c * t + b)
+-- and b and c do not involve t
+    aexp(f, t) ==
+      is?(f, "exp"::SE) =>
+        (v := isLinear(first argument(retract(f)@K),t)) case "failed" =>
+           "failed"
+        [1, v.nconst, v.const]
+      (u := isTimes f) case List(F) =>
+        c:F := 1
+        c1 := c0 := 0$F
+        for g in u::List(F) repeat
+          if (r := aexp(g,t)) case Record(coef:F,coef1:F,coef0:F) then
+            rec := r::Record(coef:F, coef1:F, coef0:F)
+            c   := c * rec.coef
+            c0  := c0 + rec.coef0
+            c1  := c1 + rec.coef1
+          else c := c * g
+        zero? c0 and zero? c1 => "failed"
+        [c, c1, c0]
+      if (v := isPower f) case Record(val:F, exponent:Integer) then
+        w := v::Record(val:F, exponent:Integer)
+        (w.exponent ^= 1) and
+          ((r := aexp(w.val, t)) case Record(coef:F,coef1:F,coef0:F)) =>
+            rec := r::Record(coef:F, coef1:F, coef0:F)
+            return [rec.coef ** w.exponent, w.exponent * rec.coef1,
+                                            w.exponent * rec.coef0]
+      "failed"
+
+    mkPlus f ==
+      (u := isPlus numer f) case "failed" => "failed"
+      d := denom f
+      [p / d for p in u::List(SparseMultivariatePolynomial(R, K))]
+
+-- returns g if f = g/t
+    tdenom(f, t) ==
+      (denom f exquo numer t) case "failed" => "failed"
+      t * f
+
+    intlaplace(f, ss, g, v, vv) ==
+      is?(g, oplap) or ((i := integrate(g, v)) case List(F)) => "failed"
+      (u:=limit(i::F,equation(vv::OFE,plusInfinity()$OFE)$EQ)) case OFE =>
+        (l := limit(i::F, equation(vv::OFE, ss::OFE)$EQ)) case OFE =>
+          retractIfCan(u::OFE - l::OFE)@Union(F, "failed")
+        "failed"
+      "failed"
+
+    lapkernel(f, t, tt, ss) ==
+      (k := retractIfCan(f)@Union(K, "failed")) case "failed" => "failed"
+      empty?(arg := argument(k::K)) or not empty? rest arg => "failed"
+      member?(t, variables(a := first(arg) / tt)) => "failed"
+      is?(op := operator k, "Si"::SE) => atan(a / ss) / ss
+      is?(op, "Ci"::SE) => log((ss**2 + a**2) / a**2) / (2 * ss)
+      is?(op, "Ei"::SE) => log((ss + a) / a) / ss
+      "failed"
+
+    locallaplace(f, t, tt, s, ss) ==
+      zero? f => 0
+--      one? f  => inv ss
+      (f = 1)  => inv ss
+      (x := tdenom(f, tt)) case F =>
+        g := locallaplace(x::F, t, tt, vv := new()$SE, vvv := vv::F)
+        (x := intlaplace(f, ss, g, vv, vvv)) case F => x::F
+        oplap(f, tt, ss)
+      (u := mkPlus f) case List(F) =>
+        +/[locallaplace(g, t, tt, s, ss) for g in u::List(F)]
+      (rec := splitConstant(f, t)).const ^= 1 =>
+        rec.const * locallaplace(rec.nconst, t, tt, s, ss)
+      (v := atn(f, t)) case Record(coef:F, deg:PI) =>
+        vv := v::Record(coef:F, deg:PI)
+        is?(la := locallaplace(vv.coef, t, tt, s, ss), oplap) => oplap(f,tt,ss)
+        (-1$Integer)**(vv.deg) * differentiate(la, s, vv.deg)
+      (w := aexp(f, t)) case Record(coef:F, coef1:F, coef0:F) =>
+        ww := w::Record(coef:F, coef1:F, coef0:F)
+        exp(ww.coef0) * locallaplace(ww.coef,t,tt,s,ss - ww.coef1)
+      (x := lapkernel(f, t, tt, ss)) case F => x::F
+      -- last chance option: try to use the fact that
+      --    laplace(f(t),t,s) = s laplace(g(t),t,s) - g(0)  where dg/dt = f(t)
+      elem?(int := lfintegrate(f, t)) and (rint := retractIfCan int) case F =>
+           fint := rint :: F
+           -- to avoid infinite loops, we don't call laplace recursively
+           -- if the integral has no new logs and f is an algebraic function
+           empty?(logpart int) and algebraic?(f, t) => oplap(fint, tt, ss)
+           ss * locallaplace(fint, t, tt, s, ss) - eval(fint, tt = 0)
+      oplap(f, tt, ss)
+
+    setProperty(oplap,SPECIALDIFF,dvlap@((List F,SE)->F) pretend None)
+
+@
+\section{package INVLAPLA InverseLaplaceTransform}
+<<package INVLAPLA InverseLaplaceTransform>>=
+)abbrev package INVLAPLA InverseLaplaceTransform
+++ Inverse Laplace transform
+++ Author: Barry Trager
+++ Date Created: 3 Sept 1991
+++ Date Last Updated: 3 Sept 1991
+++ Description: This package computes the inverse Laplace Transform.
+InverseLaplaceTransform(R, F): Exports == Implementation where
+  R : Join(EuclideanDomain, OrderedSet, CharacteristicZero,
+           RetractableTo Integer, LinearlyExplicitRingOver Integer)
+  F : Join(TranscendentalFunctionCategory, PrimitiveFunctionCategory,
+           SpecialFunctionCategory, AlgebraicallyClosedFunctionSpace R)
+
+  SE  ==> Symbol
+  PI  ==> PositiveInteger
+  N   ==> NonNegativeInteger
+  K   ==> Kernel F
+  UP  ==> SparseUnivariatePolynomial F
+  RF  ==> Fraction UP
+
+  Exports ==> with
+    inverseLaplace: (F, SE, SE) -> Union(F,"failed")
+      ++ inverseLaplace(f, s, t) returns the Inverse
+      ++ Laplace transform of \spad{f(s)}
+      ++ using t as the new variable or "failed" if unable to find
+      ++ a closed form.
+
+  Implementation ==> add
+
+    -- local ops --
+    ilt : (F,Symbol,Symbol) -> Union(F,"failed")
+    ilt1 : (RF,F) -> F
+    iltsqfr : (RF,F) -> F
+    iltirred: (UP,UP,F) -> F
+    freeOf?: (UP,Symbol) -> Boolean
+
+    inverseLaplace(expr,ivar,ovar) == ilt(expr,ivar,ovar)
+
+    freeOf?(p:UP,v:Symbol) ==
+      "and"/[freeOf?(c,v) for c in coefficients p]
+
+    ilt(expr,var,t) ==
+      expr = 0 => 0
+      r := univariate(expr,kernel(var))
+      not(numer(r) quo denom(r) = 0) => "failed"
+      not( freeOf?(numer r,var) and freeOf?(denom r,var)) => "failed"
+      ilt1(r,t::F)
+
+    hintpac := TranscendentalHermiteIntegration(F, UP)
+
+    ilt1(r,t) ==
+      r = 0 => 0
+      rsplit := HermiteIntegrate(r, differentiate)$hintpac
+      -t*ilt1(rsplit.answer,t) + iltsqfr(rsplit.logpart,t)
+
+    iltsqfr(r,t) ==
+       r = 0 => 0
+       p:=numer r
+       q:=denom r
+     --  ql := [qq.factor for qq in factors factor q]
+       ql := [qq.factor for qq in factors squareFree q]
+       # ql = 1 => iltirred(p,q,t)
+       nl := multiEuclidean(ql,p)::List(UP)
+       +/[iltirred(a,b,t) for a in nl for b in ql]
+
+    -- q is irreducible, monic, degree p < degree q
+    iltirred(p,q,t) ==
+      degree q = 1 =>
+        cp := coefficient(p,0)
+        (c:=coefficient(q,0))=0 => cp
+        cp*exp(-c*t)
+      degree q = 2 =>
+        a := coefficient(p,1)
+        b := coefficient(p,0)
+        c:=(-1/2)*coefficient(q,1)
+        d:= coefficient(q,0)
+        e := exp(c*t)
+        b := b+a*c
+        d := d-c**2
+        d > 0 =>
+            alpha:F := sqrt d
+            e*(a*cos(t*alpha) + b*sin(t*alpha)/alpha)
+        alpha :F := sqrt(-d)
+        e*(a*cosh(t*alpha) + b*sinh(t*alpha)/alpha)
+      roots:List F := zerosOf q
+      q1 := differentiate q
+      +/[p(root)/q1(root)*exp(root*t) for root in roots]
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package LAPLACE LaplaceTransform>>
+<<package INVLAPLA InverseLaplaceTransform>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

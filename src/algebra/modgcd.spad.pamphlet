@@ -1,0 +1,315 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra modgcd.spad}
+\author{James Davenport, Patrizia Gianni}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package INMODGCD InnerModularGcd}
+<<package INMODGCD InnerModularGcd>>=
+)abbrev package INMODGCD InnerModularGcd
+++ Author: J.H. Davenport and P. Gianni
+++ Date Created: July 1990
+++ Date Last Updated: November 1991
+++ Description:
+++ This file contains the functions for modular gcd algorithm
+++ for univariate polynomials with coefficients in a
+++ non-trivial euclidean domain (i.e. not a field).
+++ The package parametrised by the coefficient domain,
+++ the polynomial domain, a prime,
+++ and a function for choosing the next prime
+
+Z    ==> Integer
+NNI  ==> NonNegativeInteger
+
+InnerModularGcd(R,BP,pMod,nextMod):C == T
+ where
+  R       :  EuclideanDomain
+  BP      :  UnivariatePolynomialCategory(R)
+  pMod    :  R
+  nextMod :  (R,NNI) -> R
+
+  C == with
+     modularGcdPrimitive    : List BP  -> BP
+         ++ modularGcdPrimitive(f1,f2) computes the gcd of the two polynomials
+         ++ f1 and f2 by modular methods.
+     modularGcd    : List BP  -> BP
+         ++ modularGcd(listf) computes the gcd of the list of polynomials
+         ++ listf  by modular methods.
+     reduction :       (BP,R)              ->   BP
+         ++ reduction(f,p) reduces the coefficients of the polynomial f
+         ++ modulo the prime p.
+
+  T == add
+
+                    -- local functions --
+    height    :         BP                ->   NNI
+    mbound    :       (BP,BP)             ->   NNI
+    modGcdPrimitive    :   (BP,BP)        ->   BP
+    test         :     (BP,BP,BP)         ->   Boolean
+    merge        :        (R,R)           ->   Union(R,"failed")
+    modInverse   :      (R,R)             ->   R
+    exactquo     :       (BP,BP,R)        ->   Union(BP,"failed")
+    constNotZero :           BP           ->   Boolean
+    constcase    : (List NNI ,List BP )   ->   BP 
+    lincase      : (List NNI ,List BP )   ->   BP 
+
+
+    if R has IntegerNumberSystem then
+        reduction(u:BP,p:R):BP ==
+            p = 0 => u
+            map(symmetricRemainder(#1,p),u)
+      else
+        reduction(u:BP,p:R):BP ==
+            p = 0 => u
+            map(#1 rem p,u)
+
+    FP:=EuclideanModularRing(R,BP,R,reduction,merge,exactquo)
+    zeroChar : Boolean := R has CharacteristicZero
+
+                 --  exported functions --
+
+    -- modular Gcd for a list of primitive polynomials
+    modularGcdPrimitive(listf : List BP) :BP ==
+      empty? listf => 0$BP
+      g := first listf
+      for f in rest listf | ^zero? f  while degree g > 0 repeat
+        g:=modGcdPrimitive(g,f)
+      g		
+
+    -- gcd for univariate polynomials
+    modularGcd(listf : List BP): BP  ==
+      listf:=remove!(0$BP,listf)
+      empty? listf => 0$BP
+      # listf = 1 => first listf 
+      minpol:=1$BP
+      -- extract a monomial gcd
+      mdeg:= "min"/[minimumDegree f for f in listf]
+      if mdeg>0 then
+        minpol1:= monomial(1,mdeg)
+        listf:= [(f exquo minpol1)::BP for f in listf]
+        minpol:=minpol*minpol1
+      listdeg:=[degree f for f in listf ]
+    -- make the polynomials primitive
+      listCont := [content f for f in listf]
+      contgcd:= gcd listCont
+      -- make the polynomials primitive
+      listf :=[(f exquo cf)::BP for f in listf for cf in listCont]
+      minpol:=contgcd*minpol
+      ans:BP :=  
+         --one polynomial is constant
+         member?(1,listf) => 1
+         --one polynomial is linear
+         member?(1,listdeg) => lincase(listdeg,listf)
+         modularGcdPrimitive listf
+      minpol*ans
+ 
+                  --  local functions --
+
+    --one polynomial is linear, remark that they are primitive
+    lincase(listdeg:List NNI ,listf:List BP ): BP  ==
+      n:= position(1,listdeg)
+      g:=listf.n
+      for f in listf repeat
+        if (f1:=f exquo g) case "failed" then return 1$BP
+      g
+
+    -- test if d is the gcd
+    test(f:BP,g:BP,d:BP):Boolean ==
+      d0:=coefficient(d,0)
+      coefficient(f,0) exquo d0 case "failed" => false
+      coefficient(g,0) exquo d0 case "failed" => false
+      f exquo d case "failed" => false
+      g exquo d case "failed" => false
+      true
+
+    -- gcd and cofactors for PRIMITIVE univariate polynomials
+    -- also assumes that constant terms are non zero
+    modGcdPrimitive(f:BP,g:BP): BP ==
+      df:=degree f
+      dg:=degree g
+      dp:FP
+      lcf:=leadingCoefficient f
+      lcg:=leadingCoefficient g
+      testdeg:NNI
+      lcd:R:=gcd(lcf,lcg)
+      prime:=pMod
+      bound:=mbound(f,g)
+      while zero? (lcd rem prime) repeat
+        prime := nextMod(prime,bound)
+      soFar:=gcd(reduce(f,prime),reduce(g,prime))::BP
+      testdeg:=degree soFar
+      zero? testdeg => return 1$BP
+      ldp:FP:=
+        ((lcdp:=leadingCoefficient(soFar::BP)) = 1) =>
+                                        reduce(lcd::BP,prime)
+        reduce((modInverse(lcdp,prime)*lcd)::BP,prime)
+      soFar:=reduce(ldp::BP *soFar,prime)::BP
+      soFarModulus:=prime
+      -- choose the prime
+      while true repeat
+        prime := nextMod(prime,bound)
+        lcd rem prime =0 => "next prime"
+        fp:=reduce(f,prime)
+        gp:=reduce(g,prime)
+        dp:=gcd(fp,gp)
+        dgp :=euclideanSize dp
+        if dgp =0 then return 1$BP
+        if dgp=dg and ^(f exquo g case "failed") then return g
+        if dgp=df and ^(g exquo f case "failed") then return f
+        dgp > testdeg => "next prime"
+        ldp:FP:=
+          ((lcdp:=leadingCoefficient(dp::BP)) = 1) =>
+                                        reduce(lcd::BP,prime)
+          reduce((modInverse(lcdp,prime)*lcd)::BP,prime)
+        dp:=ldp *dp
+        dgp=testdeg  =>
+           correction:=reduce(dp::BP-soFar,prime)::BP
+           zero? correction =>
+              ans:=reduce(lcd::BP*soFar,soFarModulus)::BP
+              cont:=content ans
+              ans:=(ans exquo cont)::BP
+              test(f,g,ans) => return ans
+              soFarModulus:=soFarModulus*prime
+           correctionFactor:=modInverse(soFarModulus rem prime,prime)
+                             -- the initial rem is just for efficiency
+           soFar:=soFar+soFarModulus*(correctionFactor*correction)
+           soFarModulus:=soFarModulus*prime
+           soFar:=reduce(soFar,soFarModulus)::BP
+        dgp<testdeg =>
+          soFarModulus:=prime
+          soFar:=dp::BP
+          testdeg:=dgp
+        if ^zeroChar and euclideanSize(prime)>1 then
+           result:=dp::BP
+           test(f,g,result) => return result
+        -- this is based on the assumption that the caller of this package,
+        -- in non-zero characteristic, will use primes of the form
+        -- x-alpha as long as possible, but, if these are exhausted,
+        -- will switch to a prime of degree larger than the answer
+        -- so the result can be used directly.
+
+    merge(p:R,q:R):Union(R,"failed") ==
+         p = q => p
+         p = 0 => q
+         q = 0 => p
+         "failed"
+
+    modInverse(c:R,p:R):R ==
+        (extendedEuclidean(c,p,1)::Record(coef1:R,coef2:R)).coef1
+
+    exactquo(u:BP,v:BP,p:R):Union(BP,"failed") ==
+        invlcv:=modInverse(leadingCoefficient v,p)
+        r:=monicDivide(u,reduction(invlcv*v,p))
+        reduction(r.remainder,p) ^=0 => "failed"
+        reduction(invlcv*r.quotient,p)
+
+
+    -- compute the height of a polynomial --
+    height(f:BP):NNI ==
+      degf:=degree f
+      "max"/[euclideanSize cc for cc in coefficients f]
+
+    -- compute the bound
+    mbound(f:BP,g:BP):NNI ==
+      hf:=height f
+      hg:=height g
+      2*min(hf,hg)
+
+\section{package FOMOGCD ForModularGcd}
+-- ForModularGcd(R,BP) : C == T
+--  where
+--   R          :   EuclideanDomain  -- characteristic 0
+--   BP         :   UnivariatePolynomialCategory(R)
+--
+--   C == with
+--     nextMod :  (R,NNI) -> R
+--
+--   T == add
+--     nextMod(val:R,bound:NNI) : R  ==
+--       ival:Z:= val pretend Z
+--       (nextPrime(ival)$IntegerPrimesPackage(Z))::R
+--
+-- ForTwoGcd(F) : C == T
+--  where
+--   F          :   Join(Finite,Field)
+--   SUP       ==>  SparseUnivariatePolynomial
+--   R         ==>  SUP F
+--   P         ==>  SUP R
+--   UPCF2     ==>  UnivariatePolynomialCategoryFunctions2
+--
+--   C == with
+--     nextMod :  (R,NNI) -> R
+--
+--   T == add
+--     nextMod(val:R,bound:NNI) : R ==
+--       ris:R:= nextItem(val) :: R
+--       euclideanSize ris < 2 => ris
+--       generateIrredPoly(
+--             (bound+1)::PositiveInteger)$IrredPolyOverFiniteField(F)
+--
+--
+-- ModularGcd(R,BP) == T
+--  where
+--   R  : EuclideanDomain -- characteristic 0
+--   BP : UnivariatePolynomialCategory(R)
+--   T ==> InnerModularGcd(R,BP,67108859::R,nextMod$ForModularGcd(R,BP))
+--
+-- TwoGcd(F) : C == T
+--  where
+--   F          :   Join(Finite,Field)
+--   SUP       ==>  SparseUnivariatePolynomial
+--   R         ==>  SUP F
+--   P         ==>  SUP R
+--
+--   T ==> InnerModularGcd(R,P,nextMod(monomial(1,1)$R)$ForTwoGcd(F),
+--                         nextMod$ForTwoGcd(F))
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package INMODGCD InnerModularGcd>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

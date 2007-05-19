@@ -1,0 +1,188 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra mesh.spad}
+\author{James Wen, Jon Steinbach}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package MESH MeshCreationRoutinesForThreeDimensions}
+<<package MESH MeshCreationRoutinesForThreeDimensions>>=
+)abbrev package MESH MeshCreationRoutinesForThreeDimensions
+++ <description of package>
+++ Author: Jim Wen
+++ Date Created: ??
+++ Date Last Updated: October 1991 by Jon Steinbach
+++ Keywords:
+++ Examples:
+++ References:
+MeshCreationRoutinesForThreeDimensions():Exports == Implementation where
+
+  I       ==> Integer
+  PI      ==> PositiveInteger
+  SF      ==> DoubleFloat
+  L       ==> List
+  SEG     ==> Segment
+  S       ==> String
+  Fn1     ==> SF -> SF
+  Fn2     ==> (SF,SF) -> SF
+  Fn3     ==> (SF,SF,SF) -> SF
+  FnPt    ==> (SF,SF) -> Point(SF)
+  FnU     ==> Union(Fn3,"undefined")
+  EX      ==> Expression
+  DROP    ==> DrawOption
+  POINT   ==> Point(SF)
+  SPACE3  ==> ThreeSpace(SF)
+  COMPPROP ==> SubSpaceComponentProperty
+  TUBE    ==> TubePlot
+
+  Exports ==> with
+    meshPar2Var: (Fn2,Fn2,Fn2,FnU,SEG SF,SEG SF,L DROP) -> SPACE3
+	++ meshPar2Var(f,g,h,j,s1,s2,l) \undocumented
+    meshPar2Var: (FnPt,SEG SF,SEG SF,L DROP) -> SPACE3
+	++ meshPar2Var(f,s1,s2,l) \undocumented
+    meshPar2Var: (SPACE3,FnPt,SEG SF,SEG SF,L DROP) -> SPACE3
+	++ meshPar2Var(sp,f,s1,s2,l) \undocumented
+    meshFun2Var: (Fn2,FnU,SEG SF,SEG SF,L DROP) -> SPACE3
+	++ meshFun2Var(f,g,s1,s2,l) \undocumented
+    meshPar1Var: (EX I,EX I,EX I,Fn1,SEG SF,L DROP) -> SPACE3
+	++ meshPar1Var(s,t,u,f,s1,l) \undocumented
+    ptFunc: (Fn2,Fn2,Fn2,Fn3) -> ((SF,SF) -> POINT)
+      ++ ptFunc(a,b,c,d) is an internal function exported in
+      ++ order to compile packages.
+
+  Implementation ==> add
+    import ViewDefaultsPackage()
+    import SubSpaceComponentProperty()
+    import DrawOptionFunctions0
+    import SPACE3
+    --import TUBE()
+
+    -- local functions
+    numberCheck(nums:Point SF):Void ==
+      -- this function checks to see that the small floats are
+      -- actually just that - rather than complex numbers or
+      -- whatever (the whatever includes nothing presently
+      -- since NaN, Not a Number, is not necessarily supported
+      -- by common lisp). note that this function is dependent
+      -- upon the fact that Common Lisp supports complex numbers.
+      for i in minIndex(nums)..maxIndex(nums) repeat
+        COMPLEXP(nums.(i::PositiveInteger))$Lisp => 
+          error "An unexpected complex number was encountered in the calculations."
+        
+    makePt:(SF,SF,SF,SF) -> POINT
+    makePt(x,y,z,c) == point(l : List SF := [x,y,z,c])
+    ptFunc(f,g,h,c) ==
+      x := f(#1,#2); y := g(#1,#2); z := h(#1,#2)
+      makePt(x,y,z,c(x,y,z))
+
+    -- parameterized equations of two variables
+    meshPar2Var(sp,ptFun,uSeg,vSeg,opts) ==
+      -- the issue of open and closed needs to be addressed, here, we are
+      -- defaulting to open (which is probably the correct default)
+      -- the user should be able to override that (optional argument?)
+      llp : L L POINT := nil()
+      uNum : PI  := var1Steps(opts,var1StepsDefault())
+      vNum : PI  := var2Steps(opts,var2StepsDefault())
+      ustep := (lo uSeg - hi uSeg)/uNum
+      vstep := (lo vSeg - hi vSeg)/vNum
+      someV := hi vSeg
+      for iv in vNum..0 by -1 repeat
+        if zero? iv then someV := lo vSeg  
+        -- hack: get last number in segment within segment
+        lp : L POINT := nil()
+        someU := hi uSeg
+        for iu in uNum..0 by -1 repeat
+          if zero? iu then someU := lo uSeg  
+          -- hack: get last number in segment within segment
+          pt := ptFun(someU,someV)
+          numberCheck pt
+          lp := concat(pt,lp)
+          someU := someU + ustep
+        llp := concat(lp,llp)
+        someV := someV + vstep
+      -- now llp contains a list of lists of points
+      -- for a surface that is a result of a function of 2 variables,
+      -- the main component is open and each sublist is open as well
+      lProp : L COMPPROP := [ new() for l in llp ]
+      for aProp in lProp repeat
+        close(aProp,false)
+        solid(aProp,false)
+      aProp : COMPPROP:= new()
+      close(aProp,false)
+      solid(aProp,false)
+      space := sp
+--      space := create3Space()
+      mesh(space,llp,lProp,aProp)
+      space 
+
+    meshPar2Var(ptFun,uSeg,vSeg,opts) ==
+      sp := create3Space()
+      meshPar2Var(sp,ptFun,uSeg,vSeg,opts)
+
+    zCoord: (SF,SF,SF) -> SF
+    zCoord(x,y,z) == z
+
+    meshPar2Var(xFun,yFun,zFun,colorFun,uSeg,vSeg,opts) ==
+      -- the color function should be parameterized by (u,v) as well, 
+      -- not (x,y,z) but we also want some sort of consistency and so 
+      -- changing this over would mean possibly changing the explicit 
+      -- stuff over and there, we probably do want the color function 
+      -- to be parameterized by (x,y,z) - not just (x,y) (this being 
+      -- for convinience only since z is also defined in terms of (x,y)).
+      (colorFun case Fn3) =>
+        meshPar2Var(ptFunc(xFun,yFun,zFun,colorFun :: Fn3),uSeg,vSeg,opts)
+      meshPar2Var(ptFunc(xFun,yFun,zFun,zCoord),uSeg,vSeg,opts)
+
+    -- explicit equations of two variables
+    meshFun2Var(zFun,colorFun,xSeg,ySeg,opts) ==
+      -- here, we construct the data for a function of two variables
+      meshPar2Var(#1,#2,zFun,colorFun,xSeg,ySeg,opts)
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package MESH MeshCreationRoutinesForThreeDimensions>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

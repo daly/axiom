@@ -1,0 +1,359 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/doc booklet.c}
+\author{David Mentre, Timothy Daly}
+\maketitle
+\begin{abstract}
+Booklet preprocesses a file and expands protocol specifiers in chunk names
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{Start}
+This is the booklet program. It scans the input file for a set of chunk
+names that contain ``protocol specifiers''. These protocol specifiers
+are replaced by their results. Any other normal chunk is undisturbed.
+
+A protocol specifier is a prefix within the chunk name. For the moment
+this program recognizes only one protocol specifier, the ``file:''
+protocol. This is used to specify a file which will be included into
+the file (similar to C style \#include statements). The syntax is:
+
+[[<<file:PATH-AND-FILENAME>>]]
+
+where PATH-AND-FILENAME can be any valid file system name.
+
+See appendix \ref{part:requirements} for description of what the original
+requirements were specified.
+
+<<version>>=
+"v0.1"
+
+@ 
+
+Needed includes and global variable. Nothing special.
+
+The command line allows you to specify a [[-v]] flag. If this flag
+is present then [[verbose]] is set to 1 and we print on stdout what
+we are doing.
+<<*>>=
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int verbose = 0;
+
+@ 
+
+\section{Recursive parsing and expansion}
+
+Recursive routine used to expand pamphlet files to file descriptor
+[[out]]. The input is taken from file named [[filename]].
+
+Without error, it returns [[0]]. On error, it prints on stderr a trace
+and returns [[-1]].
+
+We read input file character by character. We rely on libc buffering for
+performance. If we find the opening [[<<]] of a chunk we call [[find_url]]
+to handle the chunk. Note that the two characters we swallow will be
+output by [[find_url]] if this is not a protocol chunk.
+
+<<*>>=
+int recursive_parsing(FILE * out, char *filename)
+{
+  FILE *f;
+  int c;
+  
+  if (verbose) /* was -v specified? */
+    printf("Parsing input file '%s'\n", filename);
+
+  f = fopen(filename, "r");
+  if (f == NULL) /* we couldn't open the input file */
+  { fprintf(stderr, "error: cannot open input file '%s'\n", filename);
+    perror("fopen");
+    return -1;
+  }
+
+  c = fgetc(f);
+  while (c != EOF) 
+  { if (c == '<') 
+    { /* maybe an opening '<<'? */
+      int c2 = fgetc(f);
+
+      if (c2 == EOF) 
+      { fputc(c, out);
+        return 0;
+      }
+      if (c2 == '<') 
+      { /* yep, we have a '<<' */
+        if (find_url(out, f)) 
+        { fprintf(stderr, "error: while parsing file '%s'\n", filename);
+          return 1;
+        }
+      } 
+      else 
+      { fputc(c, out);
+        fputc(c2, out);
+      }
+    } 
+    else 
+    { fputc(c, out);
+    }
+    c = fgetc(f);
+  }
+  
+  return 0;
+}
+
+@ 
+
+We define a routine that, given an [[url]], do the needed lookup to find
+what kind of url it is, open it and puts it content into file descriptor
+[[out]].
+
+If the chunk name does not contain a protocol specifier we recognize
+then we ignore the input.
+<<*>>=
+
+int url_dispatch(FILE *out, unsigned char *url)
+{ int i = 0;
+  char c = '\0';
+  if (verbose) printf("Found URL:'%s'\n", url);
+  if (strncmp(url, "file:", 5) == 0) 
+  { recursive_parsing(out, &url[5]);
+  }
+  else /* no protocol specifier. dump the chunk name */
+  { fputc('<',out);
+    fputc('<',out);
+    for(c=url[i++]; c != '\0'; c=url[i++])
+      fputc(c,out);
+    fputc('>',out);
+    fputc('>',out);
+  }
+  return 0;
+}
+@ 
+
+We define a routine that find a booklet URL in file descriptor [[f]]. We
+now that we have already found the start of URL [[<<]]. So we look for
+the end of URL sign ([[>>]]) and store the found URL in [[buf]]. Once we
+have our URL, we call the dispatch routine on it to expand it.
+
+If, for any reason, we do not find a valid chunk name we output the
+characters we found so the original file is unchanged. If we do find
+a valid chunk name we call [[url_dispatch]] to look for a protocol
+specifier.
+
+We use a buffer of fixed size [[buf]] to store the search URL. {\bf
+FIXME: this restriction should be fixed in a later version.}
+
+<<*>>=
+#define BUF_SIZE 1024
+
+int find_url(FILE *out, FILE *f)
+{
+  unsigned char buf[BUF_SIZE];
+  int c = fgetc(f);
+  int i = 0;
+  
+  while ((i < BUF_SIZE) && (c != EOF)) 
+  { if (c == '>') /* start of '>>'? */
+    { int c2 = fgetc(f);
+      if (c2 == EOF) 
+      { buf[i] = 0;
+        fprintf(stderr,"error: end of file after first '>' of URL:'%s'\n",buf);
+        return -1;
+      }
+      if (c2 == '>')  /* yep, we found a valid chunk */
+      { buf[i] = 0;
+        url_dispatch(out, buf); /* look for a protocol specifier */
+        return 0;
+      }
+      /* no, just a single '>' */
+      buf[i] = (unsigned char)c;
+      i++;
+      c = fgetc(f);
+    } 
+    else  /* just a random character, add it to the buffer */ 
+    { buf[i] = (unsigned char)c;
+      i++;
+      c = fgetc(f);
+    }
+  }
+  if (i == 0) /* we got no characters */
+  { fprintf(stderr, "error: empty url\n");
+    return -1;
+  }
+  if (i == BUF_SIZE) /* we overflowed the buffer */
+  { fprintf(stderr, "internal error: buf exhausted in function find_url()\n");
+    return -1;
+  }
+  buf[i] = 0;
+  fprintf(stderr, "error: non terminating URL:'%s'\n", buf);
+  return -1;
+}
+@ 
+
+Print how to use this program.
+<<*>>=
+void print_usage(void)
+{
+  printf("booklet %s\n", <<version>>);
+  printf("usage: booklet [-v] bookletfile pamphletfile\n");
+}
+
+
+@ 
+
+\section {main}
+
+<<print usage and exit>>=
+print_usage();
+exit(-1);
+@ 
+
+We parse command line to take our arguments, we open files and then call
+recursive expansion.
+
+{\bf FIXME: maybe it would be better to do output on a temporary file
+  and move it to destination if no error?}
+
+<<*>>=
+int main(int argc, char **argv) 
+{
+  FILE *out;
+  
+  if (argc < 3 || argc > 4) 
+  { <<print usage and exit>>    
+  }
+  if (argc == 3) /* -v was not specified */
+  { out = fopen(argv[2], "w");
+    if (out == NULL) /* we can't write the output file */
+    { fprintf(stderr, "error: unable to open output file '%s'\n", argv[2]);
+      perror("fopen");
+      exit(-1);
+    }
+    if (recursive_parsing(out, argv[1])) /* parsing failed */
+      return -1;
+  } 
+  else /* -v was specified? */
+  { if (strncmp(argv[1], "-v", 2) == 0) /* -v was specified */
+    { verbose = 1; 
+    } 
+    else /* an unknown option was specified */
+    { fprintf(stderr, "bad option '%s'\n", argv[1]);
+      <<print usage and exit>>
+    }
+    out = fopen(argv[3], "w");
+    if (out == NULL) /* we couldn't open the input file */
+    { fprintf(stderr, "error: unable to open input file '%s'\n", argv[3]);
+      perror("fopen");
+      exit(1);
+    }
+    if (recursive_parsing(out, argv[2])) /* parsing failed */
+      return -1;
+  }
+  fclose(out);
+  return 0;
+}
+
+@
+
+\appendix
+\section{Initial requirements for booklet made by Tim Daly}
+\label{part:requirements}
+
+\begin{verbatim}
+Date: Sun, 20 Jul 2003 07:22:30 -0400
+From: root <daly@idsi.net>
+To: axiom-developer@nongnu.org
+Cc: axiom@tenkan.org
+Subject: [Axiom-developer] booklet function
+Lines: 84
+
+I need a simple C program to do the following:
+
+booklet [-v] bookletfile pamphletfile
+
+The booklet function is basically a recursive macro-expander.
+
+The booklet function takes as input the name of a booklet file and the
+name of a pamphlet file. 
+
+The bookletfile is any file that contains special strings of the form:
+@<<file:filename>>
+which we will call a booklet URL. 
+
+The booklet function replaces the whole booklet URL including the
+surrounding @<< and >> symbols by the contents of filename.
+
+The replaced text should be exact with no extra leading or trailing
+characters so that x@<<file:filename1>>@<<file:filename2>>y where filename1
+contains a single byte 'a' and filename2 contains a single byte 'b'
+should result in the inline string 'xaby'.
+
+The replaced text is recursively searched for any instance of a
+booklet URL and these are replaced inline.
+
+The resulting text is output to the pamphletfile.
+
+The -v flag is optional. If supplied the booklet function write the
+replacement actions to standard output thus:
+in (filename1) replacing @<<file:filename2>> with text from (filename2)
+where (filename1) is the file containing the booklet URL and
+filename2 is the parsed filename from the booklet URL. This will
+allow the user to trace where replacements are specified and where
+the replacement came from.
+
+If the file is not found the booklet function should fail with a clear
+diagnostic traceback that outputs the containing file, the failing
+booklet URL, and a recursive traceback. This should allow the user to
+easily find the path of embeds that led to the failing line. The
+failing booklet program should return a -1 to the shell.
+
+Note that the filename in the booklet URL can contain a relative or
+absolute pathname and will have to follow system-specific naming
+conventions (forward-slash for unix, backslash for windows).
+
+At this time only the file: protocol specifier is needed.
+
+It should be a design criteria that the file: portion of the booklet URL
+be considered one of a set of cases for a "protocol specifier" which will
+be further specified in the future as needed (likely containing such
+things as "http:", "pamphlet:", etc). 
+
+It should be a design criteria that each protocol specifier has it's own
+associated parser as the syntax of the booklet URL may vary based on the
+protocol specifier. Thus,
+@<<file:filename>> parses the 'filename' portion as a path and file spec.
+@<<http:web>> parses the 'web' portion as any valid URL
+
+Note that the booklet program should be developed as a literate program
+and be contained in a single pamphlet file that does not use booklet URLs.
+This is required so that the booklet function does not depend on itself.
+
+(Axiom will build on multiple platforms and portions of the system will
+be specified in booklet files. We need this program to be standalone
+as it will be built very early in the process (even before the common
+lisp). This will allow portions of the system to be written as booklet
+files. The protocol specifiers will be used later to fetch pamphlet
+files mentioned in the reference section of a pamphlet. Since we have
+not used this feature yet there is no reason to implement anything. 
+However, as we expect to use this feature in the future it is important
+that the booklet function be (a) flexible enough to add other protocol
+specifiers and (b) documented as a pamphlet file so others can change it.)
+
+If this is unclear please ask questions.
+
+Tim Daly
+axiom@tenkan.org
+daly@idsi.net
+
+
+_______________________________________________
+Axiom-developer mailing list
+Axiom-developer@nongnu.org
+http://mail.nongnu.org/mailman/listinfo/axiom-developer
+\end{verbatim}
+\end{document}

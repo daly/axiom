@@ -1,0 +1,1009 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra divisor.spad}
+\author{Manuel Bronstein}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{domain FRIDEAL FractionalIdeal}
+<<domain FRIDEAL FractionalIdeal>>=
+)abbrev domain FRIDEAL FractionalIdeal
+++ Author: Manuel Bronstein
+++ Date Created: 27 Jan 1989
+++ Date Last Updated: 30 July 1993
+++ Keywords: ideal, algebra, module.
+++ Examples: )r FRIDEAL INPUT
+++ Description: Fractional ideals in a framed algebra.
+FractionalIdeal(R, F, UP, A): Exports == Implementation where
+  R : EuclideanDomain
+  F : QuotientFieldCategory R
+  UP: UnivariatePolynomialCategory F
+  A : Join(FramedAlgebra(F, UP), RetractableTo F)
+
+  VF  ==> Vector F
+  VA  ==> Vector A
+  UPA ==> SparseUnivariatePolynomial A
+  QF  ==> Fraction UP
+
+  Exports ==> Group with
+    ideal   : VA -> %
+      ++ ideal([f1,...,fn]) returns the ideal \spad{(f1,...,fn)}.
+    basis   : %  -> VA
+      ++ basis((f1,...,fn)) returns the vector \spad{[f1,...,fn]}.
+    norm    : %  -> F
+      ++ norm(I) returns the norm of the ideal I.
+    numer   : %  -> VA
+      ++ numer(1/d * (f1,...,fn)) = the vector \spad{[f1,...,fn]}.
+    denom   : %  -> R
+      ++ denom(1/d * (f1,...,fn)) returns d.
+    minimize: %  -> %
+      ++ minimize(I) returns a reduced set of generators for \spad{I}.
+    randomLC: (NonNegativeInteger, VA) -> A
+      ++ randomLC(n,x) should be local but conditional.
+
+  Implementation ==> add
+    import CommonDenominator(R, F, VF)
+    import MatrixCommonDenominator(UP, QF)
+    import InnerCommonDenominator(R, F, List R, List F)
+    import MatrixCategoryFunctions2(F, Vector F, Vector F, Matrix F,
+                        UP, Vector UP, Vector UP, Matrix UP)
+    import MatrixCategoryFunctions2(UP, Vector UP, Vector UP,
+                        Matrix UP, F, Vector F, Vector F, Matrix F)
+    import MatrixCategoryFunctions2(UP, Vector UP, Vector UP,
+                        Matrix UP, QF, Vector QF, Vector QF, Matrix QF)
+
+    Rep := Record(num:VA, den:R)
+
+    poly    : % -> UPA
+    invrep  : Matrix F -> A
+    upmat   : (A, NonNegativeInteger) -> Matrix UP
+    summat  : % -> Matrix UP
+    num2O   : VA -> OutputForm
+    agcd    : List A -> R
+    vgcd    : VF -> R
+    mkIdeal : (VA, R) -> %
+    intIdeal: (List A, R) -> %
+    ret?    : VA -> Boolean
+    tryRange: (NonNegativeInteger, VA, R, %) -> Union(%, "failed")
+
+    1               == [[1]$VA, 1]
+    numer i         == i.num
+    denom i         == i.den
+    mkIdeal(v, d)   == [v, d]
+    invrep m        == represents(transpose(m) * coordinates(1$A))
+    upmat(x, i)     == map(monomial(#1, i)$UP, regularRepresentation x)
+    ret? v          == any?(retractIfCan(#1)@Union(F,"failed") case F, v)
+    x = y           == denom(x) = denom(y) and numer(x) = numer(y)
+    agcd l  == reduce("gcd", [vgcd coordinates a for a in l]$List(R), 0)
+
+    norm i ==
+      ("gcd"/[retract(u)@R for u in coefficients determinant summat i])
+              / denom(i) ** rank()$A
+
+    tryRange(range, nm, nrm, i) ==
+      for j in 0..10 repeat
+        a := randomLC(10 * range, nm)
+        unit? gcd((retract(norm a)@R exquo nrm)::R, nrm) =>
+                                return intIdeal([nrm::F::A, a], denom i)
+      "failed"
+
+    summat i ==
+      m := minIndex(v := numer i)
+      reduce("+",
+            [upmat(qelt(v, j + m), j) for j in 0..#v-1]$List(Matrix UP))
+
+    inv i ==
+      m  := inverse(map(#1::QF, summat i))::Matrix(QF)
+      cd  := splitDenominator(denom(i)::F::UP::QF * m)
+      cd2 := splitDenominator coefficients(cd.den)
+      invd:= cd2.den / reduce("gcd", cd2.num)
+      d   := reduce("max", [degree p for p in parts(cd.num)])
+      ideal
+        [invd * invrep map(coefficient(#1, j), cd.num) for j in 0..d]$VA
+
+    ideal v ==
+      d := reduce("lcm", [commonDenominator coordinates qelt(v, i)
+                          for i in minIndex v .. maxIndex v]$List(R))
+      intIdeal([d::F * qelt(v, i) for i in minIndex v .. maxIndex v], d)
+
+    intIdeal(l, d) ==
+      lr := empty()$List(R)
+      nr := empty()$List(A)
+      for x in removeDuplicates l repeat
+        if (u := retractIfCan(x)@Union(F, "failed")) case F
+          then lr := concat(retract(u::F)@R, lr)
+          else nr := concat(x, nr)
+      r    := reduce("gcd", lr, 0)
+      g    := agcd nr
+      a    := (r quo (b := gcd(gcd(d, r), g)))::F::A
+      d    := d quo b
+      r ^= 0 and ((g exquo r) case R) => mkIdeal([a], d)
+      invb := inv(b::F)
+      va:VA := [invb * m for m in nr]
+      zero? a => mkIdeal(va, d)
+      mkIdeal(concat(a, va), d)
+
+    vgcd v ==
+      reduce("gcd",
+             [retract(v.i)@R for i in minIndex v .. maxIndex v]$List(R))
+
+    poly i ==
+      m := minIndex(v := numer i)
+      +/[monomial(qelt(v, i + m), i) for i in 0..#v-1]
+
+    i1 * i2 ==
+      intIdeal(coefficients(poly i1 * poly i2), denom i1 * denom i2)
+
+    i:$ ** m:Integer ==
+      m < 0 => inv(i) ** (-m)
+      n := m::NonNegativeInteger
+      v := numer i
+      intIdeal([qelt(v, j) ** n for j in minIndex v .. maxIndex v],
+               denom(i) ** n)
+
+    num2O v ==
+      paren [qelt(v, i)::OutputForm
+             for i in minIndex v .. maxIndex v]$List(OutputForm)
+
+    basis i ==
+      v := numer i
+      d := inv(denom(i)::F)
+      [d * qelt(v, j) for j in minIndex v .. maxIndex v]
+
+    coerce(i:$):OutputForm ==
+      nm := num2O numer i
+--      one? denom i => nm
+      (denom i = 1) => nm
+      (1::Integer::OutputForm) / (denom(i)::OutputForm) * nm
+
+    if F has Finite then
+      randomLC(m, v) ==
+        +/[random()$F * qelt(v, j) for j in minIndex v .. maxIndex v]
+    else
+      randomLC(m, v) ==
+        +/[(random()$Integer rem m::Integer) * qelt(v, j)
+            for j in minIndex v .. maxIndex v]
+
+    minimize i ==
+      n := (#(nm := numer i))
+--      one?(n) or (n < 3 and ret? nm) => i
+      (n = 1) or (n < 3 and ret? nm) => i
+      nrm    := retract(norm mkIdeal(nm, 1))@R
+      for range in 1..5 repeat
+        (u := tryRange(range, nm, nrm, i)) case $ => return(u::$)
+      i
+
+@
+\section{package FRIDEAL2 FractionalIdealFunctions2}
+<<package FRIDEAL2 FractionalIdealFunctions2>>=
+)abbrev package FRIDEAL2 FractionalIdealFunctions2
+++ Lifting of morphisms to fractional ideals.
+++ Author: Manuel Bronstein
+++ Date Created: 1 Feb 1989
+++ Date Last Updated: 27 Feb 1990
+++ Keywords: ideal, algebra, module.
+FractionalIdealFunctions2(R1, F1, U1, A1, R2, F2, U2, A2):
+ Exports == Implementation where
+  R1, R2: EuclideanDomain
+  F1: QuotientFieldCategory R1
+  U1: UnivariatePolynomialCategory F1
+  A1: Join(FramedAlgebra(F1, U1), RetractableTo F1)
+  F2: QuotientFieldCategory R2
+  U2: UnivariatePolynomialCategory F2
+  A2: Join(FramedAlgebra(F2, U2), RetractableTo F2)
+
+  Exports ==> with
+    map: (R1 -> R2, FractionalIdeal(R1, F1, U1, A1)) ->
+                                         FractionalIdeal(R2, F2, U2, A2)
+	++ map(f,i) \undocumented{}
+
+  Implementation ==> add
+    fmap: (F1 -> F2, A1) -> A2
+
+    fmap(f, a) ==
+      v := coordinates a
+      represents
+        [f qelt(v, i) for i in minIndex v .. maxIndex v]$Vector(F2)
+
+    map(f, i) ==
+      b := basis i
+      ideal [fmap(f(numer #1) / f(denom #1), qelt(b, j))
+             for j in minIndex b .. maxIndex b]$Vector(A2)
+
+@
+\section{package MHROWRED ModularHermitianRowReduction}
+<<package MHROWRED ModularHermitianRowReduction>>=
+)abbrev package MHROWRED ModularHermitianRowReduction
+++ Modular hermitian row reduction.
+++ Author: Manuel Bronstein
+++ Date Created: 22 February 1989
+++ Date Last Updated: 24 November 1993
+++ Keywords: matrix, reduction.
+-- should be moved into matrix whenever possible
+ModularHermitianRowReduction(R): Exports == Implementation where
+  R: EuclideanDomain
+
+  Z   ==> Integer
+  V   ==> Vector R
+  M   ==> Matrix R
+  REC ==> Record(val:R, cl:Z, rw:Z)
+
+  Exports ==> with
+    rowEch       : M -> M
+      ++ rowEch(m) computes a modular row-echelon form of m, finding
+      ++ an appropriate modulus.
+    rowEchelon   : (M, R) -> M
+      ++ rowEchelon(m, d) computes a modular row-echelon form mod d of
+      ++    [d     ]
+      ++    [  d   ]
+      ++    [    . ]
+      ++    [     d]
+      ++    [   M  ]
+      ++ where \spad{M = m mod d}.
+    rowEchLocal    : (M, R) -> M
+      ++ rowEchLocal(m,p) computes a modular row-echelon form of m, finding
+      ++ an appropriate modulus over a local ring where p is the only prime.
+    rowEchelonLocal: (M, R, R) -> M
+      ++ rowEchelonLocal(m, d, p) computes the row-echelon form of m
+      ++ concatenated with d times the identity matrix
+      ++ over a local ring where p is the only prime.
+    normalizedDivide: (R, R) -> Record(quotient:R, remainder:R)
+      ++ normalizedDivide(n,d) returns a normalized quotient and
+      ++ remainder such that consistently unique representatives
+      ++ for the residue class are chosen, e.g. positive remainders
+
+
+
+  Implementation ==> add
+    order   : (R, R) -> Z
+    vconc   : (M, R) -> M
+    non0    : (V, Z) -> Union(REC, "failed")
+    nonzero?: V -> Boolean
+    mkMat   : (M, List Z) -> M
+    diagSubMatrix: M -> Union(Record(val:R, mat:M), "failed")
+    determinantOfMinor: M -> R
+    enumerateBinomial: (List Z, Z, Z) -> List Z
+
+    nonzero? v == any?(#1 ^= 0, v)
+
+-- returns [a, i, rown] if v = [0,...,0,a,0,...,0]
+-- where a <> 0 and i is the index of a, "failed" otherwise.
+    non0(v, rown) ==
+      ans:REC
+      allZero:Boolean := true
+      for i in minIndex v .. maxIndex v repeat
+        if qelt(v, i) ^= 0 then
+          if allZero then
+            allZero := false
+            ans := [qelt(v, i), i, rown]
+          else return "failed"
+      allZero => "failed"
+      ans
+
+-- returns a matrix made from the non-zero rows of x whose row number
+-- is not in l
+    mkMat(x, l) ==
+      empty?(ll := [parts row(x, i)
+         for i in minRowIndex x .. maxRowIndex x |
+           (not member?(i, l)) and nonzero? row(x, i)]$List(List R)) =>
+              zero(1, ncols x)
+      matrix ll
+
+-- returns [m, d] where m = x with the zero rows and the rows of
+-- the diagonal of d removed, if x has a diagonal submatrix of d's,
+-- "failed" otherwise.
+    diagSubMatrix x ==
+      l  := [u::REC for i in minRowIndex x .. maxRowIndex x |
+                                     (u := non0(row(x, i), i)) case REC]
+      for a in removeDuplicates([r.val for r in l]$List(R)) repeat
+        {[r.cl for r in l | r.val = a]$List(Z)}$Set(Z) =
+          {[z for z in minColIndex x .. maxColIndex x]$List(Z)}$Set(Z)
+            => return [a, mkMat(x, [r.rw for r in l | a = r.val])]
+      "failed"
+
+-- returns a non-zero determinant of a minor of x of rank equal to
+-- the number of columns of x, if there is one, 0 otherwise
+    determinantOfMinor x ==
+-- do not compute a modulus for square matrices, since this is as expensive
+-- as the Hermite reduction itself
+      (nr := nrows x) <= (nc := ncols x) => 0
+      lc := [i for i in minColIndex x .. maxColIndex x]$List(Integer)
+      lr := [i for i in minRowIndex x .. maxRowIndex x]$List(Integer)
+      for i in 1..(n := binomial(nr, nc)) repeat
+        (d := determinant x(enumerateBinomial(lr, nc, i), lc)) ^= 0 =>
+          j := i + 1 + (random()$Z rem (n - i))
+          return gcd(d, determinant x(enumerateBinomial(lr, nc, j), lc))
+      0
+
+-- returns the i-th selection of m elements of l = (a1,...,an),
+--                 /n\
+-- where 1 <= i <= | |
+--                 \m/
+    enumerateBinomial(l, m, i) ==
+      m1 := minIndex l - 1
+      zero?(m := m - 1) => [l(m1 + i)]
+      for j in 1..(n := #l) repeat
+        i <= (b := binomial(n - j, m)) =>
+          return concat(l(m1 + j), enumerateBinomial(rest(l, j), m, i))
+        i := i - b
+      error "Should not happen"
+
+    rowEch x ==
+      (u := diagSubMatrix x) case "failed" =>
+        zero?(d := determinantOfMinor x) => rowEchelon x
+        rowEchelon(x, d)
+      rowEchelon(u.mat, u.val)
+
+    vconc(y, m) ==
+      vertConcat(diagonalMatrix new(ncols y, m)$V, map(#1 rem m, y))
+
+    order(m, p) ==
+      zero? m => -1
+      for i in 0.. repeat
+        (mm := m exquo p) case "failed" => return i
+        m := mm::R
+
+    if R has IntegerNumberSystem then
+        normalizedDivide(n:R, d:R):Record(quotient:R, remainder:R) ==
+            qr := divide(n, d)
+            qr.remainder >= 0 => qr
+            d > 0 =>
+                qr.remainder := qr.remainder + d
+                qr.quotient := qr.quotient - 1
+                qr
+            qr.remainder := qr.remainder - d
+            qr.quotient := qr.quotient + 1
+            qr
+    else
+        normalizedDivide(n:R, d:R):Record(quotient:R, remainder:R) ==
+            divide(n, d)
+
+    rowEchLocal(x,p) ==
+      (u := diagSubMatrix x) case "failed" =>
+        zero?(d := determinantOfMinor x) => rowEchelon x
+        rowEchelonLocal(x, d, p)
+      rowEchelonLocal(u.mat, u.val, p)
+
+    rowEchelonLocal(y, m, p) ==
+        m := p**(order(m,p)::NonNegativeInteger)
+        x     := vconc(y, m)
+        nrows := maxRowIndex x
+        ncols := maxColIndex x
+        minr  := i := minRowIndex x
+        for j in minColIndex x .. ncols repeat
+          if i > nrows then leave x
+          rown := minr - 1
+          pivord : Integer
+          npivord : Integer
+          for k in i .. nrows repeat
+            qelt(x,k,j) = 0 => "next k"
+            npivord := order(qelt(x,k,j),p)
+            (rown = minr - 1) or (npivord  <  pivord) =>
+                    rown := k
+                    pivord := npivord
+          rown = minr - 1 => "enuf"
+          x := swapRows_!(x, i, rown)
+          (a, b, d) := extendedEuclidean(qelt(x,i,j), m)
+          qsetelt_!(x,i,j,d)
+          pivot := d
+          for k in j+1 .. ncols repeat
+            qsetelt_!(x,i,k, a * qelt(x,i,k) rem m)
+          for k in i+1 .. nrows repeat
+            zero? qelt(x,k,j) => "next k"
+            q := (qelt(x,k,j) exquo pivot) :: R
+            for k1 in j+1 .. ncols repeat
+              v2 := (qelt(x,k,k1) - q * qelt(x,i,k1)) rem m
+              qsetelt_!(x, k, k1, v2)
+            qsetelt_!(x, k, j, 0)
+          for k in minr .. i-1 repeat
+            zero? qelt(x,k,j) => "enuf"
+            qr    := normalizedDivide(qelt(x,k,j), pivot)
+            qsetelt_!(x,k,j, qr.remainder)
+            for k1 in j+1 .. ncols x repeat
+              qsetelt_!(x,k,k1,
+                     (qelt(x,k,k1) - qr.quotient * qelt(x,i,k1)) rem m)
+          i := i+1
+        x
+
+    if R has Field then
+      rowEchelon(y, m) == rowEchelon vconc(y, m)
+
+    else
+
+      rowEchelon(y, m) ==
+        x     := vconc(y, m)
+        nrows := maxRowIndex x
+        ncols := maxColIndex x
+        minr  := i := minRowIndex x
+        for j in minColIndex x .. ncols repeat
+          if i > nrows then leave
+          rown := minr - 1
+          for k in i .. nrows repeat
+            if (qelt(x,k,j) ^= 0) and ((rown = minr - 1) or
+                  sizeLess?(qelt(x,k,j), qelt(x,rown,j))) then rown := k
+          rown = minr - 1 => "next j"
+          x := swapRows_!(x, i, rown)
+          for k in i+1 .. nrows repeat
+            zero? qelt(x,k,j) => "next k"
+            (a, b, d) := extendedEuclidean(qelt(x,i,j), qelt(x,k,j))
+            (b1, a1) :=
+               ((qelt(x,i,j) exquo d)::R, (qelt(x,k,j) exquo d)::R)
+            -- a*b1+a1*b = 1
+            for k1 in j+1 .. ncols repeat
+              v1 := (a  * qelt(x,i,k1) +  b * qelt(x,k,k1)) rem m
+              v2 := (b1 * qelt(x,k,k1) - a1 * qelt(x,i,k1)) rem m
+              qsetelt_!(x, i, k1, v1)
+              qsetelt_!(x, k, k1, v2)
+            qsetelt_!(x, i, j, d)
+            qsetelt_!(x, k, j, 0)
+          un := unitNormal qelt(x,i,j)
+          qsetelt_!(x,i,j,un.canonical)
+          if un.associate ^= 1 then for jj in (j+1)..ncols repeat
+              qsetelt_!(x,i,jj,un.associate * qelt(x,i,jj))
+
+          xij := qelt(x,i,j)
+          for k in minr .. i-1 repeat
+            zero? qelt(x,k,j) => "next k"
+            qr    := normalizedDivide(qelt(x,k,j), xij)
+            qsetelt_!(x,k,j, qr.remainder)
+            for k1 in j+1 .. ncols x repeat
+              qsetelt_!(x,k,k1,
+                     (qelt(x,k,k1) - qr.quotient * qelt(x,i,k1)) rem m)
+          i := i+1
+        x
+
+@
+\section{domain FRMOD FramedModule}
+<<domain FRMOD FramedModule>>=
+)abbrev domain FRMOD FramedModule
+++ Author: Manuel Bronstein
+++ Date Created: 27 Jan 1989
+++ Date Last Updated: 24 Jul 1990
+++ Keywords: ideal, algebra, module.
+++ Examples: )r FRIDEAL INPUT
+++ Description: Module representation of fractional ideals.
+FramedModule(R, F, UP, A, ibasis): Exports == Implementation where
+  R     : EuclideanDomain
+  F     : QuotientFieldCategory R
+  UP    : UnivariatePolynomialCategory F
+  A     : FramedAlgebra(F, UP)
+  ibasis: Vector A
+
+  VR  ==> Vector R
+  VF  ==> Vector F
+  VA  ==> Vector A
+  M   ==> Matrix F
+
+  Exports ==> Monoid with
+    basis : %  -> VA
+      ++ basis((f1,...,fn)) = the vector \spad{[f1,...,fn]}.
+    norm  : %  -> F
+      ++ norm(f) returns the norm of the module f.
+    module: VA -> %
+      ++ module([f1,...,fn]) = the module generated by \spad{(f1,...,fn)}
+      ++ over R.
+    if A has RetractableTo F then
+      module: FractionalIdeal(R, F, UP, A) -> %
+        ++ module(I) returns I viewed has a module over R.
+
+  Implementation ==> add
+    import MatrixCommonDenominator(R, F)
+    import ModularHermitianRowReduction(R)
+
+    Rep  := VA
+
+    iflag?:Reference(Boolean) := ref true
+    wflag?:Reference(Boolean) := ref true
+    imat := new(#ibasis, #ibasis, 0)$M
+    wmat := new(#ibasis, #ibasis, 0)$M
+
+    rowdiv      : (VR, R)  -> VF
+    vectProd    : (VA, VA) -> VA
+    wmatrix     : VA -> M
+    W2A         : VF -> A
+    intmat      : () -> M
+    invintmat   : () -> M
+    getintmat   : () -> Boolean
+    getinvintmat: () -> Boolean
+
+    1                      == ibasis
+    module(v:VA)           == v
+    basis m                == m pretend VA
+    rowdiv(r, f)           == [r.i / f for i in minIndex r..maxIndex r]
+    coerce(m:%):OutputForm == coerce(basis m)$VA
+    W2A v                  == represents(v * intmat())
+    wmatrix v              == coordinates(v) * invintmat()
+
+    getinvintmat() ==
+      m := inverse(intmat())::M
+      for i in minRowIndex m .. maxRowIndex m repeat
+        for j in minColIndex m .. maxColIndex m repeat
+          imat(i, j) := qelt(m, i, j)
+      false
+
+    getintmat() ==
+      m := coordinates ibasis
+      for i in minRowIndex m .. maxRowIndex m repeat
+        for j in minColIndex m .. maxColIndex m repeat
+          wmat(i, j) := qelt(m, i, j)
+      false
+
+    invintmat() ==
+      if iflag?() then iflag?() := getinvintmat()
+      imat
+
+    intmat() ==
+      if wflag?() then wflag?() := getintmat()
+      wmat
+
+    vectProd(v1, v2) ==
+      k := minIndex(v := new(#v1 * #v2, 0)$VA)
+      for i in minIndex v1 .. maxIndex v1 repeat
+        for j in minIndex v2 .. maxIndex v2 repeat
+          qsetelt_!(v, k, qelt(v1, i) * qelt(v2, j))
+          k := k + 1
+      v pretend VA
+
+    norm m ==
+      #(basis m) ^= #ibasis => error "Module not of rank n"
+      determinant(coordinates(basis m) * invintmat())
+
+    m1 * m2 ==
+      m := rowEch((cd := splitDenominator wmatrix(
+                                     vectProd(basis m1, basis m2))).num)
+      module [u for i in minRowIndex m .. maxRowIndex m |
+                           (u := W2A rowdiv(row(m, i), cd.den)) ^= 0]$VA
+
+    if A has RetractableTo F then
+      module(i:FractionalIdeal(R, F, UP, A)) ==
+        module(basis i) * module(ibasis)
+
+@
+\section{category FDIVCAT FiniteDivisorCategory}
+<<category FDIVCAT FiniteDivisorCategory>>=
+)abbrev category FDIVCAT FiniteDivisorCategory
+++ Category for finite rational divisors on a curve
+++ Author: Manuel Bronstein
+++ Date Created: 19 May 1993
+++ Date Last Updated: 19 May 1993
+++ Description:
+++ This category describes finite rational divisors on a curve, that
+++ is finite formal sums SUM(n * P) where the n's are integers and the
+++ P's are finite rational points on the curve.
+++ Keywords: divisor, algebraic, curve.
+++ Examples: )r FDIV INPUT
+FiniteDivisorCategory(F, UP, UPUP, R): Category == Result where
+  F   : Field
+  UP  : UnivariatePolynomialCategory F
+  UPUP: UnivariatePolynomialCategory Fraction UP
+  R   : FunctionFieldCategory(F, UP, UPUP)
+
+  ID  ==> FractionalIdeal(UP, Fraction UP, UPUP, R)
+
+  Result ==> AbelianGroup with
+    ideal      : % -> ID
+      ++ ideal(D) returns the ideal corresponding to a divisor D.
+    divisor    : ID -> %
+      ++ divisor(I) makes a divisor D from an ideal I.
+    divisor    : R -> %
+      ++ divisor(g) returns the divisor of the function g.
+    divisor    : (F, F) -> %
+      ++ divisor(a, b) makes the divisor P: \spad{(x = a, y = b)}.
+      ++ Error: if P is singular.
+    divisor    : (F, F, Integer) -> %
+      ++ divisor(a, b, n) makes the divisor
+      ++ \spad{nP} where P: \spad{(x = a, y = b)}.
+      ++ P is allowed to be singular if n is a multiple of the rank.
+    decompose  : % -> Record(id:ID, principalPart: R)
+      ++ decompose(d) returns \spad{[id, f]} where \spad{d = (id) + div(f)}.
+    reduce     : % -> %
+      ++ reduce(D) converts D to some reduced form (the reduced forms can
+      ++ be differents in different implementations).
+    principal? : % -> Boolean
+      ++ principal?(D) tests if the argument is the divisor of a function.
+    generator  : % -> Union(R, "failed")
+      ++ generator(d) returns f if \spad{(f) = d},
+      ++ "failed" if d is not principal.
+    divisor    : (R, UP, UP, UP, F) -> %
+      ++ divisor(h, d, d', g, r) returns the sum of all the finite points
+      ++ where \spad{h/d} has residue \spad{r}.
+      ++ \spad{h} must be integral.
+      ++ \spad{d} must be squarefree.
+      ++ \spad{d'} is some derivative of \spad{d} (not necessarily dd/dx).
+      ++ \spad{g = gcd(d,discriminant)} contains the ramified zeros of \spad{d}
+   add
+    principal? d == generator(d) case R
+
+@
+\section{domain HELLFDIV HyperellipticFiniteDivisor}
+<<domain HELLFDIV HyperellipticFiniteDivisor>>=
+)abbrev domain HELLFDIV HyperellipticFiniteDivisor
+++ Finite rational divisors on an hyperelliptic curve
+++ Author: Manuel Bronstein
+++ Date Created: 19 May 1993
+++ Date Last Updated: 20 July 1998
+++ Description:
+++ This domains implements finite rational divisors on an hyperelliptic curve,
+++ that is finite formal sums SUM(n * P) where the n's are integers and the
+++ P's are finite rational points on the curve.
+++ The equation of the curve must be  y^2 = f(x) and f must have odd degree.
+++ Keywords: divisor, algebraic, curve.
+++ Examples: )r FDIV INPUT
+HyperellipticFiniteDivisor(F, UP, UPUP, R): Exports == Implementation where
+  F   : Field
+  UP  : UnivariatePolynomialCategory F
+  UPUP: UnivariatePolynomialCategory Fraction UP
+  R   : FunctionFieldCategory(F, UP, UPUP)
+
+  O   ==> OutputForm
+  Z   ==> Integer
+  RF  ==> Fraction UP
+  ID  ==> FractionalIdeal(UP, RF, UPUP, R)
+  ERR ==> error "divisor: incomplete implementation for hyperelliptic curves"
+
+  Exports ==> FiniteDivisorCategory(F, UP, UPUP, R)
+
+  Implementation ==> add
+    if (uhyper:Union(UP, "failed") := hyperelliptic()$R) case "failed" then
+              error "HyperellipticFiniteDivisor: curve must be hyperelliptic"
+
+-- we use the semi-reduced representation from D.Cantor, "Computing in the
+-- Jacobian of a HyperellipticCurve", Mathematics of Computation, vol 48,
+-- no.177, January 1987, 95-101.
+-- The representation [a,b,f] for D means D = [a,b] + div(f)
+-- and [a,b] is a semi-reduced representative on the Jacobian
+    Rep := Record(center:UP, polyPart:UP, principalPart:R, reduced?:Boolean)
+
+    hyper:UP := uhyper::UP
+    gen:Z    := ((degree(hyper)::Z - 1) exquo 2)::Z     -- genus of the curve
+    dvd:O    := "div"::Symbol::O
+    zer:O    := 0::Z::O
+
+    makeDivisor  : (UP, UP, R) -> %
+    intReduc     : (R, UP) -> R
+    princ?       : % -> Boolean
+    polyIfCan    : R -> Union(UP, "failed")
+    redpolyIfCan : (R, UP) -> Union(UP, "failed")
+    intReduce    : (R, UP) -> R
+    mkIdeal      : (UP, UP) -> ID
+    reducedTimes : (Z, UP, UP) -> %
+    reducedDouble: (UP, UP) -> %
+
+    0                    == divisor(1$R)
+    divisor(g:R)         == [1, 0, g, true]
+    makeDivisor(a, b, g) == [a, b, g, false]
+--    princ? d             == one?(d.center) and zero?(d.polyPart)
+    princ? d             == (d.center = 1) and zero?(d.polyPart)
+    ideal d     == ideal([d.principalPart]) * mkIdeal(d.center, d.polyPart)
+    decompose d == [ideal makeDivisor(d.center, d.polyPart, 1), d.principalPart]
+    mkIdeal(a, b) == ideal [a::RF::R, reduce(monomial(1, 1)$UPUP - b::RF::UPUP)]
+
+-- keep the sum reduced if d1 and d2 are both reduced at the start
+    d1 + d2 ==
+      a1  := d1.center;   a2 := d2.center
+      b1  := d1.polyPart; b2 := d2.polyPart
+      rec := principalIdeal [a1, a2, b1 + b2]
+      d   := rec.generator
+      h   := rec.coef              -- d = h1 a1 + h2 a2 + h3(b1 + b2)
+      a   := ((a1 * a2) exquo d**2)::UP
+      b:UP:= first(h) * a1 * b2
+      b   := b + second(h) * a2 * b1
+      b   := b + third(h) * (b1*b2 + hyper)
+      b   := (b exquo d)::UP rem a
+      dd  := makeDivisor(a, b, d::RF * d1.principalPart * d2.principalPart)
+      d1.reduced? and d2.reduced? => reduce dd
+      dd
+
+-- if is cheaper to keep on reducing as we exponentiate if d is already reduced
+    n:Z * d:% ==
+      zero? n => 0
+      n < 0 => (-n) * (-d)
+      divisor(d.principalPart ** n) + divisor(mkIdeal(d.center,d.polyPart) ** n)
+
+    divisor(i:ID) ==
+--      one?(n := #(v := basis minimize i)) => divisor v minIndex v
+      (n := #(v := basis minimize i)) = 1 => divisor v minIndex v
+      n ^= 2 => ERR
+      a := v minIndex v
+      h := v maxIndex v
+      (u := polyIfCan a) case UP =>
+        (w := redpolyIfCan(h, u::UP)) case UP => makeDivisor(u::UP, w::UP, 1)
+        ERR
+      (u := polyIfCan h) case UP =>
+        (w := redpolyIfCan(a, u::UP)) case UP => makeDivisor(u::UP, w::UP, 1)
+        ERR
+      ERR
+
+    polyIfCan a ==
+      (u := retractIfCan(a)@Union(RF, "failed")) case "failed" => "failed"
+      (v := retractIfCan(u::RF)@Union(UP, "failed")) case "failed" => "failed"
+      v::UP
+
+    redpolyIfCan(h, a) ==
+      degree(p := lift h) ^= 1 => "failed"
+      q := - coefficient(p, 0) / coefficient(p, 1)
+      rec := extendedEuclidean(denom q, a)
+      not ground?(rec.generator) => "failed"
+      ((numer(q) * rec.coef1) exquo rec.generator)::UP rem a
+
+    coerce(d:%):O ==
+      r := bracket [d.center::O, d.polyPart::O]
+      g := prefix(dvd, [d.principalPart::O])
+--      z := one?(d.principalPart)
+      z := (d.principalPart = 1)
+      princ? d => (z => zer; g)
+      z => r
+      r + g
+
+    reduce d ==
+      d.reduced? => d
+      degree(a := d.center) <= gen => (d.reduced? := true; d)
+      b  := d.polyPart
+      a0 := ((hyper - b**2) exquo a)::UP
+      b0 := (-b) rem a0
+      g  := d.principalPart * reduce(b::RF::UPUP-monomial(1,1)$UPUP) / a0::RF::R
+      reduce makeDivisor(a0, b0, g)
+
+    generator d ==
+      d := reduce d
+      princ? d => d.principalPart
+      "failed"
+
+    - d ==
+      a := d.center
+      makeDivisor(a, - d.polyPart, inv(a::RF * d.principalPart))
+
+    d1 = d2 ==
+      d1 := reduce d1
+      d2 := reduce d2
+      d1.center = d2.center and d1.polyPart = d2.polyPart
+        and d1.principalPart = d2.principalPart
+
+    divisor(a, b) ==
+      x := monomial(1, 1)$UP
+      not ground? gcd(d := x - a::UP, retract(discriminant())@UP) =>
+                                  error "divisor: point is singular"
+      makeDivisor(d, b::UP, 1)
+
+    intReduce(h, b) ==
+      v := integralCoordinates(h).num
+      integralRepresents(
+                [qelt(v, i) rem b for i in minIndex v .. maxIndex v], 1)
+
+-- with hyperelliptic curves, it is cheaper to keep divisors in reduced form
+    divisor(h, a, dp, g, r) ==
+      h  := h - (r * dp)::RF::R
+      a  := gcd(a, retract(norm h)@UP)
+      h  := intReduce(h, a)
+      if not ground? gcd(g, a) then h := intReduce(h ** rank(), a)
+      hh := lift h
+      b  := - coefficient(hh, 0) / coefficient(hh, 1)
+      rec := extendedEuclidean(denom b, a)
+      not ground?(rec.generator) => ERR
+      bb := ((numer(b) * rec.coef1) exquo rec.generator)::UP rem a
+      reduce makeDivisor(a, bb, 1)
+
+@
+\section{domain FDIV FiniteDivisor}
+<<domain FDIV FiniteDivisor>>=
+)abbrev domain FDIV FiniteDivisor
+++ Finite rational divisors on a curve
+++ Author: Manuel Bronstein
+++ Date Created: 1987
+++ Date Last Updated: 29 July 1993
+++ Description:
+++ This domains implements finite rational divisors on a curve, that
+++ is finite formal sums SUM(n * P) where the n's are integers and the
+++ P's are finite rational points on the curve.
+++ Keywords: divisor, algebraic, curve.
+++ Examples: )r FDIV INPUT
+FiniteDivisor(F, UP, UPUP, R): Exports == Implementation where
+  F   : Field
+  UP  : UnivariatePolynomialCategory F
+  UPUP: UnivariatePolynomialCategory Fraction UP
+  R   : FunctionFieldCategory(F, UP, UPUP)
+
+  N   ==> NonNegativeInteger
+  RF  ==> Fraction UP
+  ID  ==> FractionalIdeal(UP, RF, UPUP, R)
+
+  Exports ==> FiniteDivisorCategory(F, UP, UPUP, R) with
+    finiteBasis: % -> Vector R
+      ++ finiteBasis(d) returns a basis for d as a module over {\em K[x]}.
+    lSpaceBasis: % -> Vector R
+      ++ lSpaceBasis(d) returns a basis for \spad{L(d) = {f | (f) >= -d}}
+      ++ as a module over \spad{K[x]}.
+
+  Implementation ==> add
+    if hyperelliptic()$R case UP then
+      Rep := HyperellipticFiniteDivisor(F, UP, UPUP, R)
+
+      0                       == 0$Rep
+      coerce(d:$):OutputForm  == coerce(d)$Rep
+      d1 = d2                 == d1 =$Rep d2
+      n * d                   == n *$Rep d
+      d1 + d2                 == d1 +$Rep d2
+      - d                     == -$Rep d
+      ideal d                 == ideal(d)$Rep
+      reduce d                == reduce(d)$Rep
+      generator d             == generator(d)$Rep
+      decompose d             == decompose(d)$Rep
+      divisor(i:ID)           == divisor(i)$Rep
+      divisor(f:R)            == divisor(f)$Rep
+      divisor(a, b)           == divisor(a, b)$Rep
+      divisor(a, b, n)        == divisor(a, b, n)$Rep
+      divisor(h, d, dp, g, r) == divisor(h, d, dp, g, r)$Rep
+
+    else
+      Rep := Record(id:ID, fbasis:Vector(R))
+
+      import CommonDenominator(UP, RF, Vector RF)
+      import UnivariatePolynomialCommonDenominator(UP, RF, UPUP)
+
+      makeDivisor : (UP, UPUP, UP) -> %
+      intReduce   : (R, UP) -> R
+
+      ww := integralBasis()$R
+
+      0                       == [1, empty()]
+      divisor(i:ID)           == [i, empty()]
+      divisor(f:R)            == divisor ideal [f]
+      coerce(d:%):OutputForm  == ideal(d)::OutputForm
+      ideal d                 == d.id
+      decompose d             == [ideal d, 1]
+      d1 = d2                 == basis(ideal d1) = basis(ideal d2)
+      n * d                   == divisor(ideal(d) ** n)
+      d1 + d2                 == divisor(ideal d1 * ideal d2)
+      - d                     == divisor inv ideal d
+      divisor(h, d, dp, g, r) == makeDivisor(d, lift h - (r * dp)::RF::UPUP, g)
+
+      intReduce(h, b) ==
+        v := integralCoordinates(h).num
+        integralRepresents(
+                      [qelt(v, i) rem b for i in minIndex v .. maxIndex v], 1)
+
+      divisor(a, b) ==
+        x := monomial(1, 1)$UP
+        not ground? gcd(d := x - a::UP, retract(discriminant())@UP) =>
+                                          error "divisor: point is singular"
+        makeDivisor(d, monomial(1, 1)$UPUP - b::UP::RF::UPUP, 1)
+
+      divisor(a, b, n) ==
+        not(ground? gcd(d := monomial(1, 1)$UP - a::UP,
+            retract(discriminant())@UP)) and
+                  ((n exquo rank()) case "failed") =>
+                                    error "divisor: point is singular"
+        m:N :=
+          n < 0 => (-n)::N
+          n::N
+        g := makeDivisor(d**m,(monomial(1,1)$UPUP - b::UP::RF::UPUP)**m,1)
+        n < 0 => -g
+        g
+
+      reduce d ==
+        (i := minimize(j := ideal d)) = j => d
+        #(n := numer i) ^= 2 => divisor i
+        cd := splitDenominator lift n(1 + minIndex n)
+        b  := gcd(cd.den * retract(retract(n minIndex n)@RF)@UP,
+                  retract(norm reduce(cd.num))@UP)
+        e  := cd.den * denom i
+        divisor ideal([(b / e)::R,
+                reduce map((retract(#1)@UP rem b) / e, cd.num)]$Vector(R))
+
+      finiteBasis d ==
+        if empty?(d.fbasis) then
+          d.fbasis := normalizeAtInfinity
+                        basis module(ideal d)$FramedModule(UP, RF, UPUP, R, ww)
+        d.fbasis
+
+      generator d ==
+        bsis := finiteBasis d
+        for i in minIndex bsis .. maxIndex bsis repeat
+          integralAtInfinity? qelt(bsis, i) =>
+            return primitivePart qelt(bsis,i)
+        "failed"
+
+      lSpaceBasis d ==
+        map_!(primitivePart, reduceBasisAtInfinity finiteBasis(-d))
+
+-- b = center, hh = integral function, g = gcd(b, discriminant)
+      makeDivisor(b, hh, g) ==
+        b := gcd(b, retract(norm(h := reduce hh))@UP)
+        h := intReduce(h, b)
+        if not ground? gcd(g, b) then h := intReduce(h ** rank(), b)
+        divisor ideal [b::RF::R, h]$Vector(R)
+
+@
+\section{package FDIV2 FiniteDivisorFunctions2}
+<<package FDIV2 FiniteDivisorFunctions2>>=
+)abbrev package FDIV2 FiniteDivisorFunctions2
+++ Lift a map to finite divisors.
+++ Author: Manuel Bronstein
+++ Date Created: 1988
+++ Date Last Updated: 19 May 1993
+FiniteDivisorFunctions2(R1, UP1, UPUP1, F1, R2, UP2, UPUP2, F2):
+ Exports == Implementation where
+  R1   : Field
+  UP1  : UnivariatePolynomialCategory R1
+  UPUP1: UnivariatePolynomialCategory Fraction UP1
+  F1   : FunctionFieldCategory(R1, UP1, UPUP1)
+  R2   : Field
+  UP2  : UnivariatePolynomialCategory R2
+  UPUP2: UnivariatePolynomialCategory Fraction UP2
+  F2   : FunctionFieldCategory(R2, UP2, UPUP2)
+
+  Exports ==> with
+    map: (R1 -> R2, FiniteDivisor(R1, UP1, UPUP1, F1)) ->
+                                       FiniteDivisor(R2, UP2, UPUP2, F2)
+	++ map(f,d) \undocumented{} 
+
+  Implementation ==> add
+    import UnivariatePolynomialCategoryFunctions2(R1,UP1,R2,UP2)
+    import FunctionFieldCategoryFunctions2(R1,UP1,UPUP1,F1,R2,UP2,UPUP2,F2)
+    import FractionalIdealFunctions2(UP1, Fraction UP1, UPUP1, F1,
+                                     UP2, Fraction UP2, UPUP2, F2)
+
+    map(f, d) ==
+      rec := decompose d
+      divisor map(f, rec.principalPart) + divisor map(map(f, #1), rec.id)
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+-- SPAD files for the algebraic integration world should be compiled
+-- in the following order:
+--
+--   curve DIVISOR reduc pfo intalg int
+
+<<domain FRIDEAL FractionalIdeal>>
+<<package FRIDEAL2 FractionalIdealFunctions2>>
+<<package MHROWRED ModularHermitianRowReduction>>
+<<domain FRMOD FramedModule>>
+<<category FDIVCAT FiniteDivisorCategory>>
+<<domain HELLFDIV HyperellipticFiniteDivisor>>
+<<domain FDIV FiniteDivisor>>
+<<package FDIV2 FiniteDivisorFunctions2>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

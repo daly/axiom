@@ -1,0 +1,2731 @@
+\documentclass{article}
+\usepackage{/home/axiomgnu/new/mnt/linux/bin/tex/noweb}
+\begin{document}
+\title{Sorting Facilities}
+\author{Timothy Daly}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+This is a survey of the explicitly mentioned sorting algorithms
+in the Axiom algebra code. Note that there are cases of "embedded"
+sorts as in the {\bf chainSubResultants} method from the
+{\bf PseudoRemainderSequence \cite{1}} domain. There are also
+implicit sorts as items are added to lists individually in sorted
+order.
+\subsection{aggcat.spad}
+\subsubsection{FiniteLinearAggregate}
+++ A finite linear aggregate is a linear aggregate of finite length.
+++ The finite property of the aggregate adds several exports to the
+++ list of exports from {\bf LinearAggregate} such as
+++ {\bf reverse}, {\bf sort}, and so on.
+<<FiniteLinearAggregate>>=
+FiniteLinearAggregate(S:Type): Category == LinearAggregate S with
+   finiteAggregate
+   sort: ((S,S)->B,%) -> %
+      ++ sort(p,a) returns a copy of {\bf a} sorted 
+      ++ using total ordering predicate p.
+   if S has OrderedSet then
+      OrderedSet
+      sort: % -> %
+	++ sort(u) returns an u with elements in ascending order.
+	++ Note: {\bf sort(u) = sort(<=,u)}.
+   if % has shallowlyMutable then
+      sort_!: ((S,S)->B,%) -> %
+	++ sort!(p,u) returns u with its elements ordered by p.
+      if S has OrderedSet then sort_!: % -> %
+	++ sort!(u) returns u with its elements in ascending order.
+ add
+    if S has OrderedSet then
+      sort l	  == sort(_<$S, l)
+
+    if % has shallowlyMutable then
+      sort(f, l) == sort_!(f, copy l)
+      if S has OrderedSet then
+	sort_! l == sort_!(_<$S, l)
+
+@
+\subsubsection{OneDimensionalArrayAggregate}
+One-dimensional-array aggregates serves as models for one-dimensional arrays.
+Categorically, these aggregates are finite linear aggregates
+with the {\bf shallowlyMutable} property, that is, any component of
+the array may be changed without affecting the
+identity of the overall array.
+Array data structures are typically represented by a fixed area in storage and
+therefore cannot efficiently grow or shrink on demand as can list structures
+(see however {\bf FlexibleArray} for a data structure which
+is a cross between a list and an array).
+Iteration over, and access to, elements of arrays is extremely fast
+(and often can be optimized to open-code).
+Insertion and deletion however is generally slow since an entirely new
+data structure must be created for the result.
+
+<<OneDimensionalArrayAggregate>>=
+OneDimensionalArrayAggregate(S:Type): Category ==
+    FiniteLinearAggregate S with shallowlyMutable
+  add
+    sort_!(f, a) == quickSort(f, a)$FiniteLinearAggregateSort(S, %)
+
+@
+\subsubsection{ListAggregate}
+A list aggregate is a model for a linked list data structure.
+A linked list is a versatile
+data structure. Insertion and deletion are efficient and
+searching is a linear operation.
+
+{\bf ListAggregate} uses the operation {\bf split\_!} which is inherited from
+{\bf StreamAggregate} which inherites it from it's implementing Domain
+{\bf UnaryRecursiveAggregate}. 
+A unary-recursive aggregate is a one where nodes may have either
+0 or 1 children.
+This aggregate models, though not precisely, a linked
+list possibly with a single cycle.
+A node with one children models a non-empty list, with the
+{\bf value} of the list designating the head, or {\bf first}, of the
+list, and the child designating the tail, or {\bf rest}, of the list.
+A node with no child then designates the empty list.
+Since these aggregates are recursive aggregates, they may be cyclic.
+
+There we see the definition of {\bf split\_!} as:
+
+<<UnaryRecursiveAggregate>>=
+UnaryRecursiveAggregate(S:Type): Category == RecursiveAggregate S with
+   rest: % -> %
+      ++ rest(u) returns an aggregate consisting of all but the first
+      ++ element of u
+      ++ (equivalently, the next node of u).
+   rest: (%,N) -> %
+      ++ rest(u,n) returns the \axiom{n}th (n >= 0) node of u.
+      ++ Note: \axiom{rest(u,0) = u}.
+   if % has shallowlyMutable then
+      split_!: (%,I) -> %
+	 ++ split!(u,n) splits u into two aggregates: \axiom{v = rest(u,n)}
+	 ++ and \axiom{w = first(u,n)}, returning \axiom{v}.
+	 ++ Note: afterwards \axiom{rest(u,n)} returns \axiom{empty()}.
+ add
+  rest(x, n) ==
+    for i in 1..n repeat
+      empty? x => error "Index out of range"
+      x := rest x
+    x
+
+  if S has SetCategory then
+    split_!(p, n) ==
+      n < 1 => error "index out of range"
+      p := rest(p, (n - 1)::N)
+      q := rest p
+      setrest_!(p, empty())
+      q
+
+
+@
+<<ListAggregate>>=
+ListAggregate(S:Type): Category == Join(StreamAggregate S,
+   FiniteLinearAggregate S, ExtensibleLinearAggregate S) with
+ add
+   mergeSort: ((S, S) -> B, %, I) -> %
+   mergeSort(f, p, n) ==
+     if n = 2 and f(first rest p, first p) then p := reverse_! p
+     n < 3 => p
+     l := (n quo 2)::N
+     q := split_!(p, l)
+     p := mergeSort(f, p, l)
+     q := mergeSort(f, q, n - l)
+     merge_!(f, p, q)
+
+   reverse_! x ==
+     empty? x => x
+     empty?(y := rest x) => x
+     setrest_!(x, empty())
+     while not empty? y repeat
+       z := rest y
+       setrest_!(y, x)
+       x := y
+       y := z
+     x
+
+   merge_!(f, p, q) ==
+     empty? p => q
+     empty? q => p
+     eq?(p, q) => error "cannot merge a list into itself"
+     if f(first p, first q)
+       then (r := t := p; p := rest p)
+       else (r := t := q; q := rest q)
+     while not empty? p and not empty? q repeat
+       if f(first p, first q)
+	 then (setrest_!(t, p); t := p; p := rest p)
+	 else (setrest_!(t, q); t := q; q := rest q)
+     setrest_!(t, if empty? p then q else p)
+     r
+
+   sort_!(f, l)	      == mergeSort(f, l, #l)
+
+   list x		   == concat(x, empty())
+   reduce(f, x)		   ==
+     empty? x => error "reducing over an empty list needs the 3 argument form"
+     reduce(f, rest x, first x)
+   merge(f, p, q)	   == merge_!(f, copy p, copy q)
+
+   select_!(f, x) ==
+     while not empty? x and not f first x repeat x := rest x
+     empty? x => x
+     y := x
+     z := rest y
+     while not empty? z repeat
+       if f first z then (y := z; z := rest z)
+		    else (z := rest z; setrest_!(y, z))
+     x
+
+   insert_!(s:S, x:%, i:I) ==
+     i < (m := minIndex x) => error "index out of range"
+     i = m => concat(s, x)
+     y := rest(x, (i - 1 - m)::N)
+     z := rest y
+     setrest_!(y, concat(s, z))
+     x
+
+   insert_!(w:%, x:%, i:I) ==
+     i < (m := minIndex x) => error "index out of range"
+     i = m => concat_!(w, x)
+     y := rest(x, (i - 1 - m)::N)
+     z := rest y
+     setrest_!(y, w)
+     concat_!(y, z)
+     x
+
+   remove_!(f:S -> B, x:%) ==
+     while not empty? x and f first x repeat x := rest x
+     empty? x => x
+     p := x
+     q := rest x
+     while not empty? q repeat
+       if f first q then q := setrest_!(p, rest q)
+		    else (p := q; q := rest q)
+     x
+
+   delete_!(x:%, i:I) ==
+     i < (m := minIndex x) => error "index out of range"
+     i = m => rest x
+     y := rest(x, (i - 1 - m)::N)
+     setrest_!(y, rest(y, 2))
+     x
+
+   delete_!(x:%, i:U) ==
+     (l := lo i) < (m := minIndex x) => error "index out of range"
+     h := if hasHi i then hi i else maxIndex x
+     h < l => x
+     l = m => rest(x, (h + 1 - m)::N)
+     t := rest(x, (l - 1 - m)::N)
+     setrest_!(t, rest(t, (h - l + 2)::N))
+     x
+
+   find(f, x) ==
+     while not empty? x and not f first x repeat x := rest x
+     empty? x => "failed"
+     first x
+
+   position(f:S -> B, x:%) ==
+     for k in minIndex(x).. while not empty? x and not f first x repeat
+       x := rest x
+     empty? x => minIndex(x) - 1
+     k
+
+   sorted?(f, l) ==
+     empty? l => true
+     p := rest l
+     while not empty? p repeat
+       not f(first l, first p) => return false
+       p := rest(l := p)
+     true
+
+   reduce(f, x, i) ==
+     r := i
+     while not empty? x repeat (r := f(r, first x); x := rest x)
+     r
+
+   if S has SetCategory then
+      reduce(f, x, i,a) ==
+	r := i
+	while not empty? x and r ^= a repeat
+	  r := f(r, first x)
+	  x := rest x
+	r
+
+   new(n, s) ==
+     l := empty()
+     for k in 1..n repeat l := concat(s, l)
+     l
+
+   map(f, x, y) ==
+     z := empty()
+     while not empty? x and not empty? y repeat
+       z := concat(f(first x, first y), z)
+       x := rest x
+       y := rest y
+     reverse_! z
+
+   copy x ==
+     y := empty()
+     for k in 0.. while not empty? x repeat
+       k = cycleMax and cyclic? x => error "cyclic list"
+       y := concat(first x, y)
+       x := rest x
+     reverse_! y
+
+   copyInto_!(y, x, s) ==
+     s < (m := minIndex y) => error "index out of range"
+     z := rest(y, (s - m)::N)
+     while not empty? z and not empty? x repeat
+       setfirst_!(z, first x)
+       x := rest x
+       z := rest z
+     y
+
+   if S has SetCategory then
+     position(w, x, s) ==
+       s < (m := minIndex x) => error "index out of range"
+       x := rest(x, (s - m)::N)
+       for k in s.. while not empty? x and w ^= first x repeat
+	 x := rest x
+       empty? x => minIndex x - 1
+       k
+
+     removeDuplicates_! l ==
+       p := l
+       while not empty? p repeat
+	 p := setrest_!(p, remove_!(#1 = first p, rest p))
+       l
+
+   if S has OrderedSet then
+     x < y ==
+	while not empty? x and not empty? y repeat
+	  first x ^= first y => return(first x < first y)
+	  x := rest x
+	  y := rest y
+	empty? x => not empty? y
+	false
+
+
+@
+\subsection{alql.spad}
+\subsubsection{DataList}
+This domain provides some nice functions on lists
+<<DataList>>=
+DataList(S:OrderedSet) : Exports == Implementation where
+  Exports == ListAggregate(S) with
+    elt: (%,"sort") -> %
+      ++ {\bf l.sort} returns {\bf l} with elements sorted.
+      ++ Note: {\bf l.sort = sort(l)}
+  Implementation == List(S) add
+    elt(x,"sort") == sort(x)
+
+@
+\subsection{carten.spad}
+\subsubsection{CartesianTensor}
+This is an instance of an "embedded sort" that should probably
+call one of the general purpose sort routines. 
+
+{\bf CartesianTensor(minix,dim,R)} provides Cartesian tensors with
+components belonging to a commutative ring R.  These tensors
+can have any number of indices.  Each index takes values from
+{\bf minix} to {\bf minix + dim - 1}.
+<<CartesianTensor>>=
+CartesianTensor(minix, dim, R): Exports == Implementation where
+    Exports ==> Join(GradedAlgebra(R, NNI), GradedModule(I, NNI)) with
+    Implementation ==> add
+        INDEX ==> Vector Integer  -- 1-based entries from minix..minix+dim-1
+
+        -- permsign!(v) = 1, 0, or -1  according as
+        -- v is an even, is not, or is an odd permutation of minix..minix+#v-1.
+        permsign_!(v: INDEX): Integer ==
+            -- sum minix..minix+#v-1.
+            maxix := minix+#v-1
+            psum  := (((maxix+1)*maxix - minix*(minix-1)) exquo 2)::Integer
+            -- +/v ^= psum => 0
+            n := 0
+            for i in 1..#v repeat n := n + v.i
+            n ^= psum => 0
+            -- Bubble sort!  This is pretty grotesque.
+            totTrans: Integer := 0
+            nTrans:   Integer := 1
+            while nTrans ^= 0 repeat
+                nTrans := 0
+                for i in 1..#v-1 for j in 2..#v repeat
+                    if v.i > v.j then
+                        nTrans := nTrans + 1
+                        e := v.i; v.i := v.j; v.j := e
+                totTrans := totTrans + nTrans
+            for i in 1..dim repeat
+                if v.i ^= minix+i-1 then return 0
+            odd? totTrans => -1
+            1
+
+@
+\subsection{clifford.spad}
+\subsubsection{CliffordAlgebra}
+Examples of {\bf Clifford Algebras} are: gaussians, quaternions, exterior 
+algebras and spin algebras.
+<<CliffordAlgebra>>=
+CliffordAlgebra(n, K, Q): T == Impl where
+    n: PositiveInteger
+    K: Field
+    Q: QuadraticForm(n, K)
+ 
+    PI ==> PositiveInteger
+    NNI==> NonNegativeInteger
+ 
+    T ==> Join(Ring, Algebra(K), VectorSpace(K)) with
+        e: PI -> %
+          ++ e(n) produces the appropriate unit element.
+        monomial: (K, List PI) -> %
+          ++ monomial(c,[i1,i2,...,iN]) produces the value given by
+          ++ \spad{c*e(i1)*e(i2)*...*e(iN)}.
+        coefficient:  (%, List PI) -> K
+          ++ coefficient(x,[i1,i2,...,iN])  extracts the coefficient of
+          ++ \spad{e(i1)*e(i2)*...*e(iN)} in x.
+        recip: % -> Union(%, "failed")
+          ++ recip(x) computes the multiplicative inverse of x or "failed"
+          ++ if x is not invertible.
+ 
+    Impl ==> add
+        Qeelist :=  [Q unitVector(i::PositiveInteger) for i in 1..n]
+        dim     :=  2**n
+ 
+        Rep     := PrimitiveArray K
+ 
+        New     ==> new(dim, 0$K)$Rep
+ 
+        x, y, z: %
+        c: K
+        m: Integer
+ 
+        characteristic() == characteristic()$K
+        dimension()      == dim::CardinalNumber
+ 
+        x = y ==
+            for i in 0..dim-1 repeat
+                if x.i ^= y.i then return false
+            true
+ 
+        x + y == (z := New; for i in 0..dim-1 repeat z.i := x.i + y.i; z)
+        x - y == (z := New; for i in 0..dim-1 repeat z.i := x.i - y.i; z)
+        - x   == (z := New; for i in 0..dim-1 repeat z.i := - x.i; z)
+        m * x == (z := New; for i in 0..dim-1 repeat z.i := m*x.i; z)
+        c * x == (z := New; for i in 0..dim-1 repeat z.i := c*x.i; z)
+ 
+        0            == New
+        1            == (z := New; z.0 := 1; z)
+        coerce(m): % == (z := New; z.0 := m::K; z)
+        coerce(c): % == (z := New; z.0 := c; z)
+ 
+        e b ==
+            b::NNI > n => error "No such basis element"
+            iz := 2**((b-1)::NNI)
+            z := New; z.iz := 1; z
+ 
+        -- The ei*ej products could instead be precomputed in
+        -- a (2**n)**2 multiplication table.
+        addMonomProd(c1: K, b1: NNI, c2: K, b2: NNI, z: %): % ==
+            c  := c1 * c2
+            bz := b2
+            for i in 0..n-1 | bit?(b1,i) repeat
+                -- Apply rule  ei*ej = -ej*ei for i^=j
+                k := 0
+                for j in i+1..n-1 | bit?(b1, j) repeat k := k+1
+                for j in 0..i-1   | bit?(bz, j) repeat k := k+1
+                if odd? k then c := -c
+                -- Apply rule  ei**2 = Q(ei)
+                if bit?(bz,i) then
+                    c := c * Qeelist.(i+1)
+                    bz:= (bz - 2**i)::NNI
+                else
+                    bz:= bz + 2**i
+            z.bz := z.bz + c
+            z
+ 
+        x * y ==
+            z := New
+            for ix in 0..dim-1 repeat
+                if x.ix ^= 0 then for iy in 0..dim-1 repeat
+                    if y.iy ^= 0 then addMonomProd(x.ix,ix,y.iy,iy,z)
+            z
+ 
+        canonMonom(c: K, lb: List PI): Record(coef: K, basel: NNI) ==
+            -- 0. Check input
+            for b in lb repeat b > n => error "No such basis element"
+ 
+            -- 1. Apply identity ei*ej = -ej*ei, i^=j.
+            -- The Rep assumes n is small so bubble sort is ok.
+            -- Using bubble sort keeps the exchange info obvious.
+            wasordered   := false
+            exchanges := 0
+            while not wasordered repeat
+                wasordered := true
+                for i in 1..#lb-1 repeat
+                    if lb.i > lb.(i+1) then
+                        t := lb.i; lb.i := lb.(i+1); lb.(i+1) := t
+                        exchanges := exchanges + 1
+                        wasordered := false
+            if odd? exchanges then c := -c
+ 
+            -- 2. Prepare the basis element
+            -- Apply identity ei*ei = Q(ei).
+            bz := 0
+            for b in lb repeat
+                bn := (b-1)::NNI
+                if bit?(bz, bn) then
+                    c := c * Qeelist bn
+                    bz:= ( bz - 2**bn )::NNI
+                else
+                    bz:= bz + 2**bn
+            [c, bz::NNI]
+ 
+        monomial(c, lb) ==
+            r := canonMonom(c, lb)
+            z := New
+            z r.basel := r.coef
+            z
+        coefficient(z, lb) ==
+            r := canonMonom(1, lb)
+            r.coef = 0 => error "Cannot take coef of 0"
+            z r.basel/r.coef
+ 
+        Ex ==> OutputForm
+ 
+        coerceMonom(c: K, b: NNI): Ex ==
+            b = 0 => c::Ex
+            ml := [sub("e"::Ex, i::Ex) for i in 1..n | bit?(b,i-1)]
+            be := reduce("*", ml)
+            c = 1 => be
+            c::Ex * be
+        coerce(x): Ex ==
+            tl := [coerceMonom(x.i,i) for i in 0..dim-1 | x.i^=0]
+            null tl => "0"::Ex
+            reduce("+", tl)
+
+
+	localPowerSets(j:NNI): List(List(PI)) ==
+	  l: List List PI := list []
+	  j = 0 => l
+	  Sm := localPowerSets((j-1)::NNI)
+          Sn: List List PI := []
+	  for x in Sm repeat Sn := cons(cons(j pretend PI, x),Sn)
+	  append(Sn, Sm)
+
+	powerSets(j:NNI):List List PI == map(reverse, localPowerSets j)
+
+	Pn:List List PI := powerSets(n)
+
+	recip(x: %): Union(%, "failed") ==
+	  one:% := 1
+	  -- tmp:c := x*yC - 1$C
+	  rhsEqs : List K := []
+	  lhsEqs: List List K := []
+	  lhsEqi: List K
+	  for pi in Pn repeat
+	    rhsEqs := cons(coefficient(one, pi), rhsEqs)
+
+	    lhsEqi := []
+	    for pj in Pn repeat
+		lhsEqi := cons(coefficient(x*monomial(1,pj),pi),lhsEqi)
+	    lhsEqs := cons(reverse(lhsEqi),lhsEqs)
+	  ans := particularSolution(matrix(lhsEqs),
+            vector(rhsEqs))$LinearSystemMatrixPackage(K, Vector K, Vector K, Matrix K)
+          ans case "failed" => "failed"
+	  ansP := parts(ans)
+	  ansC:% := 0
+	  for pj in Pn repeat
+	    cj:= first ansP
+	    ansP := rest ansP
+	    ansC := ansC + cj*monomial(1,pj)
+	  ansC
+
+@
+\subsection{defaults.spad}
+\subsubsection{FiniteLinearAggregateSort}
+++  This package exports 3 sorting algorithms which work over 
+++  FiniteLinearAggregates.
+<<FiniteLinearAggregateSort>>=
+FiniteLinearAggregateSort(S, V): Exports == Implementation where
+  S: Type
+  V: FiniteLinearAggregate(S) with shallowlyMutable
+ 
+  B ==> Boolean
+  I ==> Integer
+ 
+  Exports ==> with
+    quickSort: ((S, S) -> B, V) -> V
+      ++ quickSort(f, agg) sorts the aggregate agg with the ordering function
+      ++ f using the quicksort algorithm.
+    heapSort : ((S, S) -> B, V) -> V
+      ++ heapSort(f, agg) sorts the aggregate agg with the ordering function
+      ++ f using the heapsort algorithm.
+    shellSort: ((S, S) -> B, V) -> V
+      ++ shellSort(f, agg) sorts the aggregate agg with the ordering function
+      ++ f using the shellSort algorithm.
+ 
+  Implementation ==> add
+    siftUp   : ((S, S) -> B, V, I, I) -> Void
+    partition: ((S, S) -> B, V, I, I, I) -> I
+    QuickSort: ((S, S) -> B, V, I, I) -> V
+ 
+    quickSort(l, r) == QuickSort(l, r, minIndex r, maxIndex r)
+ 
+    siftUp(l, r, i, n) ==
+      t := qelt(r, i)
+      while (j := 2*i+1) < n repeat
+        if (k := j+1) < n and l(qelt(r, j), qelt(r, k)) then j := k
+        if l(t,qelt(r,j)) then
+           qsetelt_!(r, i, qelt(r, j))
+           qsetelt_!(r, j, t)
+           i := j
+        else leave
+ 
+    heapSort(l, r) ==
+      not zero? minIndex r => error "not implemented"
+      n := (#r)::I
+      for k in shift(n,-1) - 1 .. 0 by -1 repeat siftUp(l, r, k, n)
+      for k in n-1 .. 1 by -1 repeat
+         swap_!(r, 0, k)
+         siftUp(l, r, 0, k)
+      r
+ 
+    partition(l, r, i, j, k) ==
+      -- partition r[i..j] such that r.s <= r.k <= r.t
+      x := qelt(r, k)
+      t := qelt(r, i)
+      qsetelt_!(r, k, qelt(r, j))
+      while i < j repeat
+         if l(x,t) then
+           qsetelt_!(r, j, t)
+           j := j-1
+           t := qsetelt_!(r, i, qelt(r, j))
+         else (i := i+1; t := qelt(r, i))
+      qsetelt_!(r, j, x)
+      j
+ 
+    QuickSort(l, r, i, j) ==
+      n := j - i
+      if one? n and l(qelt(r, j), qelt(r, i)) then swap_!(r, i, j)
+      n < 2 => return r
+      -- for the moment split at the middle item
+      k := partition(l, r, i, j, i + shift(n,-1))
+      QuickSort(l, r, i, k - 1)
+      QuickSort(l, r, k + 1, j)
+ 
+    shellSort(l, r) ==
+      m := minIndex r
+      n := maxIndex r
+      -- use Knuths gap sequence: 1,4,13,40,121,...
+      g := 1
+      while g <= (n-m) repeat g := 3*g+1
+      g := g quo 3
+      while g > 0 repeat
+         for i in m+g..n repeat
+            j := i-g
+            while j >= m and l(qelt(r, j+g), qelt(r, j)) repeat
+               swap_!(r,j,j+g)
+               j := j-g
+         g := g quo 3
+      r
+ 
+
+@
+\subsection{e04agents.spad}
+\subsubsection{e04AgentsPackage}
+<<e04AgentsPackage>>=
+e04AgentsPackage(): E == I where
+
+++ Author: Brian Dupee
+++ Date Created: February 1996
+++ Date Last Updated: June 1996
+++ Basic Operations: simple? linear?, quadratic?, nonLinear?
+++ Description:
+++ \axiomType{e04AgentsPackage} is a package of numerical agents to be used
+++ to investigate attributes of an input function so as to decide the
+++ \axiomFun{measure} of an appropriate numerical optimization routine.
+
+  E ==> with
+
+    finiteBound:(LOCDF,DF) -> LDF 
+      ++ finiteBound(l,b) repaces all instances of an infinite entry in
+      ++ \axiom{l} by a finite entry \axiom{b} or \axiom{-b}.
+    sortConstraints:NOA -> NOA
+      ++ sortConstraints(args) uses a simple bubblesort on the list of
+      ++ constraints using the degree of the expression on which to sort.
+      ++ Of course, it must match the bounds to the constraints.
+    sumOfSquares:EDF -> Union(EDF,"failed")
+      ++ sumOfSquares(f) returns either an expression for which the square is
+      ++ the original function of "failed".
+    splitLinear:EDF -> EDF 
+      ++ splitLinear(f) splits the linear part from an expression which it
+      ++ returns.
+    simpleBounds?:LEDF -> Boolean
+      ++ simpleBounds?(l) returns true if the list of expressions l are
+      ++ simple.
+    linear?:LEDF -> Boolean
+      ++ linear?(l) returns true if all the bounds l are either linear or
+      ++ simple.
+    linear?:EDF -> Boolean
+      ++ linear?(e) tests if \axiom{e} is a linear function.
+    linearMatrix:(LEDF, NNI) -> MDF
+      ++ linearMatrix(l,n) returns a matrix of coefficients of the linear
+      ++ functions in \axiom{l}.  If l is empty, the matrix has at least one
+      ++ row.
+    linearPart:LEDF -> LEDF
+      ++ linearPart(l) returns the list of linear functions of \axiom{l}.
+    nonLinearPart:LEDF -> LEDF
+      ++ nonLinearPart(l) returns the list of non-linear functions of \axiom{l}.
+    quadratic?:EDF -> Boolean
+      ++ quadratic?(e) tests if \axiom{e} is a quadratic function.
+    variables:LSA -> LS
+      ++ variables(args) returns the list of variables in \axiom{args.lfn}
+    varList:(EDF,NNI) -> LS
+      ++ varList(e,n) returns a list of \axiom{n} indexed variables with name
+      ++ as in \axiom{e}.
+    changeNameToObjf:(Symbol,Result) -> Result
+      ++ changeNameToObjf(s,r) changes the name of item \axiom{s} in \axiom{r}
+      ++ to objf.
+    expenseOfEvaluation:LSA -> F
+      ++ expenseOfEvaluation(o) returns the intensity value of the 
+      ++ cost of evaluating the input set of functions.  This is in terms 
+      ++ of the number of ``operational units''.  It returns a value 
+      ++ in the range [0,1].
+    optAttributes:Union(noa:NOA,lsa:LSA) -> List String
+      ++ optAttributes(o) is a function for supplying a list of attributes
+      ++ of an optimization problem.
+
+  I ==> add
+
+    import ExpertSystemToolsPackage, ExpertSystemContinuityPackage
+
+    sumOfSquares2:EFI -> Union(EFI,"failed")
+    nonLinear?:EDF -> Boolean
+    finiteBound2:(OCDF,DF) -> DF 
+    functionType:EDF -> String
+
+    finiteBound2(a:OCDF,b:DF):DF ==
+      not finite?(a) =>
+        positive?(a) => b
+        -b
+      retract(a)@DF
+
+    finiteBound(l:LOCDF,b:DF):LDF == [finiteBound2(i,b) for i in l]
+
+    sortConstraints(args:NOA):NOA ==
+      Args := copy args
+      c:LEDF := Args.cf
+      l:LOCDF := Args.lb
+      u:LOCDF := Args.ub
+      m:INT := (# c) - 1      
+      n:INT := (# l) - m
+      for j in m..1 by -1 repeat
+        for i in 1..j repeat
+          s:EDF := c.i
+          t:EDF := c.(i+1)
+          if linear?(t) and (nonLinear?(s) or quadratic?(s)) then
+            swap!(c,i,i+1)$LEDF
+            swap!(l,n+i-1,n+i)$LOCDF
+            swap!(u,n+i-1,n+i)$LOCDF
+      Args
+        
+    changeNameToObjf(s:Symbol,r:Result):Result ==
+      a := remove!(s,r)$Result
+      a case Any =>
+        insert!([objf@Symbol,a],r)$Result
+        r
+      r
+
+    sum(a:EDF,b:EDF):EDF == a+b
+
+    variables(args:LSA): LS == variables(reduce(sum,(args.lfn)))
+
+    sumOfSquares(f:EDF):Union(EDF,"failed") ==
+      e := edf2efi(f)
+      s:Union(EFI,"failed") := sumOfSquares2(e)
+      s case EFI =>
+        map(fi2df,s)$EF2(FI,DF)
+      "failed"
+
+    sumOfSquares2(f:EFI):Union(EFI,"failed") ==
+      p := retractIfCan(f)@Union(PFI,"failed")
+      p case PFI => 
+        r := squareFreePart(p)$PFI
+        (p=r)@Boolean => "failed"
+        tp := totalDegree(p)$PFI
+        tr := totalDegree(r)$PFI
+        t := tp quo tr
+        found := false
+        q := r
+        for i in 2..t by 2 repeat
+          s := q**2
+          (s=p)@Boolean => 
+            found := true
+            leave
+          q := r**i
+        if found then 
+          q :: EFI
+        else
+          "failed"
+      "failed"
+
+    splitLinear(f:EDF):EDF ==
+      out := 0$EDF
+      (l := isPlus(f)$EDF) case LEDF =>
+        for i in l repeat
+          if not quadratic? i then
+            out := out + i
+        out
+      out
+
+    edf2pdf(f:EDF):PDF == (retract(f)@PDF)$EDF
+
+    varList(e:EDF,n:NNI):LS ==
+      s := name(first(variables(edf2pdf(e))$PDF)$LS)$Symbol
+      [subscript(s,[t::OutputForm]) for t in expand([1..n])$Segment(Integer)]
+
+    functionType(f:EDF):String ==
+      n := #(variables(f))$EDF
+      p := (retractIfCan(f)@Union(PDF,"failed"))$EDF
+      p case PDF =>
+        d := totalDegree(p)$PDF
+        one?(n*d) => "simple"
+        one?(d) => "linear"
+        (d=2)@Boolean => "quadratic"
+        "non-linear"
+      "non-linear"
+     
+    simpleBounds?(l: LEDF):Boolean ==
+      a := true
+      for e in l repeat
+        not (functionType(e) = "simple")@Boolean => 
+          a := false
+          leave
+      a
+
+    simple?(e:EDF):Boolean == (functionType(e) = "simple")@Boolean
+
+    linear?(e:EDF):Boolean == (functionType(e) = "linear")@Boolean
+
+    quadratic?(e:EDF):Boolean == (functionType(e) = "quadratic")@Boolean
+
+    nonLinear?(e:EDF):Boolean == (functionType(e) = "non-linear")@Boolean
+
+    linear?(l: LEDF):Boolean ==
+      a := true
+      for e in l repeat
+        s := functionType(e)
+        (s = "quadratic")@Boolean or (s = "non-linear")@Boolean => 
+          a := false
+          leave
+      a
+
+    simplePart(l:LEDF):LEDF == [i for i in l | simple?(i)]
+
+    linearPart(l:LEDF):LEDF == [i for i in l | linear?(i)]
+
+    nonLinearPart(l:LEDF):LEDF ==
+      [i for i in l | not linear?(i) and not simple?(i)]
+
+    linearMatrix(l:LEDF, n:NNI):MDF ==
+      empty?(l) => mat([],n)
+      L := linearPart l
+      M := zero(max(1,# L)$NNI,n)$MDF
+      vars := varList(first(l)$LEDF,n)
+      row:INT := 1
+      for a in L repeat
+        for j in monomials(edf2pdf(a))$PDF repeat
+          col:INT := 1
+          for c in vars repeat
+            if ((first(variables(j)$PDF)$LS)=c)@Boolean then
+              M(row,col):= first(coefficients(j)$PDF)$LDF
+            col := col+1
+        row := row + 1
+      M
+
+    expenseOfEvaluation(o:LSA):F ==
+      expenseOfEvaluation(vector(copy o.lfn)$VEDF)
+
+    optAttributes(o:Union(noa:NOA,lsa:LSA)):List String ==
+      o case noa =>
+        n := o.noa
+        s1:String := "The object function is " functionType(n.fn)
+        if empty?(n.lb) then
+          s2:String := "There are no bounds on the variables" 
+        else
+          s2:String := "There are simple bounds on the variables"
+        c := n.cf
+        if empty?(c) then
+          s3:String := "There are no constraint functions"
+        else
+          t := #(c)
+          lin := #(linearPart(c))
+          nonlin := #(nonLinearPart(c))
+          s3:String := "There are " string(lin)$String " linear and "_
+                          string(nonlin)$String " non-linear constraints"
+        [s1,s2,s3]
+      l := o.lsa
+      s:String := "non-linear"
+      if linear?(l.lfn) then
+        s := "linear"
+      ["The object functions are " s]
+
+@
+\subsection{expexpan.spad}
+++   UnivariatePuiseuxSeriesWithExponentialSingularity is a domain used to
+++   represent functions with essential singularities.  Objects in this
+++   domain are sums, where each term in the sum is a univariate Puiseux
+++   series times the exponential of a univariate Puiseux series.  Thus,
+++   the elements of this domain are sums of expressions of the form
+++   \spad{g(x) * exp(f(x))}, where g(x) is a univariate Puiseux series
+++   and f(x) is a univariate Puiseux series with no terms of non-negative
+++   degree.
+\subsubsection{UnivariatePuiseuxSeriesWithExponentialSingularity}
+<<UnivariatePuiseuxSeriesWithExponentialSingularity>>=
+UnivariatePuiseuxSeriesWithExponentialSingularity(R,FE,var,cen):_
+  Exports == Implementation where
+  R   : Join(OrderedSet,RetractableTo Integer,_
+             LinearlyExplicitRingOver Integer,GcdDomain)
+  FE  : Join(AlgebraicallyClosedField,TranscendentalFunctionCategory,_
+             FunctionSpace R)
+  var : Symbol
+  cen : FE
+  B       ==> Boolean
+  I       ==> Integer
+  L       ==> List
+  RN      ==> Fraction Integer
+  UPXS    ==> UnivariatePuiseuxSeries(FE,var,cen)
+  EXPUPXS ==> ExponentialOfUnivariatePuiseuxSeries(FE,var,cen)
+  OFE     ==> OrderedCompletion FE
+  Result  ==> Union(OFE,"failed")
+  PxRec   ==> Record(k: Fraction Integer,c:FE)
+  Term    ==> Record(%coef:UPXS,%expon:EXPUPXS,%expTerms:List PxRec)
+    -- the %expTerms field is used to record the list of the terms (a 'term'
+    -- records an exponent and a coefficient) in the exponent %expon
+  TypedTerm ==> Record(%term:Term,%type:String)
+    -- a term together with a String which tells whether it has an infinite,
+    -- zero, or unknown limit as var -> cen+
+  TRec    ==> Record(%zeroTerms: List Term,_
+                     %infiniteTerms: List Term,_
+                     %failedTerms: List Term,_
+                     %puiseuxSeries: UPXS)
+  SIGNEF  ==> ElementaryFunctionSign(R,FE)
+
+  Exports ==> Join(FiniteAbelianMonoidRing(UPXS,EXPUPXS),IntegralDomain) with
+    limitPlus : % -> Union(OFE,"failed")
+      ++ limitPlus(f(var)) returns \spad{limit(var -> cen+,f(var))}.
+    dominantTerm : % -> Union(TypedTerm,"failed")
+      ++ dominantTerm(f(var)) returns the term that dominates the limiting
+      ++ behavior of \spad{f(var)} as \spad{var -> cen+} together with a
+      ++ \spadtype{String} which briefly describes that behavior.  The
+      ++ value of the \spadtype{String} will be \spad{"zero"} (resp.
+      ++ \spad{"infinity"}) if the term tends to zero (resp. infinity)
+      ++ exponentially and will \spad{"series"} if the term is a
+      ++ Puiseux series.
+
+  Implementation ==> PolynomialRing(UPXS,EXPUPXS) add
+    makeTerm : (UPXS,EXPUPXS) -> Term
+    coeff : Term -> UPXS
+    exponent : Term -> EXPUPXS
+    exponentTerms : Term -> List PxRec
+    setExponentTerms_! : (Term,List PxRec) -> List PxRec
+    computeExponentTerms_! : Term -> List PxRec
+    terms : % -> List Term
+    sortAndDiscardTerms: List Term -> TRec
+    termsWithExtremeLeadingCoef : (L Term,RN,I) -> Union(L Term,"failed")
+    filterByOrder: (L Term,(RN,RN) -> B) -> Record(%list:L Term,%order:RN)
+    dominantTermOnList : (L Term,RN,I) -> Union(Term,"failed")
+    iDominantTerm : L Term -> Union(Record(%term:Term,%type:String),"failed")
+
+    retractIfCan f ==
+      (numberOfMonomials f = 1) and (zero? degree f) => leadingCoefficient f
+      "failed"
+
+    recip f ==
+      numberOfMonomials f = 1 =>
+        monomial(inv leadingCoefficient f,- degree f)
+      "failed"
+
+    makeTerm(coef,expon) == [coef,expon,empty()]
+    coeff term == term.%coef
+    exponent term == term.%expon
+    exponentTerms term == term.%expTerms
+    setExponentTerms_!(term,list) == term.%expTerms := list
+    computeExponentTerms_! term ==
+      setExponentTerms_!(term,entries complete terms exponent term)
+
+    terms f ==
+      -- terms with a higher order singularity will appear closer to the
+      -- beginning of the list because of the ordering in EXPPUPXS;
+      -- no "expnonent terms" are computed by this function
+      zero? f => empty()
+      concat(makeTerm(leadingCoefficient f,degree f),terms reductum f)
+
+    sortAndDiscardTerms termList ==
+      -- 'termList' is the list of terms of some function f(var), ordered
+      -- so that terms with a higher order singularity occur at the
+      -- beginning of the list.
+      -- This function returns lists of candidates for the "dominant
+      -- term" in 'termList', i.e. the term which describes the
+      -- asymptotic behavior of f(var) as var -> cen+.
+      -- 'zeroTerms' will contain terms which tend to zero exponentially
+      -- and contains only those terms with the lowest order singularity.
+      -- 'zeroTerms' will be non-empty only when there are no terms of
+      -- infinite or series type.
+      -- 'infiniteTerms' will contain terms which tend to infinity
+      -- exponentially and contains only those terms with the highest
+      -- order singularity.
+      -- 'failedTerms' will contain terms which have an exponential
+      -- singularity, where we cannot say whether the limiting value
+      -- is zero or infinity. Only terms with a higher order sigularity
+      -- than the terms on 'infiniteList' are included.
+      -- 'pSeries' will be a Puiseux series representing a term without an
+      -- exponential singularity.  'pSeries' will be non-zero only when no
+      -- other terms are known to tend to infinity exponentially
+      zeroTerms : List Term := empty()
+      infiniteTerms : List Term := empty()
+      failedTerms : List Term := empty()
+      -- we keep track of whether or not we've found an infinite term
+      -- if so, 'infTermOrd' will be set to a negative value
+      infTermOrd : RN := 0
+      -- we keep track of whether or not we've found a zero term
+      -- if so, 'zeroTermOrd' will be set to a negative value
+      zeroTermOrd : RN := 0
+      ord : RN := 0; pSeries : UPXS := 0  -- dummy values
+      while not empty? termList repeat
+        -- 'expon' is a Puiseux series
+        expon := exponent(term := first termList)
+        -- quit if there is an infinite term with a higher order singularity
+        (ord := order(expon,0)) > infTermOrd => leave "infinite term dominates"
+        -- if ord = 0, we've hit the end of the list
+        (ord = 0) =>
+          -- since we have a series term, don't bother with zero terms
+          leave(pSeries := coeff(term); zeroTerms := empty())
+        coef := coefficient(expon,ord)
+        -- if we can't tell if the lowest order coefficient is positive or
+        -- negative, we have a "failed term"
+        (signum := sign(coef)$SIGNEF) case "failed" =>
+          failedTerms := concat(term,failedTerms)
+          termList := rest termList
+        -- if the lowest order coefficient is positive, we have an
+        -- "infinite term"
+        (sig := signum :: Integer) = 1 =>
+          infTermOrd := ord
+          infiniteTerms := concat(term,infiniteTerms)
+          -- since we have an infinite term, don't bother with zero terms
+          zeroTerms := empty()
+          termList := rest termList
+        -- if the lowest order coefficient is negative, we have a
+        -- "zero term" if there are no infinite terms and no failed
+        -- terms, add the term to 'zeroTerms'
+        if empty? infiniteTerms then
+          zeroTerms :=
+            ord = zeroTermOrd => concat(term,zeroTerms)
+            zeroTermOrd := ord
+            list term
+        termList := rest termList
+      -- reverse "failed terms" so that higher order singularities
+      -- appear at the beginning of the list
+      [zeroTerms,infiniteTerms,reverse_! failedTerms,pSeries]
+
+    termsWithExtremeLeadingCoef(termList,ord,signum) ==
+      -- 'termList' consists of terms of the form [g(x),exp(f(x)),...];
+      -- when 'signum' is +1 (resp. -1), this function filters 'termList'
+      -- leaving only those terms such that coefficient(f(x),ord) is
+      -- maximal (resp. minimal)
+      while (coefficient(exponent first termList,ord) = 0) repeat
+        termList := rest termList
+      empty? termList => error "UPXSSING: can't happen"
+      coefExtreme := coefficient(exponent first termList,ord)
+      outList := list first termList; termList := rest termList
+      for term in termList repeat
+        (coefDiff := coefficient(exponent term,ord) - coefExtreme) = 0 =>
+          outList := concat(term,outList)
+        (sig := sign(coefDiff)$SIGNEF) case "failed" => return "failed"
+        (sig :: Integer) = signum => outList := list term
+      outList
+
+    filterByOrder(termList,predicate) ==
+      -- 'termList' consists of terms of the form [g(x),exp(f(x)),expTerms],
+      -- where 'expTerms' is a list containing some of the terms in the
+      -- series f(x).
+      -- The function filters 'termList' and, when 'predicate' is < (resp. >),
+      -- leaves only those terms with the lowest (resp. highest) order term
+      -- in 'expTerms'
+      while empty? exponentTerms first termList repeat
+        termList := rest termList
+        empty? termList => error "UPXSING: can't happen"
+      ordExtreme := (first exponentTerms first termList).k
+      outList := list first termList
+      for term in rest termList repeat
+        not empty? exponentTerms term =>
+          (ord := (first exponentTerms term).k) = ordExtreme =>
+            outList := concat(term,outList)
+          predicate(ord,ordExtreme) =>
+            ordExtreme := ord
+            outList := list term
+      -- advance pointers on "exponent terms" on terms on 'outList'
+      for term in outList repeat
+        setExponentTerms_!(term,rest exponentTerms term)
+      [outList,ordExtreme]
+
+    dominantTermOnList(termList,ord0,signum) ==
+      -- finds dominant term on 'termList'
+      -- it is known that "exponent terms" of order < 'ord0' are
+      -- the same for all terms on 'termList'
+      newList := termsWithExtremeLeadingCoef(termList,ord0,signum)
+      newList case "failed" => "failed"
+      termList := newList :: List Term
+      empty? rest termList => first termList
+      filtered :=
+        signum = 1 => filterByOrder(termList,#1 < #2)
+        filterByOrder(termList,#1 > #2)
+      termList := filtered.%list
+      empty? rest termList => first termList
+      dominantTermOnList(termList,filtered.%order,signum)
+
+    iDominantTerm termList ==
+      termRecord := sortAndDiscardTerms termList
+      zeroTerms := termRecord.%zeroTerms
+      infiniteTerms := termRecord.%infiniteTerms
+      failedTerms := termRecord.%failedTerms
+      pSeries := termRecord.%puiseuxSeries
+      -- in future versions, we will deal with "failed terms"
+      -- at present, if any occur, we cannot determine the limit
+      not empty? failedTerms => "failed"
+      not zero? pSeries => [makeTerm(pSeries,0),"series"]
+      not empty? infiniteTerms =>
+        empty? rest infiniteTerms => [first infiniteTerms,"infinity"]
+        for term in infiniteTerms repeat computeExponentTerms_! term
+        ord0 := order exponent first infiniteTerms
+        (dTerm := dominantTermOnList(infiniteTerms,ord0,1)) case "failed" =>
+          return "failed"
+        [dTerm :: Term,"infinity"]
+      empty? rest zeroTerms => [first zeroTerms,"zero"]
+      for term in zeroTerms repeat computeExponentTerms_! term
+      ord0 := order exponent first zeroTerms
+      (dTerm := dominantTermOnList(zeroTerms,ord0,-1)) case "failed" =>
+        return "failed"
+      [dTerm :: Term,"zero"]
+
+    dominantTerm f == iDominantTerm terms f
+
+    limitPlus f ==
+      -- list the terms occurring in 'f'; if there are none, then f = 0
+      empty?(termList := terms f) => 0
+      -- compute dominant term
+      (tInfo := iDominantTerm termList) case "failed" => "failed"
+      termInfo := tInfo :: Record(%term:Term,%type:String)
+      domTerm := termInfo.%term
+      (type := termInfo.%type) = "series" =>
+        -- find limit of series term
+        (ord := order(pSeries := coeff domTerm,1)) > 0 => 0
+        coef := coefficient(pSeries,ord)
+        member?(var,variables coef) => "failed"
+        ord = 0 => coef :: OFE
+        -- in the case of an infinite limit, we need to know the sign
+        -- of the first non-zero coefficient
+        (signum := sign(coef)$SIGNEF) case "failed" => "failed"
+        (signum :: Integer) = 1 => plusInfinity()
+        minusInfinity()
+      type = "zero" => 0
+      -- examine lowest order coefficient in series part of 'domTerm'
+      ord := order(pSeries := coeff domTerm)
+      coef := coefficient(pSeries,ord)
+      member?(var,variables coef) => "failed"
+      (signum := sign(coef)$SIGNEF) case "failed" => "failed"
+      (signum :: Integer) = 1 => plusInfinity()
+      minusInfinity()
+
+
+@
+\subsection{gbeuclid.spad}
+\subsubsection{EuclideanGroebnerBasisPackage}
+++ Description: \spadtype{EuclideanGroebnerBasisPackage} computes groebner
+++ bases for polynomial ideals over euclidean domains.
+++ The basic computation provides
+++ a distinguished set of generators for these ideals.
+++ This basis allows an easy test for membership: the operation
+++ \spadfun{euclideanNormalForm} returns zero on ideal members. The string 
+++ "info" and "redcrit" can be given as additional args to provide 
+++ incremental information during the computation. If "info" is given,
+++  a computational summary is given for each s-polynomial. If "redcrit" 
+++ is given, the reduced critical pairs are printed. The term ordering
+++ is determined by the polynomial type used. Suggested types include
+++ \spadtype{DistributedMultivariatePolynomial},
+++ \spadtype{HomogeneousDistributedMultivariatePolynomial},
+++ \spadtype{GeneralDistributedMultivariatePolynomial}.
+<<EuclideanGroebnerBasisPackage>>=
+EuclideanGroebnerBasisPackage(Dom, Expon, VarSet, Dpol): T == C where
+ 
+ Dom: EuclideanDomain
+ Expon: OrderedAbelianMonoidSup
+ VarSet: OrderedSet
+ Dpol: PolynomialCategory(Dom, Expon, VarSet)
+ 
+ T== with
+ 
+     euclideanNormalForm: (Dpol, List(Dpol) )  ->  Dpol
+       ++ euclideanNormalForm(poly,gb) reduces the polynomial poly modulo the
+       ++ precomputed groebner basis gb giving a canonical representative
+       ++ of the residue class.
+     euclideanGroebner: List(Dpol) -> List(Dpol)
+       ++ euclideanGroebner(lp) computes a groebner basis for a polynomial ideal
+       ++ over a euclidean domain generated by the list of polynomials lp.
+     euclideanGroebner: (List(Dpol), String) -> List(Dpol)
+       ++ euclideanGroebner(lp, infoflag) computes a groebner basis 
+       ++ for a polynomial ideal over a euclidean domain
+       ++ generated by the list of polynomials lp.
+       ++ During computation, additional information is printed out
+       ++ if infoflag is given as 
+       ++ either "info" (for summary information) or
+       ++ "redcrit" (for reduced critical pairs)
+     euclideanGroebner: (List(Dpol), String, String ) -> List(Dpol)
+       ++ euclideanGroebner(lp, "info", "redcrit") computes a groebner basis
+       ++ for a polynomial ideal generated by the list of polynomials lp.
+       ++ If the second argument is "info", a summary is given of the critical pairs.
+       ++ If the third argument is "redcrit", critical pairs are printed.
+ C== add
+   Ex ==> OutputForm
+   lc ==> leadingCoefficient
+   red ==> reductum
+
+   import OutputForm
+ 
+   ------  Definition list of critPair
+   ------  lcmfij is now lcm of headterm of poli and polj
+   ------  lcmcij is now lcm of of lc poli and lc polj
+ 
+   critPair ==>Record(lcmfij: Expon, lcmcij: Dom, poli:Dpol, polj: Dpol )
+   Prinp    ==> Record( ci:Dpol,tci:Integer,cj:Dpol,tcj:Integer,c:Dpol,
+                tc:Integer,rc:Dpol,trc:Integer,tH:Integer,tD:Integer)
+ 
+   ------  Definition of intermediate functions
+ 
+   strongGbasis: (List(Dpol), Integer, Integer) -> List(Dpol)
+   eminGbasis: List(Dpol) -> List(Dpol)
+   ecritT: (critPair ) -> Boolean
+   ecritM: (Expon, Dom, Expon, Dom) -> Boolean
+   ecritB: (Expon, Dom, Expon, Dom, Expon, Dom) -> Boolean
+   ecrithinH: (Dpol, List(Dpol)) -> Boolean
+   ecritBonD: (Dpol, List(critPair)) -> List(critPair)
+   ecritMTondd1:(List(critPair)) -> List(critPair)
+   ecritMondd1:(Expon, Dom, List(critPair)) -> List(critPair)
+   crithdelH: (Dpol, List(Dpol)) -> List(Dpol)
+   eupdatF: (Dpol, List(Dpol) ) -> List(Dpol)
+   updatH: (Dpol, List(Dpol), List(Dpol), List(Dpol) ) -> List(Dpol)
+   sortin: (Dpol, List(Dpol) ) -> List(Dpol)
+   eRed: (Dpol, List(Dpol), List(Dpol) )  ->  Dpol
+   ecredPol: (Dpol, List(Dpol) ) -> Dpol
+   esPol: (critPair) -> Dpol
+   updatD: (List(critPair), List(critPair)) -> List(critPair)
+   lepol: Dpol -> Integer
+   prinshINFO : Dpol -> Void
+   prindINFO: (critPair, Dpol, Dpol,Integer,Integer,Integer) -> Integer
+   prinpolINFO: List(Dpol) -> Void
+   prinb: Integer -> Void
+ 
+   ------    MAIN ALGORITHM GROEBNER ------------------------
+   euclideanGroebner( Pol: List(Dpol) ) ==
+     eminGbasis(strongGbasis(Pol,0,0))
+ 
+   euclideanGroebner( Pol: List(Dpol), xx1: String) ==
+     xx1 = "redcrit" =>
+       eminGbasis(strongGbasis(Pol,1,0))
+     xx1 = "info" =>
+       eminGbasis(strongGbasis(Pol,2,1))
+     print("   "::Ex)
+     print("WARNING: options are - redcrit and/or info - "::Ex)
+     print("         you didn't type them correct"::Ex)
+     print("         please try again"::Ex)
+     print("   "::Ex)
+     []
+ 
+   euclideanGroebner( Pol: List(Dpol), xx1: String, xx2: String) ==
+     (xx1 = "redcrit" and xx2 = "info") or
+      (xx1 = "info" and xx2 = "redcrit")   =>
+       eminGbasis(strongGbasis(Pol,1,1))
+     xx1 = "redcrit" and xx2 = "redcrit" =>
+       eminGbasis(strongGbasis(Pol,1,0))
+     xx1 = "info" and xx2 = "info" =>
+       eminGbasis(strongGbasis(Pol,2,1))
+     print("   "::Ex)
+     print("WARNING:  options are - redcrit and/or info - "::Ex)
+     print("          you didn't type them correct"::Ex)
+     print("          please try again "::Ex)
+     print("   "::Ex)
+     []
+ 
+   ------    calculate basis
+ 
+   strongGbasis(Pol: List(Dpol),xx1: Integer, xx2: Integer ) ==
+     dd1, D : List(critPair)
+ 
+     ---------   create D and Pol
+ 
+     Pol1:= sort( (degree #1 > degree #2) or
+                    ((degree #1 = degree #2 ) and
+                       sizeLess?(leadingCoefficient #2,leadingCoefficient #1)),
+                 Pol)
+     Pol:= [first(Pol1)]
+     H:= Pol
+     Pol1:= rest(Pol1)
+     D:= nil
+     while ^null Pol1 repeat
+        h:= first(Pol1)
+        Pol1:= rest(Pol1)
+        en:= degree(h)
+        lch:= lc h
+        dd1:= [[sup(degree(x), en), lcm(leadingCoefficient x, lch), x, h]$critPair
+            for x in Pol]
+        D:= updatD(ecritMTondd1(sort((#1.lcmfij < #2.lcmfij) or
+                                      (( #1.lcmfij = #2.lcmfij ) and
+                                        ( sizeLess?(#1.lcmcij,#2.lcmcij)) ),
+                                     dd1)), ecritBonD(h,D))
+        Pol:= cons(h, eupdatF(h, Pol))
+        ((en = degree(first(H))) and (leadingCoefficient(h) = leadingCoefficient(first(H)) ) ) =>
+              " go to top of while "
+        H:= updatH(h,H,crithdelH(h,H),[h])
+        H:= sort((degree #1 > degree #2) or
+                ((degree #1 = degree #2 ) and
+                  sizeLess?(leadingCoefficient #2,leadingCoefficient #1)), H)
+     D:= sort((#1.lcmfij < #2.lcmfij) or
+             (( #1.lcmfij = #2.lcmfij ) and
+               ( sizeLess?(#1.lcmcij,#2.lcmcij)) ) ,D)
+     xx:= xx2
+ 
+     --------  loop
+ 
+     while ^null D repeat
+         D0:= first D
+         ep:=esPol(D0)
+         D:= rest(D)
+         eh:= ecredPol(eRed(ep,H,H),H)
+         if xx1 = 1 then
+               prinshINFO(eh)
+         eh = 0 =>
+              if xx2 = 1 then
+                  ala:= prindINFO(D0,ep,eh,#H, #D, xx)
+                  xx:= 2
+              " go to top of while "
+         eh := unitCanonical eh
+         e:= degree(eh)
+         leh:= lc eh
+         dd1:= [[sup(degree(x), e), lcm(leadingCoefficient x, leh), x, eh]$critPair
+            for x in Pol]
+         D:= updatD(ecritMTondd1(sort( (#1.lcmfij <
+              #2.lcmfij) or (( #1.lcmfij = #2.lcmfij ) and
+               ( sizeLess?(#1.lcmcij,#2.lcmcij)) ), dd1)), ecritBonD(eh,D))
+         Pol:= cons(eh,eupdatF(eh,Pol))
+         ^ecrithinH(eh,H) or
+           ((e = degree(first(H))) and (leadingCoefficient(eh) = leadingCoefficient(first(H)) ) ) =>
+              if xx2 = 1 then
+                  ala:= prindINFO(D0,ep,eh,#H, #D, xx)
+                  xx:= 2
+              " go to top of while "
+         H:= updatH(eh,H,crithdelH(eh,H),[eh])
+         H:= sort( (degree #1 > degree #2) or
+             ((degree #1 = degree #2 ) and
+                 sizeLess?(leadingCoefficient #2,leadingCoefficient #1)), H)
+         if xx2 = 1 then
+           ala:= prindINFO(D0,ep,eh,#H, #D, xx)
+           xx:= 2
+           " go to top of while "
+     if xx2 = 1 then
+       prinpolINFO(Pol)
+       print("    THE GROEBNER BASIS over EUCLIDEAN DOMAIN"::Ex)
+     if xx1 = 1 and xx2 ^= 1 then
+       print("    THE GROEBNER BASIS over EUCLIDEAN DOMAIN"::Ex)
+     H
+ 
+             --------------------------------------
+ 
+             --- erase multiple of e in D2 using crit M
+ 
+   ecritMondd1(e: Expon, c: Dom, D2: List(critPair))==
+      null D2 => nil
+      x:= first(D2)
+      ecritM(e,c, x.lcmfij, lcm(leadingCoefficient(x.poli), leadingCoefficient(x.polj)))
+         => ecritMondd1(e, c, rest(D2))
+      cons(x, ecritMondd1(e, c, rest(D2)))
+ 
+            -------------------------------
+ 
+   ecredPol(h: Dpol, F: List(Dpol) ) ==
+        h0:Dpol:= 0
+        null F => h
+        while h ^= 0 repeat
+           h0:= h0 + monomial(leadingCoefficient(h),degree(h))
+           h:= eRed(red(h), F, F)
+        h0
+             ----------------------------
+ 
+             --- reduce dd1 using crit T and crit M
+ 
+   ecritMTondd1(dd1: List(critPair))==
+           null dd1 => nil
+           f1:= first(dd1)
+           s1:= #(dd1)
+           cT1:= ecritT(f1)
+           s1= 1 and cT1 => nil
+           s1= 1 => dd1
+           e1:= f1.lcmfij
+           r1:= rest(dd1)
+           f2:= first(r1)
+           e1 = f2.lcmfij and f1.lcmcij = f2.lcmcij =>
+              cT1 =>   ecritMTondd1(cons(f1, rest(r1)))
+              ecritMTondd1(r1)
+           dd1 := ecritMondd1(e1, f1.lcmcij, r1)
+           cT1 => ecritMTondd1(dd1)
+           cons(f1, ecritMTondd1(dd1))
+ 
+             -----------------------------
+ 
+             --- erase elements in D fullfilling crit B
+ 
+   ecritBonD(h:Dpol, D: List(critPair))==
+         null D => nil
+         x:= first(D)
+         x1:= x.poli
+         x2:= x.polj
+         ecritB(degree(h), leadingCoefficient(h), degree(x1),leadingCoefficient(x1),degree(x2),leadingCoefficient(x2)) =>
+           ecritBonD(h, rest(D))
+         cons(x, ecritBonD(h, rest(D)))
+ 
+             -----------------------------
+ 
+             --- concat F and h and erase multiples of h in F
+ 
+   eupdatF(h: Dpol, F: List(Dpol)) ==
+       null F => nil
+       f1:= first(F)
+       ecritM(degree h, leadingCoefficient(h), degree f1, leadingCoefficient(f1))
+           => eupdatF(h, rest(F))
+       cons(f1, eupdatF(h, rest(F)))
+ 
+             -----------------------------
+             --- concat H and h and erase multiples of h in H
+ 
+   updatH(h: Dpol, H: List(Dpol), Hh: List(Dpol), Hhh: List(Dpol)) ==
+       null H => append(Hh,Hhh)
+       h1:= first(H)
+       hlcm:= sup(degree(h1), degree(h))
+       plc:= extendedEuclidean(leadingCoefficient(h), leadingCoefficient(h1))
+       hp:= monomial(plc.coef1,subtractIfCan(hlcm, degree(h))::Expon)*h +
+            monomial(plc.coef2,subtractIfCan(hlcm, degree(h1))::Expon)*h1
+       (ecrithinH(hp, Hh) and ecrithinH(hp, Hhh)) =>
+         hpp:= append(rest(H),Hh)
+         hp:= ecredPol(eRed(hp,hpp,hpp),hpp)
+         updatH(h, rest(H), crithdelH(hp,Hh),cons(hp,crithdelH(hp,Hhh)))
+       updatH(h, rest(H), Hh,Hhh)
+ 
+             --------------------------------------------------
+             ---- delete elements in cons(h,H)
+ 
+   crithdelH(h: Dpol, H: List(Dpol))==
+        null H => nil
+        h1:= first(H)
+        dh1:= degree h1
+        dh:= degree h
+        ecritM(dh, lc h, dh1, lc h1) => crithdelH(h, rest(H))
+        dh1 = sup(dh,dh1) =>
+           plc:= extendedEuclidean( lc h1, lc h)
+           cons(plc.coef1*h1 + monomial(plc.coef2,subtractIfCan(dh1,dh)::Expon)*h,
+               crithdelH(h,rest(H)))
+        cons(h1, crithdelH(h,rest(H)))
+ 
+   eminGbasis(F: List(Dpol)) ==
+        null F => nil
+        newbas := eminGbasis rest F
+        cons(ecredPol( first(F), newbas),newbas)
+ 
+             ------------------------------------------------
+             --- does h belong to H
+ 
+   ecrithinH(h: Dpol, H: List(Dpol))==
+        null H  => true
+        h1:= first(H)
+        ecritM(degree h1, lc h1, degree h, lc h) => false
+        ecrithinH(h, rest(H))
+ 
+            -----------------------------
+            --- calculate  euclidean S-polynomial of a critical pair
+ 
+   esPol(p:critPair)==
+      Tij := p.lcmfij
+      fi := p.poli
+      fj := p.polj
+      lij:= lcm(leadingCoefficient(fi), leadingCoefficient(fj))
+      red(fi)*monomial((lij exquo leadingCoefficient(fi))::Dom,
+                        subtractIfCan(Tij, degree fi)::Expon) -
+        red(fj)*monomial((lij exquo leadingCoefficient(fj))::Dom,
+                         subtractIfCan(Tij, degree fj)::Expon)
+ 
+            ----------------------------
+ 
+            --- euclidean reduction mod F
+ 
+   eRed(s: Dpol, H: List(Dpol), Hh: List(Dpol)) ==
+     ( s = 0 or null H ) => s
+     f1:= first(H)
+     ds:= degree s
+     lf1:= leadingCoefficient(f1)
+     ls:= leadingCoefficient(s)
+     e: Union(Expon, "failed")
+     (((e:= subtractIfCan(ds, degree f1))  case "failed" ) or sizeLess?(ls, lf1) ) =>
+        eRed(s, rest(H), Hh)
+     sdf1:= divide(ls, lf1)
+     q1:= sdf1.quotient
+     sdf1.remainder = 0 =>
+        eRed(red(s) - monomial(q1,e)*reductum(f1), Hh, Hh)
+     eRed(s -(monomial(q1, e)*f1), rest(H), Hh)
+ 
+            ----------------------------
+ 
+            --- crit T  true, if e1 and e2 are disjoint
+ 
+   ecritT(p: critPair) ==
+          pi:= p.poli
+          pj:= p.polj
+          ci:= lc pi
+          cj:= lc pj
+          (p.lcmfij = degree pi + degree pj) and  (p.lcmcij = ci*cj)
+ 
+            ----------------------------
+ 
+            --- crit M - true, if lcm#2 multiple of lcm#1
+ 
+   ecritM(e1: Expon, c1: Dom, e2: Expon, c2: Dom) ==
+     en: Union(Expon, "failed")
+     ((en:=subtractIfCan(e2, e1)) case "failed") or
+       ((c2 exquo c1) case "failed") => false
+     true
+            ----------------------------
+ 
+            --- crit B - true, if eik is a multiple of eh and eik ^equal
+            ---          lcm(eh,ei) and eik ^equal lcm(eh,ek)
+ 
+   ecritB(eh:Expon, ch: Dom, ei:Expon, ci: Dom, ek:Expon, ck: Dom) ==
+       eik:= sup(ei, ek)
+       cik:= lcm(ci, ck)
+       ecritM(eh, ch, eik, cik) and
+             ^ecritM(eik, cik, sup(ei, eh), lcm(ci, ch)) and
+                ^ecritM(eik, cik, sup(ek, eh), lcm(ck, ch))
+ 
+            -------------------------------
+ 
+            --- reduce p1 mod lp
+ 
+   euclideanNormalForm(p1: Dpol, lp: List(Dpol))==
+       eRed(p1, lp, lp)
+ 
+            ---------------------------------
+ 
+            ---  insert element in sorted list
+ 
+   sortin(p1: Dpol, lp: List(Dpol))==
+      null lp => [p1]
+      f1:= first(lp)
+      elf1:= degree(f1)
+      ep1:= degree(p1)
+      ((elf1 < ep1) or ((elf1 = ep1) and
+        sizeLess?(leadingCoefficient(f1),leadingCoefficient(p1)))) =>
+         cons(f1,sortin(p1, rest(lp)))
+      cons(p1,lp)
+ 
+   updatD(D1: List(critPair), D2: List(critPair)) ==
+      null D1 => D2
+      null D2 => D1
+      dl1:= first(D1)
+      dl2:= first(D2)
+      (dl1.lcmfij  <  dl2.lcmfij) => cons(dl1, updatD(D1.rest, D2))
+      cons(dl2, updatD(D1, D2.rest))
+ 
+            ----  calculate number of terms of polynomial
+ 
+   lepol(p1:Dpol)==
+      n: Integer
+      n:= 0
+      while p1 ^= 0 repeat
+         n:= n + 1
+         p1:= red(p1)
+      n
+ 
+            ----  print blanc lines
+ 
+   prinb(n: Integer)==
+        for i in 1..n repeat messagePrint("    ")
+ 
+            ----  print reduced critpair polynom
+ 
+   prinshINFO(h: Dpol)==
+           prinb(2)
+           messagePrint(" reduced Critpair - Polynom :")
+           prinb(2)
+           print(h::Ex)
+           prinb(2)
+ 
+            -------------------------------
+ 
+            ----  print info string
+ 
+   prindINFO(cp: critPair, ps: Dpol, ph: Dpol, i1:Integer,
+             i2:Integer, n:Integer) ==
+       ll: List Prinp
+       a: Dom
+       cpi:= cp.poli
+       cpj:= cp.polj
+       if n = 1 then
+        prinb(1)
+        messagePrint("you choose option  -info-  ")
+        messagePrint("abbrev. for the following information strings are")
+        messagePrint("  ci  =>  Leading monomial  for critpair calculation")
+        messagePrint("  tci =>  Number of terms of polynomial i")
+        messagePrint("  cj  =>  Leading monomial  for critpair calculation")
+        messagePrint("  tcj =>  Number of terms of polynomial j")
+        messagePrint("  c   =>  Leading monomial of critpair polynomial")
+        messagePrint("  tc  =>  Number of terms of critpair polynomial")
+        messagePrint("  rc  =>  Leading monomial of redcritpair polynomial")
+        messagePrint("  trc =>  Number of terms of redcritpair polynomial")
+        messagePrint("  tF  =>  Number of polynomials in reduction list F")
+        messagePrint("  tD  =>  Number of critpairs still to do")
+        prinb(4)
+        n:= 2
+       prinb(1)
+       a:= 1
+       ph = 0  =>
+          ps = 0 =>
+            ll:= [[monomial(a,degree(cpi)),lepol(cpi),monomial(a,degree(cpj)),
+             lepol(cpj),ps,0,ph,0,i1,i2]$Prinp]
+            print(ll::Ex)
+            prinb(1)
+            n
+          ll:= [[monomial(a,degree(cpi)),lepol(cpi),
+            monomial(a,degree(cpj)),lepol(cpj),monomial(a,degree(ps)),
+             lepol(ps), ph,0,i1,i2]$Prinp]
+          print(ll::Ex)
+          prinb(1)
+          n
+       ll:= [[monomial(a,degree(cpi)),lepol(cpi),
+            monomial(a,degree(cpj)),lepol(cpj),monomial(a,degree(ps)),
+             lepol(ps),monomial(a,degree(ph)),lepol(ph),i1,i2]$Prinp]
+       print(ll::Ex)
+       prinb(1)
+       n
+ 
+            -------------------------------
+ 
+            ----  print the groebner basis polynomials
+ 
+   prinpolINFO(pl: List(Dpol))==
+       n:Integer
+       n:= #pl
+       prinb(1)
+       n = 1 =>
+         print("  There is 1  Groebner Basis Polynomial "::Ex)
+         prinb(2)
+       print("  There are "::Ex)
+       prinb(1)
+       print(n::Ex)
+       prinb(1)
+       print("  Groebner Basis Polynomials. "::Ex)
+       prinb(2)
+ 
+@
+\subsection{kl.spad}
+\subsubsection{SortedCache}
+++   A sorted cache of a cachable set S is a dynamic structure that
+++   keeps the elements of S sorted and assigns an integer to each
+++   element of S once it is in the cache. This way, equality and ordering
+++   on S are tested directly on the integers associated with the elements
+++   of S, once they have been entered in the cache.
+<<SortedCache>>=
+SortedCache(S:CachableSet): Exports == Implementation where
+  N    ==> NonNegativeInteger
+  DIFF ==> 1024
+
+  Exports ==> with
+    clearCache  : () -> Void
+      ++ clearCache() empties the cache.
+    cache       : () -> List S
+      ++ cache() returns the current cache as a list.
+    enterInCache: (S, S -> Boolean) -> S
+      ++ enterInCache(x, f) enters x in the cache, calling \spad{f(y)} to
+      ++ determine whether x is equal to y. It returns x with an integer
+      ++ associated with it.
+    enterInCache: (S, (S, S) -> Integer) -> S
+      ++ enterInCache(x, f) enters x in the cache, calling \spad{f(x, y)} to
+      ++ determine whether \spad{x < y (f(x,y) < 0), x = y (f(x,y) = 0)}, or
+      ++ \spad{x > y (f(x,y) > 0)}.
+      ++ It returns x with an integer associated with it.
+
+  Implementation ==> add
+    shiftCache   : (List S, N) -> Void
+    insertInCache: (List S, List S, S, N) -> S
+
+    cach := [nil()]$Record(cche:List S)
+
+    cache() == cach.cche
+
+    shiftCache(l, n) ==
+      for x in l repeat setPosition(x, n + position x)
+      void
+
+    clearCache() ==
+      for x in cache repeat setPosition(x, 0)
+      cach.cche := nil()
+      void
+
+    enterInCache(x:S, equal?:S -> Boolean) ==
+      scan := cache()
+      while not null scan repeat
+        equal?(y := first scan) =>
+          setPosition(x, position y)
+          return y
+        scan := rest scan
+      setPosition(x, 1 + #cache())
+      cach.cche := concat(cache(), x)
+      x
+
+    enterInCache(x:S, triage:(S, S) -> Integer) ==
+      scan := cache()
+      pos:N:= 0
+      for i in 1..#scan repeat
+        zero?(n := triage(x, y := first scan)) =>
+          setPosition(x, position y)
+          return y
+        n<0 => return insertInCache(first(cache(),(i-1)::N),scan,x,pos)
+        scan := rest scan
+        pos  := position y
+      setPosition(x, pos + DIFF)
+      cach.cche := concat(cache(), x)
+      x
+
+    insertInCache(before, after, x, pos) ==
+      if ((pos+1) = position first after) then shiftCache(after, DIFF)
+      setPosition(x, pos + (((position first after) - pos)::N quo 2))
+      cach.cche := concat(before, concat(x, after))
+      x
+
+@
+\subsection{list.spad}
+\subsubsection{IndexedList}
+++   \spadtype{IndexedList} is a basic implementation of the functions
+++   in \spadtype{ListAggregate}, often using functions in the underlying
+++   LISP system. The second parameter to the constructor (\spad{mn})
+++   is the beginning index of the list. That is, if \spad{l} is a
+++   list, then \spad{elt(l,mn)} is the first value. This constructor
+++   is probably best viewed as the implementation of singly-linked
+++   lists that are addressable by index rather than as a mere wrapper
+++   for LISP lists.
+<<IndexedList>>=
+IndexedList(S:Type, mn:Integer): ListAggregate S == add
+   #x                  == LENGTH(x)$Lisp
+   concat(s:S,x:%)     == CONS(s,x)$Lisp
+   eq?(x,y)            == EQ(x,y)$Lisp
+   first x             == SPADfirst(x)$Lisp
+   elt(x,"first")      == SPADfirst(x)$Lisp
+   empty()             == NIL$Lisp
+   empty? x            == NULL(x)$Lisp
+   rest x              == CDR(x)$Lisp
+   elt(x,"rest")       == CDR(x)$Lisp
+   setfirst_!(x,s)     ==
+      empty? x => error "Cannot update an empty list"
+      Qfirst RPLACA(x,s)$Lisp
+   setelt(x,"first",s) ==
+      empty? x => error "Cannot update an empty list"
+      Qfirst RPLACA(x,s)$Lisp
+   setrest_!(x,y)      ==
+      empty? x => error "Cannot update an empty list"
+      Qrest RPLACD(x,y)$Lisp
+   setelt(x,"rest",y)  ==
+      empty? x => error "Cannot update an empty list"
+      Qrest RPLACD(x,y)$Lisp
+   construct l         == l pretend %
+   parts s             == s pretend List S
+   reverse_! x         == NREVERSE(x)$Lisp
+   reverse x           == REVERSE(x)$Lisp
+   minIndex x          == mn
+
+   rest(x, n) ==
+      for i in 1..n repeat
+         if Qnull x then error "index out of range"
+         x := Qrest x
+      x
+
+   copy x ==
+      y := empty()
+      for i in 0.. while not Qnull x repeat
+         if Qeq(i,cycleMax) and cyclic? x then error "cyclic list"
+         y := Qcons(Qfirst x,y)
+         x := Qrest x
+      (NREVERSE(y)$Lisp)@%
+
+   if S has SetCategory then
+     coerce(x):OutputForm ==
+        -- displays cycle with overbar over the cycle
+        y := empty()$List(OutputForm)
+        s := cycleEntry x
+        while Qneq(x, s) repeat
+          y := concat((first x)::OutputForm, y)
+          x := rest x
+        y := reverse_! y
+        empty? s => bracket y
+        -- cyclic case: z is cylic part
+        z := list((first x)::OutputForm)
+        while Qneq(s, rest x) repeat
+           x := rest x
+           z := concat((first x)::OutputForm, z)
+        bracket concat_!(y, overbar commaSeparate reverse_! z)
+
+     x = y ==
+       Qeq(x,y) => true
+       while not Qnull x and not Qnull y repeat
+          Qfirst x ^=$S Qfirst y => return false
+          x := Qrest x
+          y := Qrest y
+       Qnull x and Qnull y
+
+     latex(x : %): String ==
+       s : String := "\left["
+       while not Qnull x repeat
+         s := concat(s, latex(Qfirst x)$S)$String
+         x := Qrest x
+         if not Qnull x then s := concat(s, ", ")$String
+       concat(s, " \right]")$String
+
+     member?(s,x) ==
+        while not Qnull x repeat
+           if s = Qfirst x then return true else x := Qrest x
+        false
+
+   -- Lots of code from parts of AGGCAT, repeated here to
+   -- get faster compilation
+   concat_!(x:%,y:%) ==
+      Qnull x => 
+        Qnull y => x
+        Qpush(first y,x)
+        QRPLACD(x,rest y)$Lisp
+        x
+      z:=x
+      while not Qnull Qrest z repeat
+        z:=Qrest z
+      QRPLACD(z,y)$Lisp
+      x
+
+   -- Then a quicky:
+   if S has SetCategory then
+     removeDuplicates_! l ==
+       p := l
+       while not Qnull p repeat
+--       p := setrest_!(p, remove_!(#1 = Qfirst p, Qrest p))
+-- far too expensive - builds closures etc.
+         pp:=p
+         f:S:=Qfirst p
+         p:=Qrest p
+         while not Qnull (pr:=Qrest pp) repeat
+           if (Qfirst pr)@S = f then QRPLACD(pp,Qrest pr)$Lisp
+           else pp:=pr
+       l
+
+   -- then sorting
+   mergeSort: ((S, S) -> Boolean, %, Integer) -> %
+
+   sort_!(f, l)       == mergeSort(f, l, #l)
+
+   merge_!(f, p, q) ==
+     Qnull p => q
+     Qnull q => p
+     Qeq(p, q) => error "cannot merge a list into itself"
+     if f(Qfirst p, Qfirst q)
+       then (r := t := p; p := Qrest p)
+       else (r := t := q; q := Qrest q)
+     while not Qnull p and not Qnull q repeat
+       if f(Qfirst p, Qfirst q)
+         then (QRPLACD(t, p)$Lisp; t := p; p := Qrest p)
+         else (QRPLACD(t, q)$Lisp; t := q; q := Qrest q)
+     QRPLACD(t, if Qnull p then q else p)$Lisp
+     r
+
+   split_!(p, n) ==
+      n < 1 => error "index out of range"
+      p := rest(p, (n - 1)::NonNegativeInteger)
+      q := Qrest p
+      QRPLACD(p, NIL$Lisp)$Lisp
+      q
+
+   mergeSort(f, p, n) ==
+     if n = 2 and f(first rest p, first p) then p := reverse_! p
+     n < 3 => p
+     l := (n quo 2)::NonNegativeInteger
+     q := split_!(p, l)
+     p := mergeSort(f, p, l)
+     q := mergeSort(f, q, n - l)
+     merge_!(f, p, q)
+
+@
+\subsubsection{List}
+++   \spadtype{List} implements singly-linked lists that are
+++   addressable by indices; the index of the first element
+++   is 1. In addition to the operations provided by
+++   \spadtype{IndexedList}, this constructor provides some
+++   LISP-like functions such as \spadfun{null} and \spadfun{cons}.
+<<List>>=
+List(S:Type): ListAggregate S with
+  nil             : ()     -> %
+    ++ nil() returns the empty list.
+  null            : %      -> Boolean
+    ++ null(u) tests if list \spad{u} is the
+    ++ empty list.
+  cons            : (S, %) -> %
+    ++ cons(element,u) appends \spad{element} onto the front
+    ++ of list \spad{u} and returns the new list. This new list
+    ++ and the old one will share some structure.
+  append          : (%, %) -> %
+    ++ append(u1,u2) appends the elements of list \spad{u1}
+    ++ onto the front of list \spad{u2}. This new list
+    ++ and \spad{u2} will share some structure.
+  if S has SetCategory then
+    setUnion        : (%, %) -> %
+      ++ setUnion(u1,u2) appends the two lists u1 and u2, then
+      ++ removes all duplicates. The order of elements in the
+      ++ resulting list is unspecified.
+    setIntersection : (%, %) -> %
+      ++ setIntersection(u1,u2) returns a list of the elements
+      ++ that lists \spad{u1} and \spad{u2} have in common.
+      ++ The order of elements in the resulting list is unspecified.
+    setDifference   : (%, %) -> %
+      ++ setDifference(u1,u2) returns a list of the elements
+      ++ of \spad{u1} that are not also in \spad{u2}.
+      ++ The order of elements in the resulting list is unspecified.
+  if S has OpenMath then OpenMath
+
+ == IndexedList(S, LISTMININDEX) add
+      nil()                    == NIL$Lisp
+      null l                   == NULL(l)$Lisp
+      cons(s, l)               == CONS(s, l)$Lisp
+      append(l:%, t:%)         == APPEND(l, t)$Lisp
+
+      if S has OpenMath then
+        writeOMList(dev: OpenMathDevice, x: %): Void ==
+          OMputApp(dev)
+          OMputSymbol(dev, "list1", "list")
+          -- The following didn't compile because the compiler isn't
+          -- convinced that `xval' is a S.  Duhhh! MCD.
+          --for xval in x repeat
+          --  OMwrite(dev, xval, false)
+          while not null x repeat
+            OMwrite(dev,first x,false)
+            x := rest x
+          OMputEndApp(dev)
+
+        OMwrite(x: %): String ==
+          s: String := ""
+          sp := OM_-STRINGTOSTRINGPTR(s)$Lisp
+          dev: OpenMathDevice := OMopenString(sp pretend String, OMencodingXML)
+          OMputObject(dev)
+          writeOMList(dev, x)
+          OMputEndObject(dev)
+          OMclose(dev)
+          s := OM_-STRINGPTRTOSTRING(sp)$Lisp pretend String
+          s
+
+        OMwrite(x: %, wholeObj: Boolean): String ==
+          s: String := ""
+          sp := OM_-STRINGTOSTRINGPTR(s)$Lisp
+          dev: OpenMathDevice := OMopenString(sp pretend String, OMencodingXML)
+          if wholeObj then
+            OMputObject(dev)
+          writeOMList(dev, x)
+          if wholeObj then
+            OMputEndObject(dev)
+          OMclose(dev)
+          s := OM_-STRINGPTRTOSTRING(sp)$Lisp pretend String
+          s
+
+        OMwrite(dev: OpenMathDevice, x: %): Void ==
+          OMputObject(dev)
+          writeOMList(dev, x)
+          OMputEndObject(dev)
+
+        OMwrite(dev: OpenMathDevice, x: %, wholeObj: Boolean): Void ==
+          if wholeObj then
+            OMputObject(dev)
+          writeOMList(dev, x)
+          if wholeObj then
+            OMputEndObject(dev)
+
+      if S has SetCategory then
+        setUnion(l1:%,l2:%)      == removeDuplicates concat(l1,l2)
+
+        setIntersection(l1:%,l2:%) ==
+          u :% := empty()
+          l1 := removeDuplicates l1
+          while not empty? l1 repeat
+            if member?(first l1,l2) then u := cons(first l1,u)
+            l1 := rest l1
+          u
+
+        setDifference(l1:%,l2:%) ==
+          l1 := removeDuplicates l1
+          lu:% := empty()
+          while not empty? l1 repeat
+            l11:=l1.1
+            if not member?(l11,l2) then lu := concat(l11,lu)
+            l1 := rest l1
+          lu
+
+      if S has ConvertibleTo InputForm then
+        convert(x:%):InputForm ==
+          convert concat(convert("construct"::Symbol)@InputForm,
+                [convert a for a in (x pretend List S)]$List(InputForm))
+
+
+@
+\subsection{perm.spad}
+\subsubsection{Permutation}
+++ Description: Permutation(S) implements the group of all bijections
+++   on a set S, which move only a finite number of points.
+++   A permutation is considered as a map from S into S. In particular
+++   multiplication is defined as composition of maps:
+++   {\em pi1 * pi2 = pi1 o pi2}.
+++   The internal representation of permuatations are two lists
+++   of equal length representing preimages and images.
+<<Permutation>>=
+Permutation(S:SetCategory): public == private where
+
+  B        ==> Boolean
+  PI       ==> PositiveInteger
+  I        ==> Integer
+  L        ==> List
+  NNI      ==> NonNegativeInteger
+  V        ==> Vector
+  PT       ==> Partition
+  OUTFORM  ==> OutputForm
+  RECCYPE  ==> Record(cycl: L L S, permut: %)
+  RECPRIM  ==> Record(preimage: L S, image : L S)
+
+  public ==> PermutationCategory S with
+
+    listRepresentation:  %                ->  RECPRIM
+      ++ listRepresentation(p) produces a representation {\em rep} of
+      ++ the permutation p as a list of preimages and images, i.e
+      ++ p maps {\em (rep.preimage).k} to {\em (rep.image).k} for all
+      ++ indices k.
+    coercePreimagesImages : List List S   ->  %
+      ++ coercePreimagesImages(lls) coerces the representation {\em lls}
+      ++ of a permutation as a list of preimages and images to a permutation.
+    coerce            :  List List S      ->  %
+      ++ coerce(lls) coerces a list of cycles {\em lls} to a
+      ++ permutation, each cycle being a list with not
+      ++ repetitions, is coerced to the permutation, which maps
+      ++ {\em ls.i} to {\em ls.i+1}, indices modulo the length of the list,
+      ++ then these permutations are mutiplied.
+      ++ Error: if repetitions occur in one cycle.
+    coerce            :  List S           ->  %
+      ++ coerce(ls) coerces a cycle {\em ls}, i.e. a list with not
+      ++ repetitions to a permutation, which maps {\em ls.i} to
+      ++ {\em ls.i+1}, indices modulo the length of the list.
+      ++ Error: if repetitions occur.
+    coerceListOfPairs :  List List S      ->  %
+      ++ coerceListOfPairs(lls) coerces a list of pairs {\em lls} to a
+      ++ permutation.
+      ++ Error: if not consistent, i.e. the set of the first elements
+      ++ coincides with the set of second elements.
+    --coerce            :  %                ->  OUTFORM
+      ++ coerce(p) generates output of the permutation p with domain
+      ++ OutputForm.
+    degree            :  %                ->  NonNegativeInteger
+      ++ degree(p) retuns the number of points moved by the
+      ++ permutation p.
+    movedPoints       :  %                ->  Set S
+      ++ movedPoints(p) returns the set of points moved by the permutation p.
+    cyclePartition    :  %                ->  Partition
+      ++ cyclePartition(p) returns the cycle structure of a permutation
+      ++ p including cycles of length 1 only if S is finite.
+    order             :  %                ->  NonNegativeInteger
+      ++ order(p) returns the order of a permutation p as a group element.
+    numberOfCycles    :  %                ->  NonNegativeInteger
+      ++ numberOfCycles(p) returns the number of non-trivial cycles of
+      ++ the permutation p.
+    sign              :  %                ->  Integer
+      ++ sign(p) returns the signum of the permutation p, +1 or -1.
+    even?             :  %                ->  Boolean
+      ++ even?(p) returns true if and only if p is an even permutation,
+      ++ i.e. {\em sign(p)} is 1.
+    odd?              :  %                ->  Boolean
+      ++ odd?(p) returns true if and only if p is an odd permutation
+      ++ i.e. {\em sign(p)} is {\em -1}.
+    sort              :  L %              ->  L %
+      ++ sort(lp) sorts a list of permutations {\em lp} according to
+      ++ cycle structure first according to length of cycles,
+      ++ second, if S has \spadtype{Finite} or S has
+      ++ \spadtype{OrderedSet} according to lexicographical order of
+      ++ entries in cycles of equal length.
+    if S has Finite then
+      fixedPoints     :  %                ->  Set S
+        ++ fixedPoints(p) returns the points fixed by the permutation p.
+    if S has IntegerNumberSystem or S has Finite then
+      coerceImages    :  L S              ->  %
+        ++ coerceImages(ls) coerces the list {\em ls} to a permutation
+        ++ whose image is given by {\em ls} and the preimage is fixed
+        ++ to be {\em [1,...,n]}.
+        ++ Note: {coerceImages(ls)=coercePreimagesImages([1,...,n],ls)}.
+
+  private ==> add
+
+    -- representation of the object:
+
+    Rep  := V L S
+
+    -- import of domains and packages
+
+    import OutputForm
+    import Vector List S
+
+    -- variables
+
+    p,q      : %
+    exp      : I
+
+    -- local functions first, signatures:
+
+    smaller? : (S,S) -> B
+    rotateCycle: L S -> L S
+    coerceCycle: L L S -> %
+    smallerCycle?: (L S, L S)  -> B
+    shorterCycle?:(L S, L S)  -> B
+    permord:(RECCYPE,RECCYPE)  -> B
+    coerceToCycle:(%,B) -> L L S
+    duplicates?: L S -> B
+
+    smaller?(a:S, b:S): B ==
+      S has OrderedSet => a <$S b
+      S has Finite     => lookup a < lookup b
+      false
+
+    rotateCycle(cyc: L S): L S ==
+      -- smallest element is put in first place
+      -- doesn't change cycle if underlying set
+      -- is not ordered or not finite.
+      min:S := first cyc
+      minpos:I := 1           -- 1 = minIndex cyc
+      for i in 2..maxIndex cyc repeat
+        if smaller?(cyc.i,min) then
+          min  := cyc.i
+          minpos := i
+      one? minpos => cyc
+      concat(last(cyc,((#cyc-minpos+1)::NNI)),first(cyc,(minpos-1)::NNI))
+
+    coerceCycle(lls : L L S): % ==
+      perm : % := 1
+      for lists in reverse lls repeat
+        perm := cycle lists * perm
+      perm
+
+    smallerCycle?(cyca: L S, cycb: L S): B ==
+      #cyca ^= #cycb =>
+        #cyca < #cycb
+      for i in cyca for j in cycb repeat
+        i ^= j => return smaller?(i, j)
+      false
+
+    shorterCycle?(cyca: L S, cycb: L S): B ==
+      #cyca < #cycb
+
+    permord(pa: RECCYPE, pb : RECCYPE): B ==
+      for i in pa.cycl for j in pb.cycl repeat
+        i ^= j => return smallerCycle?(i, j)
+      #pa.cycl < #pb.cycl
+
+    coerceToCycle(p: %, doSorting?: B): L L S ==
+      preim := p.1
+      im := p.2
+      cycles := nil()$(L L S)
+      while not null preim repeat
+        -- start next cycle
+        firstEltInCycle: S := first preim
+        nextCycle : L S := list firstEltInCycle
+        preim := rest preim
+        nextEltInCycle := first im
+        im      := rest im
+        while nextEltInCycle ^= firstEltInCycle repeat
+          nextCycle := cons(nextEltInCycle, nextCycle)
+          i := position(nextEltInCycle, preim)
+          preim := delete(preim,i)
+          nextEltInCycle := im.i
+          im := delete(im,i)
+        nextCycle := reverse nextCycle
+        -- check on 1-cycles, we don't list these
+        if not null rest nextCycle then
+          if doSorting? and (S has OrderedSet or S has Finite) then
+              -- put smallest element in cycle first:
+              nextCycle := rotateCycle nextCycle
+          cycles := cons(nextCycle, cycles)
+      not doSorting? => cycles
+      -- sort cycles
+      S has OrderedSet or S has Finite =>
+        sort(smallerCycle?,cycles)$(L L S)
+      sort(shorterCycle?,cycles)$(L L S)
+
+    duplicates? (ls : L S ): B ==
+      x := copy ls
+      while not null x repeat
+        member? (first x ,rest x) => return true
+        x := rest x
+      false
+
+    -- now the exported functions
+
+    listRepresentation p ==
+      s : RECPRIM := [p.1,p.2]
+
+    coercePreimagesImages preImageAndImage ==
+      p : % := [preImageAndImage.1,preImageAndImage.2]
+
+    movedPoints p == construct p.1  --check on fixed points !!
+
+    degree p ==  #movedPoints p
+
+    p = q ==
+      #(preimp := p.1) ^= #(preimq := q.1) => false
+      for i in 1..maxIndex preimp repeat
+        pos := position(preimp.i, preimq)
+        pos = 0 => return false
+        (p.2).i ^= (q.2).pos => return false
+      true
+
+    orbit(p ,el) ==
+      -- start with a 1-element list:
+      out : Set S := brace list el
+      el2 := eval(p, el)
+      while el2 ^= el repeat
+        -- be carefull: insert adds one element
+        -- as side effect to out
+        insert_!(el2, out)
+        el2 := eval(p, el2)
+      out
+
+    cyclePartition p ==
+      partition([#c for c in coerceToCycle(p, false)])$Partition
+
+    order p ==
+      ord: I := lcm removeDuplicates convert cyclePartition p
+      ord::NNI
+
+    sign(p) ==
+      even? p => 1
+      - 1
+
+
+    even?(p) ==  even?(#(p.1) - numberOfCycles p)
+      -- see the book of James and Kerber on symmetric groups
+      -- for this formula.
+
+    odd?(p) ==  odd?(#(p.1) - numberOfCycles p)
+
+    pa < pb ==
+      pacyc:= coerceToCycle(pa,true)
+      pbcyc:= coerceToCycle(pb,true)
+      for i in pacyc for j in pbcyc repeat
+        i ^= j => return smallerCycle? ( i, j )
+      maxIndex pacyc < maxIndex pbcyc
+
+    coerce(lls : L L S): % == coerceCycle lls
+
+    coerce(ls : L S): % == cycle ls
+
+    sort(inList : L %): L % ==
+      not (S has OrderedSet or S has Finite) => inList
+      ownList: L RECCYPE := nil()$(L RECCYPE)
+      for sigma in inList repeat
+        ownList :=
+          cons([coerceToCycle(sigma,true),sigma]::RECCYPE, ownList)
+      ownList := sort(permord, ownList)$(L RECCYPE)
+      outList := nil()$(L %)
+      for rec in ownList repeat
+        outList := cons(rec.permut, outList)
+      reverse outList
+
+    coerce (p: %): OUTFORM ==
+      cycles: L L S := coerceToCycle(p,true)
+      outfmL : L OUTFORM := nil()
+      for cycle in cycles repeat
+        outcycL: L OUTFORM := nil()
+        for elt in cycle repeat
+          outcycL := cons(elt :: OUTFORM, outcycL)
+        outfmL := cons(paren blankSeparate reverse outcycL, outfmL)
+      -- The identity element will be output as 1:
+      null outfmL => outputForm(1@Integer)
+      -- represent a single cycle in the form (a b c d)
+      -- and not in the form ((a b c d)):
+      null rest outfmL => first outfmL
+      hconcat reverse outfmL
+
+    cycles(vs ) == coerceCycle vs
+
+    cycle(ls) ==
+      #ls < 2 => 1
+      duplicates? ls => error "cycle: the input contains duplicates"
+      [ls, append(rest ls, list first ls)]
+
+    coerceListOfPairs(loP) ==
+      preim := nil()$(L S)
+      im := nil()$(L S)
+      for pair in loP repeat
+        if first pair ^=  second pair then
+          preim := cons(first pair, preim)
+          im := cons(second pair, im)
+      duplicates?(preim) or duplicates?(im) or brace(preim)$(Set S) _
+        ^= brace(im)$(Set S) =>
+        error "coerceListOfPairs: the input cannot be interpreted as a permutation"
+      [preim, im]
+
+    q * p ==
+      -- use vectors for efficiency??
+      preimOfp : V S := construct p.1
+      imOfp : V S := construct p.2
+      preimOfq := q.1
+      imOfq := q.2
+      preimOfqp   := nil()$(L S)
+      imOfqp   := nil()$(L S)
+      -- 1 = minIndex preimOfp
+      for i in 1..(maxIndex preimOfp) repeat
+        -- find index of image of p.i in q if it exists
+        j := position(imOfp.i, preimOfq)
+        if j = 0 then
+          -- it does not exist
+          preimOfqp := cons(preimOfp.i, preimOfqp)
+          imOfqp := cons(imOfp.i, imOfqp)
+        else
+          -- it exists
+          el := imOfq.j
+          -- if the composition fixes the element, we don't
+          -- have to do anything
+          if el ^= preimOfp.i then
+            preimOfqp := cons(preimOfp.i, preimOfqp)
+            imOfqp := cons(el, imOfqp)
+          -- we drop the parts of q which have to do with p
+          preimOfq := delete(preimOfq, j)
+          imOfq := delete(imOfq, j)
+      [append(preimOfqp, preimOfq), append(imOfqp, imOfq)]
+
+    1 == new(2,empty())$Rep
+
+    inv p  == [p.2, p.1]
+
+    eval(p, el) ==
+      pos := position(el, p.1)
+      pos = 0 => el
+      (p.2).pos
+
+    elt(p, el) == eval(p, el)
+
+    numberOfCycles p == #coerceToCycle(p, false)
+
+
+    if S has IntegerNumberSystem then
+
+      coerceImages (image) ==
+        preImage : L S := [i::S for i in 1..maxIndex image]
+        p : % := [preImage,image]
+
+    if S has Finite then
+
+      coerceImages (image) ==
+        preImage : L S := [index(i::PI)::S for i in 1..maxIndex image]
+        p : % := [preImage,image]
+
+      fixedPoints ( p ) == complement movedPoints p
+
+      cyclePartition p ==
+        pt := partition([#c for c in coerceToCycle(p, false)])$Partition
+        pt +$PT conjugate(partition([#fixedPoints(p)])$PT)$PT
+
+@
+\subsection{polset.spad}
+\subsubsection{PolynomialSetCategory}
+<<PolynomialSetCategory>>=
+PolynomialSetCategory(R:Ring, E:OrderedAbelianMonoidSup,_
+  VarSet:OrderedSet, P:RecursivePolynomialCategory(R,E,VarSet)): Category == 
+    Join(SetCategory,Collection(P),CoercibleTo(List(P))) with
+     finiteAggregate
+     retractIfCan : List(P) -> Union($,"failed")
+         ++ \axiom{retractIfCan(lp)} returns an element of the domain whose elements
+         ++ are the members of \axiom{lp} if such an element exists, otherwise
+         ++ \axiom{"failed"} is returned.
+     retract : List(P) -> $
+         ++ \axiom{retract(lp)} returns an element of the domain whose elements
+         ++ are the members of \axiom{lp} if such an element exists, otherwise
+         ++ an error is produced.
+     mvar : $ -> VarSet
+         ++  \axiom{mvar(ps)} returns the main variable of the non constant polynomial
+         ++  with the greatest main variable, if any, else an error is returned.
+     variables : $ -> List VarSet
+         ++  \axiom{variables(ps)} returns the decreasingly sorted list of the
+         ++  variables which are variables of some polynomial in \axiom{ps}.
+     mainVariables : $  -> List VarSet
+         ++ \axiom{mainVariables(ps)} returns the decreasingly sorted list of the
+         ++ variables which are main variables of some polynomial in \axiom{ps}.
+     mainVariable? : (VarSet,$) -> Boolean
+         ++ \axiom{mainVariable?(v,ps)} returns true iff \axiom{v} is the main variable 
+         ++ of some polynomial in \axiom{ps}.
+     collectUnder : ($,VarSet) -> $
+         ++ \axiom{collectUnder(ps,v)} returns the set consisting of the 
+         ++ polynomials of \axiom{ps} with main variable less than \axiom{v}.
+     collect : ($,VarSet) -> $
+         ++ \axiom{collect(ps,v)}  returns the set consisting of the 
+         ++ polynomials of \axiom{ps} with \axiom{v} as main variable.
+     collectUpper : ($,VarSet) -> $
+         ++ \axiom{collectUpper(ps,v)} returns the set consisting of the 
+         ++ polynomials of \axiom{ps} with main variable greater than \axiom{v}.
+     sort : ($,VarSet) -> Record(under:$,floor:$,upper:$)
+         ++ \axiom{sort(v,ps)} returns \axiom{us,vs,ws} such that \axiom{us}
+         ++ is \axiom{collectUnder(ps,v)}, \axiom{vs} is \axiom{collect(ps,v)}
+         ++ and \axiom{ws} is \axiom{collectUpper(ps,v)}. 
+     trivialIdeal?: $ -> Boolean
+         ++ \axiom{trivialIdeal?(ps)} returns true iff \axiom{ps} does
+         ++ not contain non-zero elements.
+     if R has IntegralDomain
+     then
+       roughBase? : $ -> Boolean
+           ++ \axiom{roughBase?(ps)} returns true iff for every pair \axiom{{p,q}}
+           ++ of polynomials in \axiom{ps} their leading monomials are 
+           ++ relatively prime.
+       roughSubIdeal?  : ($,$) -> Boolean
+           ++  \axiom{roughSubIdeal?(ps1,ps2)} returns true iff it can proved 
+           ++ that all polynomials in  \axiom{ps1} lie in the ideal generated by 
+           ++ \axiom{ps2} in  \axiom{\axiom{(R)^(-1) P}} without computing Groebner bases.
+       roughEqualIdeals? : ($,$) -> Boolean
+           ++ \axiom{roughEqualIdeals?(ps1,ps2)} returns true iff it can
+           ++ proved that \axiom{ps1} and \axiom{ps2} generate the same ideal
+           ++ in \axiom{(R)^(-1) P} without computing Groebner bases.
+       roughUnitIdeal? : $ -> Boolean
+           ++ \axiom{roughUnitIdeal?(ps)} returns true iff \axiom{ps} contains some
+           ++ non null element lying in the base ring \axiom{R}.
+       headRemainder : (P,$) -> Record(num:P,den:R)
+           ++ \axiom{headRemainder(a,ps)} returns \axiom{[b,r]} such that the leading
+           ++ monomial of \axiom{b} is reduced in the sense of Groebner bases w.r.t.
+           ++ \axiom{ps} and \axiom{r*a - b} lies in the ideal generated by \axiom{ps}.
+       remainder : (P,$) -> Record(rnum:R,polnum:P,den:R)
+           ++ \axiom{remainder(a,ps)} returns \axiom{[c,b,r]} such that \axiom{b} is fully 
+           ++ reduced in the sense of Groebner bases w.r.t. \axiom{ps}, 
+           ++ \axiom{r*a - c*b} lies in the ideal generated by \axiom{ps}.
+           ++ Furthermore, if \axiom{R} is a gcd-domain, \axiom{b} is primitive.
+       rewriteIdealWithHeadRemainder : (List(P),$) -> List(P)
+           ++ \axiom{rewriteIdealWithHeadRemainder(lp,cs)} returns \axiom{lr} such that
+           ++ the leading monomial of every polynomial in \axiom{lr} is reduced
+           ++ in the sense of Groebner bases w.r.t. \axiom{cs} and \axiom{(lp,cs)}
+           ++ and \axiom{(lr,cs)} generate the same ideal in \axiom{(R)^(-1) P}.
+       rewriteIdealWithRemainder : (List(P),$) -> List(P)
+           ++ \axiom{rewriteIdealWithRemainder(lp,cs)} returns \axiom{lr} such that
+           ++ every polynomial in \axiom{lr} is fully reduced in the sense 
+           ++ of Groebner bases w.r.t. \axiom{cs} and \axiom{(lp,cs)} and 
+           ++ \axiom{(lr,cs)} generate the same ideal in \axiom{(R)^(-1) P}.
+       triangular? : $ -> Boolean
+           ++ \axiom{triangular?(ps)} returns true iff \axiom{ps} is a triangular set,
+           ++ i.e. two distinct polynomials have distinct main variables
+           ++ and no constant lies in \axiom{ps}.
+
+  add
+
+     NNI ==> NonNegativeInteger
+     B ==> Boolean
+
+     elements: $ -> List(P)
+
+     elements(ps:$):List(P) ==
+       lp : List(P) := members(ps)$$
+
+     variables1(lp:List(P)):(List VarSet) ==
+       lvars : List(List(VarSet)) := [variables(p)$P for p in lp]
+       sort(#1 > #2, removeDuplicates(concat(lvars)$List(VarSet)))
+
+     variables2(lp:List(P)):(List VarSet) ==
+       lvars : List(VarSet) := [mvar(p)$P for p in lp]
+       sort(#1 > #2, removeDuplicates(lvars)$List(VarSet))
+
+     variables (ps:$) ==
+       variables1(elements(ps))
+
+     mainVariables (ps:$) ==
+       variables2(remove(ground?,elements(ps)))
+
+     mainVariable? (v,ps) ==
+       lp : List(P) := remove(ground?,elements(ps))
+       while (not empty? lp) and (not (mvar(first(lp)) = v)) repeat
+         lp := rest lp
+       (not empty? lp)
+
+     collectUnder (ps,v) ==
+       lp : List P := elements(ps)
+       lq : List P := []
+       while (not empty? lp) repeat
+         p := first lp
+         lp := rest lp
+         if (ground?(p)) or (mvar(p) < v)
+           then
+             lq := cons(p,lq)
+       construct(lq)$$
+
+     collectUpper (ps,v) ==
+       lp : List P := elements(ps)
+       lq : List P := []
+       while (not empty? lp) repeat
+         p := first lp
+         lp := rest lp
+         if (not ground?(p)) and (mvar(p) > v)
+           then
+             lq := cons(p,lq)
+       construct(lq)$$
+
+     collect (ps,v) ==
+       lp : List P := elements(ps)
+       lq : List P := []
+       while (not empty? lp) repeat
+         p := first lp
+         lp := rest lp
+         if (not ground?(p)) and (mvar(p) = v)
+           then
+             lq := cons(p,lq)
+       construct(lq)$$
+
+     sort (ps,v) ==
+       lp : List P := elements(ps)
+       us : List P := []
+       vs : List P := []
+       ws : List P := []
+       while (not empty? lp) repeat
+         p := first lp
+         lp := rest lp
+         if (ground?(p)) or (mvar(p) < v)
+           then
+             us := cons(p,us)
+           else
+             if (mvar(p) = v)
+               then
+                 vs := cons(p,vs)
+               else
+                 ws := cons(p,ws)
+       [construct(us)$$,construct(vs)$$,construct(ws)$$]$Record(under:$,floor:$,upper:$)
+
+     ps1 = ps2 ==
+       {p for p in elements(ps1)} =$(Set P) {p for p in elements(ps2)}
+
+     exactQuo : (R,R) -> R
+
+     localInf? (p:P,q:P):B ==
+       degree(p) <$E degree(q)
+
+     localTriangular? (lp:List(P)):B ==
+       lp := remove(zero?, lp)
+       empty? lp => true
+       any? (ground?, lp) => false
+       lp := sort(mvar(#1)$P > mvar(#2)$P, lp)
+       p,q : P
+       p := first lp
+       lp := rest lp
+       while (not empty? lp) and (mvar(p) > mvar((q := first(lp)))) repeat
+         p := q
+         lp := rest lp
+       empty? lp
+
+     triangular? ps ==
+       localTriangular? elements ps
+
+     trivialIdeal? ps ==
+       empty?(remove(zero?,elements(ps))$(List(P)))$(List(P))
+
+     if R has IntegralDomain
+     then
+
+       roughUnitIdeal? ps ==
+         any?(ground?,remove(zero?,elements(ps))$(List(P)))$(List P)
+
+       relativelyPrimeLeadingMonomials? (p:P,q:P):B ==
+         dp : E := degree(p)
+         dq : E := degree(q)
+         (sup(dp,dq)$E =$E dp +$E dq)@B
+
+       roughBase? ps ==
+         lp := remove(zero?,elements(ps))$(List(P))
+         empty? lp => true
+         rB? : B := true
+         while (not empty? lp) and rB? repeat
+           p := first lp
+           lp := rest lp
+           copylp := lp
+           while (not empty? copylp) and rB? repeat
+             rB? := relativelyPrimeLeadingMonomials?(p,first(copylp))
+             copylp := rest copylp
+         rB?
+
+       roughSubIdeal?(ps1,ps2) ==
+         lp: List(P) := rewriteIdealWithRemainder(elements(ps1),ps2)
+         empty? (remove(zero?,lp))
+
+       roughEqualIdeals? (ps1,ps2) ==
+         ps1 =$$ ps2 => true
+         roughSubIdeal?(ps1,ps2) and roughSubIdeal?(ps2,ps1)
+
+     if (R has GcdDomain) and (VarSet has ConvertibleTo (Symbol))
+     then
+
+       LPR ==> List Polynomial R
+       LS ==> List Symbol
+
+       if R has EuclideanDomain
+         then
+           exactQuo(r:R,s:R):R ==
+             r quo$R s
+         else
+           exactQuo(r:R,s:R):R ==
+             (r exquo$R s)::R
+
+       headRemainder (a,ps) ==
+         lp1 : List(P) := remove(zero?, elements(ps))$(List(P))
+         empty? lp1 => [a,1$R]
+         any?(ground?,lp1) => [reductum(a),1$R]
+         r : R := 1$R
+         lp1 := sort(localInf?, reverse elements(ps))
+         lp2 := lp1
+         e : Union(E, "failed")
+         while (not zero? a) and (not empty? lp2) repeat
+           p := first lp2
+           if ((e:= subtractIfCan(degree(a),degree(p))) case E)
+             then
+               g := gcd((lca := leadingCoefficient(a)),(lcp := leadingCoefficient(p)))$R
+               (lca,lcp) := (exactQuo(lca,g),exactQuo(lcp,g))
+               a := lcp * reductum(a) - monomial(lca, e::E)$P * reductum(p)
+               r := r * lcp
+               lp2 := lp1
+             else
+               lp2 := rest lp2
+         [a,r]
+
+       makeIrreducible! (frac:Record(num:P,den:R)):Record(num:P,den:R) ==
+         g := gcd(frac.den,frac.num)$P
+         one? g => frac
+         frac.num := exactQuotient!(frac.num,g)
+         frac.den := exactQuo(frac.den,g)
+         frac
+
+       remainder (a,ps) ==
+         hRa := makeIrreducible! headRemainder (a,ps)
+         a := hRa.num
+         r : R := hRa.den
+         zero? a => [1$R,a,r]
+         b : P := monomial(1$R,degree(a))$P
+         c : R := leadingCoefficient(a)
+         while not zero?(a := reductum a) repeat
+           hRa := makeIrreducible!  headRemainder (a,ps)
+           a := hRa.num
+           r := r * hRa.den
+           g := gcd(c,(lca := leadingCoefficient(a)))$R
+           b := ((hRa.den) * exactQuo(c,g)) * b + monomial(exactQuo(lca,g),degree(a))$P
+           c := g
+         [c,b,r]
+
+       rewriteIdealWithHeadRemainder(ps,cs) ==
+         trivialIdeal? cs => ps
+         roughUnitIdeal? cs => [0$P]
+         ps := remove(zero?,ps)
+         empty? ps => ps
+         any?(ground?,ps) => [1$P]
+         rs : List P := []
+         while not empty? ps repeat
+           p := first ps
+           ps := rest ps
+           p := (headRemainder(p,cs)).num
+           if not zero? p
+             then 
+               if ground? p
+                 then
+                   ps := []
+                   rs := [1$P]
+                 else
+                   primitivePart! p
+                   rs := cons(p,rs)
+         removeDuplicates rs
+
+       rewriteIdealWithRemainder(ps,cs) ==
+         trivialIdeal? cs => ps
+         roughUnitIdeal? cs => [0$P]
+         ps := remove(zero?,ps)
+         empty? ps => ps
+         any?(ground?,ps) => [1$P]
+         rs : List P := []
+         while not empty? ps repeat
+           p := first ps
+           ps := rest ps
+           p := (remainder(p,cs)).polnum
+           if not zero? p
+             then 
+               if ground? p
+                 then
+                   ps := []
+                   rs := [1$P]
+                 else
+                   rs := cons(unitCanonical(p),rs)
+         removeDuplicates rs
+
+@
+\subsection{sortpak.spad}
+\subsubsection{SortPackage}
+++ This package exports sorting algorithnms
+<<SortPackage>>=
+SortPackage(S,A) : Exports == Implementation where
+  S: Type
+  A: IndexedAggregate(Integer,S)
+    with (finiteAggregate; shallowlyMutable)
+
+  Exports == with
+    bubbleSort_!: (A,(S,S) -> Boolean) -> A
+	++ bubbleSort!(a,f) \undocumented
+    insertionSort_!: (A, (S,S) -> Boolean) -> A
+	++ insertionSort!(a,f) \undocumented
+    if S has OrderedSet then
+      bubbleSort_!: A -> A
+	++ bubbleSort!(a) \undocumented
+      insertionSort_!: A -> A
+	++ insertionSort! \undocumented
+
+  Implementation == add
+    bubbleSort_!(m,f) ==
+      n := #m
+      for i in 1..(n-1) repeat
+        for j in n..(i+1) by -1 repeat
+          if f(m.j,m.(j-1)) then swap_!(m,j,j-1)
+      m
+    insertionSort_!(m,f) ==
+      for i in 2..#m repeat
+        j := i
+        while j > 1 and f(m.j,m.(j-1)) repeat
+          swap_!(m,j,j-1)
+          j := (j - 1) pretend PositiveInteger
+      m
+    if S has OrderedSet then
+      bubbleSort_!(m) == bubbleSort_!(m,_<$S)
+      insertionSort_!(m) == insertionSort_!(m,_<$S)
+    if A has UnaryRecursiveAggregate(S) then
+      bubbleSort_!(m,fn) ==
+        empty? m => m
+        l := m
+        while not empty? (r := l.rest) repeat
+           r := bubbleSort_!(r,fn)
+           x := l.first
+           if fn(r.first,x) then
+             l.first := r.first
+             r.first := x
+           l.rest := r
+           l := l.rest
+        m
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} {\bf PseudoRemainderSequence in prs.spad}
+\end{thebibliography}
+\end{document}

@@ -1,0 +1,479 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp patches.lisp}
+\author{Timothy Daly}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\subsection{toplevel}
+The function top-level is the very root of the normal invocation
+history stack. Control will pass to the restart function which is 
+also in this file.
+
+For some unknown reason toplevel was redefined to incorrectly
+call lisp::unwind whereas it is defined (in this file) to be
+interned in the boot package. We've returned toplevel to its
+previous definition.
+<<toplevel>>=
+(defun toplevel (&rest foo) (throw '|top_level| '|restart|))
+;;(defun toplevel (&rest foo) (lisp::unwind))
+
+@
+\section{License}
+<<license>>=
+;; Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+;; All rights reserved.
+;;
+;; Redistribution and use in source and binary forms, with or without
+;; modification, are permitted provided that the following conditions are
+;; met:
+;;
+;;     - Redistributions of source code must retain the above copyright
+;;       notice, this list of conditions and the following disclaimer.
+;;
+;;     - Redistributions in binary form must reproduce the above copyright
+;;       notice, this list of conditions and the following disclaimer in
+;;       the documentation and/or other materials provided with the
+;;       distribution.
+;;
+;;     - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+;;       names of its contributors may be used to endorse or promote products
+;;       derived from this software without specific prior written permission.
+;;
+;; THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+;; IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+;; TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+;; PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+;; OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+;; EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+;; PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+;; PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+;; LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+;; NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+;; SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+@
+<<*>>=
+<<license>>
+
+(in-package "BOOT")
+;;patches for now
+
+;; browser stuff:
+#+:UNIX (defvar |$standard| 't)
+#-:UNIX (defvar |$standard| 'nil)
+#+:UNIX (defvar |$saturn| 'nil)
+#-:UNIX (defvar |$saturn| 't)
+
+(defun CATCHALL (a &rest b) a) ;; not correct but ok for now
+(defvar |$demoFlag| nil)
+
+(define-function '|construct| #'list) ;; NEEDED , SPAD-COMPILER generated Lisp code
+(define-function '|COMP,TRAN| #'comp-tran) ;called by |compWithMappingMode|
+
+(defvar |Undef| (function |Undef|)) ;needed in NewbFVectorCopy
+(define-function '|spadHash| #'sxhash)
+
+(defun |mkAutoLoad| (fn cname)
+   (function (lambda (&rest args)
+		 (|autoLoad| fn cname)
+		 (apply cname args))))
+
+(setq |$printTimeIfTrue| nil)
+
+
+(defmacro dribinit (streamvar)
+  `(if (is-console ,streamvar)
+       (setq ,streamvar *terminal-io*)))
+
+(defun clear-highlight ()
+  (let ((|$displaySetValue| nil))
+    (declare (special |$displaySetValue| |$saveHighlight| |$saveSpecialchars|))
+    (setq |$saveHighlight| |$highlightAllowed|
+	  |$highlightAllowed| nil)
+    (setq |$saveSpecialchars| |$specialCharacters|)
+    (|setOutputCharacters| '(|plain|))))
+
+(defun reset-highlight ()
+  (setq |$highlightAllowed| |$saveHighlight|)
+  (setq |$specialCharacters| |$saveSpecialchars|))
+
+(defun |spool| (filename)
+  (cond ((null filename)
+	 (dribble) (TERPRI)
+	 (reset-highlight))
+	((probe-file (car filename))
+	 (error (format nil "file ~a already exists" (car filename))))
+	(t (dribble (car filename))
+	   (TERPRI)
+	   (clear-highlight))
+    ))
+
+@
+We need to repatch this for GCL-2.6.8pre2. There appears to be an issue
+about the proper handling of directory names. The pathname returned by
+truename does not appear to be a string so we need to call namestring.
+It used to read:
+\begin{verbatim}
+(defun |cd| (args)
+  (cond ((null args)
+#+(and :lucid :ibm/370)
+         (setq $current-directory "")
+#-(and :lucid :ibm/370)
+         (setq $current-directory 
+           (namestring (truename (user-homedir-pathname)))) )
+        ((eql (|directoryp| (interp-make-directory (car args))) 1)
+         (setq $current-directory 
+           (namestring (truename (interp-make-directory (car args)))))))
+#+(or :kcl :ibcl :CCL) (system:CHDIR $current-directory)
+#+(and :lucid :ibm/370)
+  (setq *default-pathname-defaults* "")
+#-(and :lucid :ibm/370)
+  (setq *default-pathname-defaults* (pathname $current-directory))
+  (|sayKeyedMsg| 'S2IZ0070 (list (namestring $current-directory))))
+\end{verbatim}
+<<*>>=
+(defun |cd| (args)
+  (cond
+    ((null args)
+#+(and :lucid :ibm/370)
+     (setq $current-directory "")
+#-(and :lucid :ibm/370)
+     (setq $current-directory 
+       (namestring (truename (user-homedir-pathname)))) )
+    ((eql (|directoryp| (interp-make-directory (car args))) 1)
+     (setq $current-directory 
+       (namestring (truename (interp-make-directory (car args)))))))
+#+(or :kcl :ibcl :CCL) (system:CHDIR $current-directory)
+#+(and :lucid :ibm/370)
+  (setq *default-pathname-defaults* "")
+#-(and :lucid :ibm/370)
+  (setq *default-pathname-defaults* (pathname $current-directory))
+  (|sayKeyedMsg| 'S2IZ0070 (list (namestring $current-directory))))
+
+<<toplevel>>
+(define-function 'top-level #'toplevel)
+(define-function 'unwind #'|spadThrow|)
+(define-function 'resume #'|spadThrow|)
+
+(DEFUN BUMPCOMPERRORCOUNT () ())
+
+(define-function '|isBpiOrLambda| #'FBOUNDP)
+;;(defun |isSharpVar| (x) (and (identp x) (char= (elt (pname x) 0) #\#)))
+
+(setq |$useInternalHistoryTable| T)
+(defvar |$internalHistoryTable| ())
+(setq |$inputPromptType| '|step|)
+(setq |nullstream| '|nullstream|)
+(setq |nonnullstream| '|nonnullstream|)
+(defun |cpCms| (prefix &optional (string (|getSystemCommandLine|)))
+  (setq string (concat prefix string))
+  (if (equal string "") (obey "sh")
+    (obey string))
+   (|terminateSystemCommand|))
+(setq *print-escape* nil) ;; so stringimage doesn't escape idents?
+#+(or :IEEE-FLOATING-POINT)
+ (setq system:*print-nans* T)
+(defun /RF (&rest foo &aux (Echo-Meta 'T))
+  (declare (special Echo-Meta))
+  (/RF-1 nil))
+(defun /RQ (&rest foo &aux (Echo-Meta nil))
+  (declare (special Echo-Meta))
+  (/RF-1 nil))
+(defun |/RQ,LIB| (&rest foo &aux (Echo-Meta nil) ($LISPLIB T))
+  (declare (special Echo-Meta $LISPLIB))
+  (/RF-1 nil))
+
+(defun /RF-1 (ignore)
+ (declare (ignore ignore))
+  (let* ((input-file (vmlisp::make-input-filename /EDITFILE))
+     (lfile ())
+     (type (pathname-type input-file)))
+    (cond
+     ((string= type "boot")
+#-:CCL
+      (boot input-file
+	 (setq lfile (make-pathname :type "lisp"
+			   :defaults input-file)))
+#+:CCL
+      (boot input-file
+         (setq lfile (make-pathname :name (pathname-name input-file)
+                                :type "lisp")))
+      (load lfile))
+     ((string= type "lisp") (load input-file))
+     ((string= type "bbin") (load input-file))
+     ((and (string= type "input")
+	   |$useNewParser|)
+      (|ncINTERPFILE| input-file Echo-Meta))
+     (t (spad input-file)))))
+
+(defun /EF (&rest foo)
+  (obey (concat "vi " (namestring (vmlisp::make-input-filename /EDITFILE)))))
+#-:CCL
+  (defun user::start () (in-package "BOOT") (boot::|start|))
+#+:CCL
+  (defun user::start () (setq *package* (find-package "BOOT")) (boot::|start|))
+
+(setq |$algebraOutputStream|
+   (setq |$fortranOutputStream|
+      (setq |$texOutputStream|
+	  (setq |$formulaOutputStream|
+	     (setq |conOutStream| (make-synonym-stream '*terminal-io*))))))
+
+;; non-interactive restarts...
+(defun restart0 ()
+#+(and :NAG :ccl) (lisp::init-lm 0)
+  (compressopen);; set up the compression tables
+  (interpopen);; open up the interpreter database
+  (operationopen);; all of the operations known to the system
+  (categoryopen);; answer hasCategory question
+  (browseopen)
+  (let ((asharprootlib (strconc (|getEnv| "AXIOM") "/aldor/lib/")))
+    (set-file-getter (strconc asharprootlib "runtime.o"))
+    (set-file-getter (strconc asharprootlib "lang.o"))
+    (set-file-getter (strconc asharprootlib "attrib.o"))
+    (set-file-getter (strconc asharprootlib "axlit.o"))
+    (set-file-getter (strconc asharprootlib "minimach.o"))
+    (set-file-getter (strconc asharprootlib "axextend.o")))
+)
+
+(defun AKCL-VERSION () system::*akcl-version*)
+(defun SHAREDITEMS (x) T) ;;checked in history code
+(defun whocalled (n) nil) ;; no way to look n frames up the stack
+(defun setletprintflag (x) x)
+(defun |normalizeTimeAndStringify| (time)
+  (if (= time 0.0) "0" (format nil "~,1F" time)))
+
+(define-function '|eval| #'eval)
+
+(defun |libraryFileLists| () '((SPAD SPADLIBS J)))
+
+;;--------------------> NEW DEFINITION (see cattable.boot.pamphlet)
+(defun |compressHashTable| (ht) ht)
+(defun GETZEROVEC (n) (MAKE-ARRAY n :initial-element 0))
+
+(defun |normalizeArgFileName| (l) l)
+
+(defun READSPADEXPR ()
+  (let* ((line (cdar (preparse in-stream))))
+    (cond ((or (not (stringp line)) (zerop (SIZE line)))
+       (SAY "   Scratchpad -- input")
+       (READSPADEXPR))
+      (t (|parseTransform| (|postTransform| (|string2SpadTree| line)))))))
+
+(setq |$sourceFiles| ()) ;; set in readSpad2Cmd
+
+(setq |$localVars| ())	;checked by isType
+
+(setq |$highlightFontOn| (concat " " $BOLDSTRING))
+(setq |$highlightFontOff| (concat $NORMALSTRING " "))
+(define-function 'SUBSTQ #'SUBSTEQ) ;; needed for substNames (always copy)
+#+(and :lucid (not :ibm/370))
+ (define-function 'RUN-AIX-PROGRAM #'SYS:RUN-AIX-PROGRAM)
+(setq |$specialCharacters| |$plainRTspecialCharacters|)
+;; following should be no longer necessary
+;; (eval-when (eval load compile) (shadow 'delete))
+;; (define-function 'boot::delete #'|delete|)
+
+;; following code is to mimic def of MAP in NEWSPAD LISP
+;; i.e. MAP in boot package is a self evaluating form
+;; #-:CCL (eval-when (eval load compile) (shadow 'map))
+;; #-:CCL (defmacro map (&rest args) `'(map ,@args))
+(eval-when (eval load compile) (shadow 'map))
+(defmacro map (&rest args) `'(map ,@args))
+
+#+:Lucid
+(defun save-system (filename)
+      (in-package "BOOT")
+      (UNTRACE)
+      (|untrace| NIL)
+      (|clearClams|)
+	;; bind output to nulloutstream
+      (let ((*standard-output* (make-broadcast-stream)))
+	(|resetWorkspaceVariables|))
+      (setq |$specialCharacters| |$plainRTspecialCharacters|)
+
+	  (load (make-absolute-filename "lib/interp/obey"))
+      (system:disksave filename :restart-function restart-hook :full-gc t))
+#+:Lucid (define-function 'user::save-system  #'boot::save-system)
+(defun |undoINITIALIZE| () ())
+;; following are defined in spadtest.boot and stantest.boot
+(defun |installStandardTestPackages| () ())
+(defun |spadtestValueHook| (val type) ())
+(defun |testError| (errotype erroValue) ())
+(defvar |$TestOptions| ())
+;; following in defined in word.boot
+(defun |bootFind| (word) ())
+;; following 3 are replacements for g-util.boot
+(define-function '|isLowerCaseLetter| #'LOWER-CASE-P)
+(define-function '|isUpperCaseLetter| #'UPPER-CASE-P)
+(define-function '|isLetter| #'ALPHA-CHAR-P)
+;; reset from /spad/lisp/setq.lisp
+(setq |$consistencyCheck| ()) ;; prevents wasting time checking consistency
+
+
+#+(or :CCL (and :lucid :ibm/370))
+(setq vmlisp::$current-directory (truename "."))
+#-(or :CCL (and :lucid :ibm/370))
+(setq vmlisp::$current-directory (make-directory *default-pathname-defaults*))
+
+(defvar *msghash* nil "hash table keyed by msg number")
+
+(defun cacheKeyedMsg (file)
+  (let ((line "") (msg "") key)
+   (with-open-file (in file)
+    (catch 'done
+     (loop
+      (setq line (read-line in nil nil))
+      (cond
+       ((null line)
+	 (when key
+	  (setf (gethash key *msghash*) msg))
+	  (throw 'done nil))
+       ((= (length line) 0))
+       ((char= (schar line 0) #\S)
+	 (when key
+	  (setf (gethash key *msghash*) msg))
+	 (setq key (intern line "BOOT"))
+	 (setq msg ""))
+       ('else
+	(setq msg (concatenate 'string msg line)))))))))
+
+(defun |fetchKeyedMsg| (key ignore)
+ (declare (ignore ignore))
+ (setq key (|object2Identifier| key))
+ (unless *msghash*
+  (setq *msghash* (make-hash-table))
+  (cacheKeyedMsg |$defaultMsgDatabaseName|))
+ (gethash key *msghash*))
+
+#+:AKCL (proclaim '(ftype (function (t) t) identity))
+#+:AKCL (defun identity (x) x)
+
+(setq identity #'identity) ;to make LispVM code for handling constants to work
+
+(|initializeTimedNames| |$interpreterTimedNames| |$interpreterTimedClasses|)
+
+(defun |rebuild| (filemode)
+ "rebuild MODEMAP.DAASE, exit lisp with bad return code on failure"
+ (let ((returncode -16))
+  (unwind-protect
+   (let (|$databaseQueue| |$e|)
+    (declare (special |$databaseQueue| |$e|))
+    (|clearConstructorAndLisplibCaches|)
+    (setq |$databaseQueue| nil)
+    (setq |$e| (cons (cons nil nil) nil))
+    (|buildDatabase| filemode t)
+    (setq |$IOindex| 1)
+    (setq |$InteractiveFrame| (cons (cons nil nil) nil))
+    (setq returncode 0))
+   (unless (zerop returncode) (bye returncode)))))
+
+#+:dos
+(setq vmlisp::$current-directory (truename "."))
+#+:dos
+(setq vmlisp::$spadroot "/spad/mnt/dos")
+#+:dos
+(defun user-homedir-pathname ()
+ (truename "."))
+
+(defun boot::|printCopyright| ()
+ (format t "there is no such thing as a simple job -- ((iHy))~%"))
+
+(defun |setViewportProcess| ()
+  (setq |$ViewportProcessToWatch|
+     (stringimage (CDR
+	  (|processInteractive|	 '(|key| (|%%| -2)) NIL) ))))
+
+(defun |waitForViewport| ()
+  (progn
+   (do ()
+       ((not (zerop (obey
+	 (concat
+	  "ps "
+	  |$ViewportProcessToWatch|
+	  " > /dev/null")))))
+       ())
+   (|sockSendInt| |$MenuServer| 1)
+   (|setIOindex| (- |$IOindex| 3))
+  )
+)
+
+
+(defun |makeVector| (els type)
+ (make-array (length els) :element-type (or type t) :initial-contents els))
+
+
+(defun |makeList| (size el) (make-list size :initial-element el) )
+
+#+:akcl
+(defun print-xdr-stream (x y z) (format y "XDR:~A" (xdr-stream-name x)))
+#+:akcl
+(defstruct (xdr-stream
+		(:print-function  print-xdr-stream))
+           "A structure to hold XDR streams. The stream is printed out."
+           (handle ) ;; this is what is used for xdr-open xdr-read xdr-write
+           (name ))  ;; this is used for printing
+#+:akcl
+(defun |xdrOpen| (str dir) (make-xdr-stream :handle (system:xdr-open str) :name str))
+#+:CCL
+(defun |xdrOpen| (str dir) (xdr-open str dir) )
+#+:dos
+(defun |xdrOpen| (str dir) (format t "xdrOpen called"))
+
+#+:akcl
+(defun |xdrRead| (xstr r) (system:xdr-read (xdr-stream-handle xstr) r) )
+#+:CCL
+(defun |xdrRead| (xstr r) (xdr-read xstr r) )
+#+:dos
+(defun |xdrRead| (str) (format t "xdrRead called"))
+
+#+:akcl
+(defun |xdrWrite| (xstr d) (system:xdr-write (xdr-stream-handle xstr) d) )
+#+:CCL
+(defun |xdrWrite| (xstr d) (xdr-write xstr d) )
+#+:dos
+(defun |xdrWrite| (str) (format t "xdrWrite called"))
+
+;; here is a test for XDR
+;; (setq *print-array* T)
+;; (setq foo (open "xdrtest" :direction :output))
+;; (setq xfoo (|xdrOpen| foo))
+;; (|xdrWrite| xfoo "hello: This contains an integer, a float and a float array")
+;; (|xdrWrite| xfoo 42)
+;; (|xdrWrite| xfoo 3.14159)
+;; (|xdrWrite| xfoo (make-array 10 :element-type 'long-float :initial-element 2.78111D12))
+;; (close foo)
+;; (setq foo (open "xdrtest" :direction :input))
+;; (setq xfoo (|xdrOpen| foo))
+;; (|xdrRead| xfoo "")
+;; (|xdrRead| xfoo 0)
+;; (|xdrRead| xfoo 0.0)
+;; (|xdrRead| xfoo (make-array 10 :element-type 'long-float ))
+;; (setq *print-array* NIL)
+
+;; clearParserMacro has problems as boot code (package notation)
+;; defined here in Lisp
+;;--------------------> NEW DEFINITION (see i-syscmd.boot.pamphlet)
+(DEFUN |clearParserMacro| (|macro|)
+  (PROG ()
+    (RETURN (COND
+       ((NULL (IFCDR (|assoc| |macro| |$pfMacros|))) NIL)
+       ((QUOTE T) (SPADLET |$pfMacros|
+          (REMALIST |$pfMacros| |macro|)))))))
+;
+
+(setq /MAJOR-VERSION 2)
+(setq echo-meta nil)
+(defun /versioncheck (n) (unless (= n /MAJOR-VERSION) (throw 'versioncheck -1)))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} CMUCL {\bf src/interp/util.lisp.pamphlet}
+\end{thebibliography}
+\end{document}

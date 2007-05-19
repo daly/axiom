@@ -1,0 +1,378 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra gdpoly.spad}
+\author{Barry Trager}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{domain GDMP GeneralDistributedMultivariatePolynomial}
+<<domain GDMP GeneralDistributedMultivariatePolynomial>>=
+)abbrev domain GDMP GeneralDistributedMultivariatePolynomial
+++ Author: Barry Trager
+++ Date Created:
+++ Date Last Updated:
+++ Basic Functions: Ring, degree, eval, coefficient, monomial, differentiate,
+++ resultant, gcd, leadingCoefficient
+++ Related Constructors: DistributedMultivariatePolynomial,
+++ HomogeneousDistributedMultivariatePolynomial
+++ Also See: Polynomial
+++ AMS Classifications:
+++ Keywords: polynomial, multivariate, distributed
+++ References:
+++ Description:
+++   This type supports distributed multivariate polynomials
+++ whose variables are from a user specified list of symbols.
+++ The coefficient ring may be non commutative,
+++ but the variables are assumed to commute.
+++ The term ordering is specified by its third parameter.
+++ Suggested types which define term orderings include: \spadtype{DirectProduct},
+++ \spadtype{HomogeneousDirectProduct}, \spadtype{SplitHomogeneousDirectProduct}
+++ and finally \spadtype{OrderedDirectProduct} which accepts an arbitrary user
+++ function to define a term ordering.
+
+GeneralDistributedMultivariatePolynomial(vl,R,E): public == private where
+  vl: List Symbol
+  R: Ring
+  E: DirectProductCategory(#vl,NonNegativeInteger)
+  OV  ==> OrderedVariableList(vl)
+  SUP ==> SparseUnivariatePolynomial
+  NNI ==> NonNegativeInteger
+
+  public == PolynomialCategory(R,E,OV) with
+      reorder: (%,List Integer) -> %
+        ++ reorder(p, perm) applies the permutation perm to the variables
+        ++ in a polynomial and returns the new correctly ordered polynomial
+
+  private == PolynomialRing(R,E) add
+    --representations
+      Term := Record(k:E,c:R)
+      Rep := List Term
+      n := #vl
+      Vec ==> Vector(NonNegativeInteger)
+      zero?(p : %): Boolean == null(p : Rep)
+
+      totalDegree p ==
+         zero? p => 0
+         "max"/[reduce("+",(t.k)::(Vector NNI), 0) for t in p]
+
+      monomial(p:%, v: OV,e: NonNegativeInteger):% ==
+         locv := lookup v
+         p*monomial(1,
+            directProduct [if z=locv then e else 0 for z in 1..n]$Vec)
+
+      coerce(v: OV):% == monomial(1,v,1)
+
+      listCoef(p : %): List R ==
+        rec : Term
+        [rec.c for rec in (p:Rep)]
+
+      mainVariable(p: %) ==
+         zero?(p) => "failed"
+         for v in vl repeat
+           vv := variable(v)::OV
+           if degree(p,vv)>0 then return vv
+         "failed"
+
+      ground?(p) == mainVariable(p) case "failed"
+
+      retract(p : %): R ==
+          not ground? p => error "not a constant"
+          leadingCoefficient p
+
+      retractIfCan(p : %): Union(R,"failed") ==
+        ground?(p) => leadingCoefficient p
+        "failed"
+
+      degree(p: %,v: OV) == degree(univariate(p,v))
+      minimumDegree(p: %,v: OV) == minimumDegree(univariate(p,v))
+      differentiate(p: %,v: OV) ==
+            multivariate(differentiate(univariate(p,v)),v)
+
+      degree(p: %,lv: List OV) == [degree(p,v) for v in lv]
+      minimumDegree(p: %,lv: List OV) == [minimumDegree(p,v) for v in lv]
+
+      numberOfMonomials(p:%) ==
+        l : Rep := p : Rep
+        null(l) => 1
+        #l
+
+      monomial?(p : %): Boolean ==
+        l : Rep := p : Rep
+        null(l) or null rest(l)
+
+      if R has OrderedRing then
+        maxNorm(p : %): R ==
+          l : List R := nil
+          r,m : R
+          m := 0
+          for r in listCoef(p) repeat
+            if r > m then m := r
+            else if (-r) > m then m := -r
+          m
+
+      --trailingCoef(p : %) ==
+      --  l : Rep := p : Rep
+      --  null l => 0
+      --  r : Term := last l
+      --  r.c
+
+      --leadingPrimitiveMonomial(p : %) ==
+      --  ground?(p) => 1$%
+      --  r : Term := first(p:Rep)
+      --  r := [r.k,1$R]$Term     -- new cell
+      -- list(r)$Rep :: %
+
+    -- The following 2 defs are inherited from PolynomialRing
+
+      --leadingMonomial(p : %) ==
+      --  ground?(p) => p
+      --  r : Term := first(p:Rep)
+      --  r := [r.k,r.c]$Term     -- new cell
+      --  list(r)$Rep :: %
+
+      --reductum(p : %): % ==
+      --  ground? p => 0$%
+      --  (rest(p:Rep)):%
+
+      if R has Field then
+        (p : %) / (r : R) == inv(r) * p
+
+      variables(p: %) ==
+         maxdeg:Vector(NonNegativeInteger) := new(n,0)
+         while not zero?(p) repeat
+            tdeg := degree p
+            p := reductum p
+            for i in 1..n repeat
+              maxdeg.i := max(maxdeg.i, tdeg.i)
+         [index(i:PositiveInteger) for i in 1..n | maxdeg.i^=0]
+
+      reorder(p: %,perm: List Integer):% ==
+         #perm ^= n => error "must be a complete permutation of all vars"
+         q := [[directProduct [term.k.j for j in perm]$Vec,term.c]$Term
+                         for term in p]
+         sort(#1.k > #2.k,q)
+
+      --coerce(dp:DistributedMultivariatePolynomial(vl,R)):% ==
+      --   q:=dp:List(Term)
+      --   sort(#1.k > #2.k,q):%
+
+      univariate(p: %,v: OV):SUP(%) ==
+         zero?(p) => 0
+         exp := degree p
+         locv := lookup v
+         deg:NonNegativeInteger := 0
+         nexp := directProduct [if i=locv then (deg :=exp.i;0) else exp.i
+                                        for i in 1..n]$Vec
+         monomial(monomial(leadingCoefficient p,nexp),deg)+
+                      univariate(reductum p,v)
+
+      eval(p: %,v: OV,val:%):% == univariate(p,v)(val)
+
+      eval(p: %,v: OV,val:R):% == eval(p,v,val::%)$%
+
+      eval(p: %,lv: List OV,lval: List R):% ==
+         lv = [] => p
+         eval(eval(p,first lv,(first lval)::%)$%, rest lv, rest lval)$%
+
+      -- assume Lvar are sorted correctly
+      evalSortedVarlist(p: %,Lvar: List OV,Lpval: List %):% ==
+        v := mainVariable p
+        v case "failed" => p
+        pv := v:: OV
+        Lvar=[] or Lpval=[] => p
+        mvar := Lvar.first
+        mvar > pv => evalSortedVarlist(p,Lvar.rest,Lpval.rest)
+        pval := Lpval.first
+        pts:SUP(%):= map(evalSortedVarlist(#1,Lvar,Lpval),univariate(p,pv))
+        mvar=pv => pts(pval)
+        multivariate(pts,pv)
+
+      eval(p:%,Lvar:List OV,Lpval:List %) ==
+        nlvar:List OV := sort(#1 > #2,Lvar)
+        nlpval :=
+           Lvar = nlvar => Lpval
+           nlpval := [Lpval.position(mvar,Lvar) for mvar in nlvar]
+        evalSortedVarlist(p,nlvar,nlpval)
+
+      multivariate(p1:SUP(%),v: OV):% ==
+        0=p1 => 0
+        degree p1 = 0 => leadingCoefficient p1
+        leadingCoefficient(p1)*(v::%)**degree(p1) +
+                  multivariate(reductum p1,v)
+
+      univariate(p: %):SUP(R) ==
+        (v := mainVariable p) case "failed" =>
+                      monomial(leadingCoefficient p,0)
+        q := univariate(p,v:: OV)
+        ans:SUP(R) := 0
+        while q ^= 0 repeat
+          ans := ans + monomial(ground leadingCoefficient q,degree q)
+          q := reductum q
+        ans
+
+      multivariate(p:SUP(R),v: OV):% ==
+        0=p => 0
+        (leadingCoefficient p)*monomial(1,v,degree p) +
+                       multivariate(reductum p,v)
+
+      if R has GcdDomain then
+        content(p: %):R ==
+          zero?(p) => 0
+          "gcd"/[t.c for t in p]
+
+
+
+        if R has EuclideanDomain and not(R has FloatingPointSystem)  then
+          gcd(p: %,q:%):% ==
+            gcd(p,q)$PolynomialGcdPackage(E,OV,R,%)
+
+        else gcd(p: %,q:%):% ==
+            r : R
+            (pv := mainVariable(p)) case "failed" =>
+              (r := leadingCoefficient p) = 0$R => q
+              gcd(r,content q)::%
+            (qv := mainVariable(q)) case "failed" =>
+              (r := leadingCoefficient q) = 0$R => p
+              gcd(r,content p)::%
+            pv<qv => gcd(p,content univariate(q,qv))
+            qv<pv => gcd(q,content univariate(p,pv))
+            multivariate(gcd(univariate(p,pv),univariate(q,qv)),pv)
+
+      coerce(p: %) : OutputForm ==
+        zero?(p) => (0$R) :: OutputForm
+        l,lt : List OutputForm
+        lt := nil
+        vl1 := [v::OutputForm for v in vl]
+        for t in reverse p repeat
+          l := nil
+          for i in 1..#vl1 repeat
+            t.k.i = 0 => l
+            t.k.i = 1 => l := cons(vl1.i,l)
+            l := cons(vl1.i ** t.k.i ::OutputForm,l)
+          l := reverse l
+          if (t.c ^= 1) or (null l) then l := cons(t.c :: OutputForm,l)
+          1 = #l => lt := cons(first l,lt)
+          lt := cons(reduce("*",l),lt)
+        1 = #lt => first lt
+        reduce("+",lt)
+
+@
+\section{domain DMP DistributedMultivariatePolynomial}
+<<domain DMP DistributedMultivariatePolynomial>>=
+)abbrev domain DMP DistributedMultivariatePolynomial
+++ Author: Barry Trager
+++ Date Created:
+++ Date Last Updated:
+++ Basic Functions: Ring, degree, eval, coefficient, monomial, differentiate,
+++ resultant, gcd, leadingCoefficient
+++ Related Constructors: GeneralDistributedMultivariatePolynomial,
+++ HomogeneousDistributedMultivariatePolynomial
+++ Also See: Polynomial
+++ AMS Classifications:
+++ Keywords: polynomial, multivariate, distributed
+++ References:
+++ Description:
+++   This type supports distributed multivariate polynomials
+++ whose variables are from a user specified list of symbols.
+++ The coefficient ring may be non commutative,
+++ but the variables are assumed to commute.
+++ The term ordering is lexicographic specified by the variable
+++ list parameter with the most significant variable first in the list.
+DistributedMultivariatePolynomial(vl,R): public == private where
+  vl : List Symbol
+  R  : Ring
+  E   ==> DirectProduct(#vl,NonNegativeInteger)
+  OV  ==> OrderedVariableList(vl)
+  public == PolynomialCategory(R,E,OV) with
+      reorder: (%,List Integer) -> %
+        ++ reorder(p, perm) applies the permutation perm to the variables
+        ++ in a polynomial and returns the new correctly ordered polynomial
+
+  private ==
+    GeneralDistributedMultivariatePolynomial(vl,R,E)
+
+@
+\section{domain HDMP HomogeneousDistributedMultivariatePolynomial}
+<<domain HDMP HomogeneousDistributedMultivariatePolynomial>>=
+)abbrev domain HDMP HomogeneousDistributedMultivariatePolynomial
+++ Author: Barry Trager
+++ Date Created:
+++ Date Last Updated:
+++ Basic Functions: Ring, degree, eval, coefficient, monomial, differentiate,
+++ resultant, gcd, leadingCoefficient
+++ Related Constructors: DistributedMultivariatePolynomial,
+++ GeneralDistributedMultivariatePolynomial
+++ Also See: Polynomial
+++ AMS Classifications:
+++ Keywords: polynomial, multivariate, distributed
+++ References:
+++ Description:
+++   This type supports distributed multivariate polynomials
+++ whose variables are from a user specified list of symbols.
+++ The coefficient ring may be non commutative,
+++ but the variables are assumed to commute.
+++ The term ordering is total degree ordering refined by reverse
+++ lexicographic ordering with respect to the position that the variables
+++ appear in the list of variables parameter.
+HomogeneousDistributedMultivariatePolynomial(vl,R): public == private where
+  vl : List Symbol
+  R  : Ring
+  E   ==> HomogeneousDirectProduct(#vl,NonNegativeInteger)
+  OV  ==> OrderedVariableList(vl)
+  public == PolynomialCategory(R,E,OV) with
+      reorder: (%,List Integer) -> %
+        ++ reorder(p, perm) applies the permutation perm to the variables
+        ++ in a polynomial and returns the new correctly ordered polynomial
+  private ==
+    GeneralDistributedMultivariatePolynomial(vl,R,E)
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<domain GDMP GeneralDistributedMultivariatePolynomial>>
+<<domain DMP DistributedMultivariatePolynomial>>
+<<domain HDMP HomogeneousDistributedMultivariatePolynomial>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

@@ -1,0 +1,1787 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra fortran.spad}
+\author{Didier Pinchon, Mike Dewar, William Naylor}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{domain RESULT Result}
+<<domain RESULT Result>>=
+)abbrev domain RESULT Result
+++ Author: Didier Pinchon and Mike Dewar
+++ Date Created:  8 April 1994
+++ Date Last Updated: 28 June 1994 
+++ Basic Operations:
+++ Related Domains:
+++ Also See:
+++ AMS Classifications:
+++ Keywords:
+++ Examples:
+++ References:
+++ Description: A domain used to return the results from a call to the NAG
+++ Library.  It prints as a list of names and types, though the user may 
+++ choose to display values automatically if he or she wishes.
+Result():Exports==Implementation where
+
+  O  ==> OutputForm
+
+  Exports ==> TableAggregate(Symbol,Any) with
+    showScalarValues : Boolean -> Boolean
+      ++ showScalarValues(true) forces the values of scalar components to be
+      ++  displayed rather than just their types.
+    showArrayValues : Boolean -> Boolean
+      ++ showArrayValues(true) forces the values of array components to be
+      ++  displayed rather than just their types.
+    finiteAggregate
+
+  Implementation ==> Table(Symbol,Any) add
+
+    -- Constant
+    colon := ": "::Symbol::O
+    elide := "..."::Symbol::O
+
+    -- Flags
+    showScalarValuesFlag : Boolean := false
+    showArrayValuesFlag  : Boolean := false
+
+    cleanUpDomainForm(d:SExpression):O ==
+      not list? d => d::O
+      #d=1 => (car d)::O
+      -- If the car is an atom then we have a domain constructor, if not
+      -- then we have some kind of value.  Since we often can't print these
+      -- ****ers we just elide them.
+      not atom? car d => elide
+      prefix((car d)::O,[cleanUpDomainForm(u) for u in destruct cdr(d)]$List(O))
+
+    display(v:Any,d:SExpression):O ==
+      not list? d => error "Domain form is non-list"
+      #d=1 =>
+       showScalarValuesFlag => objectOf v
+       cleanUpDomainForm d
+      car(d) = convert("Complex"::Symbol)@SExpression =>
+       showScalarValuesFlag => objectOf v
+       cleanUpDomainForm d
+      showArrayValuesFlag => objectOf v
+      cleanUpDomainForm d
+       
+    makeEntry(k:Symbol,v:Any):O ==
+      hconcat [k::O,colon,display(v,dom v)]
+
+    coerce(r:%):O == 
+      bracket [makeEntry(key,r.key) for key in reverse! keys(r)]
+
+    showArrayValues(b:Boolean):Boolean  == showArrayValuesFlag := b
+    showScalarValues(b:Boolean):Boolean == showScalarValuesFlag := b
+
+@
+\section{domain FC FortranCode}
+<<domain FC FortranCode>>=
+)abbrev domain FC FortranCode 
+-- The FortranCode domain is used to represent operations which are to be
+-- translated into FORTRAN.
+++ Author: Mike Dewar
+++ Date Created: April 1991
+++ Date Last Updated: 22 March 1994
+++                    26 May 1994 Added common, MCD
+++                    21 June 1994 Changed print to printStatement, MCD
+++                    30 June 1994 Added stop, MCD
+++                    12 July 1994 Added assign for String, MCD
+++                     9 January 1995 Added fortran2Lines to getCall, MCD
+++ Basic Operations:
+++ Related Constructors: FortranProgram, Switch, FortranType
+++ Also See:
+++ AMS Classifications:
+++ Keywords:
+++ References:
+++ Description:
+++ This domain builds representations of program code segments for use with
+++ the FortranProgram domain.
+FortranCode(): public == private where
+  L ==> List
+  PI ==> PositiveInteger
+  PIN ==> Polynomial Integer
+  SEX ==> SExpression
+  O ==> OutputForm
+  OP ==> Union(Null:"null",
+               Assignment:"assignment",
+               Conditional:"conditional",
+               Return:"return",
+               Block:"block",
+               Comment:"comment",
+               Call:"call",
+               For:"for",
+               While:"while",
+               Repeat:"repeat",
+               Goto:"goto",
+               Continue:"continue",
+	       ArrayAssignment:"arrayAssignment",
+               Save:"save",
+               Stop:"stop",
+               Common:"common",
+               Print:"print")
+  ARRAYASS ==> Record(var:Symbol, rand:O, ints2Floats?:Boolean)
+  EXPRESSION ==> Record(ints2Floats?:Boolean,expr:O)
+  ASS ==> Record(var:Symbol,
+                 arrayIndex:L PIN,
+                 rand:EXPRESSION
+                )
+  COND ==> Record(switch: Switch(),
+                  thenClause: $,
+                  elseClause: $
+                 )
+  RETURN ==> Record(empty?:Boolean,value:EXPRESSION)
+  BLOCK ==> List $
+  COMMENT ==> List String
+  COMMON ==> Record(name:Symbol,contents:List Symbol)
+  CALL ==> String
+  FOR ==> Record(range:SegmentBinding PIN, span:PIN,  body:$)
+  LABEL ==> SingleInteger
+  LOOP ==> Record(switch:Switch(),body:$)
+  PRINTLIST ==> List O
+  OPREC ==> Union(nullBranch:"null", assignmentBranch:ASS,
+                  arrayAssignmentBranch:ARRAYASS,
+                  conditionalBranch:COND, returnBranch:RETURN,
+                  blockBranch:BLOCK, commentBranch:COMMENT, callBranch:CALL,
+                  forBranch:FOR, labelBranch:LABEL, loopBranch:LOOP,
+                  commonBranch:COMMON, printBranch:PRINTLIST)
+
+  public == SetCategory with
+    coerce: $ -> O
+      ++ coerce(f) returns an object of type OutputForm.
+    forLoop: (SegmentBinding PIN,$) -> $
+     ++ forLoop(i=1..10,c) creates a representation of a FORTRAN DO loop with
+     ++ \spad{i} ranging over the values 1 to 10.
+    forLoop: (SegmentBinding PIN,PIN,$) -> $
+     ++ forLoop(i=1..10,n,c) creates a representation of a FORTRAN DO loop with
+     ++ \spad{i} ranging over the values 1 to 10 by n.
+    whileLoop: (Switch,$) -> $
+     ++ whileLoop(s,c) creates a while loop in FORTRAN.
+    repeatUntilLoop: (Switch,$) -> $
+     ++ repeatUntilLoop(s,c) creates a repeat ... until loop in FORTRAN.
+    goto: SingleInteger -> $
+      ++ goto(l) creates a representation of a FORTRAN GOTO statement
+    continue: SingleInteger -> $
+      ++ continue(l) creates a representation of a FORTRAN CONTINUE labelled 
+      ++ with l
+    comment: String -> $
+      ++ comment(s) creates a representation of the String s as a single FORTRAN
+      ++ comment.  
+    comment: List String -> $
+      ++ comment(s) creates a representation of the Strings s as a multi-line
+      ++ FORTRAN comment.  
+    call: String -> $
+      ++ call(s) creates a representation of a FORTRAN CALL statement
+    returns: () -> $
+      ++ returns() creates a representation of a FORTRAN RETURN statement.
+    returns: Expression MachineFloat -> $
+      ++ returns(e) creates a representation of a FORTRAN RETURN statement
+      ++ with a returned value.
+    returns: Expression MachineInteger -> $
+      ++ returns(e) creates a representation of a FORTRAN RETURN statement
+      ++ with a returned value.
+    returns: Expression MachineComplex -> $
+      ++ returns(e) creates a representation of a FORTRAN RETURN statement
+      ++ with a returned value.
+    returns: Expression Float -> $
+      ++ returns(e) creates a representation of a FORTRAN RETURN statement
+      ++ with a returned value.
+    returns: Expression Integer -> $
+      ++ returns(e) creates a representation of a FORTRAN RETURN statement
+      ++ with a returned value.
+    returns: Expression Complex Float -> $
+      ++ returns(e) creates a representation of a FORTRAN RETURN statement
+      ++ with a returned value.
+    cond: (Switch,$) -> $
+      ++ cond(s,e) creates a representation of the FORTRAN expression
+      ++ IF (s) THEN e.
+    cond: (Switch,$,$) -> $
+      ++ cond(s,e,f) creates a representation of the FORTRAN expression
+      ++ IF (s) THEN e ELSE f.
+    assign: (Symbol,String) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Expression MachineInteger) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Expression MachineFloat) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Expression MachineComplex) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Matrix MachineInteger) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Matrix MachineFloat) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Matrix MachineComplex) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Vector MachineInteger) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Vector MachineFloat) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Vector MachineComplex) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Matrix Expression MachineInteger) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Matrix Expression MachineFloat) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Matrix Expression MachineComplex) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Vector Expression MachineInteger) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Vector Expression MachineFloat) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Vector Expression MachineComplex) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,L PIN,Expression MachineInteger) -> $
+      ++ assign(x,l,y) creates a representation of the assignment of \spad{y}
+      ++ to the \spad{l}'th element of array \spad{x} (\spad{l} is a list of
+      ++ indices).
+    assign: (Symbol,L PIN,Expression MachineFloat) -> $
+      ++ assign(x,l,y) creates a representation of the assignment of \spad{y}
+      ++ to the \spad{l}'th element of array \spad{x} (\spad{l} is a list of
+      ++ indices).
+    assign: (Symbol,L PIN,Expression MachineComplex) -> $
+      ++ assign(x,l,y) creates a representation of the assignment of \spad{y}
+      ++ to the \spad{l}'th element of array \spad{x} (\spad{l} is a list of
+      ++ indices).
+    assign: (Symbol,Expression Integer) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Expression Float) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Expression Complex Float) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Matrix Expression Integer) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Matrix Expression Float) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Matrix Expression Complex Float) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Vector Expression Integer) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Vector Expression Float) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,Vector Expression Complex Float) -> $
+      ++ assign(x,y) creates a representation of the FORTRAN expression
+      ++ x=y.
+    assign: (Symbol,L PIN,Expression Integer) -> $
+      ++ assign(x,l,y) creates a representation of the assignment of \spad{y}
+      ++ to the \spad{l}'th element of array \spad{x} (\spad{l} is a list of
+      ++ indices).
+    assign: (Symbol,L PIN,Expression Float) -> $
+      ++ assign(x,l,y) creates a representation of the assignment of \spad{y}
+      ++ to the \spad{l}'th element of array \spad{x} (\spad{l} is a list of
+      ++ indices).
+    assign: (Symbol,L PIN,Expression Complex Float) -> $
+      ++ assign(x,l,y) creates a representation of the assignment of \spad{y}
+      ++ to the \spad{l}'th element of array \spad{x} (\spad{l} is a list of
+      ++ indices).
+    block: List($) -> $
+      ++ block(l) creates a representation of the statements in l as a block.
+    stop: () -> $
+      ++ stop() creates a representation of a STOP statement.
+    save: () -> $
+      ++ save() creates a representation of a SAVE statement.
+    printStatement: List O -> $
+      ++ printStatement(l) creates a representation of a PRINT statement.
+    common: (Symbol,List Symbol) -> $
+      ++ common(name,contents) creates a representation a named common block.
+    operation: $ -> OP
+      ++ operation(f) returns the name of the operation represented by \spad{f}.
+    code: $ -> OPREC
+      ++ code(f) returns the internal representation of the object represented
+      ++ by \spad{f}.
+    printCode: $ -> Void
+      ++ printCode(f) prints out \spad{f} in FORTRAN notation.
+    getCode: $ -> SEX
+      ++ getCode(f) returns a Lisp list of strings representing \spad{f}
+      ++ in Fortran notation.  This is used by the FortranProgram domain.
+    setLabelValue:SingleInteger -> SingleInteger
+      ++ setLabelValue(i) resets the counter which produces labels to i
+
+  private == add
+    import Void
+    import ASS
+    import COND
+    import RETURN
+    import L PIN
+    import O
+    import SEX
+    import FortranType
+    import TheSymbolTable
+
+    Rep := Record(op: OP, data: OPREC)
+
+    -- We need to be able to generate unique labels
+    labelValue:SingleInteger := 25000::SingleInteger
+    setLabelValue(u:SingleInteger):SingleInteger == labelValue := u
+    newLabel():SingleInteger ==
+      labelValue := labelValue + 1$SingleInteger
+      labelValue
+
+    commaSep(l:List String):List(String) ==
+      [(l.1),:[:[",",u] for u in rest(l)]]
+
+    getReturn(rec:RETURN):SEX ==
+      returnToken : SEX := convert("RETURN"::Symbol::O)$SEX
+      elt(rec,empty?)$RETURN =>
+        getStatement(returnToken,NIL$Lisp)$Lisp
+      rt : EXPRESSION := elt(rec,value)$RETURN
+      rv : O := elt(rt,expr)$EXPRESSION
+      getStatement([returnToken,convert(rv)$SEX]$Lisp,
+                   elt(rt,ints2Floats?)$EXPRESSION )$Lisp
+
+    getStop():SEX ==
+      fortran2Lines(LIST("STOP")$Lisp)$Lisp
+
+    getSave():SEX ==
+      fortran2Lines(LIST("SAVE")$Lisp)$Lisp
+
+    getCommon(u:COMMON):SEX ==
+      fortran2Lines(APPEND(LIST("COMMON"," /",string (u.name),"/ ")$Lisp,_
+                    addCommas(u.contents)$Lisp)$Lisp)$Lisp
+ 
+    getPrint(l:PRINTLIST):SEX ==
+      ll : SEX := LIST("PRINT*")$Lisp
+      for i in l repeat 
+        ll := APPEND(ll,CONS(",",expression2Fortran(i)$Lisp)$Lisp)$Lisp
+      fortran2Lines(ll)$Lisp
+
+    getBlock(rec:BLOCK):SEX ==
+      indentFortLevel(convert(1@Integer)$SEX)$Lisp
+      expr : SEX := LIST()$Lisp
+      for u in rec repeat
+        expr := APPEND(expr,getCode(u))$Lisp
+      indentFortLevel(convert(-1@Integer)$SEX)$Lisp
+      expr
+
+    getBody(f:$):SEX ==
+      operation(f) case Block => getCode f
+      indentFortLevel(convert(1@Integer)$SEX)$Lisp
+      expr := getCode f
+      indentFortLevel(convert(-1@Integer)$SEX)$Lisp
+      expr
+
+    getElseIf(f:$):SEX ==
+      rec := code f
+      expr :=
+       fortFormatElseIf(elt(rec.conditionalBranch,switch)$COND::O)$Lisp
+      expr := 
+       APPEND(expr,getBody elt(rec.conditionalBranch,thenClause)$COND)$Lisp
+      elseBranch := elt(rec.conditionalBranch,elseClause)$COND
+      not(operation(elseBranch) case Null) =>
+        operation(elseBranch) case Conditional => 
+          APPEND(expr,getElseIf elseBranch)$Lisp
+        expr := APPEND(expr, getStatement(ELSE::O,NIL$Lisp)$Lisp)$Lisp
+        expr := APPEND(expr, getBody elseBranch)$Lisp
+      expr
+
+    getContinue(label:SingleInteger):SEX ==
+      lab : O := label::O
+      if (width(lab) > 6) then error "Label too big"
+      cnt : O := "CONTINUE"::O
+      --sp  : O := hspace(6-width lab)
+      sp  : O := hspace(_$fortIndent$Lisp -width lab)
+      LIST(STRCONC(STRINGIMAGE(lab)$Lisp,sp,cnt)$Lisp)$Lisp
+
+    getGoto(label:SingleInteger):SEX ==
+     fortran2Lines(
+      LIST(STRCONC("GOTO ",STRINGIMAGE(label::O)$Lisp)$Lisp)$Lisp)$Lisp
+
+    getRepeat(repRec:LOOP):SEX ==
+      sw : Switch := NOT elt(repRec,switch)$LOOP
+      lab := newLabel()
+      bod := elt(repRec,body)$LOOP
+      APPEND(getContinue lab,getBody bod,
+           fortFormatIfGoto(sw::O,lab)$Lisp)$Lisp
+
+    getWhile(whileRec:LOOP):SEX ==
+      sw := NOT elt(whileRec,switch)$LOOP
+      lab1 := newLabel()
+      lab2 := newLabel()
+      bod := elt(whileRec,body)$LOOP
+      APPEND(fortFormatLabelledIfGoto(sw::O,lab1,lab2)$Lisp,
+           getBody bod, getBody goto(lab1), getContinue lab2)$Lisp
+
+    getArrayAssign(rec:ARRAYASS):SEX ==
+      getfortarrayexp((rec.var)::O,rec.rand,rec.ints2Floats?)$Lisp
+
+    getAssign(rec:ASS):SEX ==
+      indices : L PIN := elt(rec,arrayIndex)$ASS
+      if indices = []::(L PIN) then
+        lhs := elt(rec,var)$ASS::O
+      else
+        lhs := cons(elt(rec,var)$ASS::PIN,indices)::O
+        -- Must get the index brackets correct:
+        lhs := (cdr car cdr convert(lhs)$SEX::SEX)::O -- Yuck!
+      elt(elt(rec,rand)$ASS,ints2Floats?)$EXPRESSION =>
+        assignment2Fortran1(lhs,elt(elt(rec,rand)$ASS,expr)$EXPRESSION)$Lisp
+      integerAssignment2Fortran1(lhs,elt(elt(rec,rand)$ASS,expr)$EXPRESSION)$Lisp
+
+    getCond(rec:COND):SEX ==
+      expr := APPEND(fortFormatIf(elt(rec,switch)$COND::O)$Lisp,
+                     getBody elt(rec,thenClause)$COND)$Lisp
+      elseBranch := elt(rec,elseClause)$COND
+      if not(operation(elseBranch) case Null) then
+        operation(elseBranch) case Conditional =>
+          expr := APPEND(expr,getElseIf elseBranch)$Lisp
+        expr := APPEND(expr,getStatement(ELSE::O,NIL$Lisp)$Lisp,
+                       getBody elseBranch)$Lisp
+      APPEND(expr,getStatement(ENDIF::O,NIL$Lisp)$Lisp)$Lisp
+
+    getComment(rec:COMMENT):SEX ==
+      convert([convert(concat("C     ",c)$String)@SEX for c in rec])@SEX
+
+    getCall(rec:CALL):SEX ==
+      expr := concat("CALL ",rec)$String
+      #expr > 1320 => error "Fortran CALL too large"
+      fortran2Lines(convert([convert(expr)@SEX ])@SEX)$Lisp
+
+    getFor(rec:FOR):SEX ==
+      rnge : SegmentBinding PIN := elt(rec,range)$FOR
+      increment : PIN := elt(rec,span)$FOR
+      lab : SingleInteger := newLabel()
+      declare!(variable rnge,fortranInteger())
+      expr := fortFormatDo(variable rnge, (lo segment rnge)::O,_
+        (hi segment rnge)::O,increment::O,lab)$Lisp
+      APPEND(expr, getBody elt(rec,body)$FOR, getContinue(lab))$Lisp
+ 
+    getCode(f:$):SEX ==
+      opp:OP := operation f
+      rec:OPREC:= code f
+      opp case Assignment => getAssign(rec.assignmentBranch)
+      opp case ArrayAssignment => getArrayAssign(rec.arrayAssignmentBranch)
+      opp case Conditional => getCond(rec.conditionalBranch)
+      opp case Return => getReturn(rec.returnBranch)
+      opp case Block => getBlock(rec.blockBranch)
+      opp case Comment => getComment(rec.commentBranch)
+      opp case Call => getCall(rec.callBranch)
+      opp case For => getFor(rec.forBranch)
+      opp case Continue => getContinue(rec.labelBranch)
+      opp case Goto => getGoto(rec.labelBranch)
+      opp case Repeat => getRepeat(rec.loopBranch)
+      opp case While => getWhile(rec.loopBranch)
+      opp case Save => getSave()
+      opp case Stop => getStop()
+      opp case Print => getPrint(rec.printBranch)
+      opp case Common => getCommon(rec.commonBranch)
+      error "Unsupported program construct."
+      convert(0)@SEX
+
+    printCode(f:$):Void ==
+      displayLines1$Lisp getCode f
+      void()$Void
+
+    code (f:$):OPREC ==
+      elt(f,data)$Rep
+
+    operation (f:$):OP ==
+      elt(f,op)$Rep
+
+    common(name:Symbol,contents:List Symbol):$ ==
+      [["common"]$OP,[[name,contents]$COMMON]$OPREC]$Rep
+
+    stop():$ ==
+      [["stop"]$OP,["null"]$OPREC]$Rep
+
+    save():$ ==
+      [["save"]$OP,["null"]$OPREC]$Rep
+
+    printStatement(l:List O):$ ==
+      [["print"]$OP,[l]$OPREC]$Rep
+
+    comment(s:List String):$ ==
+      [["comment"]$OP,[s]$OPREC]$Rep
+
+    comment(s:String):$ ==
+      [["comment"]$OP,[list s]$OPREC]$Rep
+
+    forLoop(r:SegmentBinding PIN,body:$):$ ==
+      [["for"]$OP,[[r,(incr segment r)::PIN,body]$FOR]$OPREC]$Rep
+
+    forLoop(r:SegmentBinding PIN,increment:PIN,body:$):$ ==
+      [["for"]$OP,[[r,increment,body]$FOR]$OPREC]$Rep
+
+    goto(l:SingleInteger):$ ==
+      [["goto"]$OP,[l]$OPREC]$Rep
+
+    continue(l:SingleInteger):$ ==
+      [["continue"]$OP,[l]$OPREC]$Rep
+
+    whileLoop(sw:Switch,b:$):$ ==
+      [["while"]$OP,[[sw,b]$LOOP]$OPREC]$Rep
+
+    repeatUntilLoop(sw:Switch,b:$):$ ==
+      [["repeat"]$OP,[[sw,b]$LOOP]$OPREC]$Rep
+
+    returns():$ ==
+      v := [false,0::O]$EXPRESSION
+      [["return"]$OP,[[true,v]$RETURN]$OPREC]$Rep
+
+    returns(v:Expression MachineInteger):$ ==
+      [["return"]$OP,[[false,[false,v::O]$EXPRESSION]$RETURN]$OPREC]$Rep
+
+    returns(v:Expression MachineFloat):$ ==
+      [["return"]$OP,[[false,[false,v::O]$EXPRESSION]$RETURN]$OPREC]$Rep
+
+    returns(v:Expression MachineComplex):$ ==
+      [["return"]$OP,[[false,[false,v::O]$EXPRESSION]$RETURN]$OPREC]$Rep
+
+    returns(v:Expression Integer):$ ==
+      [["return"]$OP,[[false,[false,v::O]$EXPRESSION]$RETURN]$OPREC]$Rep
+
+    returns(v:Expression Float):$ ==
+      [["return"]$OP,[[false,[false,v::O]$EXPRESSION]$RETURN]$OPREC]$Rep
+
+    returns(v:Expression Complex Float):$ ==
+      [["return"]$OP,[[false,[false,v::O]$EXPRESSION]$RETURN]$OPREC]$Rep
+
+    block(l:List $):$ ==
+      [["block"]$OP,[l]$OPREC]$Rep
+      
+    cond(sw:Switch,thenC:$):$ ==
+      [["conditional"]$OP,
+       [[sw,thenC,[["null"]$OP,["null"]$OPREC]$Rep]$COND]$OPREC]$Rep
+
+    cond(sw:Switch,thenC:$,elseC:$):$ ==
+      [["conditional"]$OP,[[sw,thenC,elseC]$COND]$OPREC]$Rep
+
+    coerce(f : $):O ==
+      (f.op)::O
+
+    assign(v:Symbol,rhs:String):$ ==
+      [["assignment"]$OP,[[v,nil()::L PIN,[false,rhs::O]$EXPRESSION]$ASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Matrix MachineInteger):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,false]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Matrix MachineFloat):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,true]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Matrix MachineComplex):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,true]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Vector MachineInteger):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,false]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Vector MachineFloat):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,true]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Vector MachineComplex):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,true]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Matrix Expression MachineInteger):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,false]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Matrix Expression MachineFloat):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,true]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Matrix Expression MachineComplex):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,true]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Vector Expression MachineInteger):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,false]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Vector Expression MachineFloat):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,true]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Vector Expression MachineComplex):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,true]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,index:L PIN,rhs:Expression MachineInteger):$ ==
+      [["assignment"]$OP,[[v,index,[false,rhs::O]$EXPRESSION]$ASS]$OPREC]$Rep
+
+    assign(v:Symbol,index:L PIN,rhs:Expression MachineFloat):$ ==
+      [["assignment"]$OP,[[v,index,[true,rhs::O]$EXPRESSION]$ASS]$OPREC]$Rep
+
+    assign(v:Symbol,index:L PIN,rhs:Expression MachineComplex):$ ==
+      [["assignment"]$OP,[[v,index,[true,rhs::O]$EXPRESSION]$ASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Expression MachineInteger):$ ==
+      [["assignment"]$OP,[[v,nil()::L PIN,[false,rhs::O]$EXPRESSION]$ASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Expression MachineFloat):$ ==
+      [["assignment"]$OP,[[v,nil()::L PIN,[true,rhs::O]$EXPRESSION]$ASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Expression MachineComplex):$ ==
+      [["assignment"]$OP,[[v,nil()::L PIN,[true,rhs::O]$EXPRESSION]$ASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Matrix Expression Integer):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,false]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Matrix Expression Float):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,true]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Matrix Expression Complex Float):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,true]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Vector Expression Integer):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,false]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Vector Expression Float):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,true]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Vector Expression Complex Float):$ ==
+      [["arrayAssignment"]$OP,[[v,rhs::O,true]$ARRAYASS]$OPREC]$Rep
+
+    assign(v:Symbol,index:L PIN,rhs:Expression Integer):$ ==
+      [["assignment"]$OP,[[v,index,[false,rhs::O]$EXPRESSION]$ASS]$OPREC]$Rep
+
+    assign(v:Symbol,index:L PIN,rhs:Expression Float):$ ==
+      [["assignment"]$OP,[[v,index,[true,rhs::O]$EXPRESSION]$ASS]$OPREC]$Rep
+
+    assign(v:Symbol,index:L PIN,rhs:Expression Complex Float):$ ==
+      [["assignment"]$OP,[[v,index,[true,rhs::O]$EXPRESSION]$ASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Expression Integer):$ ==
+      [["assignment"]$OP,[[v,nil()::L PIN,[false,rhs::O]$EXPRESSION]$ASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Expression Float):$ ==
+      [["assignment"]$OP,[[v,nil()::L PIN,[true,rhs::O]$EXPRESSION]$ASS]$OPREC]$Rep
+
+    assign(v:Symbol,rhs:Expression Complex Float):$ ==
+      [["assignment"]$OP,[[v,nil()::L PIN,[true,rhs::O]$EXPRESSION]$ASS]$OPREC]$Rep
+
+    call(s:String):$ ==
+      [["call"]$OP,[s]$OPREC]$Rep
+
+@
+\section{domain FORTRAN FortranProgram}
+<<domain FORTRAN FortranProgram>>=
+)abbrev domain FORTRAN FortranProgram
+++ Author: Mike Dewar
+++ Date Created: October 1992
+++ Date Last Updated: 13 January 1994
+++                    23 January 1995 Added support for intrinsic functions
+++ Basic Operations:
+++ Related Constructors: FortranType, FortranCode, Switch
+++ Also See:
+++ AMS Classifications:
+++ Keywords:
+++ References:
+++ Description: \axiomType{FortranProgram} allows the user to build and manipulate simple 
+++ models of FORTRAN subprograms.  These can then be transformed into actual FORTRAN
+++ notation.
+FortranProgram(name,returnType,arguments,symbols): Exports == Implement where
+  name       : Symbol
+  returnType : Union(fst:FortranScalarType,void:"void")
+  arguments  : List Symbol
+  symbols    : SymbolTable
+
+  FC     ==> FortranCode
+  EXPR   ==> Expression
+  INT    ==> Integer
+  CMPX   ==> Complex
+  MINT   ==> MachineInteger
+  MFLOAT ==> MachineFloat
+  MCMPLX ==> MachineComplex
+  REP    ==> Record(localSymbols : SymbolTable, code : List FortranCode)
+
+  Exports ==> FortranProgramCategory with
+    coerce	: FortranCode -> $
+	++ coerce(fc) \undocumented{}
+    coerce	: List FortranCode -> $
+	++ coerce(lfc) \undocumented{}
+    coerce	: REP -> $
+	++ coerce(r) \undocumented{}
+    coerce      : EXPR MINT -> $
+	++ coerce(e) \undocumented{}
+    coerce      : EXPR MFLOAT -> $
+	++ coerce(e) \undocumented{}
+    coerce      : EXPR MCMPLX -> $
+	++ coerce(e) \undocumented{}
+    coerce      : Equation EXPR MINT -> $
+	++ coerce(eq) \undocumented{}
+    coerce      : Equation EXPR MFLOAT -> $
+	++ coerce(eq) \undocumented{}
+    coerce      : Equation EXPR MCMPLX -> $
+	++ coerce(eq) \undocumented{}
+    coerce      : EXPR INT -> $
+	++ coerce(e) \undocumented{}
+    coerce      : EXPR Float -> $
+	++ coerce(e) \undocumented{}
+    coerce      : EXPR CMPX Float -> $
+	++ coerce(e) \undocumented{}
+    coerce      : Equation EXPR INT -> $
+	++ coerce(eq) \undocumented{}
+    coerce      : Equation EXPR Float -> $
+	++ coerce(eq) \undocumented{}
+    coerce      : Equation EXPR CMPX Float -> $
+	++ coerce(eq) \undocumented{}
+
+  Implement ==> add
+
+    Rep := REP
+
+    import SExpression
+    import TheSymbolTable
+    import FortranCode
+
+    makeRep(b:List FortranCode):$ ==
+      construct(empty()$SymbolTable,b)$REP
+
+    codeFrom(u:$):List FortranCode ==
+      elt(u::Rep,code)$REP
+
+    outputAsFortran(p:$):Void ==
+      setLabelValue(25000::SingleInteger)$FC
+      -- Do this first to catch any extra type declarations:
+      tempName := "FPTEMP"::Symbol
+      newSubProgram(tempName)
+      initialiseIntrinsicList()$Lisp
+      body : List SExpression := [getCode(l)$FortranCode for l in codeFrom(p)]
+      intrinsics : SExpression := getIntrinsicList()$Lisp
+      endSubProgram()
+      fortFormatHead(returnType::OutputForm, name::OutputForm, _
+                     arguments::OutputForm)$Lisp
+      printTypes(symbols)$SymbolTable
+      printTypes((p::Rep).localSymbols)$SymbolTable
+      printTypes(tempName)$TheSymbolTable
+      fortFormatIntrinsics(intrinsics)$Lisp
+      clearTheSymbolTable(tempName)
+      for expr in body repeat displayLines1(expr)$Lisp
+      dispStatement(END::OutputForm)$Lisp
+      void()$Void
+
+    mkString(l:List Symbol):String ==
+      unparse(convert(l::OutputForm)@InputForm)$InputForm
+
+    checkVariables(user:List Symbol,target:List Symbol):Void ==
+      -- We don't worry about whether the user has subscripted the
+      -- variables or not.
+      setDifference(map(name$Symbol,user),target) ^= empty()$List(Symbol) =>
+        s1 : String := mkString(user)
+        s2 : String := mkString(target)
+        error ["Incompatible variable lists:", s1, s2]
+      void()$Void
+
+    coerce(u:EXPR MINT) : $ ==
+      checkVariables(variables(u)$EXPR(MINT),arguments)
+      l : List(FC) := [assign(name,u)$FC,returns()$FC]
+      makeRep l
+
+    coerce(u:Equation EXPR MINT) : $ ==
+      retractIfCan(lhs u)@Union(Kernel(EXPR MINT),"failed") case "failed" =>
+        error "left hand side is not a kernel"
+      vList : List Symbol := variables lhs u
+      #vList ^= #arguments =>
+        error "Incorrect number of arguments"
+      veList : List EXPR MINT := [w::EXPR(MINT) for w in vList]
+      aeList : List EXPR MINT := [w::EXPR(MINT) for w in arguments]
+      eList : List Equation EXPR MINT := 
+        [equation(w,v) for w in veList for v in aeList]
+      (subst(rhs u,eList))::$
+
+    coerce(u:EXPR MFLOAT) : $ ==
+      checkVariables(variables(u)$EXPR(MFLOAT),arguments)
+      l : List(FC) := [assign(name,u)$FC,returns()$FC]
+      makeRep l 
+
+    coerce(u:Equation EXPR MFLOAT) : $ ==
+      retractIfCan(lhs u)@Union(Kernel(EXPR MFLOAT),"failed") case "failed" =>
+        error "left hand side is not a kernel"
+      vList : List Symbol := variables lhs u
+      #vList ^= #arguments =>
+        error "Incorrect number of arguments"
+      veList : List EXPR MFLOAT := [w::EXPR(MFLOAT) for w in vList]
+      aeList : List EXPR MFLOAT := [w::EXPR(MFLOAT) for w in arguments]
+      eList : List Equation EXPR MFLOAT := 
+        [equation(w,v) for w in veList for v in aeList]
+      (subst(rhs u,eList))::$
+
+    coerce(u:EXPR MCMPLX) : $ ==
+      checkVariables(variables(u)$EXPR(MCMPLX),arguments)
+      l : List(FC) := [assign(name,u)$FC,returns()$FC]
+      makeRep l
+
+    coerce(u:Equation EXPR MCMPLX) : $ ==
+      retractIfCan(lhs u)@Union(Kernel EXPR MCMPLX,"failed") case "failed"=>
+        error "left hand side is not a kernel"
+      vList : List Symbol := variables lhs u
+      #vList ^= #arguments =>
+        error "Incorrect number of arguments"
+      veList : List EXPR MCMPLX := [w::EXPR(MCMPLX) for w in vList]
+      aeList : List EXPR MCMPLX := [w::EXPR(MCMPLX) for w in arguments]
+      eList : List Equation EXPR MCMPLX := 
+        [equation(w,v) for w in veList for v in aeList]
+      (subst(rhs u,eList))::$
+
+
+    coerce(u:REP):$ ==
+      u@Rep
+
+    coerce(u:$):OutputForm ==
+      coerce(name)$Symbol
+
+    coerce(c:List FortranCode):$ ==
+      makeRep c
+
+    coerce(c:FortranCode):$ ==
+      makeRep [c]
+
+    coerce(u:EXPR INT) : $ ==
+      checkVariables(variables(u)$EXPR(INT),arguments)
+      l : List(FC) := [assign(name,u)$FC,returns()$FC]
+      makeRep l
+
+    coerce(u:Equation EXPR INT) : $ ==
+      retractIfCan(lhs u)@Union(Kernel(EXPR INT),"failed") case "failed" =>
+        error "left hand side is not a kernel"
+      vList : List Symbol := variables lhs u
+      #vList ^= #arguments =>
+        error "Incorrect number of arguments"
+      veList : List EXPR INT := [w::EXPR(INT) for w in vList]
+      aeList : List EXPR INT := [w::EXPR(INT) for w in arguments]
+      eList : List Equation EXPR INT := 
+        [equation(w,v) for w in veList for v in aeList]
+      (subst(rhs u,eList))::$
+
+    coerce(u:EXPR Float) : $ ==
+      checkVariables(variables(u)$EXPR(Float),arguments)
+      l : List(FC) := [assign(name,u)$FC,returns()$FC]
+      makeRep l 
+
+    coerce(u:Equation EXPR Float) : $ ==
+      retractIfCan(lhs u)@Union(Kernel(EXPR Float),"failed") case "failed" =>
+        error "left hand side is not a kernel"
+      vList : List Symbol := variables lhs u
+      #vList ^= #arguments =>
+        error "Incorrect number of arguments"
+      veList : List EXPR Float := [w::EXPR(Float) for w in vList]
+      aeList : List EXPR Float := [w::EXPR(Float) for w in arguments]
+      eList : List Equation EXPR Float := 
+        [equation(w,v) for w in veList for v in aeList]
+      (subst(rhs u,eList))::$
+
+    coerce(u:EXPR Complex Float) : $ ==
+      checkVariables(variables(u)$EXPR(Complex Float),arguments)
+      l : List(FC) := [assign(name,u)$FC,returns()$FC]
+      makeRep l
+
+    coerce(u:Equation EXPR CMPX Float) : $ ==
+      retractIfCan(lhs u)@Union(Kernel EXPR CMPX Float,"failed") case "failed"=>
+        error "left hand side is not a kernel"
+      vList : List Symbol := variables lhs u
+      #vList ^= #arguments =>
+        error "Incorrect number of arguments"
+      veList : List EXPR CMPX Float := [w::EXPR(CMPX Float) for w in vList]
+      aeList : List EXPR CMPX Float := [w::EXPR(CMPX Float) for w in arguments]
+      eList : List Equation EXPR CMPX Float := 
+        [equation(w,v) for w in veList for v in aeList]
+      (subst(rhs u,eList))::$
+
+@
+\section{domain M3D ThreeDimensionalMatrix}
+<<domain M3D ThreeDimensionalMatrix>>=
+)abbrev domain M3D ThreeDimensionalMatrix
+++ Author: William Naylor
+++ Date Created: 20 October 1993
+++ Date Last Updated: 20 May 1994
+++ BasicFunctions:
+++ Related Constructors: Matrix
+++ Also See: PrimitiveArray
+++ AMS Classification:
+++ Keywords:
+++ References:
+++ Description:
+++ This domain represents three dimensional matrices over a general object type
+ThreeDimensionalMatrix(R) : Exports == Implementation where
+
+  R : SetCategory
+  L ==> List
+  NNI ==> NonNegativeInteger
+  A1AGG ==> OneDimensionalArrayAggregate
+  ARRAY1 ==> OneDimensionalArray
+  PA ==> PrimitiveArray
+  INT ==> Integer
+  PI ==> PositiveInteger
+
+  Exports ==> HomogeneousAggregate(R) with
+
+    if R has Ring then
+      zeroMatrix : (NNI,NNI,NNI) -> $
+         ++ zeroMatrix(i,j,k) create a matrix with all zero terms
+      identityMatrix : (NNI) -> $
+         ++ identityMatrix(n) create an identity matrix
+         ++ we note that this must be square
+      plus : ($,$) -> $
+         ++ plus(x,y) adds two matrices, term by term
+         ++ we note that they must be the same size
+    construct : (L L L R) -> $
+       ++ construct(lll) creates a 3-D matrix from a List List List R lll
+    elt : ($,NNI,NNI,NNI) -> R
+       ++ elt(x,i,j,k) extract an element from the matrix x
+    setelt! :($,NNI,NNI,NNI,R) -> R
+       ++ setelt!(x,i,j,k,s) (or x.i.j.k:=s) sets a specific element of the array to some value of type R
+    coerce : (PA PA PA R) -> $
+       ++ coerce(p) moves from the representation type
+       ++ (PrimitiveArray  PrimitiveArray  PrimitiveArray R)
+       ++ to the domain
+    coerce : $ -> (PA PA PA R)
+    	++ coerce(x) moves from the domain to the representation type
+    matrixConcat3D : (Symbol,$,$) -> $
+         ++ matrixConcat3D(s,x,y) concatenates two 3-D matrices along a specified axis
+    matrixDimensions : $ -> Vector NNI
+         ++ matrixDimensions(x) returns the dimensions of a matrix
+
+  Implementation ==>  (PA PA PA R) add
+
+    import (PA PA PA R)
+    import (PA PA R)
+    import (PA R)
+    import R
+
+    matrix1,matrix2,resultMatrix : $
+
+    -- function to concatenate two matrices
+    -- the first argument must be a symbol, which is either i,j or k
+    -- to specify the direction in which the concatenation is to take place
+    matrixConcat3D(dir : Symbol,mat1 : $,mat2 : $) : $ ==
+      ^((dir = (i::Symbol)) or (dir = (j::Symbol)) or (dir = (k::Symbol)))_
+       => error "the axis of concatenation must be i,j or k"
+      mat1Dim := matrixDimensions(mat1)
+      mat2Dim := matrixDimensions(mat2)
+      iDim1 := mat1Dim.1
+      jDim1 := mat1Dim.2
+      kDim1 := mat1Dim.3
+      iDim2 := mat2Dim.1
+      jDim2 := mat2Dim.2
+      kDim2 := mat2Dim.3
+      matRep1 : (PA PA PA R) := copy(mat1 :: (PA PA PA R))$(PA PA PA R)
+      matRep2 : (PA PA PA R) := copy(mat2 :: (PA PA PA R))$(PA PA PA R)
+      retVal : $
+
+      if (dir = (i::Symbol)) then
+        -- j,k dimensions must agree
+        if (^((jDim1 = jDim2) and (kDim1=kDim2)))
+        then
+          error "jxk do not agree"
+        else
+          retVal := (coerce(concat(matRep1,matRep2)$(PA PA PA R))$$)@$
+
+      if (dir = (j::Symbol)) then
+        -- i,k dimensions must agree
+        if (^((iDim1 = iDim2) and (kDim1=kDim2)))
+        then
+          error "ixk do not agree"
+        else
+          for i in 0..(iDim1-1) repeat
+            setelt(matRep1,i,(concat(elt(matRep1,i)$(PA PA PA R)_
+             ,elt(matRep2,i)$(PA PA PA R))$(PA PA R))@(PA PA R))$(PA PA PA R)
+          retVal := (coerce(matRep1)$$)@$
+
+      if (dir = (k::Symbol)) then
+        temp : (PA PA R)
+        -- i,j dimensions must agree
+        if (^((iDim1 = iDim2) and (jDim1=jDim2)))
+        then
+          error "ixj do not agree"
+        else
+          for i in 0..(iDim1-1) repeat
+            temp := copy(elt(matRep1,i)$(PA PA PA R))$(PA PA R)
+            for j in 0..(jDim1-1) repeat
+              setelt(temp,j,concat(elt(elt(matRep1,i)$(PA PA PA R)_
+              ,j)$(PA PA R),elt(elt(matRep2,i)$(PA PA PA R),j)$(PA PA R)_
+              )$(PA R))$(PA PA R)
+            setelt(matRep1,i,temp)$(PA PA PA R)
+          retVal := (coerce(matRep1)$$)@$
+
+      retVal
+
+    matrixDimensions(mat : $) : Vector NNI ==
+      matRep : (PA PA PA R) := mat :: (PA PA PA R)
+      iDim : NNI := (#matRep)$(PA PA PA R)
+      matRep2 : PA PA R := elt(matRep,0)$(PA PA PA R)
+      jDim : NNI := (#matRep2)$(PA PA R)
+      matRep3 : (PA R) := elt(matRep2,0)$(PA PA R)
+      kDim : NNI := (#matRep3)$(PA R)
+      retVal : Vector NNI := new(3,0)$(Vector NNI)
+      retVal.1 := iDim
+      retVal.2 := jDim
+      retVal.3 := kDim
+      retVal
+
+    coerce(matrixRep : (PA PA PA R)) : $ == matrixRep pretend $
+
+    coerce(mat : $) : (PA PA PA R) == mat pretend (PA PA PA R)
+
+    -- i,j,k must be with in the bounds of the matrix
+    elt(mat : $,i : NNI,j : NNI,k : NNI) : R ==
+      matDims := matrixDimensions(mat)
+      iLength := matDims.1
+      jLength := matDims.2
+      kLength := matDims.3
+      ((i > iLength) or (j > jLength) or (k > kLength) or (i=0) or (j=0) or_
+(k=0)) => error "coordinates must be within the bounds of the matrix"
+      matrixRep : PA PA PA R := mat :: (PA PA PA R)
+      elt(elt(elt(matrixRep,i-1)$(PA PA PA R),j-1)$(PA PA R),k-1)$(PA R)
+
+    setelt!(mat : $,i : NNI,j : NNI,k : NNI,val : R)_
+       : R ==
+      matDims := matrixDimensions(mat)
+      iLength := matDims.1
+      jLength := matDims.2
+      kLength := matDims.3
+      ((i > iLength) or (j > jLength) or (k > kLength) or (i=0) or (j=0) or_
+(k=0)) => error "coordinates must be within the bounds of the matrix"
+      matrixRep : PA PA PA R := mat :: (PA PA PA R)
+      row2 : PA PA R := copy(elt(matrixRep,i-1)$(PA PA PA R))$(PA PA R)
+      row1 : PA R := copy(elt(row2,j-1)$(PA PA R))$(PA R)
+      setelt(row1,k-1,val)$(PA R)
+      setelt(row2,j-1,row1)$(PA PA R)
+      setelt(matrixRep,i-1,row2)$(PA PA PA R)
+      val
+
+    if R has Ring then
+      zeroMatrix(iLength:NNI,jLength:NNI,kLength:NNI) : $ ==
+        (new(iLength,new(jLength,new(kLength,(0$R))$(PA R))$(PA PA R))$(PA PA PA R)) :: $
+
+      identityMatrix(iLength:NNI) : $ ==
+        retValueRep : PA PA PA R := zeroMatrix(iLength,iLength,iLength)$$ :: (PA PA PA R)
+        row1 : PA R
+        row2 : PA PA R
+        row1empty : PA R := new(iLength,0$R)$(PA R)
+        row2empty : PA PA R := new(iLength,copy(row1empty)$(PA R))$(PA PA R)
+        for count in 0..(iLength-1) repeat
+          row1 := copy(row1empty)$(PA R)
+          setelt(row1,count,1$R)$(PA R)
+          row2 := copy(row2empty)$(PA PA R)
+          setelt(row2,count,copy(row1)$(PA R))$(PA PA R)
+          setelt(retValueRep,count,copy(row2)$(PA PA R))$(PA PA PA R)
+        retValueRep :: $
+
+
+      plus(mat1 : $,mat2 :$) : $ ==
+
+        mat1Dims := matrixDimensions(mat1)
+        iLength1 := mat1Dims.1
+        jLength1 := mat1Dims.2
+        kLength1 := mat1Dims.3
+
+        mat2Dims := matrixDimensions(mat2)
+        iLength2 := mat2Dims.1
+        jLength2 := mat2Dims.2
+        kLength2 := mat2Dims.3
+
+        -- check that the dimensions are the same
+        (^(iLength1 = iLength2) or ^(jLength1 = jLength2) or ^(kLength1 = kLength2))_
+         => error "error the matrices are different sizes"
+
+        sum : R
+        row1 : (PA R) := new(kLength1,0$R)$(PA R)
+        row2 : (PA PA R) := new(jLength1,copy(row1)$(PA R))$(PA PA R)
+        row3 : (PA PA PA R) := new(iLength1,copy(row2)$(PA PA R))$(PA PA PA R)
+
+        for i in 1..iLength1 repeat
+          for j in 1..jLength1 repeat
+            for k in 1..kLength1 repeat
+              sum := (elt(mat1,i,j,k)::R +$R_
+                      elt(mat2,i,j,k)::R)
+              setelt(row1,k-1,sum)$(PA R)
+            setelt(row2,j-1,copy(row1)$(PA R))$(PA PA R)
+          setelt(row3,i-1,copy(row2)$(PA PA R))$(PA PA PA R)
+
+        resultMatrix := (row3 pretend $)
+
+        resultMatrix
+
+    construct(listRep : L L L R) : $ ==
+
+      (#listRep)$(L L L R) = 0 => error "empty list"
+      (#(listRep.1))$(L L R) = 0 => error "empty list"
+      (#((listRep.1).1))$(L R) = 0 => error "empty list"
+      iLength := (#listRep)$(L L L R)
+      jLength := (#(listRep.1))$(L L R)
+      kLength := (#((listRep.1).1))$(L R)
+
+      --first check that the matrix is in the correct form
+      for subList in listRep repeat
+        ^((#subList)$(L L R) = jLength) => error_
+ "can not have an irregular shaped matrix"
+        for subSubList in subList repeat
+          ^((#(subSubList))$(L R) = kLength) => error_
+ "can not have an irregular shaped matrix"
+
+      row1 : (PA R) := new(kLength,((listRep.1).1).1)$(PA R)
+      row2 : (PA PA R) := new(jLength,copy(row1)$(PA R))$(PA PA R)
+      row3 : (PA PA PA R) := new(iLength,copy(row2)$(PA PA R))$(PA PA PA R)
+         
+      for i in 1..iLength repeat
+        for j in 1..jLength repeat
+          for k in 1..kLength repeat
+
+            element := elt(elt(elt(listRep,i)$(L L L R),j)$(L L R),k)$(L R)
+            setelt(row1,k-1,element)$(PA R)
+          setelt(row2,j-1,copy(row1)$(PA R))$(PA PA R)
+        setelt(row3,i-1,copy(row2)$(PA PA R))$(PA PA PA R)
+
+      resultMatrix := (row3 pretend $)
+
+      resultMatrix
+
+@
+\section{domain SFORT SimpleFortranProgram}
+<<domain SFORT SimpleFortranProgram>>=
+)abbrev domain SFORT SimpleFortranProgram
+-- Because of a bug in the compiler:
+)bo $noSubsumption:=true 
+
+++ Author: Mike Dewar
+++ Date Created: November 1992
+++ Date Last Updated: 
+++ Basic Operations:
+++ Related Constructors: FortranType, FortranCode, Switch
+++ Also See:
+++ AMS Classifications:
+++ Keywords:
+++ References:
+++ Description:
+++ \axiomType{SimpleFortranProgram(f,type)} provides a simple model of some
+++ FORTRAN subprograms, making it possible to coerce objects of various
+++ domains into a FORTRAN subprogram called \axiom{f}.
+++ These can then be translated into legal FORTRAN code.
+SimpleFortranProgram(R,FS): Exports == Implementation where
+  R  : OrderedSet
+  FS : FunctionSpace(R)
+
+  FST ==> FortranScalarType
+
+  Exports ==> FortranProgramCategory with
+    fortran : (Symbol,FST,FS) -> $
+    ++fortran(fname,ftype,body) builds an object of type 
+    ++\axiomType{FortranProgramCategory}. The three arguments specify
+    ++the name, the type and the body of the program.
+
+  Implementation ==> add
+
+    Rep := Record(name : Symbol, type : FST, body : FS )
+
+    fortran(fname, ftype, res) ==
+      construct(fname,ftype,res)$Rep
+
+    nameOf(u:$):Symbol == u . name
+
+    typeOf(u:$):Union(FST,"void") == u . type
+
+    bodyOf(u:$):FS == u . body
+
+    argumentsOf(u:$):List Symbol == variables(bodyOf u)$FS
+
+    coerce(u:$):OutputForm ==
+      coerce(nameOf u)$Symbol
+
+    outputAsFortran(u:$):Void ==
+      ftype := (checkType(typeOf(u)::OutputForm)$Lisp)::OutputForm
+      fname := nameOf(u)::OutputForm
+      args := argumentsOf(u)
+      nargs:=args::OutputForm
+      val  := bodyOf(u)::OutputForm
+      fortFormatHead(ftype,fname,nargs)$Lisp
+      fortFormatTypes(ftype,args)$Lisp
+      dispfortexp1$Lisp ["="::OutputForm, fname, val]@List(OutputForm)
+      dispfortexp1$Lisp "RETURN"::OutputForm
+      dispfortexp1$Lisp "END"::OutputForm
+      void()$Void
+
+@
+\section{domain SWITCH Switch}
+<<domain SWITCH Switch>>=
+)abbrev domain SWITCH Switch
+-- Because of a bug in the compiler:
+)bo $noSubsumption:=false
+
+++ Author: Mike Dewar
+++ Date Created: April 1991
+++ Date Last Updated: March 1994
+++                    30.6.94 Added coercion from Symbol MCD
+++ Basic Operations:
+++ Related Constructors: FortranProgram, FortranCode, FortranTypes
+++ Also See:
+++ AMS Classifications:
+++ Keywords:
+++ References:
+++ Description:
+++ This domain builds representations of boolean expressions for use with
+++ the \axiomType{FortranCode} domain.
+Switch():public == private where
+  EXPR ==> Union(I:Expression Integer,F:Expression Float,
+                 CF:Expression Complex Float,switch:%)
+
+  public ==  CoercibleTo OutputForm with
+    coerce : Symbol -> $
+	++ coerce(s) \undocumented{}
+    LT : (EXPR,EXPR) -> $
+      ++ LT(x,y) returns the \axiomType{Switch} expression representing \spad{x<y}.
+    GT : (EXPR,EXPR) -> $
+      ++ GT(x,y) returns the \axiomType{Switch} expression representing \spad{x>y}.
+    LE : (EXPR,EXPR) -> $
+      ++ LE(x,y) returns the \axiomType{Switch} expression representing \spad{x<=y}.
+    GE : (EXPR,EXPR) -> $
+      ++ GE(x,y) returns the \axiomType{Switch} expression representing \spad{x>=y}.
+    OR : (EXPR,EXPR) -> $
+      ++ OR(x,y) returns the \axiomType{Switch} expression representing \spad{x or y}.
+    EQ : (EXPR,EXPR) -> $
+      ++ EQ(x,y) returns the \axiomType{Switch} expression representing \spad{x = y}.
+    AND : (EXPR,EXPR) -> $
+      ++ AND(x,y) returns the \axiomType{Switch} expression representing \spad{x and y}.
+    NOT : EXPR -> $
+      ++ NOT(x) returns the \axiomType{Switch} expression representing \spad{\~~x}.
+    NOT : $ -> $
+      ++ NOT(x) returns the \axiomType{Switch} expression representing \spad{\~~x}.
+    
+  private == add
+    Rep := Record(op:BasicOperator,rands:List EXPR)
+
+    -- Public function definitions
+
+    nullOp : BasicOperator := operator NULL
+
+    coerce(s:%):OutputForm ==
+      rat := (s . op)::OutputForm
+      ran := [u::OutputForm for u in s.rands]
+      (s . op) = nullOp => first ran
+      #ran = 1 =>
+        prefix(rat,ran)
+      infix(rat,ran)
+
+    coerce(s:Symbol):$ == [nullOp,[[s::Expression(Integer)]$EXPR]$List(EXPR)]$Rep
+
+    NOT(r:EXPR):% ==
+      [operator("~"::Symbol),[r]$List(EXPR)]$Rep
+
+    NOT(r:%):% ==
+      [operator("~"::Symbol),[[r]$EXPR]$List(EXPR)]$Rep
+
+    LT(r1:EXPR,r2:EXPR):% ==
+      [operator("<"::Symbol),[r1,r2]$List(EXPR)]$Rep
+
+    GT(r1:EXPR,r2:EXPR):% ==
+      [operator(">"::Symbol),[r1,r2]$List(EXPR)]$Rep
+
+    LE(r1:EXPR,r2:EXPR):% ==
+      [operator("<="::Symbol),[r1,r2]$List(EXPR)]$Rep
+
+    GE(r1:EXPR,r2:EXPR):% ==
+      [operator(">="::Symbol),[r1,r2]$List(EXPR)]$Rep
+
+    AND(r1:EXPR,r2:EXPR):% ==
+      [operator("and"::Symbol),[r1,r2]$List(EXPR)]$Rep
+
+    OR(r1:EXPR,r2:EXPR):% ==
+      [operator("or"::Symbol),[r1,r2]$List(EXPR)]$Rep
+
+    EQ(r1:EXPR,r2:EXPR):% ==
+      [operator("EQ"::Symbol),[r1,r2]$List(EXPR)]$Rep
+
+@
+\section{domain FTEM FortranTemplate}
+<<domain FTEM FortranTemplate>>=
+)abbrev domain FTEM FortranTemplate
+++ Author: Mike Dewar
+++ Date Created:  October 1992
+++ Date Last Updated: 
+++ Basic Operations:
+++ Related Domains:
+++ Also See:
+++ AMS Classifications:
+++ Keywords:
+++ Examples:
+++ References:
+++ Description: Code to manipulate Fortran templates
+FortranTemplate() : specification == implementation where
+
+  specification == FileCategory(FileName, String) with
+
+    processTemplate : (FileName, FileName) -> FileName
+      ++ processTemplate(tp,fn) processes the template tp, writing the
+      ++ result out to fn.
+    processTemplate : (FileName) -> FileName
+      ++ processTemplate(tp) processes the template tp, writing the
+      ++ result to the current FORTRAN output stream.
+    fortranLiteralLine : String -> Void
+      ++ fortranLiteralLine(s) writes s to the current Fortran output stream,
+      ++ followed by a carriage return
+    fortranLiteral : String -> Void
+      ++ fortranLiteral(s) writes s to the current Fortran output stream
+    fortranCarriageReturn : () -> Void
+      ++ fortranCarriageReturn() produces a carriage return on the current
+      ++ Fortran output stream
+
+  implementation == TextFile add
+
+    import TemplateUtilities
+    import FortranOutputStackPackage
+
+    Rep := TextFile
+
+    fortranLiteralLine(s:String):Void ==
+      PRINTEXP(s,_$fortranOutputStream$Lisp)$Lisp
+      TERPRI(_$fortranOutputStream$Lisp)$Lisp 
+
+    fortranLiteral(s:String):Void ==
+      PRINTEXP(s,_$fortranOutputStream$Lisp)$Lisp
+
+    fortranCarriageReturn():Void ==
+      TERPRI(_$fortranOutputStream$Lisp)$Lisp
+
+    writePassiveLine!(line:String):Void ==
+    -- We might want to be a bit clever here and look for new SubPrograms etc.
+      fortranLiteralLine line
+
+    processTemplate(tp:FileName, fn:FileName):FileName == 
+      pushFortranOutputStack(fn)
+      processTemplate(tp)
+      popFortranOutputStack()
+      fn
+
+    getLine(fp:TextFile):String ==
+      line : String := stripCommentsAndBlanks readLine!(fp)
+      while not empty?(line) and elt(line,maxIndex line) = char "__" repeat
+        setelt(line,maxIndex line,char " ")
+        line := concat(line, stripCommentsAndBlanks readLine!(fp))$String
+      line
+
+    processTemplate(tp:FileName):FileName == 
+      fp : TextFile := open(tp,"input")
+      active : Boolean := true
+      line : String
+      endInput : Boolean := false
+      while not (endInput or endOfFile? fp) repeat
+        if active then
+          line := getLine fp
+          line = "endInput" => endInput := true
+          if line = "beginVerbatim" then
+            active := false
+          else
+            not empty? line => interpretString line
+        else
+          line := readLine!(fp)
+          if line = "endVerbatim" then
+            active := true
+          else
+            writePassiveLine! line
+      close!(fp)
+      if not active then 
+        error concat(["Missing `endVerbatim' line in ",tp::String])$String
+      string(_$fortranOutputFile$Lisp)::FileName
+
+@
+\section{domain FEXPR FortranExpression}
+<<domain FEXPR FortranExpression>>=
+)abbrev domain FEXPR FortranExpression
+++ Author: Mike Dewar
+++ Date Created:  December 1993
+++ Date Last Updated: 19 May 1994
+++                     7 July 1994 added %power to f77Functions
+++                    12 July 1994 added RetractableTo(R)
+++ Basic Operations:
+++ Related Domains:
+++ Also See: FortranMachineTypeCategory, MachineInteger, MachineFloat,
+++  MachineComplex
+++ AMS Classifications:
+++ Keywords:
+++ Examples:
+++ References:
+++ Description: A domain of expressions involving functions which can be
+++ translated into standard Fortran-77, with some extra extensions from
+++ the NAG Fortran Library.  
+FortranExpression(basicSymbols,subscriptedSymbols,R):
+                                Exports==Implementation where
+  basicSymbols : List Symbol
+  subscriptedSymbols : List Symbol
+  R : FortranMachineTypeCategory
+
+  EXPR ==> Expression
+  EXF2 ==> ExpressionFunctions2
+  S    ==> Symbol
+  L    ==> List
+  BO   ==> BasicOperator
+  FRAC ==> Fraction
+  POLY ==> Polynomial
+
+  Exports ==> Join(ExpressionSpace,Algebra(R),RetractableTo(R),
+                   PartialDifferentialRing(Symbol)) with
+    retract : EXPR R -> $
+      ++ retract(e) takes e and transforms it into a 
+      ++  FortranExpression checking that it contains no non-Fortran
+      ++  functions, and that it only contains the given basic symbols
+      ++  and subscripted symbols which correspond to scalar and array
+      ++  parameters respectively.
+    retractIfCan : EXPR R -> Union($,"failed")
+      ++ retractIfCan(e) takes e and tries to transform it into a 
+      ++  FortranExpression checking that it contains no non-Fortran
+      ++  functions, and that it only contains the given basic symbols
+      ++  and subscripted symbols which correspond to scalar and array
+      ++  parameters respectively.
+    retract : S -> $
+      ++ retract(e) takes e and transforms it into a FortranExpression
+      ++  checking that it is one of the given basic symbols
+      ++  or subscripted symbols which correspond to scalar and array
+      ++  parameters respectively.
+    retractIfCan : S -> Union($,"failed")
+      ++ retractIfCan(e) takes e and tries to transform it into a FortranExpression
+      ++  checking that it is one of the given basic symbols
+      ++  or subscripted symbols which correspond to scalar and array
+      ++  parameters respectively.
+    coerce : $ -> EXPR R
+	++ coerce(x) \undocumented{}
+    if (R has RetractableTo(Integer)) then
+      retract : EXPR Integer -> $
+        ++ retract(e) takes e and transforms it into a 
+        ++  FortranExpression checking that it contains no non-Fortran
+        ++  functions, and that it only contains the given basic symbols
+        ++  and subscripted symbols which correspond to scalar and array
+        ++  parameters respectively.
+      retractIfCan : EXPR Integer -> Union($,"failed")
+        ++ retractIfCan(e) takes e and tries to transform it into a 
+        ++  FortranExpression checking that it contains no non-Fortran
+        ++  functions, and that it only contains the given basic symbols
+        ++  and subscripted symbols which correspond to scalar and array
+        ++  parameters respectively.
+      retract : FRAC POLY  Integer -> $
+        ++ retract(e) takes e and transforms it into a 
+        ++  FortranExpression checking that it contains no non-Fortran
+        ++  functions, and that it only contains the given basic symbols
+        ++  and subscripted symbols which correspond to scalar and array
+        ++  parameters respectively.
+      retractIfCan : FRAC POLY  Integer -> Union($,"failed")
+        ++ retractIfCan(e) takes e and tries to transform it into a 
+        ++  FortranExpression checking that it contains no non-Fortran
+        ++  functions, and that it only contains the given basic symbols
+        ++  and subscripted symbols which correspond to scalar and array
+        ++  parameters respectively.
+      retract : POLY  Integer -> $
+        ++ retract(e) takes e and transforms it into a 
+        ++  FortranExpression checking that it contains no non-Fortran
+        ++  functions, and that it only contains the given basic symbols
+        ++  and subscripted symbols which correspond to scalar and array
+        ++  parameters respectively.
+      retractIfCan : POLY  Integer -> Union($,"failed")
+        ++ retractIfCan(e) takes e and tries to transform it into a 
+        ++  FortranExpression checking that it contains no non-Fortran
+        ++  functions, and that it only contains the given basic symbols
+        ++  and subscripted symbols which correspond to scalar and array
+        ++  parameters respectively.
+    if (R has RetractableTo(Float)) then
+      retract : EXPR Float -> $
+        ++ retract(e) takes e and transforms it into a 
+        ++  FortranExpression checking that it contains no non-Fortran
+        ++  functions, and that it only contains the given basic symbols
+        ++  and subscripted symbols which correspond to scalar and array
+        ++  parameters respectively.
+      retractIfCan : EXPR Float -> Union($,"failed")
+        ++ retractIfCan(e) takes e and tries to transform it into a 
+        ++  FortranExpression checking that it contains no non-Fortran
+        ++  functions, and that it only contains the given basic symbols
+        ++  and subscripted symbols which correspond to scalar and array
+        ++  parameters respectively.
+      retract : FRAC POLY  Float -> $
+        ++ retract(e) takes e and transforms it into a 
+        ++  FortranExpression checking that it contains no non-Fortran
+        ++  functions, and that it only contains the given basic symbols
+        ++  and subscripted symbols which correspond to scalar and array
+        ++  parameters respectively.
+      retractIfCan : FRAC POLY  Float -> Union($,"failed")
+        ++ retractIfCan(e) takes e and tries to transform it into a 
+        ++  FortranExpression checking that it contains no non-Fortran
+        ++  functions, and that it only contains the given basic symbols
+        ++  and subscripted symbols which correspond to scalar and array
+        ++  parameters respectively.
+      retract : POLY  Float -> $
+        ++ retract(e) takes e and transforms it into a 
+        ++  FortranExpression checking that it contains no non-Fortran
+        ++  functions, and that it only contains the given basic symbols
+        ++  and subscripted symbols which correspond to scalar and array
+        ++  parameters respectively.
+      retractIfCan : POLY  Float -> Union($,"failed")
+        ++ retractIfCan(e) takes e and tries to transform it into a 
+        ++  FortranExpression checking that it contains no non-Fortran
+        ++  functions, and that it only contains the given basic symbols
+        ++  and subscripted symbols which correspond to scalar and array
+        ++  parameters respectively.
+    abs    : $ -> $
+      ++ abs(x) represents the Fortran intrinsic function ABS
+    sqrt   : $ -> $
+      ++ sqrt(x) represents the Fortran intrinsic function SQRT
+    exp    : $ -> $
+      ++ exp(x) represents the Fortran intrinsic function EXP
+    log    : $ -> $
+      ++ log(x) represents the Fortran intrinsic function LOG
+    log10  : $ -> $
+      ++ log10(x) represents the Fortran intrinsic function LOG10
+    sin    : $ -> $
+      ++ sin(x) represents the Fortran intrinsic function SIN
+    cos    : $ -> $
+      ++ cos(x) represents the Fortran intrinsic function COS
+    tan    : $ -> $
+      ++ tan(x) represents the Fortran intrinsic function TAN
+    asin   : $ -> $
+      ++ asin(x) represents the Fortran intrinsic function ASIN
+    acos   : $ -> $
+      ++ acos(x) represents the Fortran intrinsic function ACOS
+    atan   : $ -> $
+      ++ atan(x) represents the Fortran intrinsic function ATAN
+    sinh   : $ -> $
+      ++ sinh(x) represents the Fortran intrinsic function SINH
+    cosh   : $ -> $
+      ++ cosh(x) represents the Fortran intrinsic function COSH
+    tanh   : $ -> $
+      ++ tanh(x) represents the Fortran intrinsic function TANH
+    pi     : () -> $
+      ++ pi(x) represents the NAG Library function X01AAF which returns 
+      ++  an approximation to the value of pi
+    variables : $ -> L S
+      ++ variables(e) return a list of all the variables in \spad{e}.
+    useNagFunctions : () -> Boolean
+      ++ useNagFunctions() indicates whether NAG functions are being used
+      ++  for mathematical and machine constants.
+    useNagFunctions : Boolean -> Boolean
+      ++ useNagFunctions(v) sets the flag which controls whether NAG functions 
+      ++  are being used for mathematical and machine constants.  The previous
+      ++  value is returned.
+
+  Implementation ==> EXPR R add
+
+    -- The standard FORTRAN-77 intrinsic functions, plus nthRoot which
+    -- can be translated into an arithmetic expression:
+    f77Functions : L S := [abs,sqrt,exp,log,log10,sin,cos,tan,asin,acos,
+                           atan,sinh,cosh,tanh,nthRoot,%power]
+    nagFunctions : L S := [pi, X01AAF]
+    useNagFunctionsFlag : Boolean := true
+
+    -- Local functions to check for "unassigned" symbols etc.
+
+    mkEqn(s1:Symbol,s2:Symbol):Equation EXPR(R) ==
+      equation(s2::EXPR(R),script(s1,scripts(s2))::EXPR(R))
+
+    fixUpSymbols(u:EXPR R):Union(EXPR R,"failed") ==
+      -- If its a univariate expression then just fix it up:
+      syms   : L S := variables(u)
+--      one?(#basicSymbols) and zero?(#subscriptedSymbols) =>
+      (#basicSymbols = 1) and zero?(#subscriptedSymbols) =>
+--        not one?(#syms) => "failed"
+        not (#syms = 1) => "failed"
+        subst(u,equation(first(syms)::EXPR(R),first(basicSymbols)::EXPR(R)))
+      -- We have one variable but it is subscripted:
+--      zero?(#basicSymbols) and one?(#subscriptedSymbols) =>
+      zero?(#basicSymbols) and (#subscriptedSymbols = 1) =>
+        -- Make sure we don't have both X and X_i
+        for s in syms repeat
+          not scripted?(s) => return "failed"
+--        not one?(#(syms:=removeDuplicates! [name(s) for s in syms]))=> "failed"
+        not ((#(syms:=removeDuplicates! [name(s) for s in syms])) = 1)=> "failed"
+        sym : Symbol := first subscriptedSymbols
+        subst(u,[mkEqn(sym,i) for i in variables(u)]) 
+      "failed"
+
+    extraSymbols?(u:EXPR R):Boolean ==
+      syms   : L S := [name(v) for v in variables(u)]
+      extras : L S := setDifference(syms,
+                                    setUnion(basicSymbols,subscriptedSymbols))
+      not empty? extras
+
+    checkSymbols(u:EXPR R):EXPR(R) ==
+      syms   : L S := [name(v) for v in variables(u)]
+      extras : L S := setDifference(syms,
+                                    setUnion(basicSymbols,subscriptedSymbols))
+      not empty? extras => 
+        m := fixUpSymbols(u)
+        m case EXPR(R) => m::EXPR(R)
+        error("Extra symbols detected:",[string(v) for v in extras]$L(String))
+      u
+
+    notSymbol?(v:BO):Boolean ==
+      s : S := name v
+      member?(s,basicSymbols) or 
+        scripted?(s) and member?(name s,subscriptedSymbols) => false
+      true
+
+    extraOperators?(u:EXPR R):Boolean ==
+      ops    : L S := [name v for v in operators(u) | notSymbol?(v)]
+      if useNagFunctionsFlag then
+        fortranFunctions : L S := append(f77Functions,nagFunctions)
+      else
+        fortranFunctions : L S := f77Functions
+      extras : L S := setDifference(ops,fortranFunctions)
+      not empty? extras
+
+    checkOperators(u:EXPR R):Void ==
+      ops    : L S := [name v for v in operators(u) | notSymbol?(v)]
+      if useNagFunctionsFlag then
+        fortranFunctions : L S := append(f77Functions,nagFunctions)
+      else
+        fortranFunctions : L S := f77Functions
+      extras : L S := setDifference(ops,fortranFunctions)
+      not empty? extras => 
+        error("Non FORTRAN-77 functions detected:",[string(v) for v in extras])
+      void()
+
+    checkForNagOperators(u:EXPR R):$ ==
+      useNagFunctionsFlag =>
+        import Pi
+        import PiCoercions(R)
+        piOp : BasicOperator := operator X01AAF
+        piSub : Equation EXPR R :=
+          equation(pi()$Pi::EXPR(R),kernel(piOp,0::EXPR(R))$EXPR(R))
+        subst(u,piSub) pretend $
+      u pretend $
+
+    -- Conditional retractions:
+
+    if R has RetractableTo(Integer) then 
+
+      retractIfCan(u:POLY Integer):Union($,"failed") ==
+        retractIfCan((u::EXPR Integer)$EXPR(Integer))@Union($,"failed")
+
+      retract(u:POLY Integer):$ ==
+        retract((u::EXPR Integer)$EXPR(Integer))@$
+
+      retractIfCan(u:FRAC POLY Integer):Union($,"failed") ==
+        retractIfCan((u::EXPR Integer)$EXPR(Integer))@Union($,"failed")
+
+      retract(u:FRAC POLY  Integer):$ ==
+        retract((u::EXPR Integer)$EXPR(Integer))@$
+
+      int2R(u:Integer):R == u::R
+
+      retractIfCan(u:EXPR Integer):Union($,"failed") ==
+        retractIfCan(map(int2R,u)$EXF2(Integer,R))@Union($,"failed")
+
+      retract(u:EXPR Integer):$ ==
+        retract(map(int2R,u)$EXF2(Integer,R))@$
+
+    if R has RetractableTo(Float) then 
+
+      retractIfCan(u:POLY Float):Union($,"failed") ==
+        retractIfCan((u::EXPR Float)$EXPR(Float))@Union($,"failed")
+
+      retract(u:POLY Float):$ ==
+        retract((u::EXPR Float)$EXPR(Float))@$
+
+      retractIfCan(u:FRAC POLY Float):Union($,"failed") ==
+        retractIfCan((u::EXPR Float)$EXPR(Float))@Union($,"failed")
+
+      retract(u:FRAC POLY  Float):$ ==
+        retract((u::EXPR Float)$EXPR(Float))@$
+
+      float2R(u:Float):R == (u::R)
+
+      retractIfCan(u:EXPR Float):Union($,"failed") ==
+        retractIfCan(map(float2R,u)$EXF2(Float,R))@Union($,"failed")
+
+      retract(u:EXPR Float):$ ==
+        retract(map(float2R,u)$EXF2(Float,R))@$
+
+    -- Exported Functions
+
+    useNagFunctions():Boolean == useNagFunctionsFlag
+    useNagFunctions(v:Boolean):Boolean == 
+      old := useNagFunctionsFlag
+      useNagFunctionsFlag := v
+      old
+ 
+    log10(x:$):$ ==
+      kernel(operator log10,x)
+
+    pi():$ == kernel(operator X01AAF,0)
+
+    coerce(u:$):EXPR R == u pretend EXPR(R)
+
+    retractIfCan(u:EXPR R):Union($,"failed") ==
+      if (extraSymbols? u) then 
+        m := fixUpSymbols(u)
+        m case "failed" => return "failed"
+        u := m::EXPR(R)
+      extraOperators? u => "failed"
+      checkForNagOperators(u)
+
+    retract(u:EXPR R):$ ==
+      u:=checkSymbols(u)
+      checkOperators(u)
+      checkForNagOperators(u)
+
+    retractIfCan(u:Symbol):Union($,"failed") ==
+      not (member?(u,basicSymbols) or
+           scripted?(u) and member?(name u,subscriptedSymbols)) => "failed"
+      (((u::EXPR(R))$(EXPR R))pretend Rep)::$
+
+    retract(u:Symbol):$ ==
+      res : Union($,"failed") := retractIfCan(u)
+      res case "failed" => error("Illegal Symbol Detected:",u::String)
+      res::$
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<domain RESULT Result>>
+<<domain FC FortranCode>>
+<<domain FORTRAN FortranProgram>>
+<<domain M3D ThreeDimensionalMatrix>>
+<<domain SFORT SimpleFortranProgram>>
+<<domain SWITCH Switch>>
+<<domain FTEM FortranTemplate>>
+<<domain FEXPR FortranExpression>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

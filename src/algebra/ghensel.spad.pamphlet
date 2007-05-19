@@ -1,0 +1,202 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra ghensel.spad}
+\author{Patrizia Gianni}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{package GHENSEL GeneralHenselPackage}
+<<package GHENSEL GeneralHenselPackage>>=
+)abbrev package GHENSEL GeneralHenselPackage
+++ Author : P.Gianni
+++ General Hensel Lifting
+++ Used for Factorization of bivariate polynomials over a finite field.
+GeneralHenselPackage(RP,TP):C == T where
+   RP :   EuclideanDomain
+   TP :   UnivariatePolynomialCategory RP
+
+   PI ==> PositiveInteger
+
+   C == with
+      HenselLift: (TP,List(TP),RP,PI) -> Record(plist:List(TP), modulo:RP)
+        ++ HenselLift(pol,lfacts,prime,bound) lifts lfacts, 
+        ++ that are the factors of pol mod prime,
+        ++ to factors of pol mod prime**k > bound. No recombining is done .
+
+      completeHensel: (TP,List(TP),RP,PI) -> List TP
+        ++ completeHensel(pol,lfact,prime,bound) lifts lfact, 
+        ++ the factorization mod prime of pol,
+        ++ to the factorization mod prime**k>bound. 
+        ++ Factors are recombined on the way.
+  
+      reduction     :  (TP,RP)  ->  TP 
+        ++ reduction(u,pol) computes the symmetric reduction of u mod pol
+
+   T == add
+     GenExEuclid: (List(FP),List(FP),FP) -> List(FP)
+     HenselLift1: (TP,List(TP),List(FP),List(FP),RP,RP,F) -> List(TP)
+     mQuo: (TP,RP) -> TP
+
+     reduceCoef(c:RP,p:RP):RP ==
+        zero? p => c
+        RP is Integer => symmetricRemainder(c,p)
+        c rem p
+
+     reduction(u:TP,p:RP):TP ==
+        zero? p => u
+        RP is Integer => map(symmetricRemainder(#1,p),u)
+        map(#1 rem p,u)
+
+     merge(p:RP,q:RP):Union(RP,"failed") ==
+         p = q => p
+         p = 0 => q
+         q = 0 => p
+         "failed"
+
+     modInverse(c:RP,p:RP):RP ==
+        (extendedEuclidean(c,p,1)::Record(coef1:RP,coef2:RP)).coef1
+
+     exactquo(u:TP,v:TP,p:RP):Union(TP,"failed") ==
+        invlcv:=modInverse(leadingCoefficient v,p)
+        r:=monicDivide(u,reduction(invlcv*v,p))
+        reduction(r.remainder,p) ^=0 => "failed"
+        reduction(invlcv*r.quotient,p)
+
+     FP:=EuclideanModularRing(RP,TP,RP,reduction,merge,exactquo)
+
+     mQuo(poly:TP,n:RP) : TP == map(#1 quo n,poly)
+
+     GenExEuclid(fl:List FP,cl:List FP,rhs:FP) :List FP ==
+        [clp*rhs rem flp for clp in cl for flp in fl]
+
+     -- generate the possible factors
+     genFact(fln:List TP,factlist:List List TP) : List List TP ==
+       factlist=[] => [[pol] for pol in fln]
+       maxd := +/[degree f for f in fln] quo 2
+       auxfl:List List TP := []
+       for poly in fln while factlist^=[] repeat
+         factlist := [term for term in factlist | ^member?(poly,term)]
+         dp := degree poly
+         for term in factlist repeat
+           (+/[degree f for f in term]) + dp > maxd => "next term"
+           auxfl := cons(cons(poly,term),auxfl)
+       auxfl
+
+     HenselLift1(poly:TP,fln:List TP,fl1:List FP,cl1:List FP,
+                 prime:RP,Modulus:RP,cinv:RP):List TP ==
+        lcp := leadingCoefficient poly
+        rhs := reduce(mQuo(poly - lcp * */fln,Modulus),prime)
+        zero? rhs => fln
+        lcinv:=reduce(cinv::TP,prime)
+        vl := GenExEuclid(fl1,cl1,lcinv*rhs)
+        [flp + Modulus*(vlp::TP) for flp in fln for vlp in vl]
+
+     HenselLift(poly:TP,tl1:List TP,prime:RP,bound:PI) ==
+        -- convert tl1
+        constp:TP:=0
+        if degree first tl1 = 0 then
+           constp:=tl1.first
+           tl1 := rest tl1
+        fl1:=[reduce(ttl,prime) for ttl in tl1]
+        cl1 := multiEuclidean(fl1,1)::List FP
+        Modulus:=prime
+        fln :List TP := [ffl1::TP for ffl1 in fl1]
+        lcinv:RP:=retract((inv
+                  (reduce((leadingCoefficient poly)::TP,prime)))::TP)
+        while euclideanSize(Modulus)<bound repeat
+           nfln:=HenselLift1(poly,fln,fl1,cl1,prime,Modulus,lcinv)
+           fln = nfln and zero?(err:=poly-*/fln) => leave "finished"
+           fln := nfln
+           Modulus := prime*Modulus
+        if constp^=0 then fln:=cons(constp,fln)
+        [fln,Modulus]
+
+     completeHensel(m:TP,tl1:List TP,prime:RP,bound:PI) ==
+      hlift:=HenselLift(m,tl1,prime,bound)
+      Modulus:RP:=hlift.modulo
+      fln:List TP:=hlift.plist
+      nm := degree m
+      u:Union(TP,"failed")
+      aux,auxl,finallist:List TP
+      auxfl,factlist:List List TP
+      factlist := []
+      dfn :NonNegativeInteger := nm
+      lcm1 := leadingCoefficient m
+      mm := lcm1*m
+      while dfn>0 and (factlist := genFact(fln,factlist))^=[] repeat
+        auxfl := []
+        while factlist^=[] repeat
+          auxl := factlist.first
+          factlist := factlist.rest
+          tc := reduceCoef((lcm1 * */[coefficient(poly,0)
+                          for poly in auxl]), Modulus)
+          coefficient(mm,0) exquo tc case "failed" =>
+            auxfl := cons(auxl,auxfl)
+          pol := */[poly for poly in auxl]
+          poly :=reduction(lcm1*pol,Modulus)
+          u := mm exquo poly
+          u case "failed"  => auxfl := cons(auxl,auxfl)
+          poly1: TP := primitivePart poly
+          m := mQuo((u::TP),leadingCoefficient poly1)
+          lcm1 := leadingCoefficient(m)
+          mm := lcm1*m
+          finallist := cons(poly1,finallist)
+          dfn := degree m
+          aux := []
+          for poly in fln repeat
+            ^member?(poly,auxl) => aux := cons(poly,aux)
+            auxfl := [term for term in auxfl | ^member?(poly,term)]
+            factlist := [term for term in factlist |^member?(poly,term)]
+          fln := aux
+        factlist := auxfl
+      if dfn > 0 then finallist := cons(m,finallist)
+      finallist
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<package GHENSEL GeneralHenselPackage>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

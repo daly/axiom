@@ -1,0 +1,207 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/input images2a.input}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{License}
+<<license>>=
+--Copyright The Numerical Algorithms Group Limited 1994.
+@
+<<*>>=
+<<license>>
+
+-- Newton's Iteration function
+
+-- newtonStep(f) returns a newton's iteration function for the
+-- expression f.
+
+newtonStep(f) ==
+  fun  := complexNumericFunction f
+  deriv := complexDerivativeFunction(f,1)
+  (b:Complex DoubleFloat):Complex DoubleFloat +->
+    b - fun(b)/deriv(b)
+
+-- create complex numeric functions from an expression
+
+complexFunPack := MakeUnaryCompiledFunction(EXPR INT, Complex DoubleFloat, Complex DoubleFloat)
+
+-- create a complex numeric function from an expression
+complexNumericFunction x ==
+  v := theVariable x
+  compiledFunction(x, v)$complexFunPack
+
+-- create a complex numeric derivatiave function from an expression
+complexDerivativeFunction(x,n) ==
+  v := theVariable x
+  df := differentiate(x,v,n)
+  compiledFunction(df, v)$complexFunPack
+
+-- return the unique variable in x, or an error if it is multivariate
+theVariable x ==
+  vl := variables x
+  nv := # vl
+  nv > 1 => error "Expression is not univariate."
+  nv = 0 => 'x
+  first vl
+
+-- complex surface and vector field drawing by SCM
+-- complex surface vector field drawing
+ 
+C := Complex DoubleFloat
+S := Segment DoubleFloat
+PC := Record(rr:DoubleFloat, th:DoubleFloat)
+ 
+realSteps: PI := 25    -- the number of steps in the real direction
+imagSteps: PI := 25    -- the number of steps in the imaginary direction
+clipValue: DoubleFloat := 10    -- the maximum length of a vector to draw
+ 
+
+-- Draw a complex function as a height field
+-- uses the complex norm as the height and the complex argument as the color
+-- optionally it will draw arrows on the surface indicating the direction
+-- of the complex argument
+
+-- sample call:
+--   f: C -> C
+--   f z == exp(1/z)
+--   drawComplex(f, 0.3..3, 0..2*%pi, false)
+
+-- parameter descriptions:
+--   f:  the function to draw
+--   rRange: the range of the real values
+--   imagRange: the range of imaginary values
+drawComplex(f: C -> C, realRange: S, imagRange: S): VIEW3D ==
+  free realSteps, imagSteps
+  delReal := (hi(realRange) - lo(realRange))/realSteps
+  delImag := (hi(imagRange) - lo(imagRange))/imagSteps
+  funTable: ARRAY2(PC) := new(realSteps+1, imagSteps+1, [0,0]$PC)
+  real := lo(realRange)
+  for i in 1..realSteps+1 repeat
+    imag := lo(imagRange)
+    for j in 1..imagSteps+1 repeat
+      z := f complex(real, imag)
+      funTable(i,j) := [clipFun(sqrt norm z), argument(z)]$PC
+      imag := imag + delImag
+    real := real + delReal
+  llp:List List Point DoubleFloat := []
+  real := lo(realRange)
+  for i in 1..realSteps+1 repeat
+    imag := lo(imagRange)
+    lp:List Point DoubleFloat := []
+    for j in 1..imagSteps+1 repeat
+      lp := cons(point [real,imag, funTable(i,j).rr, 
+                                    funTable(i,j).th] ,lp)
+      imag := imag + delImag
+    real := real + delReal
+    llp := cons(reverse! lp, llp)
+  llp := reverse! llp
+  space := mesh(llp)$ThreeSpace(DoubleFloat)
+  makeViewport3D(space, "Complex Function")$VIEW3D
+
+-- draw a complex vector field
+-- these vector fields should be viewed from the top by pressing the
+-- "XY" translate button on the VIEW3D control panel
+ 
+-- parameters:
+--   f: the mapping from C to C which we will draw
+--   realRange: the range of the reals
+--   tRange: the range of the imaginaries
+ 
+-- sample call:
+--    f z == sin z
+--    drawComplexVectorField(f, -2..2, -2..2)
+-- call the functions 'setRealSteps' and 'setImagSteps' to change the
+-- number of arrows drawn in each direction.
+ 
+drawComplexVectorField(f: C -> C, realRange: S, imagRange: S): VIEW3D ==
+  -- compute the steps size of the grid
+  delReal := (hi(realRange) - lo(realRange))/realSteps
+  delImag := (hi(imagRange) - lo(imagRange))/imagSteps
+  -- create the space to hold the arrows
+  space := create3Space()$ThreeSpace DoubleFloat
+  real := lo(realRange)
+  for i in 1..realSteps+1 repeat
+    imag := lo(imagRange)
+    for j in 1..imagSteps+1 repeat
+      -- compute the function
+      z := f complex(real, imag)
+      -- get the direction of the arrow
+      arg := argument z
+      -- get the length of the arrow
+      len := clipFun(sqrt norm z)
+      -- create point at the base of the arrow
+      p1 :=  point [real, imag, 0.0@DoubleFloat, arg]
+      -- scale the arrow length so it isn't too long
+      scaleLen := delReal * len
+      -- create the point at the top of the arrow
+      p2 := point [p1.1 + scaleLen*cos(arg), p1.2 + scaleLen*sin(arg), 
+                   0.0@DoubleFloat, arg]
+      -- make the pointer at the top of the arrow
+      arrow := makeArrow(p1, p2, scaleLen, arg)
+      -- add the line segments in the arrow to the space
+      for a in arrow repeat curve(space, a)$ThreeSpace DoubleFloat
+      imag := imag + delImag
+    real := real + delReal
+  -- draw the vector feild
+  makeViewport3D(space, "Complex Vector Field")$VIEW3D
+ 
+-- relative size of the arrow head compared to the length of the arrow
+arrowScale := 0.25@DoubleFloat
+ 
+-- angle of the arrow head
+arrowAngle := %pi-%pi/10.0@DoubleFloat
+ 
+-- Add an arrow head to a line segment, which starts at 'p1', ends at 'p2',
+-- has length 'len', and and angle 'arg'.  We pass 'len' and 'arg' as
+-- arguments since thet were already computed by the calling program
+makeArrow(p1, p2, len, arg) ==
+  c1 := cos(arg + arrowAngle) 
+  s1 := sin(arg + arrowAngle)
+  c2 := cos(arg - arrowAngle) 
+  s2 := sin(arg - arrowAngle)
+  p3 := point [p2.1 + c1*arrowScale*len, p2.2 + s1*arrowScale*len, 
+               p2.3, p2.4]
+  p4 := point [p2.1 + c2*arrowScale*len, p2.2 + s2*arrowScale*len, 
+               p2.3, p2.4]
+  [[p1, p2, p3], [p2, p4]]
+ 
+-- set the number of steps to use in the real direction
+setRealSteps(n) ==
+  free realSteps
+  realSteps := n
+ 
+-- set the number of steps to use in the imaginary direction
+setImagSteps(n) ==
+  free imagSteps
+  imagSteps := n
+ 
+-- set the maximum length of a vector 
+setClipValue clip ==
+  free clipValue
+  clipValue := clip
+
+-- clip a value in the interval (-clip...clip)
+clipFun(x:DoubleFloat):DoubleFloat == 
+  min(max(x, -clipValue), clipValue)
+ 
+
+-- create a Newton's iteration function for the equation x**3 = 2.
+f := newtonStep(x**3 - 2)
+
+setClipValue(4)
+drawComplexVectorField(f**3, -3..3, -3..3)
+drawComplex(f**3, -3..3, -3..3)
+drawComplex(f**4, -3..3, -3..3)
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

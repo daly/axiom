@@ -1,0 +1,340 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/algebra invnode.as}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{IVNodeCategory}
+<<IVNodeCategory>>=
+#include "axiom"
+
+POINT ==> Point DoubleFloat;
+
+local DF2S;
+DF2S(u:DoubleFloat):String == {
+    STRINGIMAGE ==> VMLISP_:_:STRINGIMAGE;
+    import { STRINGIMAGE : DoubleFloat -> String} from Foreign Lisp;
+    STRINGIMAGE(u);
+}
+
++++ Category  of all open inventor node types
++++ Uses IVObject as a 'generic' value.
+define IVNodeCategory: Category == SetCategory with {
+	quickWrite: (TextFile, %) 	-> ();
+		++ Quick version. Not guaranteed to terminate
+	children:      % 		-> List IVNodeObject;
+	addChild!:    (%, IVNodeObject) -> ();
+	fields:        %		-> List IVField;
+	className:     %		-> String;	
+	coerce:	       %		-> IVNodeObject;
+	default {
+		import from Symbol;
+		quickWrite(out: TextFile, node: %): () == {
+			write!(out, className(node));
+			write!(out, " {");
+			writeLine!(out);
+			import from List IVField;
+			import from IVValue;
+			for field in fields node repeat {
+				write!(out, string name field);
+				write!(out, " ");
+				invWrite(out, value field);
+			}
+			writeLine!(out, "}");
+		}
+		coerce(x: %): IVNodeObject == 
+			make(% pretend IVNodeCategory, x);
+
+		coerce(x: %): OutputForm == {
+			import from String;
+			coerce className x;
+		}
+	}
+}
+
+@
+\section{IVLeafNodeCategory}
+<<IVLeafNodeCategory>>=
++++ Category for leaves --- just adds a few defaults to make life 
++++ easy.
+define IVLeafNodeCategory: Category == IVNodeCategory with {
+	default {
+		children(v: %): List IVNodeObject == [];
+		addChild!(v: %, new: IVNodeObject): () == 
+			error "can't add child to a leaf";
+	}
+}
+
+@
+\section{IVNodeObject}
+<<IVNodeObject>>=
+-- virtual functions for fun and profit...
+IVNodeObject: IVNodeCategory with {
+	make:     (T: IVNodeCategory, T) -> %;
+	coerce:   (T: IVNodeCategory, %) -> T;
+	uniqueID: % -> Integer;
+} == add {
+	Rep ==> Record(NT: IVNodeCategory, val: NT, idx: Integer);
+	import from Rep;
+	default z: Integer;
+
+	local iCount: Integer := 0;
+	local explode: (o: %) -> (NodeType: IVNodeCategory, NodeType);
+
+	uniqueID(o: %): Integer == rep(o).idx;
+
+	explode(o: %): (NodeType: IVNodeCategory, v: NodeType) == {
+		(NT, val, id) == explode rep o;
+		(NT, val);
+	}
+
+	make(T: IVNodeCategory, val: T):   % == {
+		free iCount := iCount + 1;
+		per [T, val, iCount];
+	}
+	coerce(T: IVNodeCategory, val: %): T == {
+		(type, v, id) == explode rep val;
+		v pretend T;
+	}
+
+	-- The '0' functions are needed to turn non-constants 
+	-- (eg. fn return values) -- into constants.
+	children(v: %): List IVNodeObject == {
+		children0(NodeType: IVNodeCategory, val: NodeType): 
+							List IVNodeObject == 
+			children val;
+		children0 explode v;
+	}
+
+	fields(v: %): List IVField == {
+		fields0(NodeType: IVNodeCategory, val: NodeType): List IVField == 
+			fields val;
+		fields0 explode v;
+	}
+
+	className(v: %): String == {
+		name0(NodeType: IVNodeCategory, val: NodeType): String == 
+			className(val)$NodeType;
+		name0 explode v;
+	}
+
+	addChild!(v: %, child: %): () == { 
+		addChild0!(NodeType: IVNodeCategory, val: NodeType): () == 
+			addChild!(val, child);
+		addChild0! explode v;
+	}
+
+	-- BasicType stuff
+	sample: % == % pretend %;
+	(=)(a: %, b: %): Boolean == error "no equality on ivobject";
+}
+
+@
+\section{IVNodeConnection}
+<<IVNodeConnection>>=
+IVNodeConnection: with {
+	bracket: (IVNodeObject, Symbol) -> %;
+	field: % -> Symbol;
+	node:  % -> IVNodeObject;
+} == add {
+	Rep ==> Record(o: IVNodeObject, f: Symbol);
+	import from Rep;
+
+	[o: IVNodeObject, f: Symbol]: % == per [o,f];
+	field(c: %): Symbol == rep(c).f;
+	node(c: %): IVNodeObject == rep(c).o;
+}
+
+@
+\section{IVValue}
+<<IVValue>>=
+IVValue: BasicType with {
+	DECL(T, fld, flg) ==> {
+		coerce: % -> T;
+		flg: % -> Boolean;
+		fld: T -> %;
+	}
+	DECL(DoubleFloat,        float,     float?);
+	DECL(IVNodeObject,       node, 	    node?);
+	DECL(Boolean,            bool, 	    bool?);
+	DECL(SingleInteger,      int, 	    int?);
+	DECL(String, 	     	 string,    string?);
+	DECL(Symbol,	         symbol,    symbol?);
+	DECL(POINT,		 point,     point?);
+	DECL(List DoubleFloat,   floatlist, floatlist?);
+	DECL(List SingleInteger, intlist,   intlist?);
+	DECL(List POINT,	 pointlist, pointlist?);
+	DECL(IVNodeConnection,   connect,   connect?);
+
+	invWrite: (TextFile, %) -> ();
+} == add {
+	Rep ==> Union(  float:     DoubleFloat,
+			node:      IVNodeObject,
+			bool:      Boolean,
+			int:       SingleInteger,
+			string:    String,
+			symbol:    Symbol,
+			point:	   POINT,
+			intlist:   List SingleInteger,
+			floatlist: List DoubleFloat,
+			pointlist: List POINT,
+			connect:   IVNodeConnection
+		     );
+	import from Rep;
+	
+	Accessor(T, fld, flg) ==> { 
+		coerce(x: %):  	 T == rep(x).fld;
+		flg(x: %): Boolean == rep(x) case fld;
+		fld(x: T): %       == per [x, fld];
+	}
+	Accessor(DoubleFloat,        float, 	float?);
+	Accessor(IVNodeObject,       node, 	node?);
+	Accessor(Boolean,            bool, 	bool?);
+	Accessor(SingleInteger,      int, 	int?);
+	Accessor(String, 	     string,	string?);
+	Accessor(Symbol,	     symbol,    symbol?);
+	Accessor(POINT,		     point,     point?);
+	Accessor(List DoubleFloat,   floatlist, floatlist?);
+	Accessor(List SingleInteger, intlist,   intlist?);
+	Accessor(List POINT,	     pointlist, pointlist?);
+	Accessor(IVNodeConnection,   connect,   connect?);
+
+	local ppoint(out: TextFile, val: POINT, dim: Integer): () == {
+		for i in 1..dim repeat {
+			write!(out, DF2S(val.(i::Integer)));
+			write!(out, " ");
+		}
+	}
+	invWrite(out: TextFile, val: %): () == {
+		import from Float, Integer;
+		float? val => {
+			writeLine!(out, 
+				   convert(convert(val::DoubleFloat)$Float));
+		}
+		node? val or connect? val => {
+			error "Sorry, can't write a node here";
+			--writeLine!(out, val::IVNodeObject);
+		}
+		bool? val => {
+			writeLine!(out, 
+				   if val::Boolean then "true" else "false");
+		}
+		int? val => {
+			writeLine!(out, 
+				 convert(convert(val::SingleInteger)@Integer));
+		}
+		string? val => {
+			writeLine!(out, val::String);
+		}
+		symbol? val => {
+			writeLine!(out, string(val::Symbol));
+		}
+		point? val => {
+			ppoint(out, rep(val).point, 3);
+			writeLine!(out, "");
+		}
+		floatlist? val => {
+			write!(out, "[ ");
+			for fl in val::List DoubleFloat repeat {
+				write!(out,convert(convert(fl)$Float));
+				write!(out, ", ");
+			}
+			writeLine!(out, "]");
+		}
+		intlist? val => {
+			write!(out, "[ ");
+			for i in val::List SingleInteger repeat {
+				write!(out,convert(convert(i)@Integer));
+				write!(out, ", ");
+			}
+			writeLine!(out, "]");
+		}
+		pointlist? val => {
+			write!(out, "[ ");
+			for p in val::List POINT repeat {
+				ppoint(out, p, 3);
+				writeLine!(out, ",");
+			}
+			writeLine!(out, "]");
+		}
+		never
+	}
+	--
+	sample: % == % pretend %;
+	(=)(a: %, b: %): Boolean == error "no equality for values";
+}
+
+@
+\section{IVField}
+<<IVField>>=
+IVField: BasicType with {
+	new: (Symbol,IVValue) -> %;
+	name:  % -> Symbol;
+	value: % -> IVValue;
+} == add {
+	Rep ==> Record(name: Symbol, v: IVValue);
+	import from Rep;
+
+	new(name: Symbol, val: IVValue): % == per [name, val];
+	name(f: %):  Symbol == rep(f).name;
+	value(f: %): IVValue == rep(f).v;
+
+	--
+	sample: % == % pretend %;
+	(=)(a: %, b: %): Boolean == error "no equality for values";
+}
+
+@
+\section{License}
+<<license>>=
+--Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+--All rights reserved.
+--
+--Redistribution and use in source and binary forms, with or without
+--modification, are permitted provided that the following conditions are
+--met:
+--
+--    - Redistributions of source code must retain the above copyright
+--      notice, this list of conditions and the following disclaimer.
+--
+--    - Redistributions in binary form must reproduce the above copyright
+--      notice, this list of conditions and the following disclaimer in
+--      the documentation and/or other materials provided with the
+--      distribution.
+--
+--    - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--      names of its contributors may be used to endorse or promote products
+--      derived from this software without specific prior written permission.
+--
+--THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+--IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+--TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+--PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+--OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+--EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+--PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+--PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+--LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+--NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+--SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@
+<<*>>=
+<<license>>
+
+<<IVNodeCategory>>
+<<IVLeafNodeCategory>>
+<<IVNodeObject>>
+<<IVNodeConnection>>
+<<IVValue>>
+<<IVField>>
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}
