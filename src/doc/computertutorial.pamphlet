@@ -1,0 +1,2751 @@
+\documentclass{article}
+\begin{document}
+\title{\$SPAD/src/doc CompilerTutorial}
+\author{Timothy Daly}
+\newcommand{\<}{<}
+\maketitle
+\begin{abstract}
+We build a couple domains from scratch in order to demonstrate how to build
+Axiom domains using the Axiom compiler.
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{Overview}
+
+There are several sections in this tutorial, which is written
+to introduce concepts in Axiom programming, using a step-by-step
+development style and mimicking the development of a novice Axiom
+programmer. 
+
+Section 2 uses a simple Axiom program to introduce the ideas necessary
+to understand how to use the compiler, how to use simple types and how
+to do simple output. We also discuss some differences between Axiom
+and the C and C++ programming languages.
+
+Section 3 introduces building an Axiom {\bf Type}. This section
+introduces the ideas of a {\bf Type}, signatures and export/import
+issues. It also introduces the split between exports and
+implementation.
+
+Section 4 constructs a new {\bf Type}, which we call {\tt Term}.  This
+section introduces the ideas of representation within types and
+``standard'' export lists ({\tt new}, {\tt dispose!}, {\tt access},
+{\tt print}). It also introduces commenting styles and testing issues.
+
+Section 5 constructs another new type, which we call {\tt Polynomial}.
+This section introduces the ideas of building {\bf Type}s {\em over\/}
+other {\bf Type}s. It explains printing and uses this function to
+introduce the question of ``the right place'' to implement certain
+operations. It introduces the concept of local functions. It also
+introduces the concept of a {\bf Category}.
+
+Section 6 introduces operations {\em in\/} the {\bf Type} {\tt
+Polynomial}, rather than operations {\em over\/} another type. Here we
+introduce the polynomial arithmetic operations of {\tt +}, {\tt -} and
+{\tt *}.
+
+Section 7 introduces parameterized {\bf Type}s. We build a new {\tt Term} 
+type which is more general than the previous version of {\bf Term}.
+
+We are not trying to teach programming. The reader is assumed familiar
+with basic programming concepts and with elementary polynomial
+operations, such as addition and multiplication.  The reader can
+ignore the comparisons with C and C++ if these languages are unfamiliar.
+
+As this is a tutorial, the reader should be aware that we are making
+design choices motivated by simplicity or clarity rather than issues
+of efficiency or generality.
+
+\section{A trivial Axiom program}
+
+We will develop a simple polynomial manipulation program and
+illustrate the various features of the language. By the end of
+this tutorial you should be able to write your own Axiom programs.
+
+\subsection{Some discussion of the Axiom language for the programmer}
+
+These initial comments are intended to give those who are skilled in C
+and C++ an idea of the Axiom language, based on analogy. Those who are
+not C programmers should ignore this section.
+
+Axiom is a block structured language that is strongly typed. It follows
+a syntactic style similar to C. It has the following simple characteristics:
+
+\begin{itemize}
+\item Printing is done using the {\bf output}.  For example:\\
+\begin{verbatim}
+output "this is a number: "
+\end{verbatim}
+
+\item Printing several items on the same line can by done with the
+{\bf outputList} function. This function takes a list of objects
+and prints them. For example:\\
+\begin{verbatim}
+outputList(["this is a number: ",3])
+\end{verbatim}
+
+\item Assignment uses {\tt :=}.  For example:\\
+\begin{verbatim}
+a := 3
+\end{verbatim}
+
+\item The conditional statement has the form: \\
+{\tt if} {\it condition} {\tt then} {\it statement}
+{\tt else} {\it statement} \\
+For example: 
+\begin{verbatim}
+if a > 0 then output("positive") else output("negative")
+\end{verbatim}
+
+Note that you must use {\tt =} instead of {\tt ==} for equality.
+
+Note that the {\tt if then else} construct is an expression producing
+a value, as in: 
+\begin{verbatim}
+x := if a = 0 then 1 else 2
+\end{verbatim}
+
+This is the equivalent of the C/C++ expression: 
+\begin{verbatim}
+x = (a == 0 ? 1 : 2)
+\end{verbatim}
+
+\item Iteration may be performed with the {\tt repeat} statement. For
+example: 
+\begin{verbatim}
+for i in 1..10 repeat output(i)
+\end{verbatim}
+
+In Axiom you can iterate over structures in a more elegant and
+abstract fashion than in C, where you normally need to write loops
+which directly access the representation of data structures, or C++,
+where you need to define {\em friend} iterator classes. In Axiom every
+domain can provide a {\em generator} abstracting the traversal of its
+elements. So, for instance, you can write:
+
+\begin{small}
+\begin{verbatim}
+ls := [1,2,3,4,5]
+for elem in ls repeat output(elem)
+\end{verbatim}
+\end{small}
+
+\item Sequences of statements may be surrounded by braces. For example:
+\begin{small}
+\begin{verbatim}
+{
+  a := 3; 
+  if a > 0 then
+          output "positive" 
+  else 
+          output "negative"
+}
+\end{verbatim}
+\end{small}
+
+\item There is no {\tt main} (unless you want one).
+Programs are compiled as files. Top level forms (such as {\bf print})
+that occur in the file are executed when the (compiled) file is run. The
+executable version of a file which contains:
+\begin{small}
+\begin{verbatim}
+       #include "axllib"
+       print \<\< "hello, world" \<\< newline;
+\end{verbatim}
+\end{small}
+
+     will print \\
+     {\bf hello, world} \\
+     when it is run.
+     This is similar to a ``compiled interpretation language'' like
+     several new versions of Basic.
+
+\item Integers, strings and floating point numbers
+are not built into the language, but need to be explicitly imported.
+See the language description for details.
+
+\item domains and categories are similar to the C++ concept of
+     classes and abstract classes.
+     However, functions match {\em both\/} on the types of their arguments
+     and the on types of the results. C++ ignores result types when trying 
+     to match function signatures.
+
+\item In contrast to C and C++, which are never indentation sensitive,
+the Axiom compiler can optionally take account of indentation.
+Using the {\tt \#pile} directive at the top of a file instructs
+Axiom to consider sequences of statements at the same indentation
+level as belonging to the same block, when braces are omitted.
+
+\end{itemize}
+
+\subsection{Signum - a first function}
+
+For the first example we will construct a trivial program to determine
+the sign of its argument (called the {\bf signum} function).
+
+The entire function looks like:
+
+\begin{small}
+\begin{verbatim}
+#include "axllib"
+
+signum(number: SingleInteger): String == {
+        number > 0 => "Positive"; 
+        number = 0 => "Zero";
+        "Negative"
+}
+
+import from SingleInteger;
+print \<\< signum 10 \<\< newline;
+print \<\< signum 0  \<\< newline;
+print \<\< signum(-10) \<\< newline;
+\end{verbatim}
+\end{small}
+
+Axiom is a strongly typed language but, initially, the compiler does
+not know anything about particular types (except for a very small
+number of built-in types). The compiler is shipped with a type library
+known as {\tt axllib}. We will have the line {\tt \#include "axllib"}
+at the top of each file to allow access to these types. The first line
+of our example program is:
+
+\begin{small}
+\begin{verbatim}
+  #include "axllib"
+\end{verbatim}
+\end{small}
+
+which gives us access to the types {\bf SingleInteger} and {\bf String}, 
+both of which are {\bf Type}s (with a capital {\bf T}).
+
+\subsection{What is a Type?}
+
+{\bf Type}s (with a capital {\bf T}) are a way to create special kinds
+of new things in the world. Suppose we want a special kind of
+numbers,, such as Roman numerals (the kind you learned in school). We
+would need two parts to the definition of this new kinds of numbers: a
+way to store them in the program (called the representation) and a
+list of things we can do to them, such as add them, subtract them,
+print them etc. (called the operations).  A {\bf Type} is a kind of
+box that packages up three things: the operations, the representation
+and the programs to implement the operations.
+
+Axiom programming usually consists of building new {\bf Type}s. 
+So, when you see a new {\bf Type}, the thing you need to know is,
+``What can I do with this {\bf Type}?'' or, equivalently, 
+``What operations are available for this {\bf Type}?''
+
+{\bf SingleInteger} is a {\bf Type} which reflects the underlying machine
+implementation of integers. That is, it has a defined range based on
+the size of the machine's word (its representation).  There are several
+dozen operations that we can perform --- but it is sufficient to know
+that they act like integers for our purposes. That is, we can add,
+subtract, multiply and compare them, etc.
+
+{\bf String} is a second {\bf Type} we will use. We really don't need
+to know how it is implemented. The only interesting operation on 
+{\bf String}s, for our purposes, is printing. This operation is called
+``{\bf \<\<}''.
+
+To build a {\bf Type} we need to know the parts of the box (remember:
+{\bf Type}s are boxes with three interesting parts --- the exported
+functions, the representation and the implementation of the exported
+functions).
+
+Our simple signum function is:
+
+\begin{small}
+\begin{verbatim}
+signum(number: SingleInteger): String == {
+        number > 0 => "Positive"; 
+        number = 0 => "Zero";
+        "Negative"
+}
+\end{verbatim}
+\end{small}
+
+Let's look at the parts.
+
+The first line of this form begins:
+
+\begin{small}
+\begin{verbatim} 
+        signum(number: SingleInteger): String ==
+\end{verbatim}
+\end{small}
+
+which is the function header (the rest of the definition
+is the function body). This header line reads as follows:
+
+\begin{quotation}
+  ``We are defining a function called `{\bf signum}',
+   which takes one argument called `{\bf number}', of {\bf Type}
+   `{\bf SingleInteger}'. It returns a result
+   of {\bf Type} `{\bf String}'.''
+\end{quotation}
+
+The {\tt ==} marks the start of a function body. The function body is
+surrounded by braces ({\tt \{ \}}). Every exit from the function body
+{\em must\/} be of the correct return {\bf Type}. In this case, every
+exit from the {\bf signum} function must be of {\bf Type} {\bf String}
+(because we said that {\bf signum} returns a {\bf String}).
+
+Within the function body we use the ``{\bf =>}'' operator. This takes
+a test (something that is either true or false) on its left hand side
+and a value to return on its right hand side. If the test is true then
+we evaluate the right hand side and return its value as the value of
+the containing sequence. In this case the containing sequence is the
+program, so as soon as we find one of the tests is true we return the
+corresponding string as the result.  The way in which ``{\bf =>}'' is
+used here is similar to the {\tt switch} construct in C.
+
+Defining the function will not execute it. We call the function and
+print the resulting value. Printing is done by the ``{\bf \<\<}'' operator.
+(Note that this is {\em not\/} the C++ leftshift operator).
+The ``{\bf \<\<}'' operator has the function header:
+
+\begin{small}
+\begin{verbatim}
+  (stream: TextWriter) \<\< (thing: String): TextWriter ==
+\end{verbatim}
+\end{small}
+
+This operator takes a {\bf TextWriter} on its left hand side and
+an object to print on its right hand side. Its result is a {\bf TextWriter}
+object. Since this is an infix operator (there are a few predefined
+infix operators in the syntax) we can cascade the ``{\bf \<\<}'' operators.
+(Infix means that the function is written between its arguments like
+the {\tt +} function rather than being written before the arguments like
+most functions.) Printing is thus done by:
+
+\begin{small}
+\begin{verbatim}
+ print \<\< "first thing" \<\< "second thing" \<\< ... \<\< newline;
+\end{verbatim}
+\end{small}
+
+This line is executed left to right as though it had been parenthesized:
+
+\begin{small}
+\begin{verbatim}
+ ((((print \<\< "first thing") \<\< "second thing") \<\< ...) \<\< newline);
+\end{verbatim}
+\end{small}
+
+An important thing to remember is that the compiler does not know 
+anything about the particular {\bf Type}s in use, yet the meaning of each
+thing in our program is defined in a {\bf Type}. In our case we are using
+the numbers 10, 0 and -10. The compiler does not know what these
+things are. We intend them to be {\tt SingleInteger}s (because that's what
+our program takes) so we have to add the line:
+
+\begin{small}%
+\begin{verbatim}
+ import from SingleInteger;
+\end{verbatim}
+\end{small}
+
+in our program to tell the compiler that {\bf SingleInteger}
+operations can be used.  Since there isn't anything else around the 10
+gets interpreted as a {\bf SingleInteger}, which is what we want. It
+will often be the case in Axiom programs that we need to tell the
+compiler to import {\bf Type}s.
+
+In our example we call the function {\bf signum} with its argument
+(which must be a {\bf SingleInteger}) and it returns a result of 
+{\bf Type} {\tt String}. We call the function at the time we want to print
+the result. There are three lines in the example which test all
+possible cases. They look like:
+
+\begin{small}
+\begin{verbatim}
+  print \<\< signum(10) \<\< newline;
+  print \<\< signum(0) \<\< newline;
+  print \<\< signum(-10) \<\< newline;
+\end{verbatim}
+\end{small}
+
+\section{Building an Axiom type}
+
+\subsection{ Properties --- a first domain}
+
+Axiom programs, like C++ programs, are normally developed as objects.
+The idea of an object in these languages is that there exist
+boxes (we call them domains, C++ calls them classes) that wrap the
+functions and the data representation together and hide all of the
+details. All we know about an object is given by the list of exports
+from its box, in other words the list of exports from the domain. 
+For instance, we know we can add two {\tt SingleInteger}s
+because the {\bf Type} {\tt SingleInteger} exports the function {\tt +}.
+
+\begin{small}
+\begin{verbatim}
+
+#include "axllib"
+
+Properties: with {
+        signum: SingleInteger -> String;
+                ++ signum will return the sign of a number as a String
+ }
+== add {
+        signum(number: SingleInteger): String == {
+                number > 0 => "Positive";
+                number = 0 => "Zero";
+                "Negative"
+        }
+ }
+
+import from SingleInteger;
+import from Properties;
+print \<\< signum(10) \<\< newline;
+print \<\< signum(0) \<\< newline;
+print \<\< signum(-10) \<\< newline;
+
+\end{verbatim}
+\end{small}
+
+We would like to define a new {\bf Type} --- let's call it {\tt Properties}
+--- with a list of functions to compute the properties of
+{\tt SingleInteger}s. In fact, it will have only one function, the 
+{\bf signum} function. 
+
+So, how do we define a class (um, ... domain)? Each domain has the following
+(simplified) form:
+
+\begin{small}%
+\begin{verbatim}
+DomainName: with {
+        exported list of function signatures
+}
+== add {
+        representation
+        implementations of exported functions
+}
+\end{verbatim}
+\end{small}
+
+Remember that we said there are three parts to a domain. The first
+part is the list of all of the functions we can call from that
+domain. This is the ``exported list of function signatures''. For our
+example they look like:
+
+\begin{small}%
+\begin{verbatim}
+Properties: with {
+        signum: SingleInteger -> String;
+                ++ signum will return the sign of a number as a String
+}
+\end{verbatim}
+\end{small}
+
+{\tt Properties} is the name that we give to the domain. The
+ {\tt with} says that we are exporting a list of function signatures. This
+list is surrounded by braces. The {\bf signum} line is slightly
+different from what we have seen before, and now reads:
+
+\begin{small}%
+\begin{verbatim}
+        signum: SingleInteger -> String;
+\end{verbatim}
+\end{small}
+
+The line is a ``function signature''. The signature line is read as:
+\begin{quotation}
+  ``We are exporting a function called `{\bf signum}'
+   that will take a thing of {\bf Type} 
+   `{\bf SingleInteger}' and return a thing of {\bf Type}
+   `{\bf String}'.''
+\end{quotation}
+In order to define this function we use:
+
+\begin{small}%
+\begin{verbatim}
+        signum(number: SingleInteger): String == 
+\end{verbatim}
+\end{small}
+
+This line is the ``function header''. In the body of the domain we use function
+headers. The header line is read as:
+\begin{quotation}
+  ``We are defining a function called `{\bf signum}' that will
+   take a particular {\bf SingleInteger} called `{\bf number}'
+   and return a particular {\bf String}.''
+\end{quotation}
+
+So, the exports list is a list of function signatures.  Note also the
+{\tt ++} comment that follows the function signature.  In export lists
+the so-called ``plus-plus comments'' are related to the function
+signature that preceeds them. This kind of comment differs from the
+{\tt --} comment in that the {\tt ++} comment will show up in the
+documentation related to the function. Lines that contain a {\tt --}
+are ignored starting from the {\tt --} and ending with the newline.
+Similarly, lines that contain a {\tt ++} are ignored starting from the
+{\tt ++} and ending with the newline; however, the compiler {\em does}
+check the syntax of the {\tt ++} comment lines.
+
+After the export list we find the ``{\bf add} body'', which starts
+with the {\tt == add} clause and is surrounded by braces. The 
+{\bf add} body contains the representation and implementation
+information. The {\bf add} body for our example looks like:
+
+\begin{small}
+\begin{verbatim}
+== add {
+        signum(number: SingleInteger): String == {
+                number > 0 => "Positive";
+                number = 0 => "Zero";
+                "Negative"
+        }
+}
+\end{verbatim}
+\end{small}
+
+This is the same function definition we had earlier, except that it is
+now enclosed within a domain. Every exported function signature 
+{\em must\/} have an associated implementation. However, the implementation
+is now ``hidden'' (encapsulated, if you like larger words) within a
+domain so it is not visible to the outside world. To make the function
+visible we need to perform three steps. We construct the signature,
+put it in the exports list of the domain and import the domain.
+
+When we wish to use the functions exported from the domain 
+{\bf Properties}, we need to ``import'' from {\bf Properties}. This ensures
+that the functions from {\bf Properties} are in scope. Import allows
+control over which domains we wish to use. There might be many domains
+with the same signature and we wish to choose only one.
+
+\section{A new type: Term - a first representation}
+
+{\bf The complete listing for this section is at page 
+\pageref{FirstTermRepListing}.}
+
+The {\bf signum} domain does not create a new kind of object, so we
+didn't specify how objects from {\bf Properties} were represented. It
+does not refer to itself. Domains with this structure are sometimes
+called ``packages'', to distinguish them from domains that refer to
+themselves in the export list.
+
+Leaving the {\bf Properties} domain for a while, we now will build a
+polynomial domain with simple exports and an internal representation.
+
+Polynomials are relatively simple things, composed of terms that are
+added or subtracted to form the composite polynomial.  Let's look at
+terms.
+
+The terms are composed of products of coefficients and symbols (we
+are, of course, simplifying the issues but we'll come back to this
+later).  So a term should look like:
+
+\begin{small}
+\begin{verbatim}
+  3*x
+\end{verbatim}
+\end{small}
+
+We need a representation of a symbol. Usually a symbol is just a
+single letter and it is sufficient for our purposes to choose the set
+of ascii letters as our representation of symbols. Note that this will
+{\em not\/} allow us to write terms like:
+
+\begin{small}
+\begin{verbatim}  
+  3*x*y
+\end{verbatim}
+\end{small}
+
+This assumes that a term can contain more than one symbol (or, in
+general, could be composed of terms). We will revisit this design
+decision later.
+
+We need a representation of coefficients. These are usually called the
+{\em ring of coefficients} over which we build polynomials. The ring has
+certain operations defined on it. We will ignore this for the moment
+and choose {\tt SingleInteger}s (machine integers) as our coefficients.
+Note that this will {\em not\/} allow us to write the polynomial:
+
+\begin{small}
+\begin{verbatim}
+  (2/3)*x
+\end{verbatim}
+\end{small}
+
+as (2/3) is not a {\bf SingleInteger}. Thus we will need to revisit
+this design decision if we need to divide polynomials.
+
+\subsection{Rep, the representation domain}
+
+Now that we have made those decisions we need a representation for
+terms.  A {\bf Term} can be stored as a record composed of a
+coefficient and a symbol.  This is written in Axiom as:
+
+\begin{small}
+\begin{verbatim}
+ Rep == Record(coef:SingleInteger, var:Character);
+\end{verbatim}
+\end{small}
+
+This is a new construct for several reasons. The ``{\bf ==>}''
+notation defines a macro. Every occurrence of {\tt Rep} will be
+replaced by the form on the right side of the arrow.
+
+{\bf Record}s form a {\bf Type} that is similar to C ``structs''.
+They have a list of fields (in this case, {\tt coef} and {\tt var})
+and each field has its own {\bf Type} (in this case, 
+{\tt SingleInteger} and {\tt Character}). {\bf Record}s are a useful way of
+combining many different {\bf Type}s into one data structure.
+
+By convention in Axiom, {\tt Rep} is used to define the representation
+of a domain. Such a representation may be defined using either a macro
+definition, as shown, or a constant definition, with {\tt ==} instead
+of {\tt ==>}.  It is not essential to define a representation for a
+domain but it is generally useful, as there are two macros which work
+specifically on representations.
+
+Contrast what a user sees as the representation of your {\bf Type}
+with how the type is implemented: in this case, we have defined our
+{\em representation\/} (how a term will actually be stored) as a 
+{\bf Record} --- however, the user will see terms as {\bf Term}s, that is,
+as a brand new {\bf Type} in the world.  We will, at times, need to
+move between the view of the data as a {\bf Term} and the view of the
+data as a {\bf Record}.  The macro {\tt rep} takes a {\tt Rep} (in
+this case, a {\bf Record}) and views it as a domain type (in this
+case, a {\bf Term}).  The macro {\tt per} goes the other way: it takes
+a domain type (a {\bf Term}) and views it as a {\bf Rep} (a 
+{\bf Record}). So:
+
+\begin{small}%
+\begin{verbatim}
+  per: Record(coef: SingleInteger, var: Character) -> Term;
+  rep: Term -> Record(coef: SingleInteger, var: Character);
+\end{verbatim}
+\end{small}
+
+Sometimes we have a {\bf Record} and we need a {\bf Term} (such as when we
+return a result from a function) so the correct form is:
+
+\begin{small}%
+  {\bf per(}{\em recordobject\/}{\bf )}
+\end{small}
+
+and sometimes we have a {\bf Term} (such as when the user has called one
+of our exported functions) and we need to reach into the {\bf Term} object
+to get the parts. So the correct form is:
+
+\begin{small}%
+  {\bf rep(}{\em termobject\/}{\bf )}
+\end{small}
+
+This will (hopefully) become clear as we progress with the example.
+
+\subsection{Importing the Rep}
+
+Once we have chosen the representation we must tell the compiler to
+bring the functions related to that representation into the world
+(into ``scope''), so that we can use the functions from {\bf Record}
+on our representation.  The most common method of doing this is to
+follow the {\tt Rep} macro definition with the line:
+
+\begin{small}
+\begin{verbatim}
+  import from Rep;
+\end{verbatim}
+\end{small}
+
+Since {\tt Rep} is a macro that expands into 
+ 
+\begin{small}
+\begin{verbatim}
+  Record(coef: SingleInteger, var: Character)
+\end{verbatim}
+\end{small}
+
+this line {\em really\/} reads (after macro expansion in the compiler):
+
+\begin{small}
+\begin{verbatim}
+  import from Record(coef: SingleInteger, var: Character);
+\end{verbatim}
+\end{small}
+
+This will import operations from the value of {\tt Rep}, which allows
+access to the interior of the object.
+
+\subsection{ Choosing our export list}
+
+Another early step in developing a new domain is the choice of
+functions to export. These define the {\bf Type} the user sees. 
+{\em How} the {\bf Type} is represented is much less important than 
+{\em what} we can do with the {\bf Type}, at least from the user's point of
+view. When you construct a new {\bf Type}, the choice of
+representation {\em is} an important issue and will impact the
+efficiency of the resulting code.
+
+You have complete freedom about what functions you export from your
+domain. What follows is a list that suggests useful exports for every
+domain. For various reasons you might decide not to implement these
+functions. We recommend these because users of your domain will expect
+to perform at least these operations.
+
+It is reasonable that new domains have the following functions:
+
+\begin{description}
+\item[new]       which constructs a new instance of the domain,
+\item[dispose!]   which destroys an instance,
+\item[{\tt \<\<}]        which prints an instance,
+\item[{\em accessors}] which allow access to the parts of an instance.
+\end{description}
+
+In the description of the domain there is a special symbol, {\tt \%} 
+which refers to ``the type being defined''. 
+
+Starting with these as the primitive functions we'll develop them one by one.
+
+\subsection{New --- the constructor function}
+
+The function {\tt new} should take the parts of a domain
+representation and construct a new instance of the domain from those
+parts.  For example, the instance {\tt 3} is a particular example of
+the type {\bf SingleInteger}.
+
+nSince we are working with the domain {\bf Term} we need a function,
+{\tt new}, that takes a {\bf SingleInteger} and a {\bf Character} (the
+two things we need to stick into our {\bf Record(coef: SingleInteger,
+var: Character))} and returns an instance of the type {\bf Term}. The
+signature of the {\tt new} function is:
+
+\begin{small}
+\begin{verbatim}
+  new: (SingleInteger, Character) -> %;
+\end{verbatim}
+\end{small}
+
+That is, the function {\tt new} takes two arguments, a 
+{\bf SingleInteger} and a {\bf Character}, and returns a new instance of
+this domain (in this case, the domain {\bf Term}). Note that we are
+using {\tt \%} to mean ``this domain''.  So, for example:
+
+\begin{small}
+\begin{verbatim}
+  new(10, char "x") 
+\end{verbatim}
+\end{small}
+
+returns a new {\bf Term}. Since we haven't decided how to print 
+{\bf Term}s yet we cannot show what the term looks like; however, this
+defines the term {\tt 3*x}.
+
+Now that we know the signature, let's look at the implementation. In the
+{\bf add} body we have the following code:
+
+\begin{small}
+\begin{verbatim}
+new(number: SingleInteger, variable: Character): % ==
+        per([number, variable]);
+\end{verbatim}
+\end{small}
+
+This says that we are implementing the function {\tt new}. It takes
+two \linebreak arguments: number is a {\bf SingleInteger} and variable
+is a {\bf Character}.  We return a {\tt \%} (the magic symbol
+again). That is, we return an instance of ``this domain'' (which is
+{\bf Term}). So we have to write a function that takes a number and a
+variable and constructs a {\bf Record(coef: SingleInteger,} 
+{\bf var: Character)}.  The {\tt [number,variable]} will do this. However, the
+returned result is {\em not\/} supposed to be a {\bf Record} (which is
+our {\tt Rep}) but should be a {\bf Term} (which is our {\bf Type}).
+The magic macro that changes a {\tt Rep} to a {\tt \%} is 
+{\tt per}. So the final result of {\tt per([number,variable])} is a 
+{\bf Term}.
+
+\subsection{Dispose! --- destroying an instance }
+
+The function {\tt dispose!} frees up the storage taken up by instances
+of this domain. In this case, we will ignore the storage issues
+and return nothing, which is written as {\tt ()}. So the signature is:
+
+\begin{small}
+\begin{verbatim}
+  dispose!: % -> ();
+\end{verbatim}
+\end{small}
+
+Axiom, by default, includes a ``garbage collector'' which reclaims storage
+that you are no longer using. This strategy should be sufficient to handle
+storage needs for simple programs.
+
+We will comment that for efficiency reasons it is probably a good idea
+to have {\tt dispose!} add discarded items to a list and let {\tt new}
+pick discarded items from this list instead of always allocating extra
+storage.  The {\tt new} and {\tt dispose!}  operations for the
+primitive array and record types in the basic Axiom library do this,
+so if you implement your operations in terms of these, this is what
+you will get.  This is an excellent efficiency mechanism if used
+properly but can be dangerous if the storage is being pointed to by
+something else.  Don't hold on to all the storage you ever use as the
+program will probably grow too large.  The benefits of this technique
+outweigh the complexity.  We're ignoring all of these issues for now.
+
+If we look in the {\bf add} body, we will find the code that
+implements the {\tt dispose!} function. It looks like:
+
+\begin{small}
+\begin{verbatim}
+   dispose!(ignore: %): () == {}
+\end{verbatim}
+\end{small}
+
+That is, it takes a {\tt \%} (in this case, a {\bf Term}) as an
+argument and returns no result.
+
+\subsection{{\tt \<\<} --- printing the Type}
+
+Above, we constructed an instance of term. It looked like:
+ 
+\begin{small}
+\begin{verbatim}
+  new(10, char "x") 
+\end{verbatim}
+\end{small}
+
+Now we will walk through the steps of printing this term.
+To print this term we would make the call:
+
+\begin{small}
+\begin{verbatim}
+  print \<\< new(10, char "x")
+\end{verbatim}
+\end{small}
+
+Printing is done using ``{\bf \<\<}'', similar to the C++ convention.
+The signature of this is already defined for {\tt Record}s, 
+{\tt SingleInteger}s and {\bf Character}s (the types we are using in our
+representation). However, it is {\em not\/} defined for instances of
+our type, {\bf Term}. The ``{\bf \<\<}'' function takes a 
+{\bf TextWriter} as its left argument (``{\bf \<\<}'' is infix) and an
+instance of {\bf Term} as its right argument and returns an instance
+of {\bf TextWriter} as its result.  The symbol {\tt print} in the
+above call is a {\bf TextWriter}.
+
+So our signature is:
+ 
+\begin{small}
+\begin{verbatim}
+ \<\<: (TextWriter, %) -> TextWriter;
+\end{verbatim}
+\end{small}
+
+(Notice the {\tt \%}. This is a shorthand meaning ``the current
+domain''.  In this case we are talking about the domain {\bf Term}, so
+{\tt \%} means {\bf Term}, similar to the usage of {\tt this} in C++.
+However, you will see this symbol show up many times in Axiom code and
+it has a meaning based on what domain you are defining. It is 
+{\em important} to know {\em which} {\tt \%} you are talking about.  Be
+very careful about the meaning of this symbol.)
+
+If we look in the {\bf add} body for the implementation we find:
+
+\begin{small}
+\begin{verbatim}
+  (port: TextWriter) \<\< (term1: %): TextWriter == {
+           port \<\< rep(term1).coef;
+           port \<\< "*";
+           port \<\< rep(term1).var
+   }
+\end{verbatim}
+\end{small}
+
+This says that we have a function ``{\bf \<\<}'' that takes a 
+{\bf TextWriter} and a {\tt \%} (in this case, a {\bf Term}) and returns a
+{\bf TextWriter}.
+
+\subsubsection{The second line}
+
+We start out with our hands on a {\bf Term} (in the variable called
+{\bf term1}) which we want to print. First we use the form:
+
+\begin{small}
+\begin{verbatim}
+  rep(term1)
+\end{verbatim}
+\end{small}
+
+to view the {\bf term1} variable as our {\tt Rep} (in this case, a
+{\bf Record}).  Then we reach into the record to get the {\bf coef}
+information with:
+
+\begin{small}
+\begin{verbatim}
+  rep(term1).coef
+\end{verbatim}
+\end{small}
+
+This is a {\bf SingleInteger} (because that's what we said we would
+put into our {\bf Record}). Now we call a function to print the 
+{\bf SingleInteger}:
+
+\begin{small}
+\begin{verbatim}
+  port \<\< rep(term1).coef;
+\end{verbatim}
+\end{small}
+
+This uses the ``{\bf \<\<}'' function from {\bf SingleInteger} which has
+the signature:
+
+\begin{small}
+\begin{verbatim}
+  \<\<: (TextWriter, SingleInteger) -> TextWriter
+\end{verbatim}
+\end{small}
+
+After all of this the first line of the program prints:
+
+\begin{small}
+\begin{verbatim}
+  10
+\end{verbatim}
+\end{small}
+
+\subsubsection{The third line}
+
+The third line of the program calls 
+ 
+\begin{small}
+\begin{verbatim}
+ \<\<: (TextWriter, String) -> TextWriter
+\end{verbatim}
+\end{small}
+
+and prints a {\tt *} string. The printed line {\em now\/} looks like:
+
+\begin{small}
+\begin{verbatim}
+ 10*
+\end{verbatim}
+\end{small}
+
+\subsubsection{The fourth line}
+
+Again we need to use
+
+\begin{small}
+\begin{verbatim}
+  rep(term1)
+\end{verbatim}
+\end{small}
+
+to view the term1 variable as our {\tt Rep} (in this case, a {\bf Record}). 
+Then we reach into the record to get the var information with:
+
+\begin{small}
+\begin{verbatim}
+  rep(term1).var
+\end{verbatim}
+\end{small}
+
+This is a {\bf Character} (because that's what we said we would put into 
+our {\bf Record}). Now we call a function to print the {\bf Character}:
+
+\begin{small}
+\begin{verbatim}
+  port \<\< rep(term1).var;
+\end{verbatim}
+\end{small}
+
+This uses the ``{\bf \<\<}'' function from {\bf Character} which has the
+signature:
+
+\begin{small}
+\begin{verbatim}
+  \<\<: (TextWriter, Character) -> TextWriter
+\end{verbatim}
+\end{small}
+
+After all of this the line {\em now\/} looks like:
+
+\begin{small}
+\begin{verbatim}
+  10*x
+\end{verbatim}
+\end{small}
+
+Notice that we have {\em not\/} put a newline character in our
+printing routine. The polynomial domain will print many terms and they
+need to be strung out on a single line so we let someone else worry
+about how the line is formatted and concentrate on how a term should
+look on a line.
+
+We will have much more to say about ``{\bf \<\<}'' issues and printing
+later in this tutorial. For now it is enough to know that if we add
+the above signature to the export list and a ``{\bf \<\<}'' function to
+our ``{\bf add} body'' then we can control the way a {\bf Term} is
+printed.
+
+\subsection{Name overloading}
+
+Whew! That is harder to explain than it is to program. However, we are
+using many different ``{\bf \<\<}'' functions and they all have the same
+name. This is called {\em name overloading}. In a different language
+that doesn't support name overloading we would have to have named the
+functions with different names like:
+
+\begin{small}
+\begin{verbatim}
+  printTerm
+  printSingleInteger
+  printCharacter
+  printString
+\end{verbatim}
+\end{small}
+
+We {\em could\/} do that here but it is much more natural to use a
+single function name for the task we are trying to do rather than the
+type we are trying to print.
+
+Most computer programming languages let you do this for a {\em very}
+small number of names, or have predefined overloaded operations, but
+do not allow the addition of new operations.  For example, it is
+usually the case that you can write:
+
+\begin{tabular}{llll}
+ \    & y=3*4     & which uses & {\bf *:(Integer,Integer) -> Integer;} \\
+ and  & y=3.0*4.0 & which uses & {\bf *:(Float, Float)     -> Float;}   \\
+ and  & y=3*4.0   & which uses & {\bf *:(Integer, Float)   -> Float;}
+\end{tabular}
+
+but you cannot overload most other function names in other languages.
+
+\subsection{Accessing the representation}
+
+Since we have a record of two fields, {\tt coef} and {\tt var}, we'd
+like the world to be able to look inside and access the fields without
+violating the encapsulation. There is no need for users to know that
+{\bf Term}s are implemented as {\bf Record}s, only that there are two
+parts.  The accessors need to reach inside a particular {\bf Term} so
+each accessor takes a {\bf Term} as its argument and return the part
+as its result.
+
+\begin{small}
+\begin{verbatim}
+  coef: Term -> SingleInteger;
+  var:  Term -> Character;
+\end{verbatim}
+\end{small}
+
+In the ``{\bf add} body'' we find the implementations:
+
+\begin{small}
+\begin{verbatim}
+  coef(term1: %): SingleInteger == rep(term1).coef;
+\end{verbatim}
+\end{small}
+
+that is, {\tt coef} takes a {\bf Term} (verb"term1"), pretends it is a
+{\bf Record}, reaches into the record to get the {\bf coef} field
+(which is a {\bf SingleInteger}) and returns it;
+
+\begin{small}
+\begin{verbatim}
+  var(term1: %): Character == rep(term1).var;
+\end{verbatim}
+\end{small}
+
+{\tt var} takes a {\bf Term} ({\bf term1}), pretends it is a 
+{\bf Record}, reaches into the record to get the {\bf var} field (which is
+a {\bf Character}) and returns it.
+
+\subsection{A word about testing}
+
+Every exported function should be tested.  You will notice in the
+examples that follow we try to find boundary cases for all of the
+exported functions. It is a reasonable idea to leave the test cases in
+the original source file for later use.  Changes to the source file
+can be tested easily by uncommenting the test cases. The commented
+test cases are useful documentation for the end user, who needs to
+know how to use various functions. The easiest method of adding test
+cases and commenting them out is to surround them with the compiler
+directive:
+
+\begin{small}
+\begin{verbatim}
+#if TEST
+        testcase1
+        testcase2
+        ...
+#endif
+\end{verbatim}
+\end{small}
+
+If you compile the file and use the compiler switch {\bf -DTEST} you will
+compile all of the test cases. Running the file will run the test cases.
+Everything between the compiler directives ({\tt \#if} .. {\tt \#endif})
+will be compiled.
+
+If you compile the file without this compiler switch, you will compile
+the file without the test cases. Running the file will not run the tests.
+Everything between the compiler directives will be commented out.
+
+\subsection{Listing}
+
+\label{FirstTermRepListing}
+
+\begin{small}
+\begin{verbatim}
+#include "axllib"
+
+Term: with {
+        new: (SingleInteger, Character) -> %;
+        dispose!: % -> ();
+        \<\<: (TextWriter, %) -> TextWriter;
+        coef: % -> SingleInteger;
+        var:  % -> Character;
+ }
+== add {
+        Rep == Record(coef: SingleInteger, var: Character);
+        import from Rep;
+
+        new(number: SingleInteger, variable: Character): % == 
+                 per([number, variable]);
+
+        dispose!(ignore: %):() == {}
+
+        (port: TextWriter) \<\< (term1: %): TextWriter == {
+                port \<\< rep(term1).coef;
+                port \<\< "*";
+                port \<\< rep(term1).var
+        }
+
+        coef(term: %): SingleInteger == rep(term).coef;
+
+        var(term: %): Character == rep(term).var;
+ }
+
+import from SingleInteger;
+import from Character;
+import from Term;
+term1 := new(3, char "x");
+print \<\< term1 \<\< newline;
+print \<\< coef term1 \<\< newline;
+print \<\< var term1 \<\< newline;
+dispose! term1;
+
+\end{verbatim}
+\end{small}
+
+\section{A new Type: Polynomial}
+
+{\bf The complete listing for this section is at page
+\pageref{PolynomialListing}.}
+
+\subsection{Deciding on a representation}
+
+We plan to construct our first polynomial. It will consist of {\bf Term}s
+added together (we will ignore the signs of the terms for now). Since
+polynomials consist of a variable number of terms, we will need to mark
+each term with its respective power. We could do this in two ways...
+
+Each term could have an explicit power attached. This is called a 
+sparse representation because not all of the terms in a polynomial need
+to be present. We do not need to keep zero terms in a sparse representation.
+
+An alternative is to represent each term by its position in a data 
+structure. The position is the power of the term. This is called a 
+dense representation. Dense representations need a term in every position
+of the representation even if the term is zero.
+
+In general, a sparse representation is cheaper to store and harder to
+manipulate. Since this is a tutorial we will use a dense
+representation.  This will certainly make it expensive to store
+$x^{1000}$ --- but should simplify the code.
+
+The representation will be an {\bf Array} long enough to hold the
+terms.  Array element 1 holds the constant term, array element 2 holds
+the $x^1$ power term, etc. The array will be one longer than the
+highest power in the polynomial.
+
+So we need the lines:
+
+\begin{small}
+\begin{verbatim}
+  Rep == Array Term;
+  import from Rep;
+\end{verbatim}
+\end{small}
+
+\subsection{The type tower --- \\ a closer look at Term}
+
+Another important fact is that we've chosen {\bf Array(Term)} as our
+representation.  This assumes that the {\bf Type} constructor 
+{\tt Array} will accept {\bf Term} as a type it can use for elements of
+arrays. However, when we look at the definition of the {\bf Array} (in
+{\bf array.as}, in your Axiom {\bf samples/libaxllib} directory
+--- see \ref{asugManifest}) we see the following domain
+definition:
+
+\begin{small}
+\begin{verbatim}
+  Array(S: BasicType): ExtensibleArrayCategory S
+\end{verbatim}
+\end{small}
+
+This definition tells us that the argument to {\bf Array} must be of
+type {\bf BasicType}.  We cannot use this definition of {\bf Array} to
+build arrays of things that do not satisfy the definition of 
+{\bf BasicType}.  When we try to do so, the compiler will see the
+definition:
+
+\begin{small}
+\begin{verbatim}
+  Array Term
+\end{verbatim}
+\end{small}
+
+and complain that {\bf Term} is not of {\bf Type} ``{\bf BasicType}''.
+
+So we have to change the domain header for {\bf Term} to declare that
+{\bf Term} is a {\bf BasicType}. Our old domain header said:
+
+\begin{small}
+\begin{verbatim}
+  Term: with {
+\end{verbatim}
+\end{small}
+
+and we change it to read:
+
+\begin{small}
+\begin{verbatim}
+  Term: BasicType with {
+\end{verbatim}
+\end{small}
+
+which says that {\bf Term} is a {\bf BasicType} with some additional
+functions.  Now when we try to compile it the compiler says:
+
+\begin{small}%
+\begin{verbatim}
+  Term is missing the following exports:
+        =: (%, %) -> Boolean;   ++ Equality test.
+        sample: %;              ++ Example element.
+\end{verbatim}
+\end{small}
+
+Oh, bother. The compiler is unable to accept that {\bf Term} is a 
+{\bf BasicType} because {\bf Term} does {\em not\/} provide all of the
+required functions.
+
+To build up a data structure like {\bf Array(Term)} (which we call a
+{\em type tower} in Axiom) each {\bf Type} in the tower has to provide
+all of the functions expected by the next step in the tower.  Why?
+Well, {\bf Array} needs to be able to decide if two elements are
+equal. Everything that is a {\bf BasicType} {\em must\/} have an 
+{\tt =} function so that Array knows that it has a way to decide if two
+array elements are equal without knowing anything about an array
+element. All it has to do is get the two array elements and call 
+{\bf equal} from their {\bf Type}.
+
+{\bf Term}, as we have defined it so far, does {\em not\/} implement
+an {\tt =} function.
+
+\subsection{BasicType}
+
+Let's look at {\bf BasicType} for a moment (in {\bf axlcat.as} in
+theAxiom \linebreak {\bf samples/libaxllib} directory --- see
+\ref{asugManifest}).  {\bf BasicType} has the following
+definition:
+
+\begin{small}
+\begin{verbatim}
+define BasicType: Category == with {
+        =:      (%, %) -> Boolean;              ++ Equality test.
+        ~=:     (%, %) -> Boolean;              ++ Inequality test.
+        \<\<:     (TextWriter, %) -> TextWriter;  ++ Basic output.
+        \<\<:     % -> TextWriter -> TextWriter;  ++ Basic output.
+        sample: %;                              ++ Example element.
+        hash:   % -> SingleInteger;             ++ Hashing function.
+
+        default (x: %) ~= (y: %): Boolean == not (x = y);
+        default hash(x: %): SingleInteger == (0$Machine)::SingleInteger;
+        default (\<\<)(x: %)(p: TextWriter): TextWriter == p \<\< x;
+}
+\end{verbatim}
+\end{small}
+
+n{\bf BasicType} is a type called a {\bf Category}, or metaclass. For
+something to be a {\bf BasicType} it {\em must\/} implement the
+functions that are in the export list. {\bf Term} does not implement
+the following functions: {\tt =}, {\tt \~{}=}, ``{\bf \<\<}'', 
+{\tt sample} and {\tt hash}.  Without these, we cannot consider {\bf Term}
+to be a {\bf BasicType}.
+
+Look carefully at this definition. There are three functions at the
+bottom that are marked as {\tt default}. That means that, if the
+domain (in this case {\bf Term}) does {\em not\/} implement these
+functions, the default definitions from the {\bf Category} will be
+used. So, we do not need to implement the functions {\tt \~{}=}, 
+{\tt hash} and ``{\bf \<\<}.'' (Well, almost....)
+
+Notice also that there are {\em two} definitions of ``{\bf \<\<}''.
+They have different signatures.  That means that there are two
+different functions with the same name. This is not a problem --- in
+fact, it is a feature. Axiom will only consider a function call to
+match a function definition {\em if} the name, the type of each
+argument {\em and} the type of the result are the same.  So, even if
+we have two functions with the same name, it is clear that the rest of
+the signature is different and so they are different.
+
+\subsection{Implementing equality (=) in Term}
+
+Ultimately, we need to do several things: we need to implement the
+{\tt =} function for the domain {\bf Term}; we need to define 
+{\tt sample}; we need to export both functions from {\bf Term} and we need
+to declare that {\bf Term} is now fulfilling the contract of 
+{\bf BasicType}.
+
+Let's do them one at a time. The signature that we need to export for the
+function {\tt =} looks like:
+
+\begin{small}
+\begin{verbatim}
+  =: (%, %) -> Boolean;
+\end{verbatim}
+\end{small}
+
+We need to be able to compare two {\bf Term} objects to decide whether
+they are equal. In this case, a working definition might be that two
+{\bf Term} objects are equal if and only if the coefficients are equal
+and the variables are equal. Notice that we use the definition of
+equality defined by the types we used to build {\bf Term}. This is an
+important rule of composing and constructing domains.
+
+This function implementation needs to be put in the {\bf add} body
+of {\bf Term}:
+
+\begin{small}
+\begin{verbatim}
+  (term1: %) = (term2: %): Boolean == {
+          coef term1 ~= coef term2 => false;
+          var  term1 ~= var term2  => false;
+          true
+  }
+\end{verbatim}
+\end{small}
+
+This says that we have an infix function {\tt =} which takes two
+arguments: {\tt term1} of {\bf Type} {\tt \%} (in this case, 
+{\bf Term}) and {\tt term2} of {\bf Type} {\tt \%} (in this case, 
+{\bf Term}) and returns a {\bf Boolean}.% We implement it as follows:
+
+The second line calls the function with signature:
+
+\begin{small}
+\begin{verbatim}
+  ~=: (SingleInteger, SingleInteger) -> Boolean
+\end{verbatim}
+\end{small}
+
+because {\tt coef(term1)} and {\tt coef(term2)} both return 
+{\tt SingleInteger}s and the ``{\bf =>}'' needs a {\bf Boolean} result on
+its left hand side. If they are {\em not} equal then the terms cannot
+be equal and we return {\bf false}.
+
+The third line says call the function with signature:
+
+\begin{small}
+\begin{verbatim}
+  ~=: (Character, Character) -> Boolean
+\end{verbatim}
+\end{small}
+
+because {\tt var(term1)} and {\tt var(term2)} both return {\bf Character}
+and the ``{\bf =>}'' needs a {\bf Boolean} result on its left hand side. If
+they are {\em not} equal then the terms cannot be equal and we return
+{\bf false}.
+
+The fourth line (if we get to it) says that we have passed all of the
+tests so the terms must be equal and we return {\bf true}.
+
+\subsection{Implementing sample in Term}
+
+The second signature we need to implement is:
+
+\begin{small}
+\begin{verbatim}
+  sample: %;
+\end{verbatim}
+\end{small}
+
+That is, we need to return a sample element of the domain. A
+reasonably harmless sample element would be one with a 0 coefficient
+since it would never show up in the printed representation. 
+Alternatively, we could return an element with the 1 coefficient 
+and the variable {\tt x}. In general, the sample element
+should be the easiest (in some sense) to compute, because no user of
+the domain can rely on specialised properties of the sample, such as
+one-ness or emptyness.  For now, let's return the 0 element. Since the
+variable doesn't matter, we'll use {\tt x}.
+
+\subsection{Fulfilling the contract}
+
+The next step would be to add both signatures to the export list of
+{\bf Term} --- but it turns out that we don't have to do this. Look
+carefully at the definition of {\tt =} and {\tt sample} in 
+{\bf BasicType}. The signatures read:
+
+\begin{small}
+\begin{verbatim}
+  =: (%, %) -> Boolean;
+  sample: %;
+\end{verbatim}
+\end{small}
+
+Notice that they use {\tt \%}, not {\bf BasicType}. Remember that 
+{\tt \%} means ``the current domain''. So the signature that 
+{\bf BasicType} exports is automatically valid for {\bf Term} when used in
+{\bf Term}. We only need to implement these functions. Finally, as we
+have fulfilled the contract of being a {\bf BasicType}, we declare
+that we are a {\bf BasicType}.  This allows {\bf Array(Term)} to be
+constructed.
+
+The new definition line and exports for the {\bf Term} domain look like:
+
+\begin{small}
+\begin{verbatim}
+  Term: BasicType with {
+          new: (SingleInteger, Character) -> %;
+          dispose!: % -> ();
+          \<\<: (TextWriter, %) -> TextWriter;
+          coef: % -> SingleInteger;
+          var:  % -> Character;
+   }
+\end{verbatim}
+\end{small}
+
+But we get all of the signatures exported from {\bf BasicType} in
+addition so the {\em real} exports are those from {\bf BasicType} 
+{\em and} {\bf Term} (that is, we can call all of these functions on 
+{\bf Term}s, even though it does not look as if they are exported from 
+{\bf Term}):
+
+\begin{small}
+\begin{verbatim}
+        =:      (%, %) -> Boolean;              ++ Equality test.
+        ~=:     (%, %) -> Boolean;              ++ Inequality test.
+        \<\<:     (TextWriter, %) -> TextWriter;  ++ Basic output.
+        \<\<:     % -> TextWriter -> TextWriter;  ++ Basic output.
+        sample: %;                              ++ Example element.
+        hash:   % -> SingleInteger;             ++ Hashing function.
+        new:    (SingleInteger, Character) -> %;
+        dispose!: % -> ();
+        \<\<:     (TextWriter, %) -> TextWriter;
+        coef:   % -> SingleInteger;
+        var:    % -> Character;
+\end{verbatim}
+\end{small}
+
+Notice that we also get {\tt \~{}=}, {\tt hash} and ``{\bf \<\<}''
+implementations for free from {\bf BasicType}. We have the option of
+providing our own definition which will override the default
+definition, but we do not need to do this at the moment.  That is, we
+can say:
+
+\begin{small}
+\begin{verbatim}
+  new(10, char "x") ~= new(10, char "x")
+\end{verbatim}
+\end{small}
+
+(which is false, by our definition) but we {\em don't} have to
+implement this function in the {\bf add} body of {\bf Term}. It is
+{\em inherited\/} from being a default in {\bf BasicType}. That's why
+we said
+
+\begin{small}
+\begin{verbatim}
+  Term: BasicType with {
+\end{verbatim}
+\end{small}
+
+We are saying that we want all of the signatures from {\bf BasicType}
+{\em and} that we provide any implementations that we need to be a
+{\bf BasicType}.
+
+This type checking of export lists is a fundamental feature of the
+Axiom language. Since {\bf Term} is a {\bf BasicType} we know that it
+will have certain features and we can depend on this fact. In
+particular, we know that we can compare any two {\bf Term}s for
+equality (because {\bf Term} is a {\bf BasicType} and all 
+{\bf BasicType}s have a definition for equality).
+
+\subsection{Polynomial --- the definition}
+
+As usual, we need the minimum functions for a domain:
+
+\begin{description}
+\item[new]       which constructs a new instance of the domain,
+\item[dispose!]   which destroys an instance,
+\item[{\tt \<\<}]        which prints an instance,
+\item[{\em accessors}] which allow access to the parts of an instance.
+\end{description}
+
+The {\tt new} function takes a list of type {\bf Term}, and returns an
+instance of a {\bf Polynomial}. The signature is:
+
+\begin{small}
+\begin{verbatim}
+  new: List(Term) -> %;
+\end{verbatim}
+\end{small}
+
+\vbox{ 
+Notice that the {\tt \%} in this signature refers to the
+current domain, \linebreak {\bf Polynomial}, not to the domain 
+{\bf Term} we were using above. Within a domain definition it always refers
+to the current domain.
+
+The {\tt dispose!} function does nothing interesting at this time and
+returns nothing.
+
+\begin{small}
+\begin{verbatim}
+  dispose!: % -> ();
+\end{verbatim}
+\end{small}
+
+The ``{\bf \<\<}'' function has the same signature as the ``{\bf \<\<}''
+function from the {\bf Term} domain but the {\tt \%} refers to 
+{\bf Polynomial}:
+
+\begin{small}
+\begin{verbatim}
+  \<\<: (TextWriter, %) -> TextWriter;
+\end{verbatim}
+\end{small}
+
+\subsection{Printing --- a digression}
+
+Printing polynomials is a mildly interesting issue. Let's do a step by step
+code development of the ``{\bf \<\<}'' function. 
+
+We need to understand the requirements of the ``{\bf \<\<}'' function a little
+better. The standard function header is:
+
+\begin{small}
+\begin{verbatim}
+   (stream: TextWriter) \<\< (poly: %): TextWriter 
+\end{verbatim}
+\end{small}
+
+which means that we expect a {\tt stream} as our left hand argument
+(the ``{\bf \<\<}'' operator is infix) and a {\tt poly} object as our
+right hand object. Within the body of the function, printing is done
+by referring to the {\bf stream}:
+
+\begin{small}
+\begin{verbatim}
+   stream \<\< poly \<\< newline;
+\end{verbatim}
+\end{small}
+
+this will print the {\bf poly} on the {\bf stream}, followed by a
+newline.  It is normal to return {\bf stream} as the last thing in the
+body of the ``{\bf \<\<}'' function.
+
+A first cut is to just print each term of the polynomial (except 
+the last) followed by a {\tt +} sign, thus:
+ 
+\begin{small}
+\begin{verbatim}
+  (stream: TextWriter) \<\< (poly: %): TextWriter == {
+          size: SingleInteger := #(rep(poly));
+          for i in 1..(size-1) repeat 
+                  stream \<\< poly.i \<\< "^" \<\< (size - i) \<\< " + ";
+          stream \<\< poly.size
+  }
+\end{verbatim}
+\end{small}
+
+When we do this our polynomial will look something like:
+
+\begin{small}
+\begin{verbatim}
+  3*x^2 + 2*x^1 + 1*x^0
+\end{verbatim}
+\end{small}
+
+which is correct but somewhat ugly. 
+}
+
+First we simplify the printing of the zeroth order term. Since
+anything to the zero power is 1 that term should be printed as {\bf 1}.
+The change we need to make is to just print the {\bf coef} of the last
+term. Since {\tt poly.size} is of type {\bf Term} we can use the function
+{\tt coef} from {\bf Term} directly:
+     
+\begin{small}
+\begin{verbatim}
+  (stream: TextWriter) \<\< (poly: %): TextWriter == {
+          size: SingleInteger := #(rep(poly));
+          for i in 1..(size-1) repeat
+                  stream \<\< poly.i \<\< "^" \<\< (size - i) \<\< " + ";
+          stream \<\< coef(poly.size)
+  }
+\end{verbatim}
+\end{small}
+
+Next we note that the {\bf $x^1$} notation is unnecessary, so we change
+the index and print this term as {\tt x}:
+     
+\begin{small}
+\begin{verbatim}
+  (stream: TextWriter) \<\< (poly: %): TextWriter == {
+          size: SingleInteger := #(rep(poly));
+          for i in 1..(size-2) repeat 
+                  stream \<\< poly.i \<\< "^" \<\< (size-i) \<\< " + ";
+          stream \<\< poly.(size-1) \<\< " + "
+          stream \<\< coef(poly.size)
+  }
+\end{verbatim}
+\end{small}
+
+A third change is that we do not want to print terms of the form 
+{\bf $0*x^n$}.  That is, if the term has a zero {\bf coef} we want to skip
+the printing. We could reach into the term by asking for the 
+{\bf coef}, but there is another way to do this. Asking if a term is zero
+is an interesting question of anything of type {\bf Term} so we will
+change {\bf Term} to export a zero? function.  It is a trivial change
+but a better programming choice. So, the following signature gets
+added to {\bf Term}:
+
+\begin{small}
+\begin{verbatim}
+  zero? % -> Boolean;
+\end{verbatim}
+\end{small}
+
+and we can now use it in {\bf Polynomial}'s implementation of 
+``{\bf \<\<}'' thus:
+     
+\begin{small}
+\begin{verbatim}
+  (stream: TextWriter) \<\< (poly: %): TextWriter == {
+          size: SingleInteger := #(rep(poly));
+
+          for i in 1..(size-2) repeat 
+                if not zero?(poly.i) then 
+                        stream \<\< poly.i \<\< "^" \<\< (size - i) \<\< " + ";
+
+          if not zero?(poly.(size-1)) then 
+                stream \<\< poly.(size-1) \<\< " + ";
+          if zero?(poly.size) then
+                stream \<\< 0
+          else
+                stream \<\< coef(poly.size)
+  }
+\end{verbatim}
+\end{small}
+
+This will now skip printing terms whose coefficient is zero. However,
+it has a poor hack for handling the {\bf $x^0$} term. The problem is
+that we print trailing {\tt +} signs after every term except the
+last. What happens if we decide {\em not\/} to print the last term
+(because it is zero)? Well, if we print nothing we have a dangling
+{\tt +} sign. So, we cheat and print 0.
+
+We can do better. The problem is with the program design. It prints a
+{\tt +} without knowing that there will be a trailing term. It needs
+to check {\em all} trailing terms for nonzero to decide to print a
+{\tt +}. This could be done but is inefficient. A better hack is to
+print a prefix {\tt +} whenever we print a term (except the first, of
+course). So, another shot at it follows:
+     
+\begin{small}
+\begin{verbatim}
+  (stream: TextWriter) \<\< (poly: %): TextWriter == {
+          size: SingleInteger := #(rep(poly));
+          prefix: String := "";
+          for i in 1..(size-2) repeat
+                if not zero?(poly.i) then {
+                        stream \<\< prefix \<\< poly.i \<\< "^" \<\< (size - i);
+                        prefix := " + "
+                }
+          if not zero?(poly.(size-1)) then {
+                  stream \<\< prefix \<\< poly.(size-1);
+                  prefix := " + "
+          }
+          if not zero?(poly.size) then 
+                  stream \<\< prefix \<\< coef(poly.size);
+         stream
+  }
+\end{verbatim}
+\end{small}
+
+And now, another problem ... (these all fall under the universal law:
+``There is no such thing as a simple job'') ... what happens if the
+whole polynomial contains nothing but zero coefficients? The code
+given above will print nothing, but should print a {\tt 0}. We can get
+this situation if we subtract a polynomial from itself. Each term of
+the result will be zero and the whole list of terms will be zero.
+
+We could hack the code in several ways. The simple fix is to check to
+see if the prefix string is still blank at the end of printing.  If
+that is the case and the trailing term is zero then we didn't print
+anything so we can print a {\tt 0}. Simple but ugly. The ugliness
+comes into play because this function {\em knows} what the zero
+polynomial looks like. Yes, it is part of the implementation of
+polynomial but there is no reason why we have to hard code the
+representation into the logic of the program so deeply. Besides, we
+are not the only ones who will want to know that this is a zero
+polynomial, so we should adopt the same approach we used with 
+{\bf Term} and export a {\tt zero?} function.  The signature looks like:
+
+\begin{small}
+\begin{verbatim}
+  zero?: % -> Boolean;
+\end{verbatim}
+\end{small}
+
+(Notice again that we have the same signature as the {\tt zero?} from
+{\bf Term} but the {\tt \%} now refers to {\bf Polynomial}. It is
+vital that you know what {\tt \%} means at any given time. Indeed, the
+compiler spends a large amount of time deciding the same philosophical
+question.)
+
+Oh, by the way, we have another design decision to make (remember the
+universal law). Our polynomial representation allows {\em many}
+representations for the zero polynomial. Any list of zero coefficient
+terms is a zero polynomial. We could write a function to check this
+condition but it would be better to decide on a single representation
+of zero. This is known in the literature as a canonical
+representation. We can get such a representation if we enforce the
+rule that no polynomial has a zero coefficient for the highest
+exponent. If we generate a polynomial that has a zero coefficient as
+the highest exponent we shorten the polynomial representation until
+this is no longer true. Following this rule the zero polynomial is
+represented as a list of length 0.
+
+Canonical representations are important for deciding various questions
+such as equality or zero equivalence. Decisions about this issue and
+issues like sparse versus dense representations serve to distinguish
+one computer algebra system from another in fundamental ways. There
+are many tradeoffs but no one correct solution.
+
+So, we add the {\tt zero? poly} test early in the printing:
+
+\begin{small}
+\begin{verbatim}
+  (stream: TextWriter) \<\< (poly: %): TextWriter == {
+          zero? poly => stream \<\< 0;
+
+          size: SingleInteger := #(rep(poly));
+          prefix: String := "";
+
+          for i in 1..(size-2) repeat
+                  if not zero?(poly.i) then {
+                         stream \<\< prefix \<\< poly.i \<\< "^" \<\< (size-i);
+                         prefix := " + "
+                  }
+          if not zero?(poly.(size-1)) then {
+                  stream \<\< prefix \<\< poly.(size-1);
+                  prefix := " + "
+          }
+          if not zero?(poly.size) then 
+                  stream \<\< prefix \<\< coef(poly.size);
+          stream
+  }
+\end{verbatim}
+\end{small}
+
+Still another problem. We print {\tt 1*x}. Normal mathematical
+notation elides the {\tt 1} and would just print {\tt x}.  The best
+place to fix this is in {\bf Term}. Printing a term which has a {\bf
+coef} of {\bf 1} should just print the variable.
+
+One more problem, while we are at it. What happens if the term has a
+negative coefficient? Well we print something like:
+
+\begin{small}
+\begin{verbatim}
+  -3*x^2 + -2*x + -1
+\end{verbatim}
+\end{small}
+
+which is certainly correct but really ugly. Let's fix that with another pass.
+We need to be able to negate a term so that we can flip the sign of a
+negative term. So we add the signature:
+
+\begin{small}
+\begin{verbatim}
+  -: % -> %;
+\end{verbatim}
+\end{small}
+ 
+to {\bf Term}. This is unary negation. We also need predicates that tell 
+whether a term is positive or negative:
+
+\begin{small}
+\begin{verbatim}
+  positive? % -> Boolean;
+  negative? % -> Boolean;
+\end{verbatim}
+\end{small}
+
+We might as well add the ability to add and subtract terms while we
+are at it, since we will need them later when adding and subtracting
+polynomials. These signatures need to be added to {\bf Term}'s export
+list: 
+
+\begin{small}
+\begin{verbatim}
+  -:(%,%) -> %;
+  +:(%,%) -> %;
+\end{verbatim}
+\end{small}
+
+Now, back to printing the polynomial with negative terms. Let's make
+two local functions: {\bf prefix}, which takes a term and returns the
+correct prefix string, and {\bf abs}, which takes a term and returns a
+term with a positive sign.  Local functions are in the implementation
+section of the code but their signature is {\em not\/} in the exports
+list.  Since {\bf prefix} and {\bf abs} are not in the export list of
+{\bf Polynomial} there is no way for anyone to know these functions
+exist. They are hidden in the {\bf Polynomial} box. They aren't
+particularly general or interesting, but make the code (slightly)
+clearer.
+
+\begin{small}
+\begin{verbatim}
+  prefix(term: Term): String ==
+          if negative? term then " - " else " + ";
+
+  abs(term: Term): Term ==
+          if negative? term then -term else term;
+
+  (stream: TextWriter) \<\< (poly: %): TextWriter == {
+          zero? poly => stream \<\< 0;
+
+          size: SingleInteger := #(rep(poly));
+          prefix: String := if negative?(poly.1) then " - " else "";
+
+          for i in 1..(size-2) repeat
+                  if not zero?(poly.i) then {
+                          stream \<\< prefix \<\< abs(poly.i);
+                          stream \<\< "^" \<\< (size - i);
+                          prefix := prefix(poly.(i+1))
+                  }
+          if not zero?(poly.(size-1)) then {
+                  stream \<\< prefix \<\< abs(poly.(size-1));
+                  prefix := prefix(poly.size)
+          }
+          if not zero?(poly.size) then 
+                  stream \<\< prefix \<\< abs(coef(poly.size));
+          stream
+  }
+\end{verbatim}
+\end{small}
+
+Remember: There is no such thing as a simple job.
+
+\subsection{Polynomial --- a return from printing}
+
+The accessor functions for a {\bf Polynomial} fall into several cases.
+We would like to be able to access the leading term of the polynomial
+and each term of the polynomial. A single term is referred to as a
+{\em monomial}.
+
+\begin{small}
+\begin{verbatim}
+  leadingMonomial: % -> Term;
+  apply: (%, SingleInteger) -> Term;
+\end{verbatim}
+\end{small}
+  
+Notice that our representation of polynomials does not provide the
+exponent directly, so the user has to know what the exponent of a given
+term should be. In general, the $i$-th term from the polynomial will be
+{\bf $x^i$}. However, the user needs to know the highest exponent of
+the polynomial (referred to as the {\tt degree}):
+
+\begin{small}
+\begin{verbatim}
+  degree: % -> SingleInteger;
+\end{verbatim}
+\end{small}
+
+This is good enough for a first try at a {\bf Polynomial} type. The
+next example is an implementation of this type.
+
+\subsection{Listing}
+\label{PolynomialListing}
+
+\begin{small}
+\begin{verbatim}
+
+#include "axllib"
+
+Term: BasicType with {
+        new: (SingleInteger, Character) -> %;
+        dispose!: % -> ();
+        \<\<: (TextWriter, %) -> TextWriter;
+        coef: % -> SingleInteger;
+        var:  % -> Character;
+        zero?: % -> Boolean;
+        positive?: % -> Boolean;
+        negative?: % -> Boolean;
+        -: % -> %;
+        -:(%,%) -> %;
+        +:(%,%) -> %;
+}
+== add {
+        Rep == Record(coef: SingleInteger, var: Character);
+        import from Rep;
+
+        new(number: SingleInteger, variable: Character): % == 
+                per [number, variable];
+
+        dispose!(ignore: %):() == {}
+
+        (stream: TextWriter) \<\< (term: %): TextWriter ==
+                if rep(term).coef = 1 then
+                         stream \<\< rep(term).var
+                else {
+                         stream \<\< rep(term).coef;
+                         stream \<\< "*" \<\< rep(term).var
+                }
+
+        coef(term: %): SingleInteger == rep(term).coef;
+
+        var(term: %): Character == rep(term).var;
+
+        (term1: %) = (term2: %): Boolean == {
+                coef term1 ~= coef term2 => false;
+                var  term1 ~= var term2  => false;
+                true
+        }
+
+        sample: % == per [0, char "x"];
+
+        zero?(term: %): Boolean     == coef(term) = 0;
+
+        positive?(term: %): Boolean == coef(term) > 0;
+
+        negative?(term: %): Boolean == coef(term) < 0;
+
+        -(term: %): % == per [-coef(term), var term];
+
+        (term1: %) - (term2: %): % == {
+                var term1 ~= var term2 => 
+                       error "Subtracting terms with incompatible vars";
+                per [coef(term1) - coef(term2), var term1]
+        }
+
+        (term1: %) + (term2: %): % == {
+                var term1 ~= var term2 => 
+                       error "Adding terms with incompatible vars";
+                per [coef(term1) + coef(term2), var term1]
+        }
+}
+
+Polynomial: with {
+        new: List(Term) -> %;
+        dispose!: % -> ();
+        \<\<: (TextWriter, %) -> TextWriter;
+        leadingMonomial: % -> Term;
+        apply: (%, SingleInteger) -> Term;
+        degree: % -> SingleInteger;
+        zero?: % -> Boolean;
+}
+== add {
+        import from List Term;
+        import from SingleInteger;
+        Rep == Array Term;
+        import from Rep;
+
+        new(terms: List Term): % == {
+
+                size: SingleInteger := #terms;
+                result: Rep := new(size, sample@Term);
+
+                for i in 1..size repeat
+                        result.i:=terms.i;
+
+                per result
+        }
+
+        dispose!(ignore: %):() == {}
+
+        prefix(term: Term): String == 
+                if negative? term then " - " else " + ";
+
+        abs(term: Term): Term == 
+                if negative? term then -term else term;
+
+        (stream: TextWriter) \<\< (poly: %): TextWriter == {
+                zero? poly => stream \<\< 0;
+
+                size: SingleInteger := #(rep(poly));
+                sign: String := if negative?(poly.1) then " - " else "";
+
+                for i in 1..(size-2) repeat
+                        if not zero?(poly.i) then {
+                                stream \<\< sign \<\< abs(poly.i);
+                                stream \<\< "^" \<\< (size - i);
+                                sign := prefix(poly.(i + 1))
+                        }
+
+               if not zero?(poly.(size - 1)) then {
+                       stream \<\< sign \<\< abs(poly.(size-1));
+                       sign := prefix(poly.size)
+               }
+               if not zero?(poly.size) then 
+                       stream \<\< sign \<\< abs(coef(poly.size));
+               stream
+        }              
+
+        leadingMonomial(poly: %): Term == 
+                rep(poly).(#(rep(poly)));
+
+        apply(poly: %, exponent: SingleInteger): Term == 
+                rep(poly).exponent;
+
+        degree(poly: %): SingleInteger == #(rep(poly));
+
+        zero?(poly: %): Boolean == #(rep(poly)) = 0;
+ }
+
+#if TEST
+
+import from Character;
+import from SingleInteger;
+import from List Term;
+import from Polynomial;
+var: Character := char "x";
+term1 := new(3, var);
+term2 := new(2, var);
+term3 := new(1, var);
+term4 := new(0, var);
+term5 := new(-3, var);
+--  term6 := -term5;
+print \<\< new(list(term5,term5,term5)) \<\< newline; -- negative signs
+print \<\< new(list(term3,term2,term1)) \<\< newline; -- 1 elision
+print \<\< new(list(term1,term2,term3)) \<\< newline;
+print \<\< new(list(term4,term2,term3)) \<\< newline;
+print \<\< new(list(term1,term4,term3)) \<\< newline;
+print \<\< new(list(term4,term4,term3)) \<\< newline;
+print \<\< new(list(term1,term2,term4)) \<\< newline; -- bad leading term
+print \<\< new(list(term4,term2,term4)) \<\< newline; -- bad leading term
+print \<\< new(list(term1,term4,term4)) \<\< newline; -- bad leading term
+print \<\< new(list(term4,term4,term4)) \<\< newline; -- bad leading term
+print \<\< new(list())@Polynomial \<\< newline; -- true zero polynomial
+
+#endif -- TEST
+
+\end{verbatim}
+\end{small}
+
+\section{Operations in the Type ``Polynomial''}
+
+{\bf The complete listing for this section is at page
+\pageref{OpsInPolynomialListing}.}
+
+{\bf Polynomial}s are interesting objects and one can define several
+dozen interesting operations on objects of this {\bf Type}. We
+introduce two just to give you the details of how to do it. The two
+operations are addition ({\tt +}) and subtraction ({\tt -}). These are
+infix operations.  Their signatures look like:
+
+\begin{small}
+\begin{verbatim}
+
+        +: (%,%) -> %;
+        -: (%,%) -> %;
+
+\end{verbatim}
+\end{small}
+
+That is, they take two objects, both of the current {\bf Type} (in
+this % "Both" added to avoid bad linebreak.  case, {\bf Polynomial}),
+and return an object of the same {\bf Type}.
+
+The implementations are fairly straightforward.  Remember that each
+polynomial is just an array of terms and that the position in the
+array defines the exponent of the term. Since this is the case, in
+principle we only need to create an array of the right target length
+and loop over each element pair, adding or subtracting them.  A slight
+complication is that the arrays may be of different lengths: we
+overcome this by choosing the greater length for the final array, and
+taking the sum or difference only for terms which exist in both
+polynomials.
+
+\begin{small}
+\begin{verbatim}
+
+        (poly1: %) + (poly2: %): % == {
+                zero? poly1 => poly2;
+                zero? poly2 => poly1;
+
+                if (l1: SingleInteger := #(rep(poly1)))
+		    < (l2: SingleInteger := #(rep(poly2))) then {
+
+                        result: Rep := new(l2, sample@Term);
+			d: SingleInteger := l2 - l1;
+
+                        for i in 1..d repeat 
+                                result.i := poly2.i;
+                        for i in (d + 1)..l2 repeat 
+                                result.i := poly1.(i - d) + poly2.i
+                }
+		else {
+
+                        result: Rep := new(l1, sample@Term);
+			d: SingleInteger := l1 - l2;
+                        for i in 1..d repeat 
+                                result.i := poly1.i;
+                        for i in (d + 1)..l1 repeat 
+                                result.i:=poly2.(i - d) + poly1.i
+                }
+
+                per result
+        }
+
+        (poly1: %) - (poly2: %): % == {
+                zero? poly1 => poly2;
+                zero? poly2 => poly1;
+
+                if (l1: SingleInteger := #(rep(poly1)))
+		    < (l2: SingleInteger := #(rep(poly2))) then {
+
+                        result: Rep := new(l2, sample@Term);
+			d: SingleInteger := l2 - l1;
+
+                        for i in 1..d repeat 
+                                result.i := - poly2.i;
+                        for i in (d + 1)..l2 repeat 
+                                result.i:=poly1.(i - d) - poly2.i
+                }
+		else {
+
+                        result: Rep := new(l1, sample@Term);
+			d: SingleInteger := l1 - l2;
+                        for i in 1..d repeat 
+                                result.i :=  poly1.i;
+                        for i in (d + 1)..l1 repeat 
+                                result.i:=poly2.(i - d) - poly1.i
+                }
+
+                per result
+        }
+\end{verbatim}
+\end{small}
+
+This is not strictly correct, however, since the subtraction can
+generate terms which are zero at the highest powers of the polynomial.
+We should reduce the length of the polynomial to elide these terms.
+
+Now we begin a series of tests for the various cases of creating
+and printing polynomials. First we need to bring the domains we
+will use into scope.
+
+\begin{small}
+\begin{verbatim}
+
+import from Character;
+import from SingleInteger;
+import from List Term;
+import from Polynomial;
+\end{verbatim}
+\end{small}
+
+Since polynomials are lists of terms we create a few terms in the
+variable {\tt x}, which we can use to construct polynomials.
+
+\begin{small}
+\begin{verbatim}
+var: Character := char "x";
+term1 := new(3, var);
+term2 := new(2, var);
+term3 := new(1, var);
+term4 := new(0, var);
+term5 := new(-3, var);
+--   term6 := -term5;
+\end{verbatim}
+\end{small}
+
+We need to check the handling of leading negative signs:
+
+\begin{small}
+\begin{verbatim}
+print \<\< new(list(term5,term5,term5)) \<\< newline; -- negative signs
+\end{verbatim}
+\end{small}
+
+We need to check that we print {\tt 1*x} as {\tt x}.
+
+\begin{small}
+\begin{verbatim}
+print \<\< new(list(term3,term2,term1)) \<\< newline; -- 1 elision
+\end{verbatim}
+\end{small}
+
+We need to check that {\tt 0*x} is skipped properly:
+
+\begin{small}
+\begin{verbatim}
+print \<\< new(list(term1,term2,term3)) \<\< newline;
+print \<\< new(list(term4,term2,term3)) \<\< newline;
+print \<\< new(list(term1,term4,term3)) \<\< newline;
+print \<\< new(list(term4,term4,term3)) \<\< newline;
+print \<\< new(list(term1,term2,term4)) \<\< newline; -- bad leading term
+print \<\< new(list(term4,term2,term4)) \<\< newline; -- bad leading term
+print \<\< new(list(term1,term4,term4)) \<\< newline; -- bad leading term
+print \<\< new(list(term4,term4,term4)) \<\< newline; -- bad leading term
+\end{verbatim}
+\end{small}
+
+We need to check that we print the zero polynomial properly:
+
+\begin{small}
+\begin{verbatim}
+print \<\< new(list())@Polynomial \<\< newline; -- true zero polynomial
+print \<\< 0@Polynomial \<\< newline; -- true zero polynomial
+\end{verbatim}
+\end{small}
+
+We need to check that term arithmetic is properly implemented:
+
+\begin{small}
+\begin{verbatim}
+print \<\< term1 + term2 \<\< newline;
+print \<\< term1 - term2 \<\< newline;
+print \<\< term2 - term1 \<\< newline;
+print \<\< term1 - term1 \<\< newline;
+\end{verbatim}
+\end{small}
+%#endif --example5
+
+\subsection{Listing}
+
+\label{OpsInPolynomialListing}
+
+\begin{small}
+\begin{verbatim}
+
+#include "axllib"
+
+Term: BasicType with {
+        new: (SingleInteger, Character) -> %;
+        dispose!: % -> ();
+        \<\<: (TextWriter, %) -> TextWriter;
+        coef: % -> SingleInteger;
+        var:  % -> Character;
+        zero?: % -> Boolean;
+        positive?: % -> Boolean;
+        negative?: % -> Boolean;
+        -: % -> %;
+        -:(%,%) -> %;
+        +:(%,%) -> %;
+}
+== add {
+        Rep == Record(coef: SingleInteger, var: Character);
+        import from Rep;
+
+        new(number: SingleInteger, variable: Character): % == 
+                per [number, variable];
+
+        dispose!(ignore: %):() == {}
+
+        (stream: TextWriter) \<\< (term: %): TextWriter == 
+                if rep(term).coef = 1 then
+                         stream \<\< rep(term).var
+                else {
+                         stream \<\< rep(term).coef;
+                         stream \<\< "*" \<\< rep(term).var
+                }
+
+        coef(term: %): SingleInteger == rep(term).coef;
+
+        var(term: %): Character == rep(term).var;
+
+        (term1: %) = (term2: %): Boolean == {
+                coef term1 ~= coef term2  => false;
+                var term1  ~= var term2   => false;
+                true
+        }
+
+        sample: % == per [0, char "x"];
+
+        zero?(term: %): Boolean      == coef(term) = 0;
+
+        positive?(term: %): Boolean == coef(term) > 0;
+
+        negative?(term: %): Boolean == coef(term) < 0;
+
+        -(term: %): % == per [-coef(term), var term];
+
+        (term1: %) - (term2: %): % == {
+                var term1 ~= var term2 => 
+                        error "Term: Variables do not match";
+                per [coef term1 - coef term2, var term1]
+        }
+
+        (term1): % + (term2: %): % == {
+                var term1 ~= var term2 => 
+                        error "Term: Variables do not match";
+                per [coef term1 + coef term2, var term1]
+        }
+}
+
+Polynomial: with {
+        new: List(Term) -> %;
+        dispose!: % -> ();
+        \<\<: (TextWriter, %) -> TextWriter;
+        leadingMonomial: % -> Term;
+        apply: (%, SingleInteger) -> Term;
+        degree: % -> SingleInteger;
+        0: %;
+        zero?: % -> Boolean;
+        +: (%,%) -> %;
+        -: (%,%) -> %;
+ }
+== add {
+        import from List Term;
+        import from SingleInteger;
+        Rep == Array Term;
+        import from Rep;
+
+        new(terms: List Term): % == {
+                size: SingleInteger := #terms;
+                result: Rep := new(size, sample@Term);
+
+                for i in 1..size repeat
+                        result.i := terms.i;
+
+                per(result)
+                }
+
+        dispose!(ignore: %):() == {}  -- undefined
+
+        prefix(term: Term): String == 
+                if negative? term then " - " else " + ";
+
+        abs(term: Term): Term == 
+                if negative? term then -term else term;
+
+        (stream: TextWriter) \<\< (poly: %): TextWriter == {
+                zero? poly => stream \<\< 0@%;
+
+                size: SingleInteger := #(rep(poly));
+
+                sign: String:=
+                        if negative? (poly.1) then " - " else "";
+
+                for i in 1..(size - 2) repeat
+                        if not zero?(poly.i) then {
+                                stream \<\< sign \<\< abs(poly.i);
+                                stream \<\< "^" \<\< (size - i);
+                                sign := prefix(poly.(i+1))
+                        }
+                if not zero?(poly.(size-1)) then {
+                        stream \<\< sign \<\< abs(poly.(size-1));
+                        sign := prefix(poly.size)
+                }
+                if not zero?(poly.size) then 
+                        stream \<\< sign \<\< abs(coef(poly.size));
+                stream
+                }
+
+        leadingMonomial(poly: %): Term == 
+                rep(poly).(#(rep(poly)));
+
+        apply(poly: %, exponent: SingleInteger): Term == 
+                rep(poly).exponent;
+
+        degree(poly: %): SingleInteger == 
+                #(rep(poly));
+
+        0: % == new(list())@Polynomial;
+
+        zero?(poly: %): Boolean == 
+              #(rep(poly)) = 0;
+
+        (poly1: %) + (poly2: %): % == {
+                zero? poly1 => poly2;
+                zero? poly2 => poly1;
+
+                if (l1: SingleInteger := #(rep(poly1)))
+		    < (l2: SingleInteger := #(rep(poly2))) then {
+
+                        result: Rep := new(l2, sample@Term);
+			d: SingleInteger := l2 - l1;
+
+                        for i in 1..d repeat 
+                                result.i := poly2.i;
+                        for i in (d + 1)..l2 repeat 
+                                result.i := poly1.(i - d) + poly2.i
+                }
+		else {
+
+                        result: Rep := new(l1, sample@Term);
+			d: SingleInteger := l1 - l2;
+                        for i in 1..d repeat 
+                                result.i := poly1.i;
+                        for i in (d + 1)..l1 repeat 
+                                result.i:=poly2.(i - d) + poly1.i
+                }
+
+                per result
+        }
+
+        (poly1: %) - (poly2: %): % == {
+                zero? poly1 => poly2;
+                zero? poly2 => poly1;
+
+                if (l1: SingleInteger := #(rep(poly1)))
+		    < (l2: SingleInteger := #(rep(poly2))) then {
+
+                        result: Rep := new(l2, sample@Term);
+			d: SingleInteger := l2 - l1;
+
+                        for i in 1..d repeat 
+                                result.i := - poly2.i;
+                        for i in (d + 1)..l2 repeat 
+                                result.i:=poly1.(i - d) - poly2.i
+                }
+		else {
+
+                        result: Rep := new(l1, sample@Term);
+			d: SingleInteger := l1 - l2;
+                        for i in 1..d repeat 
+                                result.i :=  poly1.i;
+                        for i in (d + 1)..l1 repeat 
+                                result.i:=poly2.(i - d) - poly1.i
+                }
+
+                per result
+        }
+ }
+
+\end{verbatim}
+\end{small}
+
+\section{Parameterized types}
+
+{\bf The complete listing for this section is at page
+\pageref{ParamTypesListing}.}
+
+Types can be more general than we have seen so far. One generalization
+is to allow the types to take parameters. That is, we can construct a
+type which will change its behavior depending on some other type.
+
+If we look at general polynomials, we find that there are several
+different types of coefficients. We could have polynomials of the
+form:
+
+\begin{small}
+\begin{verbatim}
+  3*x^2 + 2*x + 1
+
+or 
+
+  3.0*x^2 + 2.0*x + 1.0
+
+or
+
+  (3/5)*x^2 + (2/5)*x + (1/5)
+
+\end{verbatim}
+\end{small}
+
+The first polynomial has integer coefficients. The second has real
+coefficients and the third has rational (ratios of integers)
+coefficients. The type of number allowed in the coefficient of a
+polynomial is determined by the ring of coefficients. Rings are simple
+mathematical objects that define operations like addition and
+subtraction. Since polynomials depend on the terms to define what it
+means to add or subtract something, we find that polynomials change
+their behavior depending on the ring of coefficients chosen.
+
+We could implement this by defining ``integer'' polynomials, ``real''
+polynomials and ``rational'' polynomials as separate types.  However,
+most of the operations we want are common to all of these polynomial
+types. What we would like to be able to do is define {\bf Polynomial}s
+that take different kinds of {\bf Term}s.
+
+The same argument applies for {\bf Term}s. Rather than having many
+different kinds of {\bf Term}s, we can change {\bf Term} to take a
+parameter that defines the kind of coefficients to use. Let's start
+this whole process by modifying {\bf Term} to take a parameter which
+tells us the {\bf Type} of a coefficient.
+
+The previous {\bf Type} definition line for {\bf Term} was:
+
+\begin{small}
+\begin{verbatim}
+  Term: BasicType with {
+\end{verbatim}
+\end{small}
+
+which has been changed to:
+
+\begin{small}
+\begin{verbatim}
+  Term(CoefType: OrderedRing): BasicType with {          
+\end{verbatim}
+\end{small}
+
+There is much to say about this change. The first and most notable
+difference is that {\bf Term} is no longer a constant {\bf Type}. It
+is now a function that takes an argument. We have given a name to the
+argument and, as in all of our function definitions, given the {\bf
+Type} of the argument.
+
+One question that arises is how and why we chose the type 
+{\bf OrderedRing}.  When we build {\bf Type} towers we depend on the things
+under us in the tower to supply certain operations. If we build on
+something that does not supply the needed operations then we have no
+meaning for our program (what would it mean to add two things of 
+{\bf Type} {\tt Display}, for example).
+
+A reasonable initial guess for a declaration line might be:
+
+\begin{small}
+\begin{verbatim}
+  Term(CoefType: BasicType): BasicType with {          
+\end{verbatim}
+\end{small}
+
+but this fails, because the code that follows assumes that we can
+compare the coefficient to the constant {\bf 1}. However, things that
+are {\bf BasicType}s only have the operations: ({\tt =}, {\tt \~{}=},
+%{\tt $\<\<$}, {\tt sample}, {\tt hash}) and are not required to have
+``{\bf \<\<}, {\tt sample}, {\tt hash}) and are not required to have the
+constant {\bf 1}.  The guarantee that a {\bf Type} has the constant
+{\bf 1} first appears in the (very primitive) type {\bf Monoid} (see
+\ref{axlcatFigure} on pageref{axlcatFigure}).  So we could satisfy
+this requirement with the definition line:
+
+\begin{small}
+\begin{verbatim}
+  Term(CoefType: Monoid): BasicType with {          
+\end{verbatim}
+\end{small}
+
+Again we run into a problem: some of the operations we have
+implemented in {\bf Term} (like {\tt positive?}) require us to use the
+{\tt >} operation to compare two coefficients. Being able to compare
+two things to decide if one is greater implies that there is an order.
+Pigments, for example, are not ordered. So we need to go further into
+the {\bf Type} hierarchy to find something that is both a {\bf Monoid}
+and has {\bf Order}. The required {\bf Type} is {\bf OrderedRing}.
+So, in order (intentional pun) to {\em guarantee} that we will be able
+to compare coefficients for equality to {\bf 1} and compare two
+coefficients to decide which is larger, we have to give {\bf Term}
+something that is at least an {\bf OrderedRing}. This gives us the
+required function definition line:
+
+\begin{small}
+\begin{verbatim}
+  Term(CoefType: OrderedRing): BasicType with {          
+\end{verbatim}
+\end{small}
+
+We originally wrote the {\tt Rep} so that it assumed that the 
+{\tt coef} field of the {\bf Record} (which is how we store {\bf Term}s
+internally) would be of {\bf Type} {\tt SingleInteger}.  We must
+change this. The old {\tt Rep} read: 
+
+\begin{small}
+\begin{verbatim}
+  Rep == Record(coef: SingleInteger, var: Character);       
+\end{verbatim}
+\end{small}
+
+and now it reads:
+
+\begin{small}
+\begin{verbatim}
+  Rep == Record(coef: CoefType, var: Character);       
+\end{verbatim}
+\end{small}
+
+This tells us that we can store anything that satisfies our {\tt CoefType}
+requirement in the internal representation.
+
+The next change we need to make is in the signature lines of certain
+functions. The old signature for the function {\tt new} was:
+
+\begin{small}
+\begin{verbatim}
+  new: (SingleInteger, Character) -> %;
+\end{verbatim}
+\end{small}
+
+which has been changed to:
+
+\begin{small}
+\begin{verbatim}
+  new: (CoefType, Character) -> %;                    
+\end{verbatim}
+\end{small}
+
+so that we used to require a {\bf SingleInteger} as the coefficient
+and now we can have any coefficient that is of type {\bf CoefType}.
+This can be anything, as long as it is {\em at least} an {\bf
+OrderedRing}.
+
+Since we changed the function signature we must make the
+corresponding change in the function header line. It used to
+read:
+
+\begin{small}
+\begin{verbatim}
+  new(number: SingleInteger, variable: Character): % ==
+\end{verbatim}
+\end{small}
+
+and now it reads:
+
+\begin{small}
+\begin{verbatim}
+  new(number: CoefType, variable: Character): % ==
+\end{verbatim}
+\end{small}
+
+Similarly, we assumed that {\tt coef} would return a {\bf SingleInteger}:
+
+\begin{small}
+\begin{verbatim}
+  coef: % -> SingleInteger;
+
+  coef: % -> CoefType;                                     
+\end{verbatim}
+\end{small}
+
+and now it returns anything that is stored in the {\bf Term}.
+
+Since we changed the function signature we must make the
+corresponding change in the function header line. It used to
+read:
+
+\begin{small}
+\begin{verbatim}
+  coef(term: %): SingleInteger ==                         
+\end{verbatim}
+\end{small}
+
+and now it reads:
+
+\begin{small}
+\begin{verbatim}
+  coef(term: %): CoefType ==                         
+\end{verbatim}
+\end{small}
+
+\subsection{Listing}
+
+\label{ParamTypesListing}
+
+\begin{small}
+\begin{verbatim}
+#include "axllib"
+
+Term(CoefType: OrderedRing): BasicType with {          
+        new: (CoefType, Character) -> %;                    
+        dispose!: % -> ();
+        \<\<: (TextWriter, %) -> TextWriter;
+        coef: % -> CoefType;                                     
+        var:  % -> Character;
+        zero?: % -> Boolean;
+        positive?: % -> Boolean;
+        negative?: % -> Boolean;
+        -: % -> %;
+        -:(%,%) -> %;
+        +:(%,%) -> %;
+ }
+== add { 
+        Rep == Record(coef: CoefType, var: Character);       
+        import from Rep;
+
+        new(number: CoefType, variable: Character): % == 
+                per [number,variable];
+
+        dispose!(ignore: %):() == {}  -- undefined
+
+        (stream: TextWriter) \<\< (term: %): TextWriter == 
+                if rep(term).coef = 1 then
+                        stream \<\< rep(term).var
+                else {
+                        stream \<\< rep(term).coef;
+                        stream \<\< "*" \<\< rep(term).var
+                }
+
+        coef(term: %): CoefType == rep(term).coef;
+
+        var(term: %): Character == rep(term).var;
+
+        (term1: %) = (term2: %): Boolean == {
+                coef(term1) ~= coef(term2) => false;
+                var(term1)  ~= var(term2)  => false;
+                true
+        }
+
+        sample: % == per [0, char "x"];
+
+        zero?(term: %):     Boolean == coef(term) = 0;
+
+        positive?(term: %): Boolean == coef(term) > 0;
+
+        negative?(term: %): Boolean == coef(term) < 0;
+
+        -(term: %): % == per [-coef(term), var term];
+
+        (term1: %) - (term2: %): % == {
+                var term1 ~= var term2 => 
+                        error "Term: Variables do not match";
+                per [coef(term1)-coef(term2), var term1]
+        }
+
+        (term1: %) + (term2: %): % == {
+                var term1 ~= var term2 => 
+                        error "Term:  Variables do not match";
+                per [coef(term1)+coef(term2), var term1]
+        }
+ }
+
+#if TEST
+
+import from Character;
+import from Term SingleInteger;
+print \<\< new(0$SingleInteger,char "x") \<\< newline;
+import from Term Float;
+print \<\< new(0$Float,char "x") \<\< newline;
+
+#endif -- TEST
+
+\end{verbatim}
+\end{small}
+
+Many thanks to the reviewers:
+Peter Broadbery,
+Robert Corless,
+George Corliss,
+Tim Daly, Jr.,
+Pietro Iglio,
+Phillip Santas,
+Jon Steinbach and
+Stephen Watt.
+
+At this point you know enough to write reasonably functional Axiom
+programs. We have introduced the concept of a domain as a means of
+structuring Axiom programs. We have shown examples of domains and
+explored the various parts, namely the export list, the representation
+and the implementation. We have shown how to connect the domain to the
+existing type hierarchy.
+
+
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

@@ -1,0 +1,677 @@
+  /***********************************************************************
+    contour.c
+    
+    begun 19 September 1992, Jim Wen
+   ***********************************************************************/
+
+#include "header.h"
+#include "draw.h"
+
+#define segmentDEBUG_X
+
+#define contourDEBUG_X
+#define use_min
+#define realloc_bug_fixed_NOT
+
+  /*=====================================================================*
+    Static variables
+   *=====================================================================*/
+int noo=0;
+poly   		       *contour_poly_list;
+poly     	       *active_list_first, *active_list_last, *active_list_current;
+segment_list_struct    *tmp_segment_list;
+
+  /*=====================================================================*
+    macro definitions
+   *=====================================================================*/
+#define foreach_poly(p)       for ((p)=contour_poly_list; p != NIL(poly); p=p->next)
+#define foreach_active(p,f,l) if (f != NIL(poly)) for (p=f; p!=l; p=(p)->next)
+#define in_range(x,a,b)	      ( ((x>=a) && (x<b)) || ((x<a) && (x>=b)) )
+#define poly_in_plane(p,z)    ( (p->contour_min==z) && (p->contour_max==z) )
+
+			       
+
+  /*=====================================================================*
+    local function declarations
+   *=====================================================================*/
+int 		 contour_compare(poly *p1, poly *p2);
+void 		 add_segment(segment_list_struct * seg_list, int index,
+                   segment_struct * seg);
+segment_struct  *make_the_segment(viewTriple * pt1, viewTriple * pt2);
+viewTriple 	*mkpoint(viewTriple * vt1, viewTriple * vt2,
+                   CONTOUR_float z_val);
+CONTOUR_float    get_t_from_pts(CONTOUR_float z_min, CONTOUR_float  z_max,
+                   CONTOUR_float z_val);
+void 		 make_active_list(poly *da_list, CONTOUR_float z_min,
+                   CONTOUR_float z_max, poly ** af, poly ** al, poly ** ac);
+int 		 maintain_active_list(poly ** af, poly ** al, poly ** ac,
+                   CONTOUR_float z_max, CONTOUR_float z_min);
+void             contour_minMaxPolygons(poly * aPoly);
+
+  /*=====================================================================*
+    contour_compare()
+    
+    The compare function passed to msort. 
+   *=====================================================================*/
+int
+contour_compare(poly *p1, poly *p2)
+{
+
+#ifdef use_min
+  if (p1->contour_min < p2->contour_min) return(-1);
+  else if (p1->contour_min == p2->contour_min) return(0);
+  else return(1);
+#else
+  if (p1->contour_max > p2->contour_max) return(-1);
+  else if (p1->contour_max == p2->contour_max) return(0);
+  else return(1);
+#endif /* use_min */
+}  /* contour_compare() */
+
+  /*=====================================================================*
+    do_contour_map()
+   *=====================================================================*/
+int
+do_contour_map(void)
+{
+
+  poly *pp;
+  poly *ap;
+  CONTOUR_float z_now;
+  int got_more;
+  int *anIndex;
+  viewTriple *aPt, *daPt, *one_point;
+  int jj, segment_index;
+  int got_one_intersection;
+  int done;
+  segment_list_struct *sl;
+#ifdef contour_object_rotate
+  float rotMat[4][4];
+  float transformed_zmax, transformed_zmin;
+#endif
+#ifdef conDEBUG
+  segment_struct *seg;
+#endif
+
+        /*---------------------------------------------------*
+	  the flag "did_contour" should be set to "no" whenever
+	  the user modifies one of the parameters
+         *---------------------------------------------------*/
+#ifdef contourDEBUG_x
+  fprintf(stderr,"Contour is %s\n",(did_contour)?"yes":"no");
+#endif
+  if (did_contour) return 1;
+  did_contour = yes;
+
+#ifdef contour_object_rotate
+        /*---------------------------------------------------*
+	  transform all the points for arbitrary plane
+	  slicing.  this includes all the viewTriples
+	  being referenced as well as the boundaries
+	  in viewData (to get contour_min, contour_max).
+         *---------------------------------------------------*/
+#ifdef oldie
+  rot_theta = 0;
+  rot_phi   = pi/2;
+#endif
+
+  sinTheta  = sin(-rot_theta);
+  cosTheta  = cos(-rot_theta);
+  sinPhi    = sin(rot_phi);
+  cosPhi    = cos(rot_phi);
+  ROTATE1(rotMat);
+
+        /*---------------------------------------------------*
+	  transform all the points.
+	  the zmin and zmax values need to be recalculated
+	  now that the object has been transformed.  note
+	  that transforming the z extreme points will not
+	  work correctly (i know, i've tried it).
+         *---------------------------------------------------*/
+    {
+      int i,j,k;
+      LLPoint *anLLPoint;
+      LPoint *anLPoint;
+      int *anIndex;
+      viewTriple *daPoint;
+      float v_in[4], v_out[4];
+      int first_time = yes;
+
+      anLLPoint = viewData.lllp.llp;
+      for (i=0; i<viewData.lllp.numOfComponents; i++,anLLPoint++) {
+	anLPoint = anLLPoint->lp;
+	for (j=0; j<anLLPoint->numOfLists; j++,anLPoint++) {
+	  anIndex = anLPoint->indices;
+	  for (k=0; k<anLPoint->numOfPoints; k++,anIndex++) {
+	    daPoint = refPt3D(viewData, *anIndex);
+        /*---------------------------------------------------*
+	  inefficient code so that the vector package could
+	  be used to see if things work;
+	  should change viewTriple's <x,y,z> to an array(?)
+         *---------------------------------------------------*/
+	    v_in[0] = daPoint->x;  v_in[1] = daPoint->y;  
+	    v_in[2] = daPoint->z;  v_in[3] = 1.0;
+	    vectorMatrix4(v_in, rotMat, v_out);
+	    daPoint->contour_x = v_out[0];  
+	    daPoint->contour_y = v_out[1];
+	    daPoint->contour_z = v_out[2];
+	    if (first_time) {
+	      first_time = no;
+	      transformed_zmin = transformed_zmax = v_out[2];
+	    } else {
+	      if (v_out[2] < transformed_zmin)
+	        transformed_zmin = v_out[2];
+	      else if (v_out[2] > transformed_zmax) 
+	        transformed_zmax = v_out[2];
+	    }
+	  } /* for points in LPoints (k) */
+	} /* for LPoints in LLPoints (j) */
+      } /* for LLPoints in LLLPoints (i) */
+
+    }
+
+#endif
+
+
+        /*---------------------------------------------------*
+	  set up the step size - it should be user adjustable
+	  and include all the slices possible.
+	  max_cuts is #slices seen
+	  z_step is #slices made
+	  cuts_used is #slices actually displayed
+         *---------------------------------------------------*/
+  z_step = (transformed_zmax - transformed_zmin)/max_cuts;
+#ifdef oldie
+  cuts_used = max_cuts;
+#endif
+
+        /*---------------------------------------------------*
+	  calculate the bounds of the polygons - the 
+	  contour_minMaxPolygons routine looks at the
+	  contour points rather than the object or 
+	  projected points
+         *---------------------------------------------------*/
+  contour_poly_list = copyPolygons(viewData.polygons);
+  contour_minMaxPolygons(contour_poly_list);
+
+        /*---------------------------------------------------*
+	  sort the polygons by the zmax value
+	  (or whatever transformed value, in general)
+         *---------------------------------------------------*/
+  contour_poly_list = msort(contour_poly_list, 0, 
+			    viewData.numPolygons, contour_compare);
+
+        /*---------------------------------------------------*
+	  having figured out how many cuts we need (should
+	  be a one time overhead so the following stuff
+	  should be in the initialization routine), we
+	  allocate an array of segment lists and initialize
+	  them (this part can stay here).
+         *---------------------------------------------------*/
+#ifdef oldie
+  segment_list = saymem("contour.c: segment_list", 
+			max_cuts, sizeof(segment_list_struct));
+#else
+        /*---------------------------------------------------*
+	  if the append flag is set, then we want to add 
+	  the new segment stuff onto the end of the old
+	  stuff (to build up a model of the surface).
+	  tmp_segment_list is use to keep track of the
+	  head of the new list while the routine goes
+	  through its paces.
+         *---------------------------------------------------*/
+  if (contour_append_lists_flag) {
+    noo = 0;
+#ifdef segmentDEBUG
+    fprintf(stderr,"======= series %d ========\n",noo);
+    fprintf(stderr,"     ---> before: sl->num=%d [%x]\n",
+	    segment_list->num, segment_list);
+#endif
+
+#ifdef realloc_bug_fixed
+    realloc(segment_list, (cuts_used + max_cuts) * sizeof(segment_list_struct));
+    tmp_segment_list = segment_list;
+    segment_list += cuts_used;  /* shift to end of list */
+    cuts_used += max_cuts;      /* size of new list */
+
+#ifdef segmentDEBUG
+    fprintf(stderr,"> %d cuts => seg at %x [old=%x]\n",
+  	  cuts_used, segment_list, tmp_segment_list);
+    fprintf(stderr,"        sl->num=%d, tsl->num=%d\n",
+	    segment_list->num, tmp_segment_list->num);
+#endif
+
+#else /* DONT_WORK */
+
+        /*---------------------------------------------------*
+	  Because realloc doesn't seem to work properly,
+	  we need to do this by hand
+         *---------------------------------------------------*/
+        /*---------------------------------------------------*
+	  allocate new space
+         *---------------------------------------------------*/
+  tmp_segment_list = saymem("contour.c: segment_list, append",
+			    cuts_used + max_cuts,
+			    sizeof(segment_list_struct));
+
+        /*---------------------------------------------------*
+	  copy over old data (1..cuts_used)
+         *---------------------------------------------------*/
+  {
+    segment_list_struct *tsl;
+
+    for (segment_index=0, sl=segment_list, tsl=tmp_segment_list; 
+	 segment_index<cuts_used; 
+	 segment_index++, sl++, tsl++) {
+      tsl->num = sl->num;
+      tsl->max_num = sl->max_num;
+      tsl->num_segs = sl->num_segs;
+      tsl->segments = sl->segments;
+    }
+  }
+
+        /*---------------------------------------------------*
+	  free the old stuff
+         *---------------------------------------------------*/
+/*  free(segment_list); */
+
+        /*---------------------------------------------------*
+	  now set segment_list to point to the point
+	  where tmp_segment_list stops - there ought
+	  to me max_cuts storage spaces left.
+         *---------------------------------------------------*/
+  segment_list = tmp_segment_list + cuts_used;
+
+        /*---------------------------------------------------*
+	  update cuts_used to have everything for a possible
+	  next iteration
+         *---------------------------------------------------*/
+  cuts_used += max_cuts;
+
+#endif /* realloc_BUG */
+
+
+  } else {
+    if (contour_allocated) {
+/*      free(segment_list); */
+    } else {
+      contour_allocated = yes;
+    }
+    noo = 0;
+    segment_list = saymem("contour.c: segment_list", 
+			  max_cuts, sizeof(segment_list_struct));
+    cuts_used = max_cuts;
+#ifdef segmentDEBUG
+    fprintf(stderr,"======= series %d ========\n",noo);
+    fprintf(stderr,"%d cuts => seg at %x\n",cuts_used, segment_list);
+#endif
+  }
+#endif
+
+  for (segment_index=0, sl=segment_list; 
+       segment_index<max_cuts; 
+       segment_index++, sl++) {
+    sl->num = ++noo;
+    sl->max_num = max_cuts;
+#ifdef segmentDEBUG
+    fprintf(stderr,"Made segment list %d  [%x]\n",noo,sl);
+/*    fprintf(stderr,"       ...(tsl->num=%d [%x]\n",
+	    tmp_segment_list->num, tmp_segment_list); */
+#endif
+    sl->num_segs = 0;
+    sl->segments = NIL(segment_struct);
+  }
+        /*---------------------------------------------------*
+	  create an "active_list" of polygons such that 
+	  this slice step intersects all and only those
+	  polygons in the active list.
+         *---------------------------------------------------*/
+  make_active_list(contour_poly_list,
+#ifdef use_min
+		   transformed_zmin, transformed_zmin+z_step,
+#else
+		   transformed_zmax, transformed_zmax-z_step,
+#endif
+		   &active_list_first, &active_list_last, &active_list_current);
+
+        /*---------------------------------------------------*
+	  iterate from zmax down to zmin with z_step increments
+         *---------------------------------------------------*/
+  segment_index = 0;
+#ifdef use_min
+  for (z_now=transformed_zmin; z_now<transformed_zmax; /* see below for incr*/) {
+#else
+  for (z_now=transformed_zmax; z_now>transformed_zmin; /* see below for incr*/) {
+#endif
+        /*---------------------------------------------------*
+	  for each of the polygons on the active list, 
+	  intersect each of line equation for the sides	
+	  with the plane equation for the plane at z_now.
+	  one of the following may occur:
+	     no intersections: haha - can't happen coz active
+	    one intersection : at the point, create point line
+	    two intersections: create line connecting points
+	    lies in the plane: create three segments
+	  note that this is a fairly inefficient approach but
+	  i'm just throwing this stuff together in an afternoon
+	  to see how it looks
+         *---------------------------------------------------*/
+    foreach_active(ap, active_list_first, active_list_last) {
+
+        /*---------------------------------------------------*
+	  do line-plane equation for each side of the 
+	  polygon
+	  for now - just 3+ sided polygons (no degenerates)
+         *---------------------------------------------------*/
+
+      if (ap->numpts >= 3) {
+	if (poly_in_plane(ap, z_now)) {
+        /*---------------------------------------------------*
+	  re-create all the segments of the polygon
+         *---------------------------------------------------*/
+	  daPt = refPt3D(viewData, *(ap->indexPtr + (ap->numpts - 1)));
+	  for (jj=0, anIndex=ap->indexPtr; jj<ap->numpts; jj++, anIndex++) {
+	    aPt = refPt3D(viewData, *anIndex);
+	    add_segment(segment_list, segment_index, 
+			make_the_segment(aPt, daPt));
+	    daPt = aPt;
+	  }
+	} else {
+        /*---------------------------------------------------*
+	  find the line that defines the intersection of 
+	  the polygon with the z-plane
+         *---------------------------------------------------*/
+	  got_one_intersection = no;
+	  done = no;
+	  daPt = refPt3D(viewData, *(ap->indexPtr + (ap->numpts - 1)));
+	  for (jj=0, anIndex=ap->indexPtr; 
+	       !done && jj<ap->numpts; 
+	       jj++, anIndex++) {
+	    aPt = refPt3D(viewData, *anIndex);
+	    if (in_range(z_now, aPt->contour_z, daPt->contour_z)) {
+	      if (got_one_intersection) {
+		add_segment(segment_list, segment_index,
+			    make_the_segment(one_point, 
+					     mkpoint(aPt, daPt, z_now)));
+		done = yes;
+	      } else {
+		one_point = mkpoint(aPt, daPt, z_now);
+		got_one_intersection = yes;
+	      }
+	    } 
+	    daPt = aPt;
+	  }  /* for */
+	}  /* else not lie in plane */
+
+      }
+    }  /* foreach_active(ap) */
+
+        /*---------------------------------------------------*
+	  maintain/update the active list, pruning off things
+	  the fall off the top (beyond z_now - z_step) and
+===>	  adding on things to the bottom that now fall into   
+	  the range [z_now ---> z_now-z_step].
+         *---------------------------------------------------*/
+    segment_index++;
+#ifdef use_min
+    z_now += z_step;
+    got_more = maintain_active_list(&active_list_first, 
+				    &active_list_last, 
+				    &active_list_current,
+				    z_now + z_step, 
+				    z_now);
+#else
+    z_now -= z_step;
+    got_more = maintain_active_list(&active_list_first, 
+				    &active_list_last, 
+				    &active_list_current,
+				    z_now, 
+				    z_now - z_step);
+#endif
+  }  /* for z_now from zmax to zmin */
+
+        /*---------------------------------------------------*
+	  if the segment lists have been appended, reset
+	  the global segment lists pointer to the top of
+	  the lists
+         *---------------------------------------------------*/
+  if (contour_append_lists_flag) {
+    segment_list = tmp_segment_list;
+#ifdef segmentDEBUG
+#ifdef oldie
+    fprintf(stderr,"    setting seg to old=%x\n", segment_list);
+    fprintf(stderr,"        num is %d\n",segment_list->num);
+#endif
+  {
+
+    for (segment_index=0, sl=segment_list; 
+	 segment_index<cuts_used; 
+	 segment_index++, sl++) {
+      fprintf(stderr,"   sl->num = %d\n",sl->num);
+    }
+  }
+
+#endif
+  }
+
+}  /* do_contour_map() */
+
+
+  /*=====================================================================*
+    make_active_list(da_list, z_min, z_max, af, al, ac)
+   *=====================================================================*/
+void 
+make_active_list(poly *da_list, CONTOUR_float z_min, CONTOUR_float z_max,
+                 poly ** af, poly ** al, poly ** ac)
+{
+
+  poly *tmp_p;
+
+        /*---------------------------------------------------*
+	  the first active polygon is the first one in the
+	  given, sorted list.  note that if it doesn't fall
+===>	  inside the z_max --> z_min range, af is set to NIL.
+         *---------------------------------------------------*/
+#ifdef use_min
+  if (da_list->contour_min > z_max) {
+#else
+  if (da_list->contour_max < z_min) {
+#endif
+    *af = NIL(poly);
+    return;
+  } else {
+    *af = da_list;
+  }
+
+        /*---------------------------------------------------*
+	  the current active polygon is set to "af" at this
+	  point but it could be the case that it is set to	
+	  "al" if, for example, the current span of z-values
+	  has no polygons - af is set to NIL, and the next
+	  time we look we start at ac=af.
+         *---------------------------------------------------*/
+  *ac = *af;
+
+        /*---------------------------------------------------*
+	  the last active polygon is the polygon right before
+===>	  the first one whose zmax is too small to make the
+	  list 
+         *---------------------------------------------------*/
+  *al = da_list;	
+  tmp_p = da_list->next;
+  for (; tmp_p != NIL(poly); tmp_p = tmp_p->next) {
+#ifdef use_min
+    if (tmp_p->contour_min > z_max) return;
+#else
+    if (tmp_p->contour_max < z_min) return;
+#endif
+    *al = tmp_p;
+  }
+  
+}  /* make_active_list() */
+
+
+  /*=====================================================================*
+    maintain_active_list(af, al, ac, z_max, z_min)
+   *=====================================================================*/
+int 
+maintain_active_list(poly ** af, poly ** al, poly ** ac,
+                     CONTOUR_float z_max, CONTOUR_float z_min)
+{
+
+  poly *tmp_p;
+
+        /*---------------------------------------------------*
+	  first, get the lower boundary to be within range,
+	  pruning elements from the head of the list
+         *---------------------------------------------------*/
+  *af = *ac;
+#ifdef use_min
+  while ((*af) && (*af)->contour_max < z_min) {
+#else
+  while ((*af) && (*af)->contour_min > z_max) {
+#endif
+    *af = (*af)->next;
+  }
+
+        /*---------------------------------------------------*
+	  check to see if the upper boundary is still in
+	  range
+         *---------------------------------------------------*/
+#ifdef use_min
+  if ((*af) == NIL(poly) || ((*af)->contour_min > z_max)) {
+#else
+  if ((*af) == NIL(poly) || ((*af)->contour_max < z_min)) {
+#endif
+    /*   --- nope, it wasn't ---   */
+    *ac = *af;
+    *af = NIL(poly);
+    return(0);
+  }
+
+        /*---------------------------------------------------*
+	  upper boundary is okay...see if we need to add to
+	  the list on the lower bound side
+         *---------------------------------------------------*/
+  tmp_p = (*al)->next;
+  for (; tmp_p != NIL(poly); tmp_p = tmp_p->next) {
+#ifdef use_min
+    if (tmp_p->contour_min > z_max) return;
+#else
+    if (tmp_p->contour_max < z_min) return;
+#endif
+    *al = tmp_p;
+  }
+
+  return(1);
+
+}  /* maintain_active_list() */
+
+
+  /*=====================================================================*
+    add_segment(seg_list, index, seg)
+   *=====================================================================*/
+void
+add_segment(segment_list_struct * seg_list, int index, segment_struct * seg)
+{
+
+  segment_list_struct *sl;
+
+  sl = seg_list + index;
+
+  seg->next = sl->segments;
+  sl->segments = seg;
+  sl->num_segs++;
+
+}  /* add_segment() */
+
+
+  /*=====================================================================*
+    make_the_segment(pt1, pt2)
+   *=====================================================================*/
+segment_struct *
+make_the_segment(viewTriple * pt1, viewTriple * pt2)
+{
+  segment_struct *seg;
+  
+  seg = (segment_struct *)saymem("contour.c: segment",1,sizeof(segment_struct));
+  seg->point1 = pt1;
+  seg->point2 = pt2;
+
+  return(seg);
+
+}  /* make_the_segment() */
+
+
+  /*=====================================================================*
+    viewTriple *mkpoint(vt1, vt2, z_val)
+   *=====================================================================*/
+viewTriple *
+mkpoint(viewTriple * vt1, viewTriple * vt2, CONTOUR_float z_val)
+{
+
+  viewTriple *vt;
+  CONTOUR_float t;
+
+  vt = (viewTriple *)saymem("contour.c: viewTriple",1,sizeof(viewTriple));
+  
+  t = get_t_from_pts(vt1->contour_z, vt2->contour_z, z_val);
+
+#ifdef waitaminute
+  vt->x = vt1->contour_x + (vt2->contour_x - vt1->contour_x) * t;
+  vt->y = vt1->contour_y + (vt2->contour_y - vt1->contour_y) * t;
+  vt->z = z_val;
+#else
+  vt->x = vt1->x + (vt2->x - vt1->x) * t;
+  vt->y = vt1->y + (vt2->y - vt1->y) * t;
+  vt->z = vt1->z + (vt2->z - vt1->z) * t;
+#endif
+
+  vt->contour_x = vt1->contour_x + (vt2->contour_x - vt1->contour_x) * t;
+  vt->contour_y = vt1->contour_y + (vt2->contour_y - vt1->contour_y) * t;
+  vt->contour_z = z_val;
+
+  return(vt);
+
+}  /* mkpoint() */
+
+
+
+  /*=====================================================================*
+    get_t_from_pts(z_min, z_max, z_val)
+   *=====================================================================*/
+CONTOUR_float
+get_t_from_pts(CONTOUR_float z_min, CONTOUR_float  z_max, CONTOUR_float z_val)
+{
+  CONTOUR_float t;
+
+  if (z_min == z_max) return 0;
+  
+  t = (z_val - z_min)/(z_max - z_min);
+
+  return(t);
+}  /* get_t_from_pts() */
+
+
+void
+contour_minMaxPolygons(poly * aPoly)
+{
+
+  int *anIndex;
+  int i;
+
+
+  for (; aPoly != NIL(poly); aPoly = aPoly->next) {
+    anIndex = aPoly->indexPtr;
+    aPoly->contour_min = aPoly->contour_max = 
+      refPt3D(viewData,*anIndex)->contour_z;
+    for (i=1,anIndex++; i<aPoly->numpts; i++,anIndex++) {
+      if (refPt3D(viewData,*anIndex)->contour_z < aPoly->contour_min)
+        aPoly->contour_min = refPt3D(viewData,*anIndex)->contour_z;
+      else if (refPt3D(viewData,*anIndex)->contour_z > aPoly->contour_max)
+        aPoly->contour_max = refPt3D(viewData,*anIndex)->contour_z;
+    }
+  }
+
+
+}  /* contour_minMaxPolygons */
