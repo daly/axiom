@@ -64,8 +64,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
    assignTo, the font variable that will hold the font (globalFont)
    daFont,   the .Xdefault field name  ("buttonFont")
    daDefault, the default font (string) ("Rom12.500")
-   whichView, the .Xdefault prefix name ("view2D")
-   this is to be used in the files view2D/main.c and view3D/main.c where the
+   whichView, the .Xdefault prefix name ("view2d")
+   this is to be used in the files view2d/main.c and view3d/main.c where the
    appropriate variables are already defined
    */
 

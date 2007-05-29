@@ -31,8 +31,8 @@ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include "view2D.h"
-#include "view3D.h"
+#include "view2d.h"
+#include "view3d.h"
 
       /* Viewport Commands */
 #define makeViewport -1
@@ -47,4 +47,4 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 #include "com.h"
-#include "globalsM.h"
+#include "globalsm.h"

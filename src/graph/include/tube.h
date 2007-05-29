@@ -67,7 +67,7 @@ typedef struct _poly {
   int primitiveType;
   int *indexPtr;         /* the index referring to the offset from the
 			    beginning of the points field in the view3DStruct
-			    in view3D.h */
+			    in view3d.h */
   float N[3],planeConst,color;    /* planeConst - for plane equ'n, N has
 				     other 3 coeffs */
   float pxmin,pxmax,pymin,pymax,pzmin,pzmax;

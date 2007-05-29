@@ -45,7 +45,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 /* viewman's and viewAlone's refPt */
 #define refPt(v,x) ((v).points + (x))
-/* view3D's refPt - allows reference into new, dynamically generated points
+/* view3d's refPt - allows reference into new, dynamically generated points
    a function called traverse(n) is expected - it returns the nth point in
    the resevoir. note that x should be zero based (if numOfPoints is 10,
    then x=10 would access the first point on the resevoir list).

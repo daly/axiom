@@ -123,7 +123,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define graphStart3D  25  /* the index of g1 */
 #define graphSelectStart3D (graphStart3D+maxGraphs)
 
-/* these should be maxControlButtons3D+1.. (be sure to modify view3D.spad) */
+/* these should be maxControlButtons3D+1.. (be sure to modify view3d.spad) */
 #define diagOnOff            (maxControlButtons3D+1)
 #define perspectiveOnOff     (maxControlButtons3D+2)
 #define clipRegionOnOff      66
