@@ -7,13 +7,18 @@
 
 ;  (tangle "clweb.pamphlet" "<<*>>")  <== noweb syntax
 ;  (tangle "clweb.pamphlet "*")       <== latex syntax (default)
+;  (tangle "clweb.pamphlet" "clweb.chunk" "clweb.spadfile")
 
 ;;; tangle takes the name of a file and the chunk to expand
+;;; If the third argument is a string then it names the output file.
 ;;; 
-(defun tangle (filename topchunk)
+(defun tangle (filename topchunk &optional file)
   (setq *chunkhash* (make-hash-table :test #'equal))
   (gcl-hashchunks (gcl-read-file filename))
-  (gcl-expand topchunk))
+  (if (and file (stringp file))
+   (with-open-file (out file :direction :output)
+    (gcl-expand topchunk out))
+   (gcl-expand topchunk t)))
 
 ;;; gcl-read-file
 ;;;
@@ -73,14 +78,14 @@
 ;;; if a chunk name reference is encountered in a line we call expand
 ;;; recursively to expand the inner chunkname.
 
-(defun gcl-expand (chunk)
+(defun gcl-expand (chunk file)
  (let ((chunklist (gethash chunk *chunkhash*)) type name)
   (dolist (chunk (reverse chunklist))
    (dolist (line (reverse chunk))
     (multiple-value-setq (type name) (ischunk-latex line))
     (if (eq type 'refer) 
       (gcl-expand name)
-      (format t "~a~%" line))))))
+      (format file "~a~%" line))))))
 
 ;;; There is a built-in assumption (in the ischunk-* functions)
 ;;; that the chunks occur on separate lines and that the indentation
