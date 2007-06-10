@@ -11,14 +11,19 @@
 
 ;;; tangle takes the name of a file and the chunk to expand
 ;;; If the third argument is a string then it names the output file.
+
+;;; This routine looks at the first character of the chunk name.
+;;; If it is a $<$ character then we assume noweb syntax otherwise
+;;; we assume latex syntax.
 ;;; 
 (defun tangle (filename topchunk &optional file)
+ (let ((noweb (char= (schar topchunk 0) #\<)))
   (setq *chunkhash* (make-hash-table :test #'equal))
-  (gcl-hashchunks (gcl-read-file filename))
+  (gcl-hashchunks (gcl-read-file filename) noweb)
   (if (and file (stringp file))
    (with-open-file (out file :direction :output)
     (gcl-expand topchunk out))
-   (gcl-expand topchunk t)))
+   (gcl-expand topchunk t))))
 
 ;;; gcl-read-file
 ;;;
@@ -48,10 +53,15 @@
 ;;; each sublist is a single chunk of lines. 
 ;;; there is a new sublist for each reuse of the same chunkname
 
-(defun gcl-hashchunks (lines)
+;;; If the noweb argument is non-nil we assume that we are parsing
+;;; using the noweb syntax. A nil argument implies latex syntax.
+
+(defun gcl-hashchunks (lines noweb)
  (let (type name chunkname oldchunks chunk gather)
   (dolist (line lines)
-   (multiple-value-setq (type name) (ischunk-latex line))
+   (if noweb
+    (multiple-value-setq (type name) (ischunk-noweb line))
+    (multiple-value-setq (type name) (ischunk-latex line)))
    (cond
     ((eq type 'define)
       (setq chunkname name)
