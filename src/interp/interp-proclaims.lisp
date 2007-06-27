@@ -699,8 +699,6 @@
             BOOT::|d03faf| BOOT::|d03eef| BOOT::|d03edf|
             BOOT::|htSystemVariables| BOOT::|htSetVars|
             BOOT::|mkSetTitle| BOOT::|npCategory|
-            BOOT::PARSE-CONS_SEXPR BOOT::PARSE-SEXPR
-            BOOT::PARSE-REF_SEXPR BOOT::PARSE-EXPR2 BOOT::PARSE-EXPR1
             BOOT::|htsv| BOOT::|npDefinitionItem| BOOT::|npDefn|
             BOOT::|npMacro| BOOT::|npMDEFinition| BOOT::|npRule|
             BOOT::RESETHASHTABLES BOOT::READSPADEXPR
@@ -731,8 +729,8 @@
             BOOT::|f02axf| BOOT::|f02awf| BOOT::|f02akf| BOOT::|f02ajf|
             BOOT::|f02agf| BOOT::|htShowPageNoScroll| BOOT::|f02aff|
             BOOT::|f02aef| BOOT::|f02adf| BOOT::|f02abf| BOOT::|f02aaf|
-            BOOT::|measure| BOOT::|writeSaturnSuffix| BOOT::NEWRULE
-            BOOT::PARSE-LOCAL_VAR BOOT::|htErrorStar|
+            BOOT::|measure| BOOT::|writeSaturnSuffix| 
+            BOOT::|htErrorStar|
             BOOT::|queryClients| BOOT::|onDisk| BOOT::|endHTPage|
             BOOT::|readSpadProfileIfThere| BOOT::|bcDraw3Dpar1|
             BOOT::|bcDraw3Dpar| BOOT::|htShowPageStarSaturn|
@@ -842,17 +840,16 @@
             BOOT::|npSCategory| BOOT::|npPrimary| BOOT::|npState|
             BOOT::|npDefaultValue| BOOT::|npAssignVariableName|
             BOOT::|npPDefinition| BOOT::|npDollar|
-            BOOT::|npSQualTypelist| BOOT::PARSE-NON_DEST_REF
-            BOOT::PARSE-OPT_EXPR BOOT::PARSE-REPEATOR
-            BOOT::|npCategoryL| BOOT::PARSE-SEXPR_STRING
-            BOOT::|npProduct| BOOT::PARSE-TEST BOOT::|npIterators|
-            BOOT::PARSE-EXPR BOOT::|npWhile|
-            BOOT::|displayPreCompilationErrors| BOOT::PARSE-N_TEST
-            BOOT::|npForIn| BOOT::PARSE-REP_TEST BOOT::|npGives|
-            BOOT::PARSE-FIL_TEST BOOT::|npLogical| BOOT::PARSE-SUBEXPR
-            BOOT::|npExpress| BOOT::PARSE-FID BOOT::PARSE-RULE
-            BOOT::|npExpress1| BOOT::PARSE-HEADER
-            BOOT::|npCommaBackSet| BOOT::PARSE-RULE1 BOOT::|npQualType|
+            BOOT::|npSQualTypelist| 
+            BOOT::|npCategoryL| 
+            BOOT::|npProduct| BOOT::|npIterators|
+            BOOT::|npWhile|
+            BOOT::|displayPreCompilationErrors| 
+            BOOT::|npForIn| BOOT::|npGives|
+            BOOT::|npLogical| 
+            BOOT::|npExpress| 
+            BOOT::|npExpress1| 
+            BOOT::|npCommaBackSet|  BOOT::|npQualType|
             VMLISP:$TOTAL-GC-TIME BOOT::|npADD|
             BOOT::|npConditionalStatement|
             BOOT::|npQualifiedDefinition| BOOT::|npPushId|
@@ -934,10 +931,10 @@
             BOOT::|menuButton| BOOT::|htSaturnBreak| BOOT::|random|
             BOOT::|dbConsExposureMessage| BOOT::|mkSigPredVectors|
             BOOT::FIRST-ERROR BOOT::|writeSaturnPrefix| BOOT::|on|
-            BOOT::|offDisk| BOOT::|htBigSkip| BOOT::PARSE-PROGRAM
-            BOOT::IN-META BOOT::|traceReply| BOOT::|?t|
+            BOOT::|offDisk| BOOT::|htBigSkip| 
+            BOOT::|traceReply| BOOT::|?t|
             BOOT::SKIP-BLANKS BOOT::|pspacers| BOOT::NEXT-LINES-SHOW
-            BOOT::|resetCounters| BOOT::PARSE-DEST_REF
+            BOOT::|resetCounters| 
             BOOT::SPAD_SHORT_ERROR BOOT::|pcounters|
             BOOT::SPAD_LONG_ERROR BOOT::INIT-BOOT/SPAD-READER
             BOOT::NEXT-LINES-CLEAR BOOT::|resetTimers|
@@ -1675,7 +1672,7 @@
             BOOT::DECIMAL-LENGTH BOOT::|unabbrevAndLoad| BOOT::READLISP
             BOOT::|abbQuery| BOOT::SPAD-EVAL BOOT::/TRANSNBOOT
             BOOT::SPAD-MDTR-2 BOOT::SPAD-MDTR-1 BOOT::/TRANSPAD
-            BOOT::|setAutoLoadProperty| BOOT::/TRANSMETA
+            BOOT::|setAutoLoadProperty| 
             BOOT::|getConstructorUnabbreviation| BOOT::|getLisplibName|
             BOOT::OPTIMIZE&PRINT
             BOOT::|getPartialConstructorModemapSig| BOOT::UNCONS
@@ -2550,7 +2547,7 @@
             BOOT:|initializeSetVariables| BOOT::|inclmsgSay|
             BOOT::|inclmsgConStill| BOOT::|incStringStream|
             BOOT::|inclmsgConActive| BOOT:NUMOFNODES FOAM::TYPE2INIT
-            BOOT:TRANSPGVAR FOAM::FOAM-FUNCTION-INFO BOOT::|GetValue|
+            FOAM::FOAM-FUNCTION-INFO BOOT::|GetValue|
             BOOT::|hasToInfo| FOAM::INSERT-TYPES BOOT::|formatPred|
             BOOT::|chaseInferences,foo| BOOT::|liftCond|
             FOAM::FOAMPROGINFOSTRUCT-P BOOT::|formatInfo|
