@@ -324,6 +324,7 @@ database.
  (setq *operation-hash* (make-hash-table))
  (setq *allconstructors* nil)
  (setq *compressvector* nil)
+ (setq *sourcefiles* nil)
  (setq *compress-stream-stamp* '(0 . 0))
  (compressopen)
  (setq *interp-stream-stamp* '(0 . 0))
@@ -1107,7 +1108,6 @@ database.
     (|unloadOneConstructor| (get abbrev 'abbreviationfor) abbrev) )
   (|sayKeyedMsg| 'S2IU0001 (list key object))))))
 
-
 ; making new databases consists of:
 ;  1) reset all of the system hash tables
 ;  *) set up Union, Record and Mapping
@@ -1127,8 +1127,43 @@ database.
 ; critical. interp.daase depends on prior computations and has
 ; to be written out last.
 
+; the build-name-to-pamphlet-hash builds a hash table whose key->value is:
+;   abbreviation -> pamphlet file name
+;   abbreviation-line -> pamphlet file position
+;   constructor -> pamphlet file name
+;   constructor-line -> pamphlet file position
+; is the symbol of the constructor name and whose value is the name of
+; the source file without any path information. We  hash the 
+; constructor abbreviation to pamphlet file name.
+
 (defun make-databases (ext dirlist)
  (labels (
+  (build-name-to-pamphlet-hash (dir)
+   (let ((ht (make-hash-table)) (eof '(done))
+         point mark end abbrev name file)
+    (dolist (fn (directory dir))
+     (with-open-file (f fn)
+      (do ((ln (read-line f nil eof) (read-line f nil eof))
+           (line 0 (incf line)))
+          ((eq ln eof))
+     (when (search ")abb" ln)
+       (setq mark (position #\space ln :from-end t))
+       (setq name (intern (string-trim '(#\space) (subseq ln mark))))
+       (cond
+         ((setq mark (search "domain" ln)) (setq mark (+ mark 7)))
+         ((setq mark (search "package" ln)) (setq mark (+ mark 8)))
+         ((setq mark (search "category" ln)) (setq mark (+ mark 9))))
+       (setq point (position #\space ln :start (+ mark 1)))
+       (setq abbrev 
+        (intern (string-trim '(#\space) (subseq ln mark point))))
+       (setq ns (namestring fn))
+       (setq mark (position #\/ ns :from-end t))
+       (setq file (subseq ns (+ mark 1)))
+       (setf (gethash abbrev ht) file)
+       (setf (gethash (format nil "~a-line" abbrev) ht) line)
+       (setf (gethash name ht) file)
+       (setf (gethash (format nil "~a-line" name) ht) line)))))
+    ht))
     ;; these are types which have no library object associated with them.
     ;; we store some constructed data to make them perform like library
     ;; objects, the *operationalist-hash* key entry is used by allConstructors
@@ -1182,6 +1217,9 @@ database.
   (|browserAutoloadOnceTrigger|)
 #+:AKCL    (|mkTopicHashTable|)
   (setq |$constructorList| nil) ;; affects buildLibdb
+  (setq *sourcefiles* (build-name-to-pamphlet-hash 
+    (concatenate 'string (|getEnv| "AXIOM") 
+      "/../../src/algebra/*.spad.pamphlet")))
   (|buildLibdb|)
   (|dbSplitLibdb|)
 ; (|dbAugmentConstructorDataTable|)
@@ -1634,7 +1672,7 @@ time stamp at the top of the file and close the file.
    (let (struct)
     (setq struct (get constructor 'database))
      ; sourcefile is small. store the string directly
-    (setq src (database-sourcefile struct))
+    (setq src (gethash constructor *sourcefiles*))
     (setq formpos (file-position out))
     (print (squeeze (database-constructorform struct)) out)
     (finish-output out)
