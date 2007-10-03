@@ -1,6 +1,9 @@
 (in-package "BOOT")
 
-(defvar |StandardOutput| *standard-output*)
+(defun |Open| (path)
+  (si::open path :direction :input :if-exists nil :if-does-not-exist nil)
+  )
+
 
 (defvar  |NewLine| '#\NewLine)
 
