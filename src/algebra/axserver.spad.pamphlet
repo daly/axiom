@@ -2,7 +2,7 @@
 \usepackage{axiom}
 \begin{document}
 \title{\$SPAD/src/algebra axserver.spad}
-\author{Arthur C. Ralfs}
+\author{Arthur C. Ralfs, Timothy Daly}
 \maketitle
 \begin{abstract}
 The AxiomServer package is designed to provide a web interface
@@ -21,17 +21,35 @@ AxiomServer: public == private where
 
    axServer: (Integer, SExpression->Void) -> Void
    multiServ: SExpression -> Void
+   getDatabase: (String,String) -> String
 
  private == add
 
    getFile: (SExpression,String) -> Void
    getCommand: (SExpression,String) -> Void
+   getDescription: String -> String
+   getLisp: (SExpression,String) -> Void
+   getShow: (SExpression,String) -> Void
    lastStep: () -> String
    lastType: () -> String
    formatMessages: String -> String
+   makeErrorPage: String -> String
+   getSourceFile: (String,String,String) -> String
+   makeDBPage: String -> String
    getContentType: String -> String
+   readTheFile: SExpression -> String 
+   outputToSocket: (SExpression,String,String) -> Void 
 
+   getDatabase(constructor:String, key:String):String ==
+     answer:=string GETDATABASE(INTERN$Lisp constructor,INTERN$Lisp key)$Lisp
+     WriteLine$Lisp concat ["getDatabase: ",constructor," ",key," ",answer]
+     answer
 
+@
+The axServer function handles the socket connection on the given port.
+When it gets a input on the socket it calls the server
+function on the socket input.
+<<package AXSERV AxiomServer>>=
    axServer(port:Integer,serverfunc:SExpression->Void):Void ==
      WriteLine("socketServer")$Lisp
      s := SiSock(port,serverfunc)$Lisp
@@ -44,66 +62,255 @@ AxiomServer: public == private where
          serverfunc(w)
 --        i := 0
 
+@
+The multiServ function parses the socket input.
+It expects either a GET or POST request.
+
+A GET request fetches a new page, calling ``getFile''.
+A POST request starts with 
+\begin{itemize}
+\item ``command='' which expects axiom interpreter commands. 
+       When this is recognized we call the ``getCommand'' function.
+\item ``lispcall='' which expects lisp interpreter input
+       When this is recognized we call the ``getLisp'' function.
+\end{itemize}
+<<package AXSERV AxiomServer>>=
+
    multiServ(s:SExpression):Void ==
-         WriteLine("multiServ begin")$Lisp
-         headers:String := ""
-         char:String
-         -- read in the http headers
-         while (char := STRING(READ_-CHAR_-NO_-HANG(s,NIL$Lisp,'EOF)$Lisp)$Lisp) ^= "EOF" repeat
-             headers := concat [headers,char]
-         sayTeX$Lisp headers
-         StringMatch("([^ ]*)", headers)$Lisp
+     WriteLine("multiServ begin")$Lisp
+     headers:String := ""
+     char:String
+     -- read in the http headers
+     while (char := _
+       STRING(READ_-CHAR_-NO_-HANG(s,NIL$Lisp,'EOF)$Lisp)$Lisp) ^= "EOF"_
+        repeat
+         headers := concat [headers,char]
+     sayTeX$Lisp headers
+     StringMatch("([^ ]*)", headers)$Lisp
+     u:UniversalSegment(Integer)
+     u := segment(MatchBeginning(1)$Lisp+1,_
+                  MatchEnd(1)$Lisp)$UniversalSegment(Integer)
+     reqtype:String := headers.u
+     sayTeX$Lisp  concat ["request type: ",reqtype]
+     if  reqtype = "GET" then
+         StringMatch("GET ([^ ]*)",headers)$Lisp
          u:UniversalSegment(Integer)
-         u := segment(MatchBeginning(1)$Lisp+1,MatchEnd(1)$Lisp)$UniversalSegment(Integer)
-         reqtype:String := headers.u
-         sayTeX$Lisp  concat ["request type: ",reqtype]
-         if  reqtype = "GET" then
-             StringMatch("GET ([^ ]*)",headers)$Lisp
-             u:UniversalSegment(Integer)
-             u := segment(MatchBeginning(1)$Lisp+1,MatchEnd(1)$Lisp)$UniversalSegment(Integer)
-             getFile(s,headers.u)
-         if reqtype = "POST" then
-             StringMatch("command=(.*)$",headers)$Lisp
-             u:UniversalSegment(Integer)
-             u := segment(MatchBeginning(1)$Lisp+1,MatchEnd(1)$Lisp)$UniversalSegment(Integer)
-             getCommand(s,headers.u)
-         WriteLine("multiServ end")$Lisp
-         WriteLine("")$Lisp
+         u := segment(MatchBeginning(1)$Lisp+1,_
+                      MatchEnd(1)$Lisp)$UniversalSegment(Integer)
+         getFile(s,headers.u)
+     if reqtype = "POST" and StringMatch("command=(.*)$",headers)$Lisp > 0
+      then
+         u:UniversalSegment(Integer)
+         u := segment(MatchBeginning(1)$Lisp+1,_
+                      MatchEnd(1)$Lisp)$UniversalSegment(Integer)
+         getCommand(s,headers.u)
+     if reqtype = "POST" and StringMatch("lispcall=(.*)$",headers)$Lisp > 0
+      then
+         u:UniversalSegment(Integer)
+         u := segment(MatchBeginning(1)$Lisp+1,_
+                      MatchEnd(1)$Lisp)$UniversalSegment(Integer)
+         getLisp(s,headers.u)
+     if reqtype = "POST" and StringMatch("showcall=(.*)$",headers)$Lisp > 0
+      then
+         u:UniversalSegment(Integer)
+         u := segment(MatchBeginning(1)$Lisp+1,_
+                      MatchEnd(1)$Lisp)$UniversalSegment(Integer)
+         getShow(s,headers.u)
+     WriteLine("multiServ end")$Lisp
+     WriteLine("")$Lisp
 
+@
+\subsection{getFile}
+Given a socket and the URL of the file we create an input stream 
+that contains the file. If the filename contains a question mark
+then we need to parse the parameters and dynamically construct the
+file contents.
+<<package AXSERV AxiomServer>>=
    getFile(s:SExpression,pathvar:String):Void ==
-       WriteLine("")$Lisp
-       WriteLine("getFile")$Lisp
-       if not null? PATHNAME_-NAME(PATHNAME(pathvar)$Lisp)$Lisp then
-       -- display contents of file
-       --first determine Content-Type from file extension
-           contentType:String := getContentType(pathvar)
-           q:=Open(pathvar)$Lisp
-           if null? q then
-             q := MAKE_-STRING_-INPUT_-STREAM("File doesn't exist")$Lisp
-             WriteLine("File does not exist.")$Lisp
+     WriteLine("")$Lisp
+     WriteLine$Lisp concat ["getFile: ",pathvar]
+     params:=split(pathvar,char "?")
+     if #params = 1 
+      then if not null? PATHNAME_-NAME(PATHNAME(pathvar)$Lisp)$Lisp 
+       then
+         contentType:String := getContentType(pathvar)
+         q:=Open(pathvar)$Lisp
+         if null? q 
+           then
+             q := MAKE_-STRING_-INPUT_-STREAM(_
+                   makeErrorPage("File doesn't exist"))$Lisp
        else
-           q:=MAKE_-STRING_-INPUT_-STREAM("Problem with file path")$Lisp
-       file:String := ""
-       WriteLine("begin reading file")$Lisp
-       r := MAKE_-STRING_-OUTPUT_-STREAM()$Lisp
-       SiCopyStream(q,r)$Lisp
-       filestream:String := GET_-OUTPUT_-STREAM_-STRING(r)$Lisp
-       CLOSE(r)$Lisp
-       CLOSE(q)$Lisp
-       WriteLine("end reading file")$Lisp
-       filelength:String := string(#filestream)
-       file := concat ["Content-Length: ",filelength,STRING(NewLine$Lisp)$Lisp,STRING(NewLine$Lisp)$Lisp,file]
-       file := concat ["Connection: close",STRING(NewLine$Lisp)$Lisp,file]
-       file := concat ["Content-Type: ",contentType,STRING(NewLine$Lisp)$Lisp,file]
-       file := concat ["HTTP/1.1 200 OK",STRING(NewLine$Lisp)$Lisp,file]
-       file := concat [file,filestream]
-       f:=MAKE_-STRING_-INPUT_-STREAM(file)$Lisp
-       SiCopyStream(f,s)$Lisp
-       CLOSE(f)$Lisp
-       CLOSE(s)$Lisp
-       WriteLine("getFile end")$Lisp
-       WriteLine("")$Lisp
+         q:=MAKE_-STRING_-INPUT_-STREAM(_
+             makeErrorPage("Problem with file path"))$Lisp
+      else
+       q:=MAKE_-STRING_-INPUT_-STREAM(makeDBPage(pathvar))$Lisp
+     outputToSocket(s,readTheFile(q),contentType)     
 
+@
+\subsection{makeErrorPage}
+<<package AXSERV AxiomServer>>=
+   makeErrorPage(msg:String):String ==
+     page:String:="<!DOCTYPE html PUBLIC "
+     page:=page "_"-//W3C//DTD XHTML 1.0 Strict//EN_" "
+     page:=page "_"http://www.w3.org/TR/xthml1/DTD/xhtml1-strict.dtd_">"
+     page:=page "<html xmlns=_"http://www.w3.org/1999/xhtml_">"
+     page:=page "<head><title>Error</title></head><body>" msg "</body></html>"
+     WriteLine(page)$Lisp
+     page
+@
+\subsection{getDescription}
+We need to fish around in the data structure to return the piece of 
+documentation for the domain. We have to call the lisp version of
+GETDATABASE because the version above returns a string object. The
+string object is missing quotes and cannot be properly read. So we
+need to get the lisp object and work with it in native form first.
+
+The doc string also contains spad markup which we need to replace with html.
+<<package AXSERV AxiomServer>>=
+   getDescription(dom:String):String ==
+    d:=CADR(CADAR(GETDATABASE(INTERN(dom)$Lisp,'DOCUMENTATION)$Lisp)$Lisp)$Lisp
+    string d
+@
+\subsection{getSourceFile}
+During build we construct a hash table that takes the chunk name as
+the key and returns the filename. We reconstruct the chunk name here
+and do a lookup for the source file.
+<<package AXSERV AxiomServer>>=
+   getSourceFile(constructorkind:String,_
+                 abbreviation:String,_
+                 dom:String):String ==
+     sourcekey:="@<<" constructorkind " " abbreviation " " dom ">>"
+     WriteLine(sourcekey)$Lisp
+     sourcefile:=lowerCase last split(getDatabase(dom,"SOURCEFILE"),char "/") 
+     sourcefile:=sourcefile ".pamphlet"
+
+@
+\subsection{makeDBPage}
+<<package AXSERV AxiomServer>>=
+   makeDBPage(pathvar:String):String ==
+     params:=split(pathvar,char "?")
+     args:=split(params.2, char "&")
+     dom:=args.1
+     domi:=INTERN(dom)$Lisp
+     -- category, domain, or package?
+     constructorkind:=getDatabase(dom,"CONSTRUCTORKIND")
+     abbreviation:=getDatabase(dom, "ABBREVIATION")
+     sourcefile:=getDatabase(dom, "SOURCEFILE")
+     constructorkind.1:=upperCase constructorkind.1
+     description:=getDescription(dom)
+     page:String:="<!DOCTYPE html PUBLIC "
+     page:=page "_"-//W3C//DTD XHTML 1.0 Strict//EN_" "
+     page:=page "_"http://www.w3.org/TR/xthml1/DTD/xhtml1-strict.dtd_">"
+     page:=page "<html xmlns=_"http://www.w3.org/1999/xhtml_">"
+     page:=page "<head>"
+     page:=page "<meta http-equiv=_"Content-Type_" content=_"text/html_"" 
+     page:=page " charset=_"us-ascii_"/>"
+     page:=page "<title>" constructorkind " " dom "</title></head>"
+     page:=page "<style> html { background-color: #FFFF66; } </style>"
+     page:=page "<body>"
+     page:=page "<div align=_"center_">"
+     page:=page "<img align=_"middle_" src=_"doctitle.png_"/></div><hr/>"
+     page:=page "<div align=_"center_">" constructorkind " " dom "</div><hr/>"
+     page:=page "<table>"
+     page:=page "<tr><td valign=_"top_">Description:  </td>"
+     page:=page "<td>" description  "</td></tr>"
+     page:=page "<tr><td>Abbreviation: </td><td>" abbreviation "</td></tr>"
+     page:=page "<tr><td>Source File:  </td><td>" sourcefile   "</td></tr>"
+     page:=page "</table><hr/>"
+     page:=page "<table>"
+     page:=page "<tr>"
+     page:=page "<td>"
+     page:=page "<a href=_"?" dom "&lookup=Ancestors_">Ancestors</a>"
+     page:=page "</td>"
+     page:=page "<td>"
+     page:=page "<a href=_"?" dom "&lookup=Dependents_">Dependents</a>"
+     page:=page "</td>"
+     page:=page "<td>"
+     page:=page "<a href=_"?" dom "&lookup=Exports_">Exports</a>"
+     page:=page "</td>"
+     page:=page "<td>"
+     page:=page "<a href=_"?" dom "&lookup=Parents_">Parents</a>"
+     page:=page "</td>"
+     page:=page "<td>"
+     page:=page "<a href=_"?" dom "&lookup=Users_">Users</a>"
+     page:=page "</td>"
+     page:=page "</tr>"
+     page:=page "<tr>"
+     page:=page "<td>"
+     page:=page "<a href=_"?" dom "&lookup=Attributes_">Attributes</a>"
+     page:=page "</td>"
+     page:=page "<td>"
+     page:=page "<a href=_"?" dom "&lookup=Examples_">Examples</a>"
+     page:=page "</td>"
+     page:=page "<td>"
+     page:=page "<a href=_"?" dom "&lookup=Operations_">Operations</a>"
+     page:=page "</td>"
+     page:=page "<td>"
+     page:=page "<a href=_"?" dom "&lookup=SearchPath_">Search Path</a>"
+     page:=page "</td>"
+     page:=page "<td>"
+     page:=page "<a href=_"?" dom "&lookup=Uses_">Uses</a>"
+     page:=page "</td>"
+     page:=page "</tr>"
+     page:=page "</table>"
+     page:=page "</body></html>"
+--     WriteLine(page)$Lisp
+     page
+@
+\subsection{readTheFile}
+We have q which is a stream which contains the file. We read the file
+into a string-stream to get it all into one string. We return the string.
+<<package AXSERV AxiomServer>>=
+   readTheFile(q:SExpression):String ==
+     WriteLine("begin reading file")$Lisp
+     r := MAKE_-STRING_-OUTPUT_-STREAM()$Lisp
+     SiCopyStream(q,r)$Lisp
+     filestream:String := GET_-OUTPUT_-STREAM_-STRING(r)$Lisp
+     CLOSE(r)$Lisp
+     CLOSE(q)$Lisp
+     WriteLine("end reading file")$Lisp
+     filestream
+
+@
+\subsection{outputToSocket}
+We have ``s'' which is the socket, ``filestream'' which is the text of
+the file to output, and ``contentType'' which is the HTML Content-Type.
+We construct the HTML header information according to the standard and
+prepend it to the file. The resulting string is output to the socket.
+<<package AXSERV AxiomServer>>=
+   outputToSocket(s:SExpression,filestream:String,contentType:String):Void ==
+     filelength:String := string(#filestream)
+     file:String := ""
+     nl:String:=STRING(NewLine$Lisp)$Lisp
+     file := concat ["Content-Length: ",filelength,nl,nl,file]
+     file := concat ["Connection: close",nl,file]
+     file := concat ["Content-Type: ",contentType,nl,file]
+     file := concat ["HTTP/1.1 200 OK",nl,file]
+     file := concat [file,filestream]
+     WriteLine(file)$Lisp
+     f:=MAKE_-STRING_-INPUT_-STREAM(file)$Lisp
+     SiCopyStream(f,s)$Lisp
+     CLOSE(f)$Lisp
+     CLOSE(s)$Lisp
+
+@
+\subsection{getCommand}
+The getCommand function is invoked when the HTTP request is a POST
+and contains the string "command". Essentially the game here is
+to rebind the various output streams used by Axiom so we can
+capture the normal output. This function returns a set of HTML 5 div
+blocks:
+\begin{enumerate}
+\item stepnum, the value of lastStep()
+\item command, the value of the  command variable
+\item algebra, the value of the algebra variable
+\item mathml, the value of the mathml variable
+\item type, the value of lastType()
+\end{enumerate}
+The HTML functions in the hyperdoc browser depend on the order
+of these variables so do not change this without changing the
+corresponding functions in the browser HTML.
+<<package AXSERV AxiomServer>>=
    getCommand(s:SExpression,command:String):Void ==
        WriteLine$Lisp concat ["getCommand: ",command]
        SETQ(tmpmathml$Lisp, MAKE_-STRING_-OUTPUT_-STREAM()$Lisp)$Lisp
@@ -112,34 +319,32 @@ AxiomServer: public == private where
        SETQ(savealgebra$Lisp, _$algebraOutputStream$Lisp)$Lisp
        SETQ(_$texOutputStream$Lisp,tmpmathml$Lisp)$Lisp
        SETQ(_$algebraOutputStream$Lisp,tmpalgebra$Lisp)$Lisp
---      parseAndInterpret$Lisp command
---      parseAndEvalStr$Lisp command
--- The previous two commands don't exit nicely when a syntactically incorrect command is
--- given to them.  They somehow need to be wrapped in CATCH statements but I haven't
--- figured out how to do this.  parseAndEvalToStringEqNum  uses the following CATCH
--- statements to call parseAndEvalStr but when I try these they don't work.  I get a
--- "NIL is not a valid identifier to use in AXIOM" message. Using parseAndEvalToStringEqNum
--- works and doesn't crash on a syntax error.
---        v := CATCH('SPAD__READER, CATCH('top__level, parseAndEvalStr$Lisp command)$Lisp)$Lisp
---        v = 'restart => ['"error"]
        ans := string parseAndEvalToStringEqNum$Lisp command
-       SETQ(resultmathml$Lisp,GET_-OUTPUT_-STREAM_-STRING(_$texOutputStream$Lisp)$Lisp)$Lisp
-       SETQ(resultalgebra$Lisp,GET_-OUTPUT_-STREAM_-STRING(_$algebraOutputStream$Lisp)$Lisp)$Lisp
+       SETQ(resultmathml$Lisp,_
+            GET_-OUTPUT_-STREAM_-STRING(_$texOutputStream$Lisp)$Lisp)$Lisp
+       SETQ(resultalgebra$Lisp,_
+            GET_-OUTPUT_-STREAM_-STRING(_$algebraOutputStream$Lisp)$Lisp)$Lisp
        SETQ(_$texOutputStream$Lisp,savemathml$Lisp)$Lisp
        SETQ(_$algebraOutputStream$Lisp,savealgebra$Lisp)$Lisp
        CLOSE(tmpmathml$Lisp)$Lisp
        CLOSE(tmpalgebra$Lisp)$Lisp
        -- Since strings returned from axiom are going to be displayed in html I
        -- should really check for the characters &,<,> and replace them with
-       -- &amp;,&lt;,&gt;.  At present I only check for ampersands in formatMessages.
+       -- &amp;,&lt;,&gt;.  
+       -- At present I only check for ampersands in formatMessages.
        mathml:String := string(resultmathml$Lisp)
        algebra:String := string(resultalgebra$Lisp)
        algebra := formatMessages(algebra)
        -- At this point mathml contains the mathml for the output but does not
-       -- include step number or type information.  We should also save the command.
+       -- include step number or type information.  
+       -- We should also save the command.
        -- I get the type and step number from the $internalHistoryTable
---       axans:String := concat ["<div><div class=_"command_">(",lastStep(),") -> ",command,"</div><div class=_"algebra_">",algebra,"</div><div class=_"mathml_">",mathml,"</div><div class=_"type_">Type: ",lastType(),"</div></div>"]
-       axans:String := concat ["<div class=_"stepnum_">", lastStep(), "</div><div class=_"command_">", command, "</div><div class=_"algebra_">",algebra,"</div><div class=_"mathml_">",mathml,"</div><div class=_"type_">",lastType(),"</div>"]       
+       axans:String := _
+         concat ["<div class=_"stepnum_">", lastStep(), "</div>_
+                  <div class=_"command_">", command, "</div>_
+                  <div class=_"algebra_">",algebra,"</div>_
+                  <div class=_"mathml_">",mathml,"</div>_
+                  <div class=_"type_">",lastType(),"</div>"]       
        WriteLine$Lisp concat ["mathml answer: ",mathml]
        WriteLine$Lisp concat ["algebra answer: ",algebra]
        q:=MAKE_-STRING_-INPUT_-STREAM(axans)$Lisp
@@ -148,18 +353,119 @@ AxiomServer: public == private where
        CLOSE(s)$Lisp
 
 
-   lastType():String ==
---  The last history entry is the first item in the $internalHistoryTable list so
---  car(_$internalHistoryTable$Lisp) selects it.  Here's an example:
---  (3 (x+y)**3 (% (value (Polynomial (Integer)) WRAPPED 1 y (3 0 . 1) (2 1 x (1 0 . 3)) (1 1 x (2 0 . 3)) (0 1 x (3 0 . 1)))))
---  This corresponds to the input "(x+y)**3" being issued as the third command after
---  starting axiom.  The following line selects the type information.
-       string car(cdr(car(cdr(car(cdr(cdr(car(_$internalHistoryTable$Lisp)$Lisp)$Lisp)$Lisp)$Lisp)$Lisp)$Lisp)$Lisp)$Lisp
+@
+\subsection{getLisp}
+The getLisp function is invoked when the HTTP request is a POST
+and contains the string "lispcall".
+<<package AXSERV AxiomServer>>=
+   getLisp(s:SExpression,command:String):Void ==
+       WriteLine$Lisp concat ["getLisp: ",command]
+       evalresult:=EVAL(READ_-FROM_-STRING(command)$Lisp)$Lisp
+       mathml:String:=string(evalresult)
+       WriteLine$Lisp concat ["getLisp: after ",mathml]
+       WriteLine$Lisp concat ["getLisp output: ",mathml]
+       SETQ(tmpalgebra$Lisp, MAKE_-STRING_-OUTPUT_-STREAM()$Lisp)$Lisp
+       SETQ(savemathml$Lisp, _$texOutputStream$Lisp)$Lisp
+       SETQ(savealgebra$Lisp, _$algebraOutputStream$Lisp)$Lisp
+       SETQ(_$texOutputStream$Lisp,tmpmathml$Lisp)$Lisp
+       SETQ(_$algebraOutputStream$Lisp,tmpalgebra$Lisp)$Lisp
+       SETQ(resultalgebra$Lisp,_
+            GET_-OUTPUT_-STREAM_-STRING(_$algebraOutputStream$Lisp)$Lisp)$Lisp
+       SETQ(_$texOutputStream$Lisp,savemathml$Lisp)$Lisp
+       SETQ(_$algebraOutputStream$Lisp,savealgebra$Lisp)$Lisp
+       CLOSE(tmpalgebra$Lisp)$Lisp
+       -- Since strings returned from axiom are going to be displayed in html I
+       -- should really check for the characters &,<,> and replace them with
+       -- &amp;,&lt;,&gt;.  
+       -- At present I only check for ampersands in formatMessages.
+       algebra:String := string(resultalgebra$Lisp)
+       algebra := formatMessages(algebra)
+       -- At this point mathml contains the mathml for the output but does not
+       -- include step number or type information.  
+       -- We should also save the command.
+       -- I get the type and step number from the $internalHistoryTable
+       axans:String := _
+        concat ["<div class=_"stepnum_">", lastStep(), "</div>_
+                 <div class=_"command_">", command, "</div>_
+                 <div class=_"algebra_">",algebra,"</div>_
+                 <div class=_"mathml_">",mathml,"</div>_
+                 <div class=_"type_">",lastType(),"</div>"]       
+       WriteLine$Lisp concat ["mathml answer: ",mathml]
+       WriteLine$Lisp concat ["algebra answer: ",algebra]
+       q:=MAKE_-STRING_-INPUT_-STREAM(axans)$Lisp
+       SiCopyStream(q,s)$Lisp
+       CLOSE(q)$Lisp
+       CLOSE(s)$Lisp
 
+@
+\subsection{getShow}
+The getShow function is invoked when the HTTP request is a POST
+and contains the string "showcall". The )show command generates
+output to lisp's *standard-output* so we wrap that stream to capture it.
+The resulting string needs to be transformed into html-friendly form.
+This is done in the call to replace-entitites (see http.lisp)
+<<package AXSERV AxiomServer>>=
+   getShow(s:SExpression,showarg:String):Void ==
+       WriteLine$Lisp concat ["getShow: ",showarg]
+       realarg:=SUBSEQ(showarg,6)$Lisp
+       show:=_
+        "(progn (setq |$options| '((|operations|))) (|show| '|" realarg "|))"
+       WriteLine$Lisp concat ["getShow: ",show]
+       SETQ(SAVESTREAM$Lisp,_*STANDARD_-OUTPUT_*$Lisp)$Lisp
+       SETQ(_*STANDARD_-OUTPUT_*$Lisp,_
+             MAKE_-STRING_-OUTPUT_-STREAM()$Lisp)$Lisp
+       evalresult:=EVAL(READ_-FROM_-STRING(show)$Lisp)$Lisp
+       SETQ(evalresult,_
+             GET_-OUTPUT_-STREAM_-STRING(_*STANDARD_-OUTPUT_*$Lisp)$Lisp)$Lisp
+       SETQ(_*STANDARD_-OUTPUT_*$Lisp,SAVESTREAM$Lisp)$Lisp
+       mathml:String:=string(REPLACE_-ENTITIES(evalresult)$Lisp)
+       SETQ(tmpalgebra$Lisp, MAKE_-STRING_-OUTPUT_-STREAM()$Lisp)$Lisp
+       SETQ(savemathml$Lisp, _$texOutputStream$Lisp)$Lisp
+       SETQ(savealgebra$Lisp, _$algebraOutputStream$Lisp)$Lisp
+       SETQ(_$texOutputStream$Lisp,tmpmathml$Lisp)$Lisp
+       SETQ(_$algebraOutputStream$Lisp,tmpalgebra$Lisp)$Lisp
+       SETQ(resultalgebra$Lisp,_
+            GET_-OUTPUT_-STREAM_-STRING(_$algebraOutputStream$Lisp)$Lisp)$Lisp
+       SETQ(_$texOutputStream$Lisp,savemathml$Lisp)$Lisp
+       SETQ(_$algebraOutputStream$Lisp,savealgebra$Lisp)$Lisp
+       CLOSE(tmpalgebra$Lisp)$Lisp
+       -- Since strings returned from axiom are going to be displayed in html I
+       -- should really check for the characters &,<,> and replace them with
+       -- &amp;,&lt;,&gt;.  
+       -- At present I only check for ampersands in formatMessages.
+       algebra:String := string(resultalgebra$Lisp)
+       algebra := formatMessages(algebra)
+       -- At this point mathml contains the mathml for the output but does not
+       -- include step number or type information.  
+       -- We should also save the command.
+       -- I get the type and step number from the $internalHistoryTable
+       axans:String := _
+        concat ["<div class=_"stepnum_">", lastStep(), "</div>_
+                 <div class=_"command_">", showarg, "</div>_
+                 <div class=_"algebra_">",algebra,"</div>_
+                 <div class=_"mathml_">",mathml,"</div>_
+                 <div class=_"type_">",lastType(),"</div>"]       
+       WriteLine$Lisp concat ["mathml answer: ",mathml]
+       q:=MAKE_-STRING_-INPUT_-STREAM(axans)$Lisp
+       SiCopyStream(q,s)$Lisp
+       CLOSE(q)$Lisp
+       CLOSE(s)$Lisp
+
+
+   lastType():String ==
+--  The last history entry is the first item in the $internalHistoryTable 
+--  list so car(_$internalHistoryTable$Lisp) selects it.  Here's an example:
+--  (3 (x+y)**3 (% (value (Polynomial (Integer)) 
+--  WRAPPED 1 y (3 0 . 1) (2 1 x (1 0 . 3)) (1 1 x (2 0 . 3))
+--  (0 1 x (3 0 . 1)))))
+--  This corresponds to the input "(x+y)**3" being issued as the third 
+--  command after starting axiom.  
+-- The following line selects the type information.
+       string car(cdr(car(cdr(car(cdr(cdr(car(_$internalHistoryTable$Lisp)_
+         $Lisp)$Lisp)$Lisp)$Lisp)$Lisp)$Lisp)$Lisp)$Lisp
 
    lastStep():String ==
        string car(car(_$internalHistoryTable$Lisp)$Lisp)$Lisp
-
 
    formatMessages(str:String):String ==
        WriteLine("formatMessages")$Lisp
@@ -193,7 +499,8 @@ AxiomServer: public == private where
        -- need to test for successful match?
        StringMatch(".*\.(.*)$", pathvar)$Lisp
        u:UniversalSegment(Integer)
-       u := segment(MatchBeginning(1)$Lisp+1,MatchEnd(1)$Lisp)$UniversalSegment(Integer)
+       u := segment(MatchBeginning(1)$Lisp+1,_
+                    MatchEnd(1)$Lisp)$UniversalSegment(Integer)
        extension:String := pathvar.u
        WriteLine$Lisp concat ["file extension: ",extension]
        -- test for extensions: html, htm, xml, xhtml, js, css
