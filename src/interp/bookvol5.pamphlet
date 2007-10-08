@@ -962,99 +962,65 @@ SpadInterpretStream(str, source, interactive?) ==
 @
 \section{The Read-Eval-Print Loop}
 \subsection{defun intloopReadConsole}
-\begin{verbatim}
-intloopReadConsole(b, n)==
-    a:= serverReadLine(_*STANDARD_-INPUT_*)
-    not STRINGP a => leaveScratchpad()
-    #a=0 =>
-             PRINC(MKPROMPT())
-             intloopReadConsole('"", n)
-    $DALYMODE and intloopPrefix?('"(",a) =>
-            intnplisp(a)
-            PRINC(MKPROMPT())
-            intloopReadConsole('"",n)
-    pfx := stripSpaces intloopPrefix?('")fi",a)
-    pfx and ((pfx = '")fi") or (pfx = '")fin")) => []
-    b = '"" and (d := intloopPrefix?('")", a)) =>
-             setCurrentLine d
-             c := ncloopCommand(d,n)
-             PRINC(MKPROMPT())
-             intloopReadConsole('"", c)
-    a:=CONCAT(b,a)
-    ncloopEscaped a => intloopReadConsole(SUBSEQ(a, 0, (LENGTH a) - 1),n)
-    c := intloopProcessString(a, n)
-    PRINC(MKPROMPT())
-    intloopReadConsole('"", c)
-\end{verbatim}
+Note that this function relies on the fact that lisp can do tail-recursion.
+The function recursively invokes itself.
+
+The serverReadLine function is a special readline function that handles
+communication with the session manager code, which is a separate process
+running in parallel. 
+
+We read a line from standard input.
+\begin{itemize}
+\item If it is a null line then we exit Axiom.
+\item If it is a zero length line we prompt and recurse
+\item If \$dalymode and open-paren we execute lisp code, prompt and recurse
+The \$dalymode will interpret any input that begins with an open-paren
+as a lisp expression rather than Axiom input. This is useful for debugging
+purposes when most of the input lines will be lisp. Setting \$dalymode
+non-nil will certainly break user expectations and is to be used with 
+caution.
+\item If it is ``)fi'' or ``)fin'' we drop into lisp. Use the (restart)
+      function to return to the interpreter loop.
+\item If it starts with ``)'' we process the command, prompt, and recurse
+\item If it is a command then we remember the current line, process the
+      command, prompt, and recurse.
+\item If the input has a trailing underscore (Axiom line-continuation)
+      then we cut off the continuation character and pass the truncated
+      string to ourselves, prompt, and recurse
+\item otherwise we process the input, prompt, and recurse.
+\end{itemize}
+Notice that all but two paths (a null input or a ``)fi'' or a ``)fin'')
+will end up as a recursive call to ourselves.
 <<defun intloopReadConsole>>=
 (defun |intloopReadConsole| (b n) 
- (prog (c d pfx a) 
-  (declare (special $dalymode)) 
-   (return 
-    (progn 
-     (setq a (|serverReadLine| *standard-input*)) 
-     (cond 
-      ((null (stringp a)) 
-        (|leaveScratchpad|)) 
-      ((eql (length a) 0) 
-        (progn 
-          (princ (mkprompt)) 
-          (|intloopReadConsole| "" n))) 
-      ((and $dalymode (|intloopPrefix?| "(" a)) 
-        (progn 
-          (|intnplisp| a) 
-          (princ (mkprompt)) 
-          (|intloopReadConsole| "" n))) 
-      (t
-       (progn 
-        (setq pfx (|stripSpaces| (|intloopPrefix?| ")fi" a))) 
-        (cond 
-         ((and pfx (or (equal pfx ")fi") (equal pfx ")fin"))) 
-           nil) 
-         ((and (equal b "") (setq d (|intloopPrefix?| ")" a))) 
-           (progn 
-             (|setCurrentLine| d) 
-             (setq c (|ncloopCommand| d n)) 
-             (princ (mkprompt)) 
-             (|intloopReadConsole| "" c))) 
-         (t 
-           (progn 
-             (setq a (concat b a)) 
-             (cond 
-              ((|ncloopEscaped| a) 
-                (|intloopReadConsole| (subseq a 0 (- (length a) 1)) n)) 
-              (t 
-                (progn 
-                  (setq c (|intloopProcessString| a n)) 
-                  (princ (mkprompt)) 
-                  (|intloopReadConsole| "" c))))))))))))))
+ (declare (special $dalymode)) 
+ (let (c d pfx input) 
+   (setq input (|serverReadLine| *standard-input*)) 
+   (when (null (stringp input)) (|leaveScratchpad|)) 
+   (when (eql (length input) 0) 
+     (princ (mkprompt)) 
+     (|intloopReadConsole| "" n))
+   (when (and $dalymode (|intloopPrefix?| "(" input))
+     (|intnplisp| input) 
+     (princ (mkprompt)) 
+     (|intloopReadConsole| "" n))
+   (setq pfx (|intloopPrefix?| ")fi" input))
+   (when (and pfx (or (string= pfx ")fi") (string= pfx ")fin")))
+     (throw '|top-level| nil))
+   (when (and (equal b "") (setq d (|intloopPrefix?| ")" input)))
+     (|setCurrentLine| d) 
+     (setq c (|ncloopCommand| d n)) 
+     (princ (mkprompt)) 
+     (|intloopReadConsole| "" c))
+   (setq input (concat b input)) 
+   (when (|ncloopEscaped| input) 
+     (|intloopReadConsole| (subseq input 0 (- (length input) 1)) n))
+   (setq c (|intloopProcessString| input n)) 
+   (princ (mkprompt)) 
+   (|intloopReadConsole| "" c)))
 
 @
 \section{Helper Functions}
-\subsection{defun reclaim}
-Call the garbage collector on various platforms.
-<<defun reclaim>>=
-#+abcl 
-(defun reclaim () (ext::gc))
-#+:allegro
-(defun reclaim () (excl::gc t))
-#+:CCL
-(defun reclaim () (gc))
-#+clisp
-(defun reclaim () (#+lisp=cl ext::gc #-lisp=cl lisp::gc))
-#+(or :cmulisp :cmu)
-(defun reclaim () (ext:gc))
-#+cormanlisp
-(defun reclaim () (cl::gc))
-#+(OR IBCL KCL GCL)
-(defun reclaim () (si::gbc t))
-#+lispworks 
-(defun reclaim () (hcl::normal-gc))
-#+Lucid
-(defun reclaim () (lcl::gc))
-#+sbcl
-(defun reclaim () (sb-ext::gc))
-@
 \subsection{defun getenviron}
 <<defun getenviron>>=
 (defun getenviron (shellvar)
@@ -1070,6 +1036,7 @@ Call the garbage collector on various platforms.
  #+sbcl (sb-ext:posix-getenv var)
  )
 @
+
 \subsection{defun init-memory-config}
 Austin-Kyoto Common Lisp (AKCL), now known as Gnu Common Lisp (GCL)
 requires some changes to the default memory setup to run Axiom efficently.
@@ -1103,6 +1070,7 @@ This function performs those setup commands.
   nil)
 
 @
+
 \subsection{defun initroot}
 Sets up the system to use the {\bf AXIOM} shell variable if we can
 and default to the {\bf \$spadroot} variable (which was the value
@@ -1110,6 +1078,20 @@ of the {\bf AXIOM} shell variable at build time) if we can't.
 <<defun initroot>>=
 (defun initroot (&optional (newroot (BOOT::|getEnv| "AXIOM")))
   (reroot (or newroot $spadroot (error "setenv AXIOM or (setq $spadroot)"))))
+
+@
+
+\subsection{defun intloopPrefix?}
+If the prefix string is the same as the whole string initial characters
+(ignoring spaces in the whole string) then we return the whole string
+minus any leading spaces.
+<<defun intloopPrefix?>>=
+(defun |intloopPrefix?| (prefix whole)
+ (let ((newprefix (string-left-trim '(#\space) prefix))
+       (newwhole  (string-left-trim '(#\space) whole)))
+  (when (<= (length newprefix) (length newwhole))
+   (when (string= newprefix newwhole :end2 (length prefix))
+    newwhole))))
 
 @
 \subsection{defun loadExposureGroupData}
@@ -1133,6 +1115,7 @@ of the {\bf AXIOM} shell variable at build time) if we can't.
   (t nil) ))
 
 @
+
 \subsection{make-absolute-filename}
 Prefix a filename with the {\bf AXIOM} shell variable.
 <<defun make-absolute-filename>>=
@@ -1140,6 +1123,7 @@ Prefix a filename with the {\bf AXIOM} shell variable.
  (concatenate 'string $spadroot name))
 
 @
+
 \subsection{defun makeInitialModemapFrame}
 \begin{verbatim}
 makeInitialModemapFrame() == COPY $InitialModemapFrame
@@ -1149,6 +1133,45 @@ makeInitialModemapFrame() == COPY $InitialModemapFrame
   (copy |$InitialModemapFrame|)) 
 
 @
+
+\subsection{defun ncloopEscaped}
+The ncloopEscaped function will return true if the last non-blank
+character of a line is an underscore, the Axiom line-continuation
+character. Otherwise, it returns nil.
+<<defun ncloopEscaped>>=
+(defun |ncloopEscaped| (x)
+ (let ((l (length x)))
+  (dotimes (i l)
+   (when (char= (char x (- l i 1)) #\_) (return t))
+   (unless (char= (char x (- l i 1)) #\space) (return nil)))))
+
+@
+
+\subsection{defun reclaim}
+Call the garbage collector on various platforms.
+<<defun reclaim>>=
+#+abcl 
+(defun reclaim () (ext::gc))
+#+:allegro
+(defun reclaim () (excl::gc t))
+#+:CCL
+(defun reclaim () (gc))
+#+clisp
+(defun reclaim () (#+lisp=cl ext::gc #-lisp=cl lisp::gc))
+#+(or :cmulisp :cmu)
+(defun reclaim () (ext:gc))
+#+cormanlisp
+(defun reclaim () (cl::gc))
+#+(OR IBCL KCL GCL)
+(defun reclaim () (si::gbc t))
+#+lispworks 
+(defun reclaim () (hcl::normal-gc))
+#+Lucid
+(defun reclaim () (lcl::gc))
+#+sbcl
+(defun reclaim () (sb-ext::gc))
+@
+
 \subsection{defun reroot}
 The reroot function is used to reset the important variables used by
 the system. In particular, these variables are sensitive to the
@@ -1180,12 +1203,315 @@ where the [[${SYS}]] variable is the same one set at build time.
   (setq $current-directory $spadroot))
 
 @
+
+\subsection{defun setCurrentLine}
+Remember the current line. The cases are:
+\begin{itemize}
+\item If there is no \$currentLine set it to the input
+\item Is the current line a string and the input a string?
+      Make them into a list
+\item Is \$currentLine not a cons cell? Make it one.
+\item Is the input a string? Cons it on the end of the list.
+\item Otherwise stick it on the end of the list
+\end{itemize}
+Note I suspect the last two cases do not occur in practice since
+they result in a dotted pair if the input is not a cons. However,
+this is what the current code does so I won't change it.
+<<defun setCurrentLine>>=
+(defun |setCurrentLine| (s)
+ (cond 
+  ((null |$currentLine|) 
+    (setq |$currentLine| s))
+  ((and (stringp |$currentLine|) (stringp s))
+    (setq |$currentLine| (list |$currentLine| s)))
+  ((not (consp |$currentLine|))
+    (setq |$currentLine| (cons |$currentLine| s)))
+  ((stringp s)
+    (rplacd (last |$currentLine|) (cons s nil)))
+  (t 
+    (rplacd (last |$currentLine|) s)))
+ |$currentLine|)
+
+@
+
 \subsection{defun statisticsInitialization}
 <<defun statisticsInitialization>>=
 (defun |statisticsInitialization| () 
  "initialize the garbage collection timer"
  #+:akcl (system:gbc-time 0)
  nil)
+
+@
+\chapter{System Command Handling}
+\subsection{defvar \$systemCommands}
+The system commands are the top-level commands available in Axiom
+that can all be invoked by prefixing the symbol with a closed-paren. 
+Thus, to see they copyright you type:
+\begin{verbatim}
+   )copyright
+\end{verbatim}
+New commands need to be added to this table. The command invoked will
+be the first entry of the pair and the ``user level'' of the command
+will be the second entry. 
+<<initvars>>=
+(defvar |$systemCommands| nil)
+
+(eval-when (eval load)
+ (setq |$systemCommands|
+ '(
+   (|abbreviations|		     . |compiler|   )
+   (|boot|			     . |development|)
+   (|browse|                         . |development|)
+   (|cd|			     . |interpreter|)
+   (|clear|			     . |interpreter|)
+   (|close|			     . |interpreter|)
+   (|compiler|			     . |compiler|   )
+   (|copyright|			     . |interpreter|)
+   (|credits|			     . |interpreter|)
+   (|display|			     . |interpreter|)
+   (|edit|			     . |interpreter|)
+   (|fin|			     . |development|)
+   (|frame|			     . |interpreter|)
+   (|help|			     . |interpreter|)
+   (|history|			     . |interpreter|)
+;; (|input|			     . |interpreter|)
+   (|lisp|			     . |development|)
+   (|library|			     . |interpreter|)
+   (|load|			     . |interpreter|)
+   (|ltrace|			     . |interpreter|)
+   (|pquit|			     . |interpreter|)
+   (|quit|			     . |interpreter|)
+   (|read|			     . |interpreter|)
+   (|savesystem|		     . |interpreter|)
+   (|set|			     . |interpreter|)
+   (|show|			     . |interpreter|)
+   (|spool|			     . |interpreter|)
+   (|summary|			     . |interpreter|)
+   (|synonym|			     . |interpreter|)
+   (|system|			     . |interpreter|)
+   (|trace|			     . |interpreter|)
+   (|undo|			     . |interpreter|)
+   (|what|			     . |interpreter|)
+   (|with|			     . |interpreter|)
+   (|workfiles|			     . |development|)
+   (|zsystemdevelopment| . |interpreter|)
+ )))
+
+@
+
+\subsection{defvar \$SYSCOMMANDS}
+This table is used to look up a symbol to see if it might be a command.
+<<initvars>>=
+(defvar $SYSCOMMANDS nil)
+(eval-when (eval load)
+ (setq $SYSCOMMANDS (mapcar #'car |$systemCommands|)))
+
+@
+\subsection{defvar \$noParseCommands}
+This is a list of the commands which have their arguments passed verbatim.
+Certain functions, such as the lisp function need to be able to handle
+all kinds of input that will not be acceptable to the interpreter. 
+<<initvars>>=
+(defvar |$noParseCommands| nil)
+(eval-when (eval load)
+ (setq |$noParseCommands| 
+ '( |boot|
+    |copyright|
+    |credits|
+    |fin|
+    |lisp|
+    |pquit|
+    |quit|
+    |suspend|
+    |synonym|
+    |system|
+    )))
+
+@
+\subsection{defvar \$tokenCommands}
+This is a list of the commands that expect the interpreter to parse
+their arguments. Thus the history command expects that Axiom will have
+tokenized and validated the input before calling the history function.
+<<initvars>>=
+(defvar |$tokenCommands| nil)
+(eval-when (eval load)
+ (setq |$tokenCommands|
+ '( |abbreviations|
+    |cd|
+    |clear|
+    |close|
+    |compiler|
+    |depends|
+    |display|
+    |edit|
+    |frame|
+    |frame|
+    |help|
+    |history|
+    |input|
+    |library|
+    |load|
+    |ltrace|
+    |read|
+    |savesystem|
+    |set|
+    |spool|
+    |undo|
+    |what|
+    |with|
+    |workfiles|
+    |zsystemdevelopment|
+    )))
+
+@
+
+\subsection{defvar \$InitialCommandSynonymAlist}
+Axiom can create ``synonyms'' for commands. We create an initial table
+of synonyms which are in common use.
+<<initvars>>=
+(defvar |$InitialCommandSynonymAlist| nil)
+(eval-when (eval load)
+ (setq |$InitialCommandSynonymAlist|
+   '(
+       (|?|	     . "what commands")
+       (|ap|	     . "what things")
+       (|apr|	     . "what things")
+       (|apropos|    . "what things")
+       (|cache|	     . "set functions cache")
+       (|cl|	     . "clear")
+       (|cls|	     . "zsystemdevelopment )cls")
+       (|cms|	     . "system")
+       (|co|	     . "compiler")
+       (|d|	     . "display")
+       (|dep|	     . "display dependents")
+       (|dependents| . "display dependents")
+       (|e|	     . "edit")
+       (|expose|     . "set expose add constructor")
+       (|fc|	     . "zsystemdevelopment )c")
+       (|fd|	     . "zsystemdevelopment )d")
+       (|fdt|	     . "zsystemdevelopment )dt")
+       (|fct|	     . "zsystemdevelopment )ct")
+       (|fctl|	     . "zsystemdevelopment )ctl")
+       (|fe|	     . "zsystemdevelopment )e")
+       (|fec|	     . "zsystemdevelopment )ec")
+       (|fect|	     . "zsystemdevelopment )ect")
+       (|fns|	     . "exec spadfn")
+       (|fortran|    . "set output fortran")
+       (|h|	     . "help")
+       (|hd|	     . "system hypertex &")
+       (|kclam|	     . "boot clearClams ( )")
+       (|killcaches| . "boot clearConstructorAndLisplibCaches ( )")
+       (|patch|	     . "zsystemdevelopment )patch")
+       (|pause|	     . "zsystemdevelopment )pause")
+       (|prompt|     . "set message prompt")
+       (|recurrence| . "set functions recurrence")
+       (|restore|    . "history )restore")
+       (|save|	     . "history )save")
+       (|startGraphics|    .  "system $AXIOM/lib/viewman &")
+       (|startNAGLink|     .  "system $AXIOM/lib/nagman &")
+       (|stopGraphics|     .  "lisp (|sockSendSignal| 2 15)")
+       (|stopNAGLink|      .  "lisp (|sockSendSignal| 8 15)")
+       (|time|	     . "set message time")
+       (|type|	     . "set message type")
+       (|unexpose|   . "set expose drop constructor")
+       (|up|	     . "zsystemdevelopment )update")
+       (|version|    . "lisp *yearweek*")
+       (|w|	     . "what")
+       (|wc|	     . "what categories")
+       (|wd|	     . "what domains")
+       (|who|        . "lisp (pprint credits)")
+       (|wp|	     . "what packages")
+       (|ws|	     . "what synonyms")
+)))
+
+@
+\subsection{defvar \$CommandSynonymAlist}
+The actual list of synonyms is initialized to be the same as the 
+above initial list of synonyms. The user synonyms that are added
+during a session are pushed onto this list for later lookup.
+<<initvars>>=
+(defvar |$CommandSynonymAlist| nil)
+(eval-when (eval load)
+ (setq |$CommandSynonymAlist| (copy-alist |$InitialCommandSynonymAlist|)))
+
+@
+
+\subsection{defun ncloopCommand}
+The \$systemCommandFunction is set in SpadInterpretStream
+to point to the function InterpExecuteSpadSystemCommand.
+<<defun ncloopCommand>>=
+(defun |ncloopCommand| (line n)
+ (declare (special |$systemCommandFunction|))
+ (let (a)
+  (cond
+   ((setq a (|ncloopPrefix?| ")include" line))
+     (|ncloopInclude1| a n))
+   (t
+     (funcall |$systemCommandFunction| line)
+     n))))
+
+@
+\subsection{defun ncloopPrefix?}
+If we find the prefix string in the whole string starting at position zero
+we return the remainder of the string without the leading prefix.
+<<defun ncloopPrefix?>>=
+(defun |ncloopPrefix?| (prefix whole)
+ (when (eql (search prefix whole) 0)
+  (subseq whole (length prefix))))
+
+@
+\subsection{defun ncloopInclude1}
+<<defun ncloopInclude1>>=
+(defun |ncloopInclude1| (name n)
+ (let (a)
+  (if (setq a (|ncloopIncFileName| name))
+    (|ncloopInclude| a n)
+    n)))
+
+@
+\subsection{defun ncloopIncFileName}
+Returns the first non-blank substring of the given string.
+<<defun ncloopIncFileName>>=
+(defun |ncloopIncFileName| (string)
+ (let (fn)
+  (unless (setq fn (|incFileName| string))
+   (write-line (concat string " not found")))
+ fn))
+
+@
+
+\subsection{defun ncloopInclude}
+Open the file and read it in. The ncloopInclude0 function is part
+of the parser and lives in int-top.boot.
+<<defun ncloopInclude>>=
+(defun |ncloopInclude| (name n)
+  (with-open-file (st name) (|ncloopInclude0| st name n)))
+
+@
+
+\subsection{defun incFileName}
+Given a string we return the first token from the string which is
+the first non-blank substring.
+<<defun incFileName>>=
+(defun |incFileName| (x)
+  (car (|incBiteOff| x)))
+
+@
+
+\subsection{defun incBiteOff}
+Takes a sequence and returns the a list of the first token and the
+remaining string characters. If there are no remaining string characters
+the second string is of length 0. Effectively it "bites off" the first 
+token in the string. If the string only 0 or more blanks it returns nil.
+<<defun incBiteOff>>=
+(defun |incBiteOff| (x)
+ (let (blank nonblank)
+  (setq x (string x))
+  (when (setq nonblank (position #\space x :test-not #'char=))
+    (setq blank (position #\space x :start nonblank))
+    (if blank
+     (list (subseq x nonblank blank) (subseq x blank))
+     (list (subseq x nonblank) "")))))
 
 @
 \chapter{The History Mechanism}
@@ -1403,13 +1729,6 @@ into a call of [[fetchOutput(n)]]. The
   and [[$HistRecord]]
  
 \subsection{Initialized history variables}
-\begin{verbatim}
-SETANDFILEQ($historyFileType,'axh)
-SETANDFILEQ($oldHistoryFileName,'last)
-SETANDFILEQ($internalHistoryTable,NIL)
-SETANDFILEQ($useInternalHistoryTable,NIL)
-\end{verbatim}
- 
 <<initvars>>=
 (defvar |$oldHistoryFileName| '|last| "vm/370 filename name component")
 (defvar |$historyFileType| '|axh|     "vm/370 filename type component")
@@ -5342,6 +5661,204 @@ removeUndoLines u == --called by writeInputLines
 
 @
 
+\chapter{The Help Browser Mechanism}
+The Axiom book on the help browser is a complete rewrite of the 
+hyperdoc mechanism. There are several components that were needed
+to make this function. Most of the web browser components are
+described in bookvol11.pamphlet. This portion describes some of
+the design issues needed to support the interface.
+
+The axServer command takes a port (defaulting to 8085) and a
+program to handle the browser interaction (defaulting to multiServ).
+The axServer function opens the port, constructs the stream, and
+passes the stream to multiServ. The multiServ loop processes one
+interaction at a time.
+
+So the basic process is that the Axiom ``)browse'' command opens a
+socket and listens for http requests. Based on the type of request
+(either 'GET' or 'POST') and the content of the request, which is
+one of:
+\begin{itemize}
+\item command - algebra request/response
+\item lispcall - a lisp s-expression to be evaluated
+\item showcall - an Axiom )show command
+\end{itemize}
+the multiServ function will call a handler function to evaluate
+the command line and construct a response. GET requests result
+in a new browser page. POST requests result in an inline result.
+
+Most responses contain the fields:
+\begin{itemize}
+\item stepnum - this is the Axiom step number 
+\item command - this is the original command from the browser
+\item algebra - this is the Axiom 2D algebra output
+\item mathml - this is the MathML version of the Axiom algebra
+\item type - this is the type of the Axiom result
+\end{itemize}
+
+\section{Browsers, MathML, and Fonts}
+This work has the Firefox browser as its target. Firefox has built-in
+support for MathML, javascript, and XMLHttpRequest handling. More details
+are available in bookvol11.pamphlet but the very basic machinery for 
+communication with the browser involves a dance between the browser
+and the multiServ function (see the axserver.spad.pamphlet). 
+
+In particular, a simple request is embedded in a web page as:
+\begin{verbatim}
+<ul>
+ <li>
+  <input type="submit" id="p3" class="subbut" 
+    onclick="makeRequest('p3');"
+    value="sin(x)" />
+  <div id="ansp3"><div></div></div>
+ </li>
+</ul>
+\end{verbatim}
+which says that this is an html ``input'' field of type ``submit''.
+The CSS display class is ``subbut'' which is of a different color
+than the surrounding text to make it obvious that you can click on
+this field. Clickable fields that have no response text are of class
+``noresult''.
+
+The javascript call to ``makeRequest'' gives the ``id'' of this input
+field, which must be unique in the page, as an argument. In this case,
+the argument is 'p3'. The ``value'' field holds the display text which
+will be passed back to Axiom as a command.
+
+When the result arrives the ``showanswer'' function will select out
+the mathml field of the response, construct the ``id'' of the html
+div to hold the response by concatenating the string ``ans'' (answer)
+to the ``id'' of the request resulting, in this case, as ``ansp3''.
+The ``showanswer'' function will find this div and replace it with a
+div containing the mathml result.
+
+The ``makeRequest'' function is:
+\begin{verbatim}
+ function makeRequest(arg) {
+   http_request = new XMLHttpRequest();         
+   var command = commandline(arg);
+   //alert(command);
+   http_request.open('POST', '127.0.0.1:8085', true);
+   http_request.onreadystatechange = handleResponse;
+   http_request.setRequestHeader('Content-Type', 'text/plain');
+   http_request.send("command="+command);
+   return(false);
+\end{verbatim}
+It contains a request to open a local server connection to Axiom,
+sets ``handleResponse'' as the function to call on reply, sets up
+the type of request, fills in the command field, and sends off the
+http request.
+
+When a response is received, the ``handleResponse'' function checks
+for the correct reply state, strips out the important text, and
+calls ``showanswer''.
+\begin{verbatim}
+ function handleResponse() {
+  if (http_request.readyState == 4) {
+   if (http_request.status == 200) {
+    showanswer(http_request.responseText,'mathAns');
+   } else
+   {
+     alert('There was a problem with the request.'+ http_request.statusText);
+   }
+  }
+ }
+\end{verbatim}
+See bookvol11.pamphlet for further details.
+
+\section{The axServer/multiServ loop}
+The basic call to start an Axiom browser listener is:
+\begin{verbatim}
+  )set message autoload off
+  )set output mathml on
+  axServer(8085,multiServ)$AXSERV
+\end{verbatim}
+
+This call sets the port, opens a socket, attaches it to a stream,
+and then calls ``multiServ'' with that stream. The ``multiServ''
+function loops serving web responses to that port.
+
+\section{The )browse command}
+In order to make the whole process cleaner the function ``)browse''
+handles the details. This code creates the command-line function for )browse
+
+The browse function does the internal equivalent of the following 3 command
+line statments:
+\begin{verbatim}
+  )set message autoload off
+  )set output mathml on
+  axServer(8085,multiServ)$AXSERV
+\end{verbatim}
+which causes Axiom to start serving web pages on port 8085
+
+For those unfamiliar with calling algebra from lisp there are a 
+few points to mention. 
+
+The loadLib needs to be called to load the algebra code into the image.
+Normally this is automatic but we are not using the interpreter so
+we need to do this ``by hand''.
+
+Each algebra file contains a "constructor function" which builds the
+domain, which is a vector, and then caches the vector so that every
+call to the contructor returns an EQ vector, that is, the same vector.
+In this case, we call the constructor $\vert$AxiomServer$\vert$
+
+The axServer function was mangled internally to 
+$\vert$AXSERV;axServer;IMV;2$\vert$.
+The multiServ function was mangled to $\vert$AXSERV;multiServ;SeV;3$\vert$
+Note well that if you change axserver.spad these names might change
+which will generate the error message along the lines of:
+\begin{verbatim}
+    System error:
+    The function $\vert$AXSERV;axServer;IMV;2$\vert$ is undefined.
+\end{verbatim}
+
+To fix this you need to look at int/algebra/AXSERV.nrlib/code.lsp
+and find the new mangled function name. A better solution would
+be to dynamically look up the surface names in the domain vector.
+
+Each Axiom function expects the domain vector as the last argument.
+This is not obvious from the call as the interpreter supplies it.
+We must do that ``by hand''.
+
+We don't call the multiServ function. We pass it as a parameter to
+the axServer function. When it does get called by the SPADCALL
+macro it needs to be a lisp pair whose car is the function and
+whose cdr is the domain vector. We construct that pair here as
+the second argument to axServer. The third, hidden, argument to
+axServer is the domain vector which we supply ``by hand''.
+
+The socket can be supplied on the command line but defaults to 8085.
+Axiom supplies the arguments as a list.
+<<defun browse>>=
+(defun |browse| (socket)
+ (let (axserv browser)
+  (if socket 
+    (setq socket (car socket))
+    (setq socket 8085))
+  (|set| '(|mes| |auto| |off|))
+  (|set| '(|out| |mathml| |on|))
+  (|loadLib| '|AxiomServer|)
+  (setq axserv (|AxiomServer|))
+  (setq browser 
+   (|AXSERV;axServer;IMV;2| socket
+    (cons #'|AXSERV;multiServ;SeV;3| axserv) axserv))))
+
+@
+Now we have to bolt it into Axiom. This involves two lookups.
+
+We create the lisp pair 
+\begin{verbatim}
+(|browse| . |development|)
+\end{verbatim} 
+and cons it into the \$systemCommands command table.  This allows the
+command to be executed in development mode.  This lookup decides if
+this command is allowed. It also has the side-effect of putting the
+command into the \$SYSCOMMANDS variable which is used to determine
+if the token is a command.
+
+\section{The server support code}
+
 \chapter{Axiom Build-time Functions}
 \subsection{defun spad-save}
 The {\bf spad-save} function is just a cover function for more
@@ -5420,6 +5937,8 @@ DEBUGSYS=${OBJ}/${SYS}/bin/debugsys
 
 <<defun addNewInterpreterFrame>>
 
+<<defun browse>>
+
 <<defun changeHistListLen>>
 <<defun changeToNamedInterpreterFrame>>
 <<defun charDigitVal>>
@@ -5453,6 +5972,8 @@ DEBUGSYS=${OBJ}/${SYS}/bin/debugsys
 <<defun histInputFileName>>
 <<defun historySpad2Cmd>>
 
+<<defun incBiteOff>>
+<<defun incFileName>>
 <<defun importFromFrame>>
 <<defun init-memory-config>>
 <<defun initHist>>
@@ -5460,6 +5981,7 @@ DEBUGSYS=${OBJ}/${SYS}/bin/debugsys
 <<defun initializeInterpreterFrameRing>>
 <<defun initroot>>
 <<defun intloop>>
+<<defun intloopPrefix?>>
 <<defun intloopReadConsole>>
 
 <<defun loadExposureGroupData>>
@@ -5469,6 +5991,12 @@ DEBUGSYS=${OBJ}/${SYS}/bin/debugsys
 <<defun makeInitialModemapFrame>>
 
 <<defun ncIntLoop>>
+<<defun ncloopCommand>>
+<<defun ncloopEscaped>>
+<<defun ncloopInclude>>
+<<defun ncloopInclude1>>
+<<defun ncloopIncFileName>>
+<<defun ncloopPrefix?>>
 <<defun ncTopLevel>>
 <<defun nextInterpreterFrame>>
 
@@ -5495,6 +6023,7 @@ DEBUGSYS=${OBJ}/${SYS}/bin/debugsys
 <<defun safeWritify>>
 <<defun saveHistory>>
 <<defun ScanOrPairVec>>
+<<defun setCurrentLine>>
 <<defun setHistoryCore>>
 <<defun set-restart-hook>>
 <<defun showInOut>>
