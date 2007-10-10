@@ -44,6 +44,35 @@
 (defun |SiAccept| (s) (si::accept s))
 (defun |SiCopyStream| (q s) (si::copy-stream q s))
 
+;;; mathObject2String is a replacement function for object2String
+;;;
+;;; this function is used in mathml.spad to handle conversion of
+;;; of numbers in mathml for radix expansions. The bug is:
+;;;
+;;;                           _____
+;;;  radix(5/24,39)  ==> 0 . 8 4 34
+;;;
+;;;                            _
+;;;  radix(5/24,40)  ==> 0 . 8 D
+;;;
+;;;                          ____
+;;;  radix(5/24,43)  ==> 0 . 8 41
+;;;
+;;;  radix(35,36)    ==> Z
+;;;
+;;;  radix(36,37)    ==> Error ... index out of range
+;;;
+;;;  radix(10,16)    ==> A
+;;;
+;;;  exprex(%)       ==> "{#\A}"
+;;;
+;;;  exprex shows the preconditioned output form which shows #\A
+
+(defun |mathObject2String| (x)
+ (if (characterp x)
+  (coerce (list x) 'string)
+  (|object2String| x)))
+
 
 ;;; replace-entities is a function that takes a string and 
 ;;; returns a new string that has special html entities replaced.
