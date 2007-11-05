@@ -177,6 +177,31 @@ substInOrder(alist,x) ==
   alist is [[a,:b],:y] => substInOrder(y,SUBST(b,a,x))
   x
 
+@
+\subsection{reportOpSymbol}
+This function prints the modemaps for operations as a result of the
+user command for some operation foo:
+\begin{verbatim}
+  )d op foo
+\end{verbatim}
+
+We have enhanced this function to search the documentation for each
+domain and print any examples it finds by calling the sayExample 
+function. Because of the way the databases are currently organized
+the documentation is under each domain and is kept separate from
+the modemaps. Ideally we'd output the example immediately after
+the related modemap but I have yet to figure out how to do that.
+
+We need to know the name of the function (which the user supplied)
+and we need to know a list of all of the domains containing that
+function. This is collected using PUSHNEW into the domain list.
+
+Once we've processed all of the modemaps we have a set of the
+domain names. We walk across that set requesting the documentation
+strings for that domain. There are a list of documentation strings, 
+one for each exported function. We call sayExample on each element
+of the list. If sayExample finds an example it prints it.
+<<*>>=
 reportOpSymbol op1 ==
   op := (STRINGP op1 => INTERN op1; op1)
   modemaps := getAllModemapsFromDatabase(op,nil)
@@ -192,8 +217,12 @@ reportOpSymbol op1 ==
   sayNewLine()
   -- filter modemaps on whether they are exposed
   mmsE := mmsU := NIL
+  domlist := NIL
   for mm in modemaps repeat
-    isFreeFunctionFromMm(mm) or isExposedConstructor getDomainFromMm(mm) => mmsE := [mm,:mmsE]
+    dom := getDomainFromMm(mm)
+    PUSHNEW(dom,domlist)
+    isFreeFunctionFromMm(mm) or isExposedConstructor dom =>
+      mmsE := [mm,:mmsE]
     mmsU := [mm,:mmsU]
   if mmsE then
     sayMms(op,mmsE,'"exposed") where
@@ -210,7 +239,104 @@ reportOpSymbol op1 ==
   if mmsU then
     if mmsE then sayNewLine()
     sayMms(op,mmsU,'"unexposed")
+  for adom in domlist repeat  
+   doc := GETDATABASE(adom,'DOCUMENTATION)
+   docs := CDR(ASSOC(op,doc))
+   sayNewLine()
+   sayBrightly ['"Examples of ",op," from ",adom]
+   sayNewLine()
+   for export in docs repeat
+    sayExample(CADR(export),op)
   nil
+
+@
+\subsection{sayExample}
+This function expects 2 arguments, the documentation string and
+the name of the operation. It searches the documentation string for
+\verb|++E| lines. These lines are examples lines for functions. 
+They look like ordinary \verb|++| comments and fit into the ordinary
+comment blocks. So, for example, in the plot.spad.pamphlet file we
+find the following function signature:
+\begin{verbatim}
+    plot: (F -> F,R) -> %
+      ++ plot(f,a..b) plots the function \spad{f(x)} 
+      ++ on the interval \spad{[a,b]}.
+      ++ 
+      ++E fp:=(t:DFLOAT):DFLOAT +-> sin(t)
+      ++E plot(fp,-1.0..1.0)$PLOT
+\end{verbatim}
+This function splits out and prints the lines that begin with \verb|++E|.
+
+A minor complication of printing the examples is that the lines have
+been processed into internal compiler format. Thus the lines that read:
+\begin{verbatim}
+      ++E fp:=(t:DFLOAT):DFLOAT +-> sin(t)
+      ++E plot(fp,-1.0..1.0)$PLOT
+\end{verbatim}
+are actually stored as one long line containing the example lines
+\begin{verbatim}
+"\\indented{1}{plot(\\spad{f},{}a..\\spad{b}) plots the function
+ \\spad{f(x)}} \\indented{1}{on the interval \\spad{[a,{}b]}.}
+ \\blankline
+ \\spad{E} fp:=(t:DFLOAT):DFLOAT +-> sin(\\spad{t})
+ \\spad{E} plot(\\spad{fp},{}\\spad{-1}.0..1.0)\\$PLOT"
+\end{verbatim}
+
+This function finds examples and strips off the prefix \verb|\\spad{E}| 
+from the stored form and calls cleanupLine to get rid of the other noise.
+<<*>>=
+sayExample(docstring,op) ==
+ point := SEARCH('"{E}",docstring)
+ point => 
+  line := SUBSEQ(docstring,point+3)
+  while (mark:=SEARCH('"{E}",line)) repeat
+   mark > 0 =>
+    PRINC cleanupLine (SUBSEQ(line,0,mark-6))
+    sayNewLine()
+    line := SUBSEQ(line,mark+3)
+  PRINC cleanupLine(line)
+  sayNewLine()
+  sayNewLine()
+
+@
+\subsection{cleanupLine}
+This function expects example lines in internal format that has been
+partially processed to remove the prefix. Thus we get lines that look 
+like:
+\begin{verbatim}
+ fp:=(t:DFLOAT):DFLOAT +-> sin(\\spad{t}) 
+ plot(\\spad{fp},{}\\spad{-1}.0..1.0)\\$PLOT
+\end{verbatim}
+
+It removes all instances of \verb|{}|, and \verb|\|, and unwraps the
+\verb|spad{}| call, leaving only the argument.
+
+We return lines that look like:
+\begin{verbatim}
+ fp:=(t:DFLOAT):DFLOAT +-> sin(t)
+ plot(fp,-1.0..1.0)$PLOT
+\end{verbatim}
+which is hopefully exactly what the user wrote.
+
+<<*>>=
+cleanupLine(line) ==
+ while (point := SEARCH('"{}",line)) repeat
+  point =>
+   left := SUBSEQ(line,0,point)
+   right := SUBSEQ(line,point+2)
+   line := CONCATENATE('STRING,left,right)
+ while (point := SEARCH('"\",line)) repeat
+  point =>
+   left := SUBSEQ(line,0,point)
+   right := SUBSEQ(line,point+1)
+   line := CONCATENATE('STRING,left,right)
+ while (point := SEARCH('"spad{",line)) repeat
+  left  := SUBSEQ(line,0,point)
+  mark  := SEARCH('"}",line)
+  mid   := SUBSEQ(line,point+5,mark)
+  right := SUBSEQ(line,mark+1)
+  line  := CONCATENATE('STRING,left,mid,right)
+ line
 
 formatOpType (form:=[op,:argl]) ==
   null argl => unabbrev op
