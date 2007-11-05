@@ -9,92 +9,9 @@
 \eject
 \tableofcontents
 \eject
-\section{Bug fixes}
-The compMacro function does macro expansion during spad file compiles.
-If a macro occurs twice in the same file the macro expands infinitely
-causing a stack overflow. The reason for the infinite recursion is that
-the left hand side of the macro definition is expanded. Thus defining
-a macro:
-\begin{verbatim}
-name ==> 1
-\end{verbatim}
-will expand properly the first time. The second time it turns into:
-\begin{verbatim}
-1 ==> 1
-\end{verbatim}
-The original code read:
-\begin{verbatim}
-compMacro(form,m,e) ==
-  $macroIfTrue: local:= true
-  ["MDEF",lhs,signature,specialCases,rhs]:= form
-  rhs :=
-    rhs is ['CATEGORY,:.] => ['"-- the constructor category"]
-    rhs is ['Join,:.]     => ['"-- the constructor category"]
-    rhs is ['CAPSULE,:.]  => ['"-- the constructor capsule"]
-    rhs is ['add,:.]      => ['"-- the constructor capsule"]
-    formatUnabbreviated rhs
-  sayBrightly ['"   processing macro definition",'%b,
-    :formatUnabbreviated lhs,'" ==> ",:rhs,'%d]
-  ["MDEF",lhs,signature,specialCases,rhs]:= form:= macroExpand(form,e)
-  m=$EmptyMode or m=$NoValueMode =>
-    ["/throwAway",$NoValueMode,put(first lhs,"macro",rhs,e)]
-
-\end{verbatim}
-Juergen Weiss proposed the following fixed code. This does not expand
-the left hand side of the macro.
-<<compMacro>>=
-compMacro(form,m,e) ==
-  $macroIfTrue: local:= true
-  ["MDEF",lhs,signature,specialCases,rhs]:= form
-  prhs :=
-    rhs is ['CATEGORY,:.] => ['"-- the constructor category"]
-    rhs is ['Join,:.]     => ['"-- the constructor category"]
-    rhs is ['CAPSULE,:.]  => ['"-- the constructor capsule"]
-    rhs is ['add,:.]      => ['"-- the constructor capsule"]
-    formatUnabbreviated rhs
-  sayBrightly ['"   processing macro definition",'%b,
-    :formatUnabbreviated lhs,'" ==> ",:prhs,'%d]
-  m=$EmptyMode or m=$NoValueMode =>
-    ["/throwAway",$NoValueMode,put(first lhs,"macro",macroExpand(rhs,e),e)]
-
-@
-\section{License}
-<<license>>=
--- Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
--- All rights reserved.
---
--- Redistribution and use in source and binary forms, with or without
--- modification, are permitted provided that the following conditions are
--- met:
---
---     - Redistributions of source code must retain the above copyright
---       notice, this list of conditions and the following disclaimer.
---
---     - Redistributions in binary form must reproduce the above copyright
---       notice, this list of conditions and the following disclaimer in
---       the documentation and/or other materials provided with the
---       distribution.
---
---     - Neither the name of The Numerical ALgorithms Group Ltd. nor the
---       names of its contributors may be used to endorse or promote products
---       derived from this software without specific prior written permission.
---
--- THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
--- IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
--- TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
--- PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
--- OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
--- EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
--- PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
--- PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
--- LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
--- NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
--- SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-@
+\section{Compiler Top Level Functions}
+\subsection{compTopLevel}
 <<*>>=
-<<license>>
-
 compTopLevel(x,m,e) ==
 --+ signals that target is derived from lhs-- see NRTmakeSlot1Info
   $NRTderivedTargetIfTrue: local := false
@@ -103,6 +20,11 @@ compTopLevel(x,m,e) ==
   $compTimeSum: local := 0
   $resolveTimeSum: local := 0
   $packagesUsed: local := []
+  -- This hashtable is a performance improvement by Waldek Hebisch
+  $envHashTable: local := MAKE_-HASHTABLE 'EQUAL
+  for u in CAR(CAR(e)) repeat
+   for v in CDR(u) repeat
+    HPUT($envHashTable,[CAR u, CAR v],true)
   -- The next line allows the new compiler to be tested interactively.
   compFun := if $newCompAtTopLevel=true then 'newComp else 'compOrCroak
   x is ["DEF",:.] or x is ["where",["DEF",:.],:.] =>
@@ -110,6 +32,9 @@ compTopLevel(x,m,e) ==
         --keep old environment after top level function defs
   FUNCALL(compFun,x,m,e)
 
+@
+\subsection{compUniquely}
+<<*>>=
 compUniquely(x,m,e) ==
   $compUniquelyIfTrue: local:= true
   CATCH("compUniquely",comp(x,m,e))
@@ -128,7 +53,7 @@ CohenCategory(): Category == SetCategory with
   construct:(CExpr,CExpr)->CExpr
     ++ construct:(CExpr,CExpr)->CExpr
 
-@
+\end{verbatim}
 the resulting call looks like:
 \begin{verbatim}
  (|compOrCroak|
@@ -156,6 +81,7 @@ The third argument, {\tt e}, is the environment.
 
 In the call to {\tt compOrCroak1} the fourth argument {\tt comp}
 is the function to call.
+\subsection{compOrCroak}
 <<*>>=
 compOrCroak(x,m,e) == compOrCroak1(x,m,e,'comp)
 
@@ -211,6 +137,8 @@ The fourth argument {\tt comp} is the function to call.
 The inner function augments the environment with information
 from the compiler stack {\tt \$compStack} and
 {\tt \$compErrorMessageStack}.
+
+\subsection{compOrCroak1}
 <<*>>=
 compOrCroak1(x,m,e,compFn) ==
   fn(x,m,e,nil,nil,compFn) where
@@ -237,16 +165,25 @@ compOrCroak1(x,m,e,compFn) ==
       displayComp $level
       userError errorMessage
 
+@
+\subsection{tc}
+<<*>>=
 tc() ==
   $tripleCache:= nil
   comp($x,$m,$f)
 
 
+@
+\subsection{comp}
+<<*>>=
 comp(x,m,e) ==
   T:= compNoStacking(x,m,e) => ($compStack:= nil; T)
   $compStack:= [[x,m,e,$exitModeStack],:$compStack]
   nil
 
+@
+\subsection{compNoStacking}
+<<*>>=
 compNoStacking(x,m,e) ==
   T:= comp2(x,m,e) =>
     (m=$EmptyMode and T.mode=$Representation => [T.expr,"$",T.env]; T)
@@ -255,11 +192,17 @@ compNoStacking(x,m,e) ==
          --preferred to the underlying representation -- RDJ 9/12/83
   compNoStacking1(x,m,e,$compStack)
 
+@
+\subsection{compNoStacking1}
+<<*>>=
 compNoStacking1(x,m,e,$compStack) ==
   u:= get(if m="$" then "Rep" else m,"value",e) =>
     (T:= comp2(x,u.expr,e) => [T.expr,m,T.env]; nil)
   nil
 
+@
+\subsection{comp2}
+<<*>>=
 comp2(x,m,e) ==
   [y,m',e]:= comp3(x,m,e) or return nil
   if $LISPLIB and isDomainForm(x,e) then
@@ -272,6 +215,9 @@ comp2(x,m,e) ==
         --$bootStrapMode-test necessary for compiling Ring in $bootStrapMode
   [y,m',e]
 
+@
+\subsection{comp3}
+<<*>>=
 comp3(x,m,$e) ==
   --returns a Triple or %else nil to signalcan't do'
   $e:= addDomain(m,$e)
@@ -292,18 +238,27 @@ comp3(x,m,$e) ==
     [x',m',addDomain(m',e')]
   t
 
+@
+\subsection{compTypeOf}
+<<*>>=
 compTypeOf(x:=[op,:argl],m,e) ==
   $insideCompTypeOf: local := true
   newModemap:= EQSUBSTLIST(argl,$FormalMapVariableList,get(op,'modemap,e))
   e:= put(op,'modemap,newModemap,e)
   comp3(x,m,e)
 
+@
+\subsection{hasFormalMapVariable}
+<<*>>=
 hasFormalMapVariable(x, vl) ==
   $formalMapVariables: local := vl
   null vl => false
   ScanOrPairVec('hasone?,x) where
      hasone? x == MEMQ(x,$formalMapVariables)
 
+@
+\subsection{compWithMappingMode}
+<<*>>=
 compWithMappingMode(x,m is ["Mapping",m',:sl],oldE) ==
   $killOptimizeIfTrue: local:= true
   e:= oldE
@@ -400,6 +355,9 @@ compWithMappingMode(x,m is ["Mapping",m',:sl],oldE) ==
     ['LIST,fname]
   [uu,m,oldE]
 
+@
+\subsection{extractCodeAndConstructTriple}
+<<*>>=
 extractCodeAndConstructTriple(u, m, oldE) ==
   u is ["call",fn,:.] =>
     if fn is ["applyFun",a] then fn := a
@@ -407,12 +365,18 @@ extractCodeAndConstructTriple(u, m, oldE) ==
   [op,:.,env] := u
   [["CONS",["function",op],env],m,oldE]
 
+@
+\subsection{compExpression}
+<<*>>=
 compExpression(x,m,e) ==
   $insideExpressionIfTrue: local:= true
   atom first x and (fn:= GET(first x,"SPECIAL")) =>
     FUNCALL(fn,x,m,e)
   compForm(x,m,e)
 
+@
+\subsection{compAtom}
+<<*>>=
 compAtom(x,m,e) ==
   T:= compAtomWithModemap(x,m,e,get(x,"modemap",e)) => T
   x="nil" =>
@@ -428,6 +392,9 @@ compAtom(x,m,e) ==
     [x,primitiveType x or return nil,e]
   convert(t,m)
 
+@
+\subsection{primitiveType}
+<<*>>=
 primitiveType x ==
   x is nil => $EmptyMode
   STRINGP x => $String
@@ -438,6 +405,9 @@ primitiveType x ==
   FLOATP x => $DoubleFloat
   nil
 
+@
+\subsection{compSymbol}
+<<*>>=
 compSymbol(s,m,e) ==
   s="$NoValue" => ["$NoValue",$NoValueMode,e]
   isFluid s => [s,getmode(s,e) or return nil,e]
@@ -458,14 +428,23 @@ compSymbol(s,m,e) ==
   m = $Expression or m = $Symbol => [['QUOTE,s],m,e]
   not isFunction(s,e) => errorRef s
 
+@
+\subsection{convertOrCroak}
+<<*>>=
 convertOrCroak(T,m) ==
   u:= convert(T,m) => u
   userError ["CANNOT CONVERT: ",T.expr,"%l"," OF MODE: ",T.mode,"%l",
     " TO MODE: ",m,"%l"]
 
+@
+\subsection{convert}
+<<*>>=
 convert(T,m) ==
   coerce(T,resolve(T.mode,m) or return nil)
 
+@
+\subsection{mkUnion}
+<<*>>=
 mkUnion(a,b) ==
   b="$" and $Rep is ["Union",:l] => b
   a is ["Union",:l] =>
@@ -474,10 +453,16 @@ mkUnion(a,b) ==
   b is ["Union",:l] => ["Union",:setUnion([a],l)]
   ["Union",a,b]
 
+@
+\subsection{maxSuperType}
+<<*>>=
 maxSuperType(m,e) ==
   typ:= get(m,"SuperDomain",e) => maxSuperType(typ,e)
   m
 
+@
+\subsection{hasType}
+<<*>>=
 hasType(x,e) ==
   fn get(x,"condition",e) where
     fn x ==
@@ -485,12 +470,18 @@ hasType(x,e) ==
       x is [["case",.,y],:.] => y
       fn rest x
 
+@
+\subsection{compForm}
+<<*>>=
 compForm(form,m,e) ==
   T:=
     compForm1(form,m,e) or compArgumentsAndTryAgain(form,m,e) or return
       stackMessageIfNone ["cannot compile","%b",form,"%d"]
   T
 
+@
+\subsection{compArgumentsAndTryAgain}
+<<*>>=
 compArgumentsAndTryAgain(form is [.,:argl],m,e) ==
   -- used in case: f(g(x)) where f is in domain introduced by
   -- comping g, e.g. for (ELT (ELT x a) b), environment can have no
@@ -501,6 +492,9 @@ compArgumentsAndTryAgain(form is [.,:argl],m,e) ==
   u="failed" => nil
   compForm1(form,m,e)
 
+@
+\subsection{outputComp}
+<<*>>=
 outputComp(x,e) ==
   u:=comp(['_:_:,x,$Expression],$Expression,e) => u
   x is ['construct,:argl] =>
@@ -509,6 +503,9 @@ outputComp(x,e) ==
     [['coerceUn2E,x,v.mode],$Expression,e]
   [x,$Expression,e]
 
+@
+\subsection{compForm1}
+<<*>>=
 compForm1(form is [op,:argl],m,e) ==
   $NumberOfArgsIfInteger: local:= #argl --see compElt
   op="error" =>
@@ -537,11 +534,17 @@ compForm1(form is [op,:argl],m,e) ==
   (mmList:= getFormModemaps(form,e)) and (T:= compForm2(form,m,e,mmList)) => T
   compToApply(op,argl,m,e)
 
+@
+\subsection{compExpressionList}
+<<*>>=
 compExpressionList(argl,m,e) ==
   Tl:= [[.,.,e]:= comp(x,$Expression,e) or return "failed" for x in argl]
   Tl="failed" => nil
   convert([["LIST",:[y.expr for y in Tl]],$Expression,e],m)
 
+@
+\subsection{compForm2}
+<<*>>=
 compForm2(form is [op,:argl],m,e,modemapList) ==
   sargl:= TAKE(# argl, $TriangleVariableList)
   aList:= [[sa,:a] for a in argl for sa in sargl]
@@ -569,10 +572,16 @@ compForm2(form is [op,:argl],m,e,modemapList) ==
       compForm3(form,m,e,modemapList)
   compForm3(form,m,e,modemapList)
 
+@
+\subsection{compFormPartiallyBottomUp}
+<<*>>=
 compFormPartiallyBottomUp(form,m,e,modemapList,partialModeList) ==
   mmList:= [mm for mm in modemapList | compFormMatch(mm,partialModeList)] =>
     compForm3(form,m,e,mmList)
 
+@
+\subsection{compFormMatch}
+<<*>>=
 compFormMatch(mm,partialModeList) ==
   mm is [[.,.,:argModeList],:.] and match(argModeList,partialModeList) where
     match(a,b) ==
@@ -580,6 +589,9 @@ compFormMatch(mm,partialModeList) ==
       null first b => match(rest a,rest b)
       first a=first b and match(rest a,rest b)
 
+@
+\subsection{compForm3}
+<<*>>=
 compForm3(form is [op,:argl],m,e,modemapList) ==
   T:=
     or/
@@ -591,6 +603,9 @@ compForm3(form is [op,:argl],m,e,modemapList) ==
     T
   T
 
+@
+\subsection{getFormModemaps}
+<<*>>=
 getFormModemaps(form is [op,:argl],e) ==
   op is ["elt",domain,op1] =>
     [x for x in getFormModemaps([op1,:argl],e) | x is [[ =domain,:.],:.]]
@@ -609,12 +624,18 @@ getFormModemaps(form is [op,:argl],e) ==
     stackMessage ["no modemap for","%b",op,"%d","with ",nargs," arguments"]
   finalModemapList
 
+@
+\subsection{getConstructorFormOfMode}
+<<*>>=
 getConstructorFormOfMode(m,e) ==
   isConstructorForm m => m
   if m="$" then m:= "Rep"
   atom m and get(m,"value",e) is [v,:.] =>
     isConstructorForm v => v
 
+@
+\subsection{getConstructorMode}
+<<*>>=
 getConstructorMode(x,e) ==
   atom x => (u:= getmode(x,e) or return nil; getConstructorFormOfMode(u,e))
   x is ["elt",y,a] =>
@@ -624,8 +645,14 @@ getConstructorMode(x,e) ==
     u is ["Record",:l] =>
       (or/[p is [., =a,R] for p in l]) and isConstructorForm R => R
 
+@
+\subsection{isConstructorForm}
+<<*>>=
 isConstructorForm u == u is [name,:.] and MEMBER(name,'(Record Vector List))
 
+@
+\subsection{eltModemapFilter}
+<<*>>=
 eltModemapFilter(name,mmList,e) ==
   isConstantId(name,e) =>
     l:= [mm for mm in mmList | mm is [[.,.,.,sel,:.],:.] and sel=name] => l
@@ -634,6 +661,9 @@ eltModemapFilter(name,mmList,e) ==
     nil
   mmList
 
+@
+\subsection{seteltModemapFilter}
+<<*>>=
 seteltModemapFilter(name,mmList,e) ==
   isConstantId(name,e) =>
     l:= [mm for (mm:= [[.,.,.,sel,:.],:.]) in mmList | sel=name] => l
@@ -642,6 +672,9 @@ seteltModemapFilter(name,mmList,e) ==
     nil
   mmList
 
+@
+\subsection{substituteIntoFunctorModemap}
+<<*>>=
 substituteIntoFunctorModemap(argl,modemap is [[dc,:sig],:.],e) ==
   #dc^=#sig =>
     keyedSystemError("S2GE0016",['"substituteIntoFunctorModemap",
@@ -655,14 +688,22 @@ substituteIntoFunctorModemap(argl,modemap is [[dc,:sig],:.],e) ==
     [SUBLIS(substitutionList,modemap),e]
   nil
 
---% SPECIAL EVALUATION FUNCTIONS
+@
 
+\section{Special evaluation functions}
+\subsection{compConstructorCategory}
+<<*>>=
 compConstructorCategory(x,m,e) == [x,resolve($Category,m),e]
 
+@
+\subsection{compString}
+<<*>>=
 compString(x,m,e) == [x,resolve($StringCategory,m),e]
 
---% SUBSET CATEGORY
-
+@
+\subsection{compSubsetCategory}
+Compile SubsetCategory
+<<*>>=
 compSubsetCategory(["SubsetCategory",cat,R],m,e) ==
   --1. put "Subsets" property on R to allow directly coercion to subset;
   --   allow automatic coercion from subset to R but not vice versa
@@ -675,10 +716,15 @@ compSubsetCategory(["SubsetCategory",cat,R],m,e) ==
           ["CATEGORY","domain",["SIGNATURE","coerce",[R,"$"]],["SIGNATURE",
             "lift",[R,"$"]],["SIGNATURE","reduce",["$",R]]]
 
---% CONS
-
+@
+\subsection{compCons}
+Compile cons
+<<*>>=
 compCons(form,m,e) == compCons1(form,m,e) or compForm(form,m,e)
 
+@
+\subsection{compCons1}
+<<*>>=
 compCons1(["CONS",x,y],m,e) ==
   [x,mx,e]:= comp(x,$EmptyMode,e) or return nil
   null y => convert([["LIST",x],["List",mx],e],m)
@@ -693,10 +739,15 @@ compCons1(["CONS",x,y],m,e) ==
     [["CONS",x,y],["Pair",mx,my],e]
   convert(T,m)
 
---% SETQ
-
+@
+\subsection{compSetq}
+Compile setq
+<<*>>=
 compSetq(["LET",form,val],m,E) == compSetq1(form,val,m,E)
 
+@
+\subsection{compSetq1}
+<<*>>=
 compSetq1(form,val,m,E) ==
   IDENTP form => setqSingle(form,val,m,E)
   form is [":",x,y] =>
@@ -707,13 +758,23 @@ compSetq1(form,val,m,E) ==
     op="Tuple" => setqMultiple(l,val,m,E)
     setqSetelt(form,val,m,E)
 
+@
+\subsection{compMakeDeclaration}
+<<*>>=
 compMakeDeclaration(x,m,e) ==
   $insideExpressionIfTrue: local
   compColon(x,m,e)
 
+@
+\subsection{setqSetelt}
+Compile setelt
+<<*>>=
 setqSetelt([v,:s],val,m,E) ==
   comp(["setelt",v,:s,val],m,E)
 
+@
+\subsection{setqSingle}
+<<*>>=
 setqSingle(id,val,m,E) ==
   $insideSetqSingleIfTrue: local:= true
     --used for comping domain forms within functions
@@ -756,6 +817,9 @@ setqSingle(id,val,m,E) ==
             (isDomainForm(x,e') => ['ELT,id,0];CAR outputComp(id,e'))]
   [form,m',e']
 
+@
+\subsection{assignError}
+<<*>>=
 assignError(val,m',form,m) ==
   message:=
     val =>
@@ -764,6 +828,9 @@ assignError(val,m',form,m) ==
     ["CANNOT ASSIGN: ",val,"%l","   TO: ",form,"%l","   OF MODE: ",m]
   stackMessage message
 
+@
+\subsection{setqMultiple}
+<<*>>=
 setqMultiple(nameList,val,m,e) ==
   val is ["CONS",:.] and m=$NoValueMode =>
     setqMultipleExplicit(nameList,uncons val,m,e)
@@ -796,6 +863,9 @@ setqMultiple(nameList,val,m,e) ==
   if assignList="failed" then NIL
   else [MKPROGN [x,:assignList,g],m',e]
 
+@
+\subsection{setqMultipleExplicit}
+<<*>>=
 setqMultipleExplicit(nameList,valList,m,e) ==
   #nameList^=#valList =>
     stackMessage ["Multiple assignment error; # of items in: ",nameList,
@@ -813,7 +883,10 @@ setqMultipleExplicit(nameList,valList,m,e) ==
   [["PROGN",:[T.expr for T in assignList],:[T.expr for T in reAssignList]],
     $NoValueMode, (LAST reAssignList).env]
 
---% WHERE
+@
+\subsection{compWhere}
+Compile where
+<<*>>=
 compWhere([.,form,:exprList],m,eInit) ==
   $insideExpressionIfTrue: local:= false
   $insideWhereIfTrue: local:= true
@@ -829,6 +902,10 @@ compWhere([.,form,:exprList],m,eInit) ==
     eInit
   [x,m,eFinal]
 
+@
+\subsection{compConstruct}
+Compile construct
+<<*>>=
 compConstruct(form is ["construct",:l],m,e) ==
   y:= modeIsAggregateOf("List",m,e) =>
     T:= compList(l,["List",CADR y],e) => convert(T,m)
@@ -845,26 +922,90 @@ compConstruct(form is ["construct",:l],m,e) ==
       (T:= compVector(l,["Vector",CADR y],e)) and (T':= convert(T,m)) =>
          return T'
 
+@
+\subsection{compQuote}
+Compile quote
+<<*>>=
 compQuote(expr,m,e) == [expr,m,e]
 
+@
+\subsection{compList}
+Compile list
+<<*>>=
 compList(l,m is ["List",mUnder],e) ==
   null l => [NIL,m,e]
   Tl:= [[.,mUnder,e]:= comp(x,mUnder,e) or return "failed" for x in l]
   Tl="failed" => nil
   T:= [["LIST",:[T.expr for T in Tl]],["List",mUnder],e]
 
+@
+\subsection{compVector}
+Compile vector
+<<*>>=
 compVector(l,m is ["Vector",mUnder],e) ==
   null l => [$EmptyVector,m,e]
   Tl:= [[.,mUnder,e]:= comp(x,mUnder,e) or return "failed" for x in l]
   Tl="failed" => nil
   [["VECTOR",:[T.expr for T in Tl]],m,e]
 
---% MACROS
-<<compMacro>>
---% SEQ
+@
+\subsection{compMacro}
+The compMacro function does macro expansion during spad file compiles.
+If a macro occurs twice in the same file the macro expands infinitely
+causing a stack overflow. The reason for the infinite recursion is that
+the left hand side of the macro definition is expanded. Thus defining
+a macro:
+\begin{verbatim}
+name ==> 1
+\end{verbatim}
+will expand properly the first time. The second time it turns into:
+\begin{verbatim}
+1 ==> 1
+\end{verbatim}
+The original code read:
+\begin{verbatim}
+compMacro(form,m,e) ==
+  $macroIfTrue: local:= true
+  ["MDEF",lhs,signature,specialCases,rhs]:= form
+  rhs :=
+    rhs is ['CATEGORY,:.] => ['"-- the constructor category"]
+    rhs is ['Join,:.]     => ['"-- the constructor category"]
+    rhs is ['CAPSULE,:.]  => ['"-- the constructor capsule"]
+    rhs is ['add,:.]      => ['"-- the constructor capsule"]
+    formatUnabbreviated rhs
+  sayBrightly ['"   processing macro definition",'%b,
+    :formatUnabbreviated lhs,'" ==> ",:rhs,'%d]
+  ["MDEF",lhs,signature,specialCases,rhs]:= form:= macroExpand(form,e)
+  m=$EmptyMode or m=$NoValueMode =>
+    ["/throwAway",$NoValueMode,put(first lhs,"macro",rhs,e)]
 
+\end{verbatim}
+Juergen Weiss proposed the following fixed code. This does not expand
+the left hand side of the macro.
+<<*>>=
+compMacro(form,m,e) ==
+  $macroIfTrue: local:= true
+  ["MDEF",lhs,signature,specialCases,rhs]:= form
+  prhs :=
+    rhs is ['CATEGORY,:.] => ['"-- the constructor category"]
+    rhs is ['Join,:.]     => ['"-- the constructor category"]
+    rhs is ['CAPSULE,:.]  => ['"-- the constructor capsule"]
+    rhs is ['add,:.]      => ['"-- the constructor capsule"]
+    formatUnabbreviated rhs
+  sayBrightly ['"   processing macro definition",'%b,
+    :formatUnabbreviated lhs,'" ==> ",:prhs,'%d]
+  m=$EmptyMode or m=$NoValueMode =>
+    ["/throwAway",$NoValueMode,put(first lhs,"macro",macroExpand(rhs,e),e)]
+
+@
+\subsection{compSeq}
+Compile seq
+<<*>>=
 compSeq(["SEQ",:l],m,e) == compSeq1(l,[m,:$exitModeStack],e)
 
+@
+\subsection{compSeq1}
+<<*>>=
 compSeq1(l,$exitModeStack,e) ==
   $insideExpressionIfTrue: local
   $finalEnv: local
@@ -882,8 +1023,14 @@ compSeq1(l,$exitModeStack,e) ==
   form:= ["SEQ",:replaceExitEtc(c,catchTag,"TAGGEDexit",$exitModeStack.(0))]
   [["CATCH",catchTag,form],$exitModeStack.(0),$finalEnv]
 
+@
+\subsection{compSeqItem}
+<<*>>=
 compSeqItem(x,m,e) == comp(macroExpand(x,e),m,e)
 
+@
+\subsection{replaceExitEtc}
+<<*>>=
 replaceExitEtc(x,tag,opFlag,opMode) ==
   (fn(x,tag,opFlag,opMode); x) where
     fn(x,tag,opFlag,opMode) ==
@@ -905,15 +1052,20 @@ replaceExitEtc(x,tag,opFlag,opMode) ==
       replaceExitEtc(first x,tag,opFlag,opMode)
       replaceExitEtc(rest x,tag,opFlag,opMode)
 
---% SUCHTHAT
+@
+\subsection{compSuchthat}
+Compile suchthat
+<<*>>=
 compSuchthat([.,x,p],m,e) ==
   [x',m',e]:= comp(x,m,e) or return nil
   [p',.,e]:= comp(p,$Boolean,e) or return nil
   e:= put(x',"condition",p',e)
   [x',m',e]
 
---% exit
-
+@
+\subsection{compExit}
+Compile exit
+<<*>>=
 compExit(["exit",level,x],m,e) ==
   index:= level-1
   $exitModeStack = [] => comp(x,m,e)
@@ -925,20 +1077,29 @@ compExit(["exit",level,x],m,e) ==
   modifyModeStack(m',index)
   [["TAGGEDexit",index,u],m,e]
 
+@
+\subsection{modifyModeStack}
+<<*>>=
 modifyModeStack(m,index) ==
   $reportExitModeStack =>
     SAY("exitModeStack: ",COPY $exitModeStack," ====> ",
       ($exitModeStack.index:= resolve(m,$exitModeStack.index); $exitModeStack))
   $exitModeStack.index:= resolve(m,$exitModeStack.index)
 
+@
+\subsection{compLeave}
+Compile leave
+<<*>>=
 compLeave(["leave",level,x],m,e) ==
   index:= #$exitModeStack-1-$leaveLevelStack.(level-1)
   [x',m',e']:= u:= comp(x,$exitModeStack.index,e) or return nil
   modifyModeStack(m',index)
   [["TAGGEDexit",index,u],m,e]
 
---% return
-
+@
+\subsection{compReturn}
+Compile return
+<<*>>=
 compReturn(["return",level,x],m,e) ==
   null $exitModeStack =>
     stackSemanticError(["the return before","%b",x,"%d","is unneccessary"],nil)
@@ -952,8 +1113,10 @@ compReturn(["return",level,x],m,e) ==
     modifyModeStack(m',index)
   [["TAGGEDreturn",0,u],m,e']
 
---% ELT
-
+@
+\subsection{compElt}
+Compile Elt
+<<*>>=
 compElt(form,m,E) ==
   form isnt ["elt",aDomain,anOp] => compForm(form,m,E)
   aDomain="Lisp" =>
@@ -979,8 +1142,10 @@ compElt(form,m,E) ==
     convert([["call",val],first rest sig,E], m) --implies fn calls used to access constants
   compForm(form,m,E)
 
---% HAS
-
+@
+\subsection{compHas}
+Compile has
+<<*>>=
 compHas(pred is ["has",a,b],m,$e) ==
   --b is (":",:.) => (.,.,E):= comp(b,$EmptyMode,E)
   $e:= chaseInferences(pred,$e)
@@ -990,6 +1155,9 @@ compHas(pred is ["has",a,b],m,$e) ==
 
       --used in various other places to make the discrimination
 
+@
+\subsection{compHasFormat}
+<<*>>=
 compHasFormat (pred is ["has",olda,b]) ==
   argl := rest $form
   formals := TAKE(#argl,$FormalMapVariableList)
@@ -1003,8 +1171,10 @@ compHasFormat (pred is ["has",olda,b]) ==
   isDomainForm(b,$EmptyEnvironment) => ["EQUAL",a,b]
   ["HasCategory",a,mkDomainConstructor b]
 
---% IF
-
+@
+\subsection{compIf}
+Compile if
+<<*>>=
 compIf(["IF",a,b,c],m,E) ==
   [xa,ma,Ea,Einv]:= compBoolean(a,$Boolean,E) or return nil
   [xb,mb,Eb]:= Tb:= compFromIf(b,m,Ea) or return nil
@@ -1019,6 +1189,9 @@ compIf(["IF",a,b,c],m,E) ==
       E
   [x,mc,returnEnv]
 
+@
+\subsection{canReturn}
+<<*>>=
 canReturn(expr,level,exitCount,ValueFlag) ==  --SPAD: exit and friends
   atom expr => ValueFlag and level=exitCount
   (op:= first expr)="QUOTE" => ValueFlag and level=exitCount
@@ -1056,10 +1229,16 @@ canReturn(expr,level,exitCount,ValueFlag) ==  --SPAD: exit and friends
     and/[canReturn(u,level,exitCount,ValueFlag) for u in expr]
   systemErrorHere '"canReturn" --for the time being
 
+@
+\subsection{compBoolean}
+<<*>>=
 compBoolean(p,m,E) ==
   [p',m,E]:= comp(p,m,E) or return nil
   [p',m,getSuccessEnvironment(p,E),getInverseEnvironment(p,E)]
 
+@
+\subsection{getSuccessEnvironment}
+<<*>>=
 getSuccessEnvironment(a,e) ==
 
   -- the next four lines try to ensure that explicit special-case tests
@@ -1079,6 +1258,9 @@ getSuccessEnvironment(a,e) ==
     put(x,"condition",[a,:get(x,"condition",e)],e)
   e
 
+@
+\subsection{getInverseEnvironment}
+<<*>>=
 getInverseEnvironment(a,E) ==
   atom a => E
   [op,:argl]:= a
@@ -1101,12 +1283,18 @@ getInverseEnvironment(a,E) ==
     put(x,"condition",[newpred,:get(x,"condition",E)],E)
   E
 
+@
+\subsection{getUnionMode}
+<<*>>=
 getUnionMode(x,e) ==
   m:=
     atom x => getmode(x,e)
     return nil
   isUnionMode(m,e)
 
+@
+\subsection{isUnionMode}
+<<*>>=
 isUnionMode(m,e) ==
   m is ["Union",:.] => m
   (m':= getmode(m,e)) is ["Mapping",["UnionCategory",:.]] => CADR m'
@@ -1114,30 +1302,45 @@ isUnionMode(m,e) ==
     (v.expr is ["Union",:.] => v.expr; nil)
   nil
 
+@
+\subsection{compFromIf}
+<<*>>=
 compFromIf(a,m,E) ==
   a="noBranch" => ["noBranch",m,E]
   true => comp(a,m,E)
 
+@
+\subsection{quotify}
+<<*>>=
 quotify x == x
 
+@
+\subsection{compImport}
+<<*>>=
 compImport(["import",:doms],m,e) ==
   for dom in doms repeat e:=addDomain(dom,e)
   ["/throwAway",$NoValueMode,e]
 
---Will the jerk who commented out these two functions please NOT do so
---again.  These functions ARE needed, and case can NOT be done by
---modemap alone.  The reason is that A case B requires to take A
---evaluated, but B unevaluated.  Therefore a special function is
---required.  You may have thought that you had tested this on "failed"
---etc., but "failed" evaluates to it's own mode.  Try it on x case $
---next time.
---                An angry JHD - August 15th., 1984
+@
+\subsection{compCase}
+Will the jerk who commented out these two functions please NOT do so
+again.  These functions ARE needed, and case can NOT be done by
+modemap alone.  The reason is that A case B requires to take A
+evaluated, but B unevaluated.  Therefore a special function is
+required.  You may have thought that you had tested this on ``failed''
+etc., but ``failed'' evaluates to it's own mode.  Try it on x case \$
+next time.
 
+An angry JHD - August 15th., 1984
+<<*>>=
 compCase(["case",x,m'],m,e) ==
   e:= addDomain(m',e)
   T:= compCase1(x,m',e) => coerce(T,m)
   nil
 
+@
+\subsection{compCase1}
+<<*>>=
 compCase1(x,m,e) ==
   [x',m',e']:= comp(x,$EmptyMode,e) or return nil
   u:=
@@ -1147,6 +1350,9 @@ compCase1(x,m,e) ==
   fn:= (or/[selfn for [cond,selfn] in u | cond=true]) or return nil
   [["call",fn,x'],$Boolean,e']
 
+@
+\subsection{compColon}
+<<*>>=
 compColon([":",f,t],m,e) ==
   $insideExpressionIfTrue=true => compColonInside(f,m,e,t)
     --if inside an expression, ":" means to convert to m "on faith"
@@ -1177,12 +1383,18 @@ compColon([":",f,t],m,e) ==
         e:= put(f,"value",[genSomeVariable(),t,$noEnv],e)
   ["/throwAway",getmode(f,e),e]
 
+@
+\subsection{unknownTypeError}
+<<*>>=
 unknownTypeError name ==
   name:=
     name is [op,:.] => op
     name
   stackSemanticError(["%b",name,"%d","is not a known type"],nil)
 
+@
+\subsection{compPretend}
+<<*>>=
 compPretend(["pretend",x,t],m,e) ==
   e:= addDomain(t,e)
   T:= comp(x,t,e) or comp(x,$EmptyMode,e) or return nil
@@ -1192,6 +1404,9 @@ compPretend(["pretend",x,t],m,e) ==
   T:= [T.expr,t,T.env]
   T':= coerce(T,m) => (if warningMessage then stackWarning warningMessage; T')
 
+@
+\subsection{compColonInside}
+<<*>>=
 compColonInside(x,m,e,m') ==
   e:= addDomain(m',e)
   T:= comp(x,$EmptyMode,e) or return nil
@@ -1208,19 +1423,23 @@ compColonInside(x,m,e,m') ==
          stackWarning [":",m'," -- should replace by pretend"]
     T'
 
+@
+\subsection{compIs}
+<<*>>=
 compIs(["is",a,b],m,e) ==
   [aval,am,e] := comp(a,$EmptyMode,e) or return nil
   [bval,bm,e] := comp(b,$EmptyMode,e) or return nil
   T:= [["domainEqual",aval,bval],$Boolean,e]
   coerce(T,m)
 
---%  Functions for coercion by the compiler
-
---  The function coerce is used by the old compiler for coercions.
---  The function coerceInteractive is used by the interpreter.
---  One should always call the correct function, since the represent-
---  ation of basic objects may not be the same.
-
+@
+\section{Functions for coercion by the compiler}
+\subsection{coerce}
+The function coerce is used by the old compiler for coercions.
+The function coerceInteractive is used by the interpreter.
+One should always call the correct function, since the representation 
+of basic objects may not be the same.
+<<*>>=
 coerce(T,m) ==
   $InteractiveMode =>
     keyedSystemError("S2GE0016",['"coerce",
@@ -1237,6 +1456,9 @@ coerce(T,m) ==
       ["Cannot coerce","%b",x,"%d","%l","      of mode","%b",m1,"%d","%l",
         "      to mode","%b",m2,"%d"]
 
+@
+\subsection{coerceEasy}
+<<*>>=
 coerceEasy(T,m) ==
   m=$EmptyMode => T
   m=$NoValueMode or m=$Void => [T.expr,m,T.env]
@@ -1248,6 +1470,9 @@ coerceEasy(T,m) ==
   T.mode=$EmptyMode or modeEqualSubst(T.mode,m,T.env) =>
     [T.expr,m,T.env]
 
+@
+\subsection{coerceSubset}
+<<*>>=
 coerceSubset([x,m,e],m') ==
   isSubset(m,m',e) or m="Rep" and m'="$" => [x,m',e]
   m is ['SubDomain,=m',:.] => [x,m',e]
@@ -1259,6 +1484,9 @@ coerceSubset([x,m,e],m') ==
       [x,m',e]
   nil
 
+@
+\subsection{coerceHard}
+<<*>>=
 coerceHard(T,m) ==
   $e: local:= T.env
   m':= T.mode
@@ -1275,6 +1503,9 @@ coerceHard(T,m) ==
       coerceExtraHard(T,m)
   coerceExtraHard(T,m)
 
+@
+\subsection{coerceExtraHard}
+<<*>>=
 coerceExtraHard(T is [x,m',e],m) ==
   T':= autoCoerceByModemap(T,m) => T'
   isUnionMode(m',e) is ["Union",:l] and (t:= hasType(x,e)) and
@@ -1284,6 +1515,9 @@ coerceExtraHard(T is [x,m',e],m) ==
       [['coerceRe2E,x,['ELT,COPY m',0]],m,e]
   nil
 
+@
+\subsection{coerceable}
+<<*>>=
 coerceable(m,m',e) ==
   m=m' => m
   -- must find any free parameters in m
@@ -1291,16 +1525,25 @@ coerceable(m,m',e) ==
   coerce(["$fromCoerceable$",m,e],m') => m'
   nil
 
+@
+\subsection{coerceExit}
+<<*>>=
 coerceExit([x,m,e],m') ==
   m':= resolve(m,m')
   x':= replaceExitEtc(x,catchTag:= MKQ GENSYM(),"TAGGEDexit",$exitMode)
   coerce([["CATCH",catchTag,x'],m,e],m')
 
+@
+\subsection{compAtSign}
+<<*>>=
 compAtSign(["@",x,m'],m,e) ==
   e:= addDomain(m',e)
   T:= comp(x,m',e) or return nil
   coerce(T,m)
 
+@
+\subsection{compCoerce}
+<<*>>=
 compCoerce(["::",x,m'],m,e) ==
   e:= addDomain(m',e)
   T:= compCoerce1(x,m',e) => coerce(T,m)
@@ -1308,6 +1551,9 @@ compCoerce(["::",x,m'],m,e) ==
     T:= (or/[compCoerce1(x,m1,e) for m1 in l]) or return nil
     coerce([T.expr,m',T.env],m)
 
+@
+\subsection{compCoerce1}
+<<*>>=
 compCoerce1(x,m',e) ==
   T:= comp(x,m',e) or comp(x,$EmptyMode,e) or return nil
   m1:=
@@ -1323,6 +1569,9 @@ compCoerce1(x,m',e) ==
     code:= ['PROG1,['LET,gg,T.expr], ['check_-subtype,pred,MKQ m',gg]]
     [code,m',T.env]
 
+@
+\subsection{coerceByModemap}
+<<*>>=
 coerceByModemap([x,m,e],m') ==
 --+ modified 6/27 for new runtime system
   u:=
@@ -1337,6 +1586,9 @@ coerceByModemap([x,m,e],m') ==
     genDeltaEntry ['coerce,:mm]
   [["call",fn,x],m',e]
 
+@
+\subsection{autoCoerceByModemap}
+<<*>>=
 autoCoerceByModemap([x,source,e],target) ==
   u:=
     [cexpr
@@ -1351,9 +1603,12 @@ autoCoerceByModemap([x,source,e],target) ==
       "      to: ",target," without a case statement"]
   [["call",fn,x],target,e]
 
---% Very old resolve
--- should only be used in the old (preWATT) compiler
 
+@
+\subsection{resolve}
+Very old resolve
+should only be used in the old (preWATT) compiler
+<<*>>=
 resolve(din,dout) ==
   din=$NoValueMode or dout=$NoValueMode => $NoValueMode
   dout=$EmptyMode => din
@@ -1363,6 +1618,9 @@ resolve(din,dout) ==
     mkUnion(din,dout)
   dout
 
+@
+\subsection{modeEqual}
+<<*>>=
 modeEqual(x,y) ==
   -- this is the late modeEqual
   -- orders Unions
@@ -1379,6 +1637,9 @@ modeEqual(x,y) ==
     true
   (and/[modeEqual(u,v) for u in x for v in y])
 
+@
+\subsection{modeEqualSubst}
+<<*>>=
 modeEqualSubst(m1,m,e) ==
   modeEqual(m1, m) => true
   atom m1 => get(m1,"value",e) is [m',:.] and modeEqual(m',m)
@@ -1389,10 +1650,9 @@ modeEqualSubst(m1,m,e) ==
         and/[modeEqualSubst(xm1,xm2,e) for xm1 in l1 for xm2 in l2]
   nil
 
---% Things to support )compile
-
 @
 \section{)compile}
+This is the implementation of the )compile command.
 
 You use this command to invoke the new Axiom library compiler or the
 old Axiom system compiler.  The {\tt )compile} system command is
@@ -1701,8 +1961,8 @@ with a {\tt .lsp} file, the Lisp file is compiled and {\tt )library}
 is called. For Aldor, You must also have present a {\tt .asy}
 generated from the same source file.
 
+\subsection{compileSpad2Cmd}
 <<*>>=
-
 compileSpad2Cmd args ==
     -- This is the old compiler
     -- Assume we entered from the "compiler" function, so args ^= nil
@@ -1801,6 +2061,9 @@ compileSpad2Cmd args ==
     terminateSystemCommand()
     spadPrompt()
 
+@
+\subsection{convertSpadToAsFile}
+<<*>>=
 convertSpadToAsFile path ==
     -- can assume path has type = .spad
     $globalMacroStack : local := nil       -- for spad -> as translator
@@ -1833,6 +2096,9 @@ convertSpadToAsFile path ==
     mkCheck()
     'done
 
+@
+\subsection{compilerDoit}
+<<*>>=
 compilerDoit(constructor, fun) ==
     $byConstructors : local := []
     $constructorsSeen : local := []
@@ -1847,6 +2113,9 @@ compilerDoit(constructor, fun) ==
         null MEMBER(ii,$constructorsSeen) =>
           sayBrightly ['">>> Warning ",'%b,ii,'%d,'" was not found"]
 
+@
+\subsection{compilerDoitWithScreenedLisplib}
+<<*>>=
 compilerDoitWithScreenedLisplib(constructor, fun) ==
     EMBED('RWRITE,
           '(LAMBDA (KEY VALUE STREAM)
@@ -1858,6 +2127,40 @@ compilerDoitWithScreenedLisplib(constructor, fun) ==
     UNWIND_-PROTECT(compilerDoit(constructor,fun),
                    SEQ(UNEMBED 'RWRITE))
 
+
+@
+\section{License}
+<<license>>=
+-- Copyright (c) 1991-2002, The Numerical ALgorithms Group Ltd.
+-- All rights reserved.
+--
+-- Redistribution and use in source and binary forms, with or without
+-- modification, are permitted provided that the following conditions are
+-- met:
+--
+--     - Redistributions of source code must retain the above copyright
+--       notice, this list of conditions and the following disclaimer.
+--
+--     - Redistributions in binary form must reproduce the above copyright
+--       notice, this list of conditions and the following disclaimer in
+--       the documentation and/or other materials provided with the
+--       distribution.
+--
+--     - Neither the name of The Numerical ALgorithms Group Ltd. nor the
+--       names of its contributors may be used to endorse or promote products
+--       derived from this software without specific prior written permission.
+--
+-- THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+-- IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+-- TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+-- PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+-- OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+-- EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+-- PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+-- PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+-- LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+-- NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+-- SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 @
 \eject
