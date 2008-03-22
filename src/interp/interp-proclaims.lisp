@@ -2250,7 +2250,7 @@
             BOOT::|displayOperationsFromLisplib| BOOT::|say2PerLine|
             BOOT::|getArgumentConstructors,fn|
             BOOT::|getArgumentConstructors,gn| BOOT::|display|
-            BOOT::|displaySpad2Cmd| BOOT::|frameEnvironment|
+            BOOT::displaySpad2Cmd BOOT::|frameEnvironment|
             BOOT::|getArgumentConstructors| BOOT::|buildLibAttrs|
             BOOT::|buildLibOps| BOOT::|splitIntoOptionBlocks|
             BOOT::|writedb| BOOT::|getFirstWord| BOOT::|f07aefSolve,fp|

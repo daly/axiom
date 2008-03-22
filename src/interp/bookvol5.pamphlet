@@ -1243,6 +1243,7 @@ this is what the current code does so I won't change it.
 
 @
 \chapter{System Command Handling}
+\section{Variables Used}
 \subsection{defvar \$systemCommands}
 The system commands are the top-level commands available in Axiom
 that can all be invoked by prefixing the symbol with a closed-paren. 
@@ -1435,7 +1436,7 @@ during a session are pushed onto this list for later lookup.
  (setq |$CommandSynonymAlist| (copy-alist |$InitialCommandSynonymAlist|)))
 
 @
-
+\section{Functions}
 \subsection{defun ncloopCommand}
 The \$systemCommandFunction is set in SpadInterpretStream
 to point to the function InterpExecuteSpadSystemCommand.
@@ -1512,6 +1513,269 @@ token in the string. If the string only 0 or more blanks it returns nil.
     (if blank
      (list (subseq x nonblank blank) (subseq x blank))
      (list (subseq x nonblank) "")))))
+
+@
+\chapter{The Display Command}
+\section{)display}
+\begin{verbatim}
+  )display abbreviations 
+  )display abbreviations [obj]
+  )display all
+  )display macros
+  )display mode all
+  )display mode [obj1 [obj2 ...]]
+  )display names
+  )display operations opname
+  )display properties
+  )display properties all
+  )display properties [obj1 [obj2 ...]]
+  )display value all
+  )display value [obj1 [obj2 ...]]
+\end{verbatim}
+
+This command is used to display the contents of the workspace and
+signatures of functions with a given name. A signature gives the
+argument and return types of a function.
+
+The command
+\begin{verbatim}
+  )display abbreviations 
+  )display abbreviations [obj]
+\end{verbatim}
+will show all of the abbreviations in the current workspace.
+
+The command
+\begin{verbatim}
+  )display all 
+\end{verbatim}
+is equivalent to 
+\begin{verbatim}
+  )display properties
+\end{verbatim}
+
+The command
+\begin{verbatim}
+  )display macros
+\end{verbatim}
+will show all of the macros in the current workspace.
+
+
+The command
+\begin{verbatim}
+  )display names
+\end{verbatim}
+lists the names of all user-defined objects in the workspace. This is
+useful if you do not wish to see everything about the objects and need
+only be reminded of their names.
+
+To just show the declared mode of ``d'', issue
+\begin{verbatim}
+  )display mode d
+\end{verbatim}
+
+All modemaps for a given operation may be displayed by using
+\begin{verbatim}
+  )display operations
+\end{verbatim}
+
+A modemap is a collection of information about a particular reference
+to an operation. This includes the types of the arguments and the
+return value, the location of the implementation and any conditions on
+the types. The modemap may contain patterns. The following displays
+the modemaps for the operation {\bf complex}:
+\begin{verbatim}
+  )d op complex
+\end{verbatim}
+
+In addition to the modemaps for an operation the request to display
+an operation will be followed by examples of the operation from each
+domain.
+
+The commands
+\begin{verbatim}
+  )display all
+  )display properties
+  )display properties all
+\end{verbatim}
+all do the  same thing: show the values and types and declared modes
+of all variables in the workspace. If you have defined functions,
+their signatures and definitions will also be displayed.
+
+To show all information about a particular variable or user functions,
+for example, something named ``d'', issue
+\begin{verbatim}
+  )display properties d
+\end{verbatim}
+
+To just show the value (and the type) of ``d'', issue
+\begin{verbatim}
+  )display value d
+\end{verbatim}
+\section{Variables Used}
+\subsection{defvar \$displayOptions}
+The current value of \$displayOptions is
+
+<<initvars>>=
+(defvar |$displayOptions| 
+ '(|abbreviations| |all| |macros| |modes| |names| |operations| 
+   |properties| |types| |values|))
+
+@
+
+\section{Data Structures}
+\section{Functions}
+\subsection{defun display}
+This trivial function satisfies the standard pattern of making a
+user command match the name of the function which implements the
+command. That command immediatly invokes a ``Spad2Cmd'' version.
+<<defun display>>=
+(defun |display| (l)
+ (displaySpad2Cmd l)) 
+
+@
+
+\subsection{displaySpad2Cmd}
+We process the options to the command and call the appropriate
+display function. There are really only 4 display functions.
+All of the other options are just subcases.
+
+There is a slight mismatch between the \$displayOptions list of
+symbols and the options this command accepts so we have a cond
+branch to clean up the option variable.
+
+If we fall all the way thru we use the \$displayOptions list
+to construct a list of strings for the sayMessage function
+and tell the user what options are available.
+<<defun displaySpad2Cmd>>=
+(defun displaySpad2Cmd (l)
+ (declare (special |$e|))
+ (let ((|$e| |$EmptyEnvironment|) (opt (car l)) (vl (cdr l)) 
+       option optList msg)
+  (if (and (pairp l) (not (eq opt '?)))
+   (progn
+    (setq option (|selectOptionLC| opt |$displayOptions| '|optionError|))
+    (cond
+     ((eq option '|all|)
+       (setq l (list '|properties|))
+       (setq option '|properties|))
+     ((or (eq option '|modes|) (eq option '|types|))
+       (setq l (cons '|type| vl))
+       (setq option '|type|))
+     ((eq option '|values|)
+       (setq l (cons '|value| vl))
+       (setq option '|value|)))
+    (cond 
+     ((eq option '|abbreviations|)
+      (if (null vl)
+        (|listConstructorAbbreviations|)
+        (dolist (v vl) (|abbQuery| (|opOf| v)))))
+     ((eq option '|operations|) (|displayOperations| vl))
+     ((eq option '|macros|) (|displayMacros| vl))
+     ((eq option '|names|) (|displayWorkspaceNames|))
+     (t (|displayProperties| option l))))
+   (|sayMessage|
+    (append 
+      '("  )display keyword arguments are")
+      (mapcar #'(lambda (x) (format nil "~%     ~a" x)) |$displayOptions|)
+      (format nil "~%  or abbreviations thereof"))))))
+
+@
+\subsection{defun displayOperations}
+This function takes a list of operation names. If the list is null
+we query the user to see if they want all operations printed. Otherwise
+we print the information for the requested symbols.
+<<defun displayOperations>>=
+(defun |displayOperations| (l)
+ (if l
+  (dolist (op l) (|reportOpSymbol| op))
+  (if (yesanswer)
+   (dolist (op (|allOperations|)) (|reportOpSymbol| op))
+   (|sayKeyedMsg| 's2iz0059 nil))))
+
+@
+\subsection{defun yesanswer}
+This is a trivial function to simplify the logic of displaySpad2Cmd.
+If the user didn't supply an argument to the )display op command
+we ask if they wish to have all information about all Axiom operations
+displayed. If the answer is either Y or YES we return true else nil.
+<<defun yesanswer>>=
+(defun yesanswer ()
+ (memq (string2id-n (upcase (|queryUserKeyedMsg| 's2iz0058 nil)) 1) '(y yes)))
+
+@
+
+\subsection{defun displayMacros}
+;displayMacros names ==
+;  imacs := getInterpMacroNames()
+;  pmacs := getParserMacroNames()
+;  macros :=
+;     null names => APPEND (imacs, pmacs)
+;     names
+;  macros := REMDUP macros
+;  null macros => sayBrightly '"   There are no Axiom macros."
+;  -- first do user defined ones
+;  first := true
+;  for macro in macros repeat
+;    macro in pmacs =>
+;        if first then
+;            sayBrightly ['%l,'"User-defined macros:"]
+;            first := NIL
+;        displayParserMacro macro
+;    macro in imacs => 'iterate
+;    sayBrightly (["   ",'%b, macro, '%d, " is not a known Axiom macro."])
+;  -- now system ones
+;  first := true
+;  for macro in macros repeat
+;    macro in imacs =>
+;        macro in pmacs => 'iterate
+;        if first then
+;            sayBrightly ['%l,'"System-defined macros:"]
+;            first := NIL
+;        displayMacro macro
+;    macro in pmacs => 'iterate
+;  NIL
+<<defun displayMacros>>=
+(defun |displayMacros| (names)
+ (let (imacs pmacs macros first)
+  (setq imacs (|getInterpMacroNames|))
+  (setq pmacs (|getParserMacroNames|))
+  (if names
+    (setq macros names)
+    (setq macros (append imacs pmacs)))
+  (setq macros (remdup macros))
+  (cond
+   ((null macros) (|sayBrightly| "   There are no Axiom macros."))
+   (t
+     (setq first t)
+     (do ((t0 macros (cdr t0)) (macro nil))
+         ((or (atom t0) (progn (setq macro (car t0)) nil)) nil)
+      (seq
+       (exit
+        (cond
+         ((|member| macro pmacs)
+           (cond
+            (first (|sayBrightly| (cons '|%l| (cons "User-defined macros:" nil))) (setq first nil)))
+           (|displayParserMacro| macro))
+         ((|member| macro imacs) '|iterate|)
+         (t (|sayBrightly| (cons "   " (cons '|%b| (cons macro (cons '|%d| (cons " is not a known Axiom macro." nil)))))))))))
+     (setq first t)
+     (do ((t1 macros (cdr t1)) (macro nil))
+         ((or (atom t1) (progn (setq macro (car t1)) nil)) nil)
+      (seq
+       (exit
+        (cond
+         ((|member| macro imacs)
+           (cond
+            ((|member| macro pmacs) '|iterate|)
+            (t 
+             (cond
+              (first
+               (|sayBrightly|
+                (cons '|%l|
+                 (cons "System-defined macros:" nil))) (setq first nil)))
+             (|displayMacro| macro))))
+         ((|member| macro pmacs) '|iterate|)))))
+     nil)))) 
 
 @
 \chapter{The History Mechanism}
@@ -4331,7 +4595,7 @@ findFrameInRing(name) ==
       (exit val))))))) 
 
 @
-\subsection{updateCurrentInterpreterFrame}
+\subsection{defun updateCurrentInterpreterFrame}
 \begin{verbatim}
 updateCurrentInterpreterFrame() ==
   RPLACA($interpreterFrameRing,createCurrentInterpreterFrame())
@@ -5951,7 +6215,11 @@ DEBUGSYS=${OBJ}/${SYS}/bin/debugsys
 <<defun dewritify,is?>>
 <<defun diffAlist>>
 <<defun disableHist>>
+<<defun display>>
 <<defun displayFrameNames>>
+<<defun displayMacros>>
+<<defun displayOperations>>
+<<defun displaySpad2Cmd>>
 
 <<defun emptyInterpreterFrame>>
 
@@ -6059,6 +6327,8 @@ DEBUGSYS=${OBJ}/${SYS}/bin/debugsys
 <<defun writeHiFi>>
 <<defun writeHistModesAndValues>>
 <<defun writeInputLines>>
+
+<<defun yesanswer>>
 
 @
 \chapter{Makefile.bookvol5}
