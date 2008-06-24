@@ -1,10 +1,13 @@
 \documentclass{article}
 \usepackage{axiom}
+\newcommand{\file}[1]{\texttt{#1}}
 \begin{document}
 \title{\$SPAD/src/interp ax.boot}
-\author{The Axiom Team}
+\author{Ralf Hemmecke}
 \maketitle
 \begin{abstract}
+We give an overview of what \file{ax.boot} does and in particular
+describe the function \verb'makeAxExportForm'.
 \end{abstract}
 \eject
 \tableofcontents
@@ -21,7 +24,29 @@ but was changed to read:
   axForm := ['Sequence, _
                ['Import, [], 'AxiomLib], ['Import, [], 'Boolean], :axForms]
 @
+\section{Overview}
 \subsection{makeAxExportForm}
+The most important function in \file{ax.boot} is the function
+\verb'makeAxExportForm'.
+
+The function takes as input a filename and a list of constructors.
+Via LISP it would be called like
+\begin{verbatim}
+(|makeAxExportForm| filename constructors)
+\end{verbatim}
+where \verb'filename' is actually unused and could be removed and
+\verb'constructors' should be a list of constructor names, i.e., names
+of categories, domains, and packages in their unabbreviated form.
+
+It returns a list that represents the \texttt{.ap} (parsed source)
+(see \verb'aldor -hall') form of the constructors. However, since the
+output is only needed for a construction of an Aldor-Axiom
+interaction, \verb'makeAxExportForm' will only construct the category
+part of the constructor.
+
+The function is actually used in \file{src/aldor/genax.lsp} and is an
+auxiliary part in the construction of the interface for the
+interaction of the Aldor compiler with Axiom.
 <<makeAxExportForm>>=
 makeAxExportForm(filename, constructors) ==
   $defaultFlag : local := false
@@ -42,7 +67,417 @@ makeAxExportForm(filename, constructors) ==
   axForm
 
 @
-\subsection{axFormatPref}
+The basic translation is easily demonstrated with a few examples. For
+better readability, we look at the corresponding SPAD form of the
+constructor (instead of its internal LISP representation).
+
+Let us first state what different situations we identified.
+\begin{enumerate}
+\item Ordinary domains. See Section~\ref{sec:Domain}.
+\item Ordinary categories. See Section~\ref{sec:Category}.
+\item Ordinary categories with default packages. See
+  Section~\ref{sec:Category+Default}.
+\item Initial domains, i.e., domains that will be extended in the
+  course of building \file{libaxiom.al}. These domains are listed in
+  the variable \verb'$extendedDomains'. %$
+
+  See Sections~\ref{sec:InitDomain} and
+  \ref{sec:ParametrizedInitDomain}. There is a subdivision for these
+  domains.
+  \begin{enumerate}
+  \item For domains that take no arguments, see
+    Section~\ref{sec:InitDomain}.
+  \item For domains that take arguments, see
+    Section~\ref{sec:ParametrizedInitDomain}.
+  \end{enumerate}
+\end{enumerate}
+\section{Ordinary Domains}\label{sec:Domain}
+The domain \verb'Stack'.
+\begin{verbatim}
+Stack(S:SetCategory): StackAggregate S with
+    stack: List S -> %
+  == add
+    Rep := Reference List S
+    ...
+\end{verbatim}
+It is translated into \ldots
+\begin{verbatim}
+(|Sequence| (|Import| NIL |AxiomLib|) (|Import| NIL |Boolean|)
+    (|Export|
+        (|Declare| |Stack|
+            (|Apply| -> (|Declare| |#1| |SetCategory|)
+                     (|With| NIL
+                             (|Sequence|
+                                 (|Apply| |StackAggregate| |#1|)
+                                 (|Declare| |stack|
+                                     (|Apply| ->
+                                      (|Comma| (|Apply| |List| |#1|))
+                                      %))))))
+        NIL NIL))
+\end{verbatim}
+That is the parsed source of the Aldor code \ldots
+\begin{verbatim}
+import from AxiomLib;
+import from Boolean;
+export Stack: (T: SetCategory) -> with {
+                                        StackAggregate T;
+                                        stack: List T -> %;
+                                  }
+\end{verbatim}
+Note that nothing appears before the \verb'with'. No problem because
+that is equivalent to a \verb'Join' in Aldor.
+\section{Ordinary Categories}\label{sec:Category}
+The category \verb'SquareFreeNormalizedTriangularSetCategory' without
+a default package.
+\begin{verbatim}
+SquareFreeNormalizedTriangularSetCategory(_
+        R: GcdDomain,_
+        E: OrderedAbelianMonoidSup,_
+        V: OrderedSet,_
+        P:RecursivePolynomialCategory(R, E, V)): Category ==
+    Join(_
+        SquareFreeRegularTriangularSetCategory(R,E,V,P),_
+         NormalizedTriangularSetCategory(R,E,V,P))
+\end{verbatim}
+It is translated into \ldots
+\begin{verbatim}
+(|Sequence| (|Import| NIL |AxiomLib|) (|Import| NIL |Boolean|)
+    (|Define|
+        (|Declare| |SquareFreeNormalizedTriangularSetCategory|
+            (|Apply| ->
+                     (|Comma| (|Declare| |#1| |GcdDomain|)
+                              (|Declare| |#2|
+                                  |OrderedAbelianMonoidSup|)
+                              (|Declare| |#3| |OrderedSet|)
+                              (|Declare| |#4|
+                                  (|Apply| |RecursivePolynomialCategory|
+                                           |#1| |#2| |#3|)))
+                     |Category|))
+        (|Lambda|
+            (|Comma| (|Declare| |#1| |GcdDomain|)
+                     (|Declare| |#2| |OrderedAbelianMonoidSup|)
+                     (|Declare| |#3| |OrderedSet|)
+                     (|Declare| |#4|
+                         (|Apply| |RecursivePolynomialCategory| |#1|
+                                  |#2| |#3|)))
+            |Category|
+            (|Label| |SquareFreeNormalizedTriangularSetCategory|
+                     (|With| NIL
+                             (|Sequence|
+                                 (|Apply| |SquareFreeRegularTriangularSetCategory|
+                                          |#1| |#2| |#3| |#4|)
+                                 (|Apply| |NormalizedTriangularSetCategory|
+                                          |#1| |#2| |#3| |#4|)))))))
+\end{verbatim}
+That is the parsed source of the Aldor code \ldots
+\begin{verbatim}
+import from AxiomLib;
+import from Boolean;
+SquareFreeNormalizedTriangularSetCategory: (
+        R: GcdDomain,
+        E: OrderedAbelianMonoidSup,
+        V: OrderedSet,
+        P: RecursivePolynomialCategory(R, E, V)
+) -> Category == (
+        R: GcdDomain,
+        E: OrderedAbelianMonoidSup,
+        V: OrderedSet,
+        P: RecursivePolynomialCategory(R, E, V)
+): Category +-> with {
+        SquareFreeRegularTriangularSetCategory(R, E, V, P),
+        NormalizedTriangularSetCategory(R, E, V, P)
+}
+\end{verbatim}
+  Again, nothing appears in front of the \verb'with'. No problem
+  because that is equivalent to a \verb'Join' in Aldor.
+\section{Ordinary Categories with Default Packages}
+\label{sec:Category+Default}
+The category \verb'StringAggregate' with default package.
+\begin{verbatim}
+StringAggregate: Category == OneDimensionalArrayAggregate Character with
+    lowerCase       : % -> %
+    lowerCase_!: % -> %
+    upperCase       : % -> %
+    ...
+    rightTrim: (%, CharacterClass) -> %
+    elt: (%, %) -> %
+ add
+   trim(s: %, c:  Character)      == leftTrim(rightTrim(s, c),  c)
+   trim(s: %, cc: CharacterClass) == leftTrim(rightTrim(s, cc), cc)
+   lowerCase s           == lowerCase_! copy s
+   upperCase s           == upperCase_! copy s
+   prefix?(s, t)         == substring?(s, t, minIndex t)
+   coerce(c:Character):% == new(1, c)
+   elt(s:%, t:%): %      == concat(s,t)$%
+\end{verbatim}
+It is translated into \ldots
+\begin{verbatim}
+(|Sequence| (|Import| NIL |AxiomLib|) (|Import| NIL |Boolean|)
+    (|Foreign| (|Declare| |dummyDefault| |Exit|) |Lisp|)
+    (|Define| (|Declare| |StringAggregate| |Category|)
+        (|With| NIL
+                (|Sequence|
+                    (|Apply| |OneDimensionalArrayAggregate|
+                             |Character|)
+                    (|Declare| |lowerCase| (|Apply| -> (|Comma| %) %))
+                    (|Declare| |lowerCase!| (|Apply| -> (|Comma| %) %))
+                    (|Declare| |upperCase| (|Apply| -> (|Comma| %) %))
+                    ...
+                    (|Declare| |rightTrim|
+                        (|Apply| -> (|Comma| % |CharacterClass|) %))
+                    (|Declare| |apply| (|Apply| -> (|Comma| % %) %))
+                    (|Default|
+                        (|Sequence|
+                            (|Define|
+                                (|Declare| |coerce|
+                                    (|Apply| -> (|Comma| |Character|)
+                                     %))
+                                (|Lambda|
+                                    (|Comma|
+                                     (|Declare| |t#1| |Character|))
+                                    %
+                                    (|Label| |coerce| |dummyDefault|)))
+                            (|Define|
+                                (|Declare| |apply|
+                                    (|Apply| -> (|Comma| % %) %))
+                                (|Lambda|
+                                    (|Comma| (|Declare| |t#1| %)
+                                     (|Declare| |t#2| %))
+                                    % (|Label| |apply| |dummyDefault|)))
+                            (|Define|
+                                (|Declare| |lowerCase|
+                                    (|Apply| -> (|Comma| %) %))
+                                (|Lambda| (|Comma| (|Declare| |t#1| %))
+                                    %
+                                    (|Label| |lowerCase|
+                                     |dummyDefault|)))
+                            ...
+                            ))))))
+\end{verbatim}
+That is the parsed source of the Aldor code \ldots
+\begin{verbatim}
+import from AxiomLib;
+import from Boolean;
+import dummyDefault: Exit from Foreign Lisp;
+StringAggregate: Category == with {
+    OneDimensionalArrayAggregate Character;
+    lowerCase: % -> %;
+    lowerCase!: % -> %;
+    upperCase: % -> %;
+    ...
+    rightTrim: (%, CharacterClass) -> %;
+    apply: (%, %) -> %
+ default {
+   coerce: Character -> % == (t: Character): % +-> dummyDefault;
+   apply: (%, %) -> %     == (t1: %, t2: %): % +-> dummyDefault;
+   lowerCase: % -> %      == (t: %): %         +-> dummyDefault;
+   ...
+}
+\end{verbatim}
+It is important to note that the actual default functions are given by
+a dummy implementation that is imported from LISP.
+
+And again, nothing appears in front of the \verb'with'. No problem
+because that is equivalent to a \verb'Join' in Aldor.
+
+Note that the \verb'elt' function is translated into \verb'apply'.
+\section{Initial Domains without Arguments}
+\label{sec:InitDomain}
+\begin{verbatim}
+SingleInteger(): Join(IntegerNumberSystem,Logic,OpenMath) with
+   canonical
+   canonicalsClosed
+   noetherian
+   max      : () -> %
+   min      : () -> %
+   "not":   % -> %
+   "~"  :   % -> %
+   "/\": (%, %) -> %
+   "\/" : (%, %) -> %
+   "xor": (%, %) -> %
+   Not  : % -> %
+   And  : (%,%) -> %
+   Or   : (%,%) -> %
+ == add
+   ...
+\end{verbatim}
+It is translated into \ldots
+\begin{verbatim}
+(|Sequence| (|Import| NIL |AxiomLib|) (|Import| NIL |Boolean|)
+    (|Extend|
+        (|Define|
+            (|Declare| |SingleInteger|
+                (|With| NIL
+                        (|Sequence| |IntegerNumberSystem| |Logic|
+                            |OpenMath|
+                            (|RestrictTo| |canonical| |Category|)
+                            (|RestrictTo| |canonicalsClosed|
+                                |Category|)
+                            (|RestrictTo| |noetherian| |Category|)
+                            (|Declare| |max| (|Apply| -> (|Comma|) %))
+                            (|Declare| |min| (|Apply| -> (|Comma|) %))
+                            (|Declare| |not|
+                                (|Apply| -> (|Comma| %) %))
+                            (|Declare| ~ (|Apply| -> (|Comma| %) %))
+                            (|Declare| |/\\|
+                                (|Apply| -> (|Comma| % %) %))
+                            (|Declare| |\\/|
+                                (|Apply| -> (|Comma| % %) %))
+                            (|Declare| |xor|
+                                (|Apply| -> (|Comma| % %) %))
+                            (|Declare| |Not|
+                                (|Apply| -> (|Comma| %) %))
+                            (|Declare| |And|
+                                (|Apply| -> (|Comma| % %) %))
+                            (|Declare| |Or|
+                                (|Apply| -> (|Comma| % %) %)))))
+            (|Add| (|PretendTo| (|Add| NIL NIL)
+                       (|With| NIL
+                               (|Sequence| |IntegerNumberSystem|
+                                   |Logic| |OpenMath|
+                                   (|RestrictTo| |canonical|
+                                    |Category|)
+                                   (|RestrictTo| |canonicalsClosed|
+                                    |Category|)
+                                   (|RestrictTo| |noetherian|
+                                    |Category|)
+                                   (|Declare| |max|
+                                    (|Apply| -> (|Comma|) %))
+                                   (|Declare| |min|
+                                    (|Apply| -> (|Comma|) %))
+                                   (|Declare| |not|
+                                    (|Apply| -> (|Comma| %) %))
+                                   (|Declare| ~
+                                    (|Apply| -> (|Comma| %) %))
+                                   (|Declare| |/\\|
+                                    (|Apply| -> (|Comma| % %) %))
+                                   (|Declare| |\\/|
+                                    (|Apply| -> (|Comma| % %) %))
+                                   (|Declare| |xor|
+                                    (|Apply| -> (|Comma| % %) %))
+                                   (|Declare| |Not|
+                                    (|Apply| -> (|Comma| %) %))
+                                   (|Declare| |And|
+                                    (|Apply| -> (|Comma| % %) %))
+                                   (|Declare| |Or|
+                                    (|Apply| -> (|Comma| % %) %)))))
+                   NIL))))
+\end{verbatim}
+That is the parsed source of the Aldor code \ldots
+\begin{verbatim}
+import from AxiomLib;
+import from Boolean;
+extend SingleInteger: with {
+        IntegerNumberSystem;
+        Logic;
+        OpenMath;
+        canonical @ Category;
+        canonicalsClosed @ Category;
+        noetherian @ Category;
+        max: () -> %;
+        min: () -> %;
+        _not: % -> %;
+        ~:   % -> %;
+        /\:  (%, %) -> %;
+        \/:  (%, %) -> %;
+        xor: (%, %) -> %;
+        Not: % -> %;
+        And: (%,%) -> %;
+        Or : (%,%) -> %;
+}
+ == (add pretend with {
+        IntegerNumberSystem;
+        Logic;
+        OpenMath;
+        canonical @ Category;
+        canonicalsClosed @ Category;
+        noetherian @ Category;
+        max: () -> %;
+        min: () -> %;
+        _not: % -> %;
+        ~:   % -> %;
+        /\:  (%, %) -> %;
+        \/:  (%, %) -> %;
+        xor: (%, %) -> %;
+        Not: % -> %;
+        And: (%,%) -> %;
+        Or : (%,%) -> %;
+}) add;
+\end{verbatim}
+\section{Initial Domains with Arguments}
+\label{sec:ParametrizedInitDomain}
+\begin{verbatim}
+SegmentBinding(S:Type): Type with
+  equation: (Symbol, Segment S) -> %
+  variable: % -> Symbol
+  segment : % -> Segment S
+  if S has SetCategory then SetCategory
+ == add
+  Rep := Record(var:Symbol, seg:Segment S)
+  ...
+\end{verbatim}
+It is translated into \ldots
+\begin{verbatim}
+(|Sequence| (|Import| NIL |AxiomLib|) (|Import| NIL |Boolean|)
+    (|Sequence|
+        (|Define|
+            (|Declare| |SegmentBindingExtendCategory|
+                (|Apply| -> (|Declare| |#1| |Type|) |Category|))
+            (|Lambda| (|Comma| (|Declare| |#1| |Type|)) |Category|
+                (|Label| |SegmentBindingExtendCategory|
+                         (|With| NIL
+                                 (|Sequence|
+                                     (|Declare| |equation|
+                                      (|Apply| ->
+                                       (|Comma| |Symbol|
+                                        (|Apply| |Segment| |#1|))
+                                       %))
+                                     (|Declare| |variable|
+                                      (|Apply| -> (|Comma| %) |Symbol|))
+                                     (|Declare| |segment|
+                                      (|Apply| -> (|Comma| %)
+                                       (|Apply| |Segment| |#1|)))
+                                     (|If|
+                                      (|Test|
+                                       (|Has| |#1| |SetCategory|))
+                                      |SetCategory| NIL))))))
+        (|Extend|
+            (|Define|
+                (|Declare| |SegmentBinding|
+                    (|Apply| -> (|Declare| |#1| |Type|)
+                             (|Apply| |SegmentBindingExtendCategory|
+                                      |#1|)))
+                (|Lambda| (|Comma| (|Declare| |#1| |Type|))
+                    (|Apply| |SegmentBindingExtendCategory| |#1|)
+                    (|Label| |SegmentBinding|
+                             (|Add| (|PretendTo| (|Add| NIL NIL)
+                                     (|Apply|
+                                      |SegmentBindingExtendCategory|
+                                      |#1|))
+                                    NIL)))))))
+\end{verbatim}
+That is the parsed source of the Aldor code \ldots
+\begin{verbatim}
+import from AxiomLib;
+import from Boolean;
+SegmentBindingExtendCategory: (S: Type) -> Category ==
+  (T: Type): Category +-> with {
+  equation: (Symbol, Segment S) -> %;
+  variable: % -> Symbol;
+  segment : % -> Segment S;
+  if S has SetCategory then SetCategory;
+}
+extend SegmentBinding: (S: Type) -> SegmentBindingExtendCategory S ==
+  (S: Type): SegmentBindingExtendCategory S +->
+    (add pretend SegmentBindingExtendCategory S) add;
+\end{verbatim}
+The last lines are actually equivalent to
+\begin{verbatim}
+extend SegmentBinding(S: Type): SegmentBindingExtendCategory S ==
+    (add pretend SegmentBindingExtendCategory S) add;
+\end{verbatim}
+
+\section{axFormatPref}
 Here we add an else clause. The original code read:
 \begin{verbatim}
       if name = '$ then name := '%
