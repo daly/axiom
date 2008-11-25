@@ -1,5 +1,5 @@
 \documentclass{article}
-\usepackage{axiom,amsthm}
+\usepackage{axiom,amsthm,amsmath,amssymb}
 \newtheorem{ToDo}{ToDo}[section]
 \begin{document}
 \title{fffg.spad}
@@ -48,7 +48,7 @@ FiniteAbelianMonoidRingFunctions2(E: OrderedAbelianMonoid,
 ++ Applications 22.
 FractionFreeFastGaussian(D, V): Exports == Implementation where
   D: Join(IntegralDomain, GcdDomain)
-  V: AbelianMonoidRing(D, NonNegativeInteger)
+  V: AbelianMonoidRing(D, NonNegativeInteger) -- for example, SUP D
 
   SUP  ==> SparseUnivariatePolynomial
 
@@ -62,8 +62,18 @@ FractionFreeFastGaussian(D, V): Exports == Implementation where
       ++ \spad{fffg} is the general algorithm as proposed by Beckermann and
       ++ Labahn.
       ++
-      ++ The second argument, c(k, M) computes c_k(M) as in Equation (2). Note
-      ++ that the information about f is therefore encoded in c.
+
+      ++ The first argument is the list of c_{i,i}.  These are the only values
+      ++ of C explicitely needed in \spad{fffg}.
+      ++
+      ++ The second argument c, computes c_k(M), i.e., c_k(.) is the dual basis
+      ++ of the vector space V, but also knows about the special multiplication
+      ++ rule as descibed in Equation (2).  Note that the information about f
+      ++ is therefore encoded in c.
+      ++
+      ++ The third argument is the vector of degree bounds n, as introduced in
+      ++ Definition 2.1.  In particular, the sum of the entries is the order of
+      ++ the Mahler system computed.
 
     interpolate: (List D, List D, NonNegativeInteger) -> Fraction SUP D
       ++ \spad{interpolate(xlist, ylist, deg} returns the rational function with
@@ -77,11 +87,11 @@ FractionFreeFastGaussian(D, V): Exports == Implementation where
 
 \begin{ToDo}
   The following function could be moved to [[FFFGF]], parallel to
-  [[generalInterpolation]]. However, the reason for moving
+  [[generalInterpolation]].  However, the reason for moving
   [[generalInterpolation]] for fractions to a separate package was the need of
-  a generic signature, hence the extra argument [[VF]] to [[FFFGF]]. In the
+  a generic signature, hence the extra argument [[VF]] to [[FFFGF]].  In the
   special case of rational interpolation, this extra argument is not necessary,
-  since we are always returning a fraction of [[SUP]]s, and ignore [[V]]. In
+  since we are always returning a fraction of [[SUP]]s, and ignore [[V]].  In
   fact, [[V]] is not needed for [[fffg]] itself, only if we want to specify a
   [[CoeffAction]].
 
@@ -229,7 +239,7 @@ FractionFreeFastGaussian(D, V): Exports == Implementation where
     generalInterpolation(C: List D, coeffAction: CoeffAction, 
                          f: Vector V, 
                          eta: List NonNegativeInteger): Matrix SUP D == 
-    
+
       c: cFunction := generalCoefficient(coeffAction, f,
                                          (#1-1)::NonNegativeInteger, #2)
       fffg(C, c, eta)
@@ -270,7 +280,7 @@ non-negative components smaller than [[p]] with the same sum as [[v]].
       else
         v.pos     := v.pos + 1    
         v.(pos-1) := (v.(pos-1) - 1)::NonNegativeInteger
-    
+
       v
 @
 
@@ -401,83 +411,107 @@ interpolation problem, if [[M.1.(2,1)]] vanishes.
 -------------------------------------------------------------------------------
 -- fffg
 -------------------------------------------------------------------------------
+@
 
+[[recurrence]] computes the new matrix $M$, according to the following formulas
+(cf. Table~2 in Beckermann and Labahn):
+\begin{align*}
+  &\text{Increase order}\\
+  &\quad\quad\text{for $\ell=1\dots m$, $\ell\neq\pi$}\\
+  &\quad\quad\quad\quad\mathbf M_{\sigma+1}^{(.,\ell)} := 
+        \left(\mathbf M_{\sigma}^{(.,\ell)}r^{(\pi)} 
+            - \mathbf M_{\sigma}^{(.,\pi)}r^{(\ell)}\right)/d_\sigma\\
+  &\text{Increase order in column $\pi$}\\
+  &\quad\quad\mathbf M_{\sigma+1}^{(.,\pi)} := 
+        \left(z-c_{\sigma,\sigma}\right)\mathbf M_{\sigma}^{(.,\pi)}\\
+  &\text{Adjust degree constraints:}\\
+  &\quad\quad\mathbf M_{\sigma+1}^{(.,\pi)} := 
+        \left(\mathbf M_{\sigma+1}^{(.,\pi)}r^{(\pi)} 
+            - \sum_{\ell\neq\pi}\mathbf M_{\sigma+1}^{(.,\ell)}p^{(\ell)}
+        \right)/d_\sigma
+\end{align*}
+
+Since we do not need the matrix $\mathbf M_{\sigma}$ anymore, we drop the index
+and update the matrix destructively.  In the following, we write [[Ck]] for
+$c_{\sigma,\sigma}$.
+
+<<package FFFG FractionFreeFastGaussian>>=
 -- a major part of the time is spent here
-    recurrence(M: Matrix SUP D, lambda: NonNegativeInteger, m: NonNegativeInteger,
+    recurrence(M: Matrix SUP D, pi: NonNegativeInteger, m: NonNegativeInteger,
                r: Vector D, d: D, z: SUP D, Ck: D, p: Vector D): Matrix SUP D ==
 
-          rLambda := qelt(r, lambda)
-          polyf := rLambda * (z - Ck::SUP D)
+        rPi: D := qelt(r, pi)
+        polyf: SUP D := rPi * (z - Ck::SUP D)
 
-          for i in 1..m repeat
-            Milambda    := qelt(M, i, lambda)
-            newMilambda := polyf * Milambda
+        for i in 1..m repeat
+            MiPi: SUP D    := qelt(M, i, pi)
+            newMiPi: SUP D := polyf * MiPi
 
+-- update columns ~= pi and calculate their sum
+            for l in 1..m | l ~= pi repeat
+                rl: D  := qelt(r, l)
+-- I need the coercion to SUP D, since exquo returns an element of
+-- Union("failed", SUP D)...
+                Mil: SUP D := ((qelt(M, i, l) * rPi - MiPi * rl) exquo d)::SUP D
+                qsetelt!(M, i, l, Mil)
 
--- update columns ~= lambda and calculate their sum
-            for l in 1..m | l ~= lambda repeat
-              rl  := qelt(r, l)
-              Mil := ((qelt(M, i, l) * rLambda - Milambda * rl) exquo d)::SUP D
-              qsetelt!(M, i, l, Mil)
+                pl: D  := qelt(p, l)
+                newMiPi := newMiPi - pl * Mil
 
-              pl  := qelt(p, l)
-              newMilambda := newMilambda - pl * Mil
+-- update column pi
+            qsetelt!(M, i, pi, (newMiPi exquo d)::SUP D)
 
--- update column lambda
-
-            qsetelt!(M, i, lambda, (newMilambda exquo d)::SUP D)
-
-          M
+        M
 
 
     fffg(C: List D, c: cFunction, eta: List NonNegativeInteger): Matrix SUP D ==
-
 -- eta is the vector of degrees. We compute M with degrees eta+e_i-1, i=1..m 
-      z: SUP D := monomial(1, 1)
-      m: NonNegativeInteger := #eta
-      M: Matrix SUP D := scalarMatrix(m, 1)
-      d: D := 1
-      K: NonNegativeInteger := reduce(_+, eta)
-      etak: Vector NonNegativeInteger := zero(m)
-      r: Vector D := zero(m)
-      p: Vector D := zero(m)
-      Lambda: List Integer
-      lambdaMax: Integer
-      lambda: NonNegativeInteger
+        z: SUP D := monomial(1, 1)
+        m: NonNegativeInteger := #eta
+        M: Matrix SUP D := scalarMatrix(m, 1)
+        d: D := 1
+        K: NonNegativeInteger := reduce(_+, eta)
+        etak: Vector NonNegativeInteger := zero(m)
+        r: Vector D := zero(m)
+        p: Vector D := zero(m)
+        Lambda: List Integer
+        lambdaMax: Integer
+        lambda: NonNegativeInteger
 
-      for k in 1..K repeat
+        for k in 1..K repeat
 -- k = sigma+1
 
-        for l in 1..m repeat r.l := c(k, column(M, l))
+            for l in 1..m repeat r.l := c(k, column(M, l))
 
-        Lambda := [eta.l-etak.l for l in 1..m | r.l ~= 0]
+            Lambda := [eta.l-etak.l for l in 1..m | r.l ~= 0]
 
 -- if Lambda is empty, then M, d and etak remain unchanged. Otherwise, we look
 -- for the next closest para-normal point.
 
-        (empty? Lambda) => "iterate"
+            (empty? Lambda) => "iterate"
 
-        lambdaMax := reduce(max, Lambda)
-        lambda := 1
-        while eta.lambda-etak.lambda < lambdaMax or r.lambda = 0 repeat 
-          lambda := lambda + 1
+            lambdaMax := reduce(max, Lambda)
+            lambda := 1
+            while eta.lambda-etak.lambda < lambdaMax or r.lambda = 0 repeat 
+                lambda := lambda + 1
 
 -- Calculate leading coefficients
 
-        for l in 1..m | l ~= lambda repeat
-          if etak.l > 0 then
-            p.l := coefficient(M.(l, lambda), (etak.l-1)::NonNegativeInteger)
-          else 
-            p.l := 0
+            for l in 1..m | l ~= lambda repeat
+                if etak.l > 0 then
+                    p.l := coefficient(M.(l, lambda), 
+                                       (etak.l-1)::NonNegativeInteger)
+                else 
+                    p.l := 0
 
 -- increase order and adjust degree constraints
 
-        M := recurrence(M, lambda, m, r, d, z, C.k, p)
+            M := recurrence(M, lambda, m, r, d, z, C.k, p)
 
-        d := r.lambda
-        etak.lambda := etak.lambda + 1
+            d := r.lambda
+            etak.lambda := etak.lambda + 1
 
-      M
+        M
 
 @
 %$
@@ -540,7 +574,7 @@ FractionFreeFastGaussianFractions(D, V, VF): Exports == Implementation where
       n := #f
       g: Vector V   := new(n, 0)
       den: Vector D := new(n, 0)
- 
+
       for i in 1..n repeat
         c := coefficients(f.i)
         den.i := commonDenominator(c)$CommonDenominator(D, F, List F)
@@ -548,7 +582,7 @@ FractionFreeFastGaussianFractions(D, V, VF): Exports == Implementation where
                   $FAMR2(NonNegativeInteger, Fraction D, VF, D, V)
 
       M := generalInterpolation(C, coeffAction, g, eta)$FFFG(D, V)
- 
+
 -- The following is necessary since I'm multiplying each row with a factor, not
 -- each column. Possibly I could factor out gcd den, but I'm not sure whether
 -- this is efficient.
@@ -560,24 +594,24 @@ FractionFreeFastGaussianFractions(D, V, VF): Exports == Implementation where
                          sumEta: NonNegativeInteger,
                          maxEta: NonNegativeInteger)
                         : Stream Matrix SUP D == 
- 
+
       n := #f
       g: Vector V   := new(n, 0)
       den: Vector D := new(n, 0)
- 
+
       for i in 1..n repeat
         c := coefficients(f.i)
         den.i := commonDenominator(c)$CommonDenominator(D, F, List F)
         g.i := map(retract(#1*den.i)@D, f.i)
                   $FAMR2(NonNegativeInteger, Fraction D, VF, D, V)
- 
+
       c: cFunction := generalCoefficient(coeffAction, g,
                                          (#1-1)::NonNegativeInteger, #2)$FFFG(D, V)
 
 
       MS: Stream Matrix SUP D 
          := generalInterpolation(C, coeffAction, g, sumEta, maxEta)$FFFG(D, V)
- 
+
 -- The following is necessary since I'm multiplying each row with a factor, not
 -- each column. Possibly I could factor out gcd den, but I'm not sure whether
 -- this is efficient.

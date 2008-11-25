@@ -21,7 +21,8 @@
 RecurrenceOperator(R, F): Exports == Implementation where
   R: Join(OrderedSet, IntegralDomain, ConvertibleTo InputForm)
   F: Join(FunctionSpace R, AbelianMonoid, RetractableTo Integer, _
-          RetractableTo Symbol, PartialDifferentialRing Symbol)
+          RetractableTo Symbol, PartialDifferentialRing Symbol, _
+          CombinatorialOpsCategory)
 --RecurrenceOperator(F): Exports == Implementation where
 --  F: Join(ExpressionSpace, AbelianMonoid, RetractableTo Integer,
 --          RetractableTo Symbol, PartialDifferentialRing Symbol) 
@@ -39,14 +40,20 @@ RecurrenceOperator(R, F): Exports == Implementation where
 
     evalADE: (BasicOperator, Symbol, F, F, F, List F) -> F
       ++ \spad{evalADE(f, dummy, x, n, eq, values)} creates an expression that
-      ++ stands for the coefficient of x^n in f(x), where f(x) is given by the
-      ++ functional equation eq. However, for technical reasons the variable x
-      ++ has to be replaced by a dummy variable dummy in eq. The argument
-      ++ values specifies f(0), f'(0), f''(0),...
+      ++ stands for the coefficient of x^n in the Taylor expansion of f(x),
+      ++ where f(x) is given by the functional equation eq. However, for
+      ++ technical reasons the variable x has to be replaced by a dummy
+      ++ variable dummy in eq. The argument values specifies the first few
+      ++ Taylor coefficients.
 
-    getADE: F -> F
-      ++ \spad{getADE f} returns the defining equation, if f stands for the
-      ++ coefficient of an ADE.
+    getEq: F -> F
+      ++ \spad{getEq f} returns the defining equation, if f represents the
+      ++ coefficient of an ADE or a recurrence.
+
+    getOp: F -> BasicOperator
+      ++ \spad{getOp f}, if f represents the coefficient of a recurrence or
+      ++ ADE, returns the operator representing the solution
+
 
 -- should be local
     numberOfValuesNeeded: (Integer, BasicOperator, Symbol, F) -> Integer
@@ -165,7 +172,7 @@ how many initial values are necessary.
 
           p := univariate(a.1, retract(n::F)@Kernel(F))
           if denominator p ~= 1 then return "failed"
-          
+
           num := numer p
 
           if degree num = 1 and coefficient(num, 1) = 1
@@ -249,14 +256,14 @@ how many initial values are necessary.
           then values.(len-n)
           else
             shiftInfo := shiftInfoRec(op, argsym, eq)
-  
+
             if shiftInfo.max case Integer then
               p := univariate(eq, shiftInfo.ker)
 
               num := numer p
-  
+
               if degree num = 1 then
-  
+
                 next := -coefficient(num, 0)/coefficient(num, 1)
                 nextval := eval(next, argsym::F, 
                                 (len-(shiftInfo.max)::Integer)::F)
@@ -266,7 +273,7 @@ how many initial values are necessary.
               else
                 kernel(oprecur, 
                        append([eq, argsym::F, argdisp, op(arg)], values))
-  
+
             else
               kernel(oprecur, 
                      append([eq, argsym::F, argdisp, op(arg)], values))
@@ -334,6 +341,24 @@ an operator.
 
 \subsection{Functional Equations}
 
+\subsubsection{Determining the number of initial values for ADE's}
+
+We use Joris van der Hoeven's instructions for ADE's. Given
+$Q=p(f,f',\dots,f^{(r)})$ we first need to differentiate $Q$ with respect to
+$f^{(i)}$ for $i\in\{0,1,\dots,r\}$, plug in the given truncated power series
+solution and determine the valuation.
+
+<<NOTYET implementation: RecurrenceOperator>>=
+    getValuation(op, argsym, eq, maxorder, values): Integer ==
+        max: Integer := -1;
+        ker: Kernel F
+        for i in 0..maxorder repeat
+            ker := D(op(argsym), argsym, i)::Kernel F
+            pol := univariate(eq, ker)
+            dif := D pol
+            ground numer(dif.D(op(argsym), argsym, i))
+@
+
 \subsubsection{Extracting some information from the functional equation}
 
 [[getOrder]] returns the maximum derivative of [[op]] occurring in [[f]].
@@ -360,51 +385,55 @@ an operator.
 
       if ((n := retractIfCan(arg)@Union(Integer, "failed")) case "failed")
       then 
---
--- The following would need yet another operator, namely "coefficient of".
---
---         keq := kernels eq
---         order := getOrder(op, keq.1)
---         for k in rest keq repeat order := max(order, getOrder(op, k))
--- 
---         if zero? order then 
--- -- in this case, we have an algebraic equation
--- 
---           p: Fraction SparseUnivariatePolynomial F 
---             := univariate(eq, kernels(D(op(argsym::F), argsym, order)).1)$F
--- 
---           num := numer p
--- 
---           if one? degree num then
--- -- the equation is in fact linear
---             return eval(-coefficient(num, 0)/coefficient(num, 1), argsym::F, arg::F)
--- 
-        kernel(opADE, 
-               append([eq, argsym::F, argdisp, op(arg)], values))
+-- try to determine the necessary number of initial values
+         keq := kernels eq
+         order := getOrder(op, keq.1)
+         for k in rest keq repeat order := max(order, getOrder(op, k))
+
+         p: Fraction SparseUnivariatePolynomial F 
+           := univariate(eq, kernels(D(op(argsym::F), argsym, order)).1)$F
+
+         if one? degree numer p 
+-- the equation is holonomic
+         then kernel(opADE, 
+                     append([eq, argsym::F, argdisp, op(arg)], 
+                            reverse first(reverse values, order)))
+         else kernel(opADE, 
+                     append([eq, argsym::F, argdisp, op(arg)], values))
       else
         if n < 0
         then 0
         else
           keq := kernels eq
           order := getOrder(op, keq.1)
-          output(hconcat("The order is ", order::OutputForm))$OutputPackage
+--          output(hconcat("The order is ", order::OutputForm))$OutputPackage
           for k in rest keq repeat order := max(order, getOrder(op, k))
 
           p: Fraction SparseUnivariatePolynomial F 
             := univariate(eq, kernels(D(op(argsym::F), argsym, order)).1)$F
 
-          output(hconcat("p: ", p::OutputForm))$OutputPackage
+--          output(hconcat("p: ", p::OutputForm))$OutputPackage
+
           if degree numer p > 1
           then
-            kernel(opADE, 
-                   append([eq, argsym::F, argdisp, op(arg)], values))
+--            kernel(opADE, 
+--                   append([eq, argsym::F, argdisp, op(arg)], values))
+
+            s := seriesSolve(eq, op, argsym, reverse values)
+                            $ExpressionSolve(R, F, 
+                                             UnivariateFormalPowerSeries F, 
+                                             UnivariateFormalPowerSeries
+                                               SparseUnivariatePolynomialExpressions F)
+
+            elt(s, n::Integer::NonNegativeInteger)
+
           else
             s := seriesSolve(eq, op, argsym, first(reverse values, order))
                             $ExpressionSolve(R, F, 
                                              UnivariateFormalPowerSeries F, 
                                              UnivariateFormalPowerSeries
                                                SparseUnivariatePolynomialExpressions F)
-          
+
             elt(s, n::Integer::NonNegativeInteger)
 
 
@@ -418,13 +447,25 @@ an operator.
 
     evaluate(opADE, iADE)$BasicOperatorFunctions1(F)
 
-    getADE(f: F): F ==
+    getEq(f: F): F ==
       ker := kernels f
-      if one?(#ker) and is?(operator(ker.1), "rootOfADE"::Symbol) then
+      if one?(#ker) and _
+         (is?(operator(ker.1), "rootOfADE"::Symbol) or _
+          is?(operator(ker.1), "rootOfRec"::Symbol)) then
         l := argument(ker.1)
         eval(eqAsF l, dummyAsF l, displayVariable l)
       else
-        error "getADE: argument should be a single rootOfADE object"
+        error "getEq: argument should be a single rootOfADE or rootOfRec object"
+
+    getOp(f: F): BasicOperator ==
+      ker := kernels f
+      if one?(#ker) and _
+         (is?(operator(ker.1), "rootOfADE"::Symbol) or _
+          is?(operator(ker.1), "rootOfRec"::Symbol)) then
+        operatorName argument(ker.1)
+      else
+        error "getOp: argument should be a single rootOfADE or rootOfRec object"
+
 
 @
 %$
@@ -440,7 +481,9 @@ an operator.
            := cons(eval(eqAsF l, dummyAsF l, displayVariable l)::OutputForm = _
                    0::OutputForm,
                    [eval(D(op(dummyAsF l), dummy l, i), _
-                         dummyAsF l=0)::OutputForm = (values.(i+1))::OutputForm
+                         dummyAsF l=0)::OutputForm = _
+                    (values.(i+1))::OutputForm * _
+                    factorial(box(i::R::F)$F)::OutputForm _
                     for i in 0..min(4,#values-5)])
 
       bracket(hconcat([bracket((displayVariable l)::OutputForm ** _
