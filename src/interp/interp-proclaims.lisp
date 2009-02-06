@@ -56,7 +56,7 @@
             BOOT::|compExpression| BOOT::|e02gafDefaultSolve|
             BOOT::|e02aefDefaultSolve| BOOT::|e02bbfDefaultSolve|
             BOOT::|asytranForm| BOOT::|asytranFormSpecial|
-            BOOT::|asytranApplySpecial| BOOT::SOCK-GET-STRING
+            BOOT::|asytranApplySpecial|
             BOOT::|sockGetString| BOOT::|showIt| BOOT::|pmPreparse,fn|
             BOOT::|pmPreparse,gn| BOOT::|dbSearchAbbrev|
             BOOT::|mkUpDownPattern,recurse| BOOT::|htMkPath|
@@ -687,7 +687,7 @@
             BOOT::|e02dff| BOOT::|e02def| BOOT::|e02ddf| BOOT::|e02dcf|
             BOOT::|e02daf| BOOT::|e02bef| BOOT::|e02bdf|
             BOOT::|minusInfinity| BOOT::|plusInfinity|
-            BOOT::SERVER-SWITCH BOOT::CLEARDATABASE BOOT::NBOOT-LEXPR
+            BOOT::CLEARDATABASE BOOT::NBOOT-LEXPR
             BOOT::BOOT-LEXPR BOOT::|executeQuietCommand|
             BOOT::|serverSwitch| BOOT::|scanS|
             BOOT::|sendNagmanErrorSignal| BOOT::|d01gbf| BOOT::|d01gaf|
@@ -1060,12 +1060,11 @@
             BOOT::|e02dafGen| BOOT::|e02bdfSolve| BOOT::|e02dffGen|
             BOOT::|e02akfSolve| BOOT::|asyJoinPart| BOOT::|printLine|
             BOOT::|sockSendWakeup| BOOT::|sockGetFloat|
-            BOOT::PRINT-LINE BOOT::SOCK-SEND-WAKEUP
-            BOOT::SOCK-GET-FLOAT BOOT::|/tb| BOOT::|/ry| BOOT::|/rx|
+            BOOT::|/tb| BOOT::|/ry| BOOT::|/rx|
             BOOT::|/cxd| BOOT::/FOOBAR BOOT::/CX BOOT::NEWNAMTRANS
             BOOT::|htMakeInputList| BOOT::SPAD-MODETRAN
-            BOOT::|popSatOutput| BOOT::|subrname| BOOT::SOCK-GET-INT
-            BOOT::OPEN-SERVER BOOT::|protectedEVAL|
+            BOOT::|popSatOutput| BOOT::|subrname|
+            BOOT::|protectedEVAL|
             BOOT::|setOutputTex| BOOT::|setOutputFortran| BOOT::|set|
             BOOT::|setLinkerArgs| BOOT::|protectSymbols|
             BOOT::|protectedSymbolsWarning| BOOT::|setStreamsCalculate|
@@ -1122,7 +1121,7 @@
             BOOT::|sayDisplayWidth| BOOT::INIT-LIB-FILE-GETTER
             BOOT::INIT-FILE-GETTER BOOT::|entryWidth| BOOT::FILE-RUNNER
             BOOT::|editFile| BOOT::|readForDoc| BOOT::|checkNumOfArgs|
-            BOOT::|openServer| BOOT::|removeBackslashes|
+            BOOT::OPENSERVER BOOT::|removeBackslashes|
             BOOT::|checkAddBackSlashes| BOOT::/RF-1 BOOT::|docreport|
             BOOT::|ExecuteInterpSystemCommand| BOOT::|pfFileName|
             BOOT::|InterpExecuteSpadSystemCommand| BOOT::|alistSize|
@@ -2611,8 +2610,7 @@
             BOOT::|e01dafDefaultSolve| BOOT::|replaceNamedHTPage|
             BOOT::|e02bafDefaultSolve| BOOT::|e02bdfDefaultSolve|
             BOOT::|e02defDefaultSolve| BOOT::|sockSendFloat|
-            BOOT::SOCK-SEND-SIGNAL BOOT::SOCK-SEND-FLOAT
-            BOOT::SOCK-SEND-STRING BOOT::SOCK-SEND-INT BOOT::ERASE
+            BOOT::ERASE
             BOOT::|sayErrorly| BOOT::|saturnSayErrorly| BOOT::|set1|
             BOOT::|displaySetOptionInformation| BOOT::|mkGrepPattern|
             BOOT::|showDoc| BOOT::|genSearchSayJump| BOOT::|oPageFrom|
