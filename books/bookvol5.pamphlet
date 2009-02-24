@@ -466,6 +466,10 @@ suppressed and input does not use piles. If this is true then the
 library loading routines might output messages and piles are expected
 on input (as from a file).
 \end{list}
+The system commands are handled by the function kept in the ``hook''
+variable \verb|$systemCommandFunction| which
+has the default function \verb|InterpExecuteSpadSystemCommand|.
+Thus, when a system command is entered this function is called.
 <<defun SpadInterpretStream>>=
 (defun |SpadInterpretStream| (str source interactive?) 
  (prog (|$promptMsg| |$shoeReadLineFunction| |$systemCommandFunction| 
@@ -998,6 +1002,14 @@ during a session are pushed onto this list for later lookup.
 \subsection{defun ncloopCommand}
 The \$systemCommandFunction is set in SpadInterpretStream
 to point to the function InterpExecuteSpadSystemCommand.
+The system commands are handled by the function kept in the ``hook''
+variable \verb|$systemCommandFunction| which
+has the default function \verb|InterpExecuteSpadSystemCommand|.
+Thus, when a system command is entered this function is called.
+
+The only exception is the \verb|)include| function which inserts
+the contents of a file inline in the input stream. This is useful
+for processing \verb|)read| of input files.
 <<defun ncloopCommand>>=
 (defun |ncloopCommand| (line n)
  (declare (special |$systemCommandFunction|))
@@ -1019,61 +1031,6 @@ we return the remainder of the string without the leading prefix.
   (subseq whole (length prefix))))
 
 @
-\subsection{defun ncloopInclude1}
-<<defun ncloopInclude1>>=
-(defun |ncloopInclude1| (name n)
- (let (a)
-  (if (setq a (|ncloopIncFileName| name))
-    (|ncloopInclude| a n)
-    n)))
-
-@
-\subsection{defun ncloopIncFileName}
-Returns the first non-blank substring of the given string.
-<<defun ncloopIncFileName>>=
-(defun |ncloopIncFileName| (string)
- (let (fn)
-  (unless (setq fn (|incFileName| string))
-   (write-line (concat string " not found")))
- fn))
-
-@
-
-\subsection{defun ncloopInclude}
-Open the file and read it in. The ncloopInclude0 function is part
-of the parser and lives in int-top.boot.
-<<defun ncloopInclude>>=
-(defun |ncloopInclude| (name n)
-  (with-open-file (st name) (|ncloopInclude0| st name n)))
-
-@
-
-\subsection{defun incFileName}
-Given a string we return the first token from the string which is
-the first non-blank substring.
-<<defun incFileName>>=
-(defun |incFileName| (x)
-  (car (|incBiteOff| x)))
-
-@
-
-\subsection{defun incBiteOff}
-Takes a sequence and returns the a list of the first token and the
-remaining string characters. If there are no remaining string characters
-the second string is of length 0. Effectively it "bites off" the first 
-token in the string. If the string only 0 or more blanks it returns nil.
-<<defun incBiteOff>>=
-(defun |incBiteOff| (x)
- (let (blank nonblank)
-  (setq x (string x))
-  (when (setq nonblank (position #\space x :test-not #'char=))
-    (setq blank (position #\space x :start nonblank))
-    (if blank
-     (list (subseq x nonblank blank) (subseq x blank))
-     (list (subseq x nonblank) "")))))
-
-@
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \cmdhead{abbreviations}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -1164,6 +1121,133 @@ constructor name {\tt VectorFunctions2} from the system:
 )abbreviation remove VectorFunctions2
 \end{verbatim}
 
+\subsection{defun abbreviations}
+<<defun abbreviations>>=
+(defun |abbreviations| (l)
+ (|abbreviationsSpad2Cmd| l)) 
+
+@
+\subsection{defun abbreviationsSpad2Cmd}
+\begin{verbatim}
+;abbreviationsSpad2Cmd l ==
+;  null l => helpSpad2Cmd '(abbreviations)
+;  abopts := '(query domain category package remove)
+;  quiet := nil
+;  for [opt] in $options repeat
+;    opt := selectOptionLC(opt,'(quiet),'optionError)
+;    opt = 'quiet => quiet := true
+;  l is [opt,:al] =>
+;    key := opOf CAR al
+;    type := selectOptionLC(opt,abopts,'optionError)
+;    type is 'query =>
+;      null al => listConstructorAbbreviations()
+;      constructor := abbreviation?(key) => abbQuery(constructor)
+;      abbQuery(key)
+;    type is 'remove =>
+;      DELDATABASE(key,'ABBREVIATION)
+;    ODDP SIZE al => sayKeyedMsg("S2IZ0002",[type])
+;    repeat
+;      null al => return 'fromLoop
+;      [a,b,:al] := al
+;      mkUserConstructorAbbreviation(b,a,type)
+;      SETDATABASE(b,'ABBREVIATION,a)
+;      SETDATABASE(b,'CONSTRUCTORKIND,type)
+;    null quiet =>
+;      sayKeyedMsg("S2IZ0001",[a,type,opOf b])
+;      nil
+;  nil
+\end{verbatim}
+
+<<defun abbreviationsSpad2Cmd>>=
+(defun |abbreviationsSpad2Cmd| (arg)
+ (prog (abopts quiet opt key type constructor t2 a b al)
+  (return
+   (seq
+    (cond
+     ((null arg) (|helpSpad2Cmd| '(|abbreviations|)))
+     (t
+      (spadlet abopts '(|query| |domain| |category| |package| |remove|))
+      (spadlet quiet NIL)
+      (do ((t0 |$options| (cdr t0)) (t1 nil))
+          ((or (atom t0) 
+               (progn (setq t1 (car t0)) nil)
+               (progn (progn (spadlet opt (car t1)) t1) nil))
+            nil)
+       (seq
+        (exit
+         (progn
+          (spadlet opt
+           (|selectOptionLC| opt '(|quiet|) '|optionError|))
+          (cond ((boot-equal opt '|quiet|)
+            (spadlet quiet t)))))))
+      (cond
+       ((and (pairp arg) 
+             (progn 
+              (spadlet opt (qcar arg))
+              (spadlet al (qcdr arg))
+              t))
+         (spadlet key (|opOf| (car al)))
+         (spadlet type
+           (|selectOptionLC| opt abopts '|optionError|))
+         (cond
+          ((eq type '|query|)
+           (cond 
+            ((null al) (|listConstructorAbbreviations|))
+            ((spadlet constructor (|abbreviation?| key))
+              (|abbQuery| constructor))
+            (t (|abbQuery| key))))
+          ((eq type '|remove|)
+           (deldatabase key 'abbreviation))
+          ((oddp (size al))
+           (|sayKeyedMsg| 's2iz0002 (cons type nil)))
+          (t
+           (do () (nil nil)
+            (seq 
+             (exit 
+              (cond
+               ((null al) (return '|fromLoop|))
+               (t
+                 (spadlet t2 al)
+                 (spadlet a (CAR t2))
+                 (spadlet b (CADR t2))
+                 (spadlet al (CDDR t2))
+                 (|mkUserConstructorAbbreviation| b a type)
+                 (setdatabase b 'abbreviation a)
+                 (setdatabase b 'constructorkind type))))))
+           (cond ((null quiet)
+            (progn
+             (|sayKeyedMsg| 's2iz0001
+               (cons a (cons type (cons (|opOf| b) nil)))) nil))))))
+       (t nil)))))))) 
+
+@
+
+\subsection{defun listConstructorAbbreviations}
+\begin{verbatim}
+;listConstructorAbbreviations() ==
+;  x := UPCASE queryUserKeyedMsg("S2IZ0056",NIL)
+;  MEMQ(STRING2ID_-N(x,1),'(Y YES)) =>
+;    whatSpad2Cmd '(categories)
+;    whatSpad2Cmd '(domains)
+;    whatSpad2Cmd '(packages)
+;  sayKeyedMsg("S2IZ0057",NIL)
+\end{verbatim}
+
+<<defun listConstructorAbbreviations>>=
+(defun |listConstructorAbbreviations| ()
+ (prog (x)
+  (return
+   (progn
+    (spadlet x (upcase (|queryUserKeyedMsg| 's2iz0056 nil)))
+    (cond
+     ((memq (string2id-n x 1) '(Y YES))
+       (|whatSpad2Cmd| '(|categories|))
+       (|whatSpad2Cmd| '(|domains|))
+       (|whatSpad2Cmd| '(|packages|)))
+     (t
+       (|sayKeyedMsg| 's2iz0057 nil))))))) 
+
+@
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \cmdhead{boot}
@@ -5766,6 +5850,78 @@ S2IH0038
 @
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\cmdhead{include}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\par\noindent{\bf User Level Required:} interpreter
+
+\par\noindent{\bf Command Syntax:}
+\begin{list}{}
+\item{\tt )include {\it filename}}
+\end{list}
+
+\par\noindent{\bf Command Description:}
+
+The \verb|)include| command can be used in \verb|.input| files
+to place the contents of another file inline with the current file.
+The path can be an absolute or relative pathname.
+
+\subsection{defun ncloopInclude1}
+<<defun ncloopInclude1>>=
+(defun |ncloopInclude1| (name n)
+ (let (a)
+  (if (setq a (|ncloopIncFileName| name))
+    (|ncloopInclude| a n)
+    n)))
+
+@
+\subsection{defun ncloopIncFileName}
+Returns the first non-blank substring of the given string.
+<<defun ncloopIncFileName>>=
+(defun |ncloopIncFileName| (string)
+ (let (fn)
+  (unless (setq fn (|incFileName| string))
+   (write-line (concat string " not found")))
+ fn))
+
+@
+
+\subsection{defun ncloopInclude}
+Open the file and read it in. The ncloopInclude0 function is part
+of the parser and lives in int-top.boot.
+<<defun ncloopInclude>>=
+(defun |ncloopInclude| (name n)
+  (with-open-file (st name) (|ncloopInclude0| st name n)))
+
+@
+
+\subsection{defun incFileName}
+Given a string we return the first token from the string which is
+the first non-blank substring.
+<<defun incFileName>>=
+(defun |incFileName| (x)
+  (car (|incBiteOff| x)))
+
+@
+
+\subsection{defun incBiteOff}
+Takes a sequence and returns the a list of the first token and the
+remaining string characters. If there are no remaining string characters
+the second string is of length 0. Effectively it "bites off" the first 
+token in the string. If the string only 0 or more blanks it returns nil.
+<<defun incBiteOff>>=
+(defun |incBiteOff| (x)
+ (let (blank nonblank)
+  (setq x (string x))
+  (when (setq nonblank (position #\space x :test-not #'char=))
+    (setq blank (position #\space x :start nonblank))
+    (if blank
+     (list (subseq x nonblank blank) (subseq x blank))
+     (list (subseq x nonblank) "")))))
+
+@
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \cmdhead{library}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -6762,8 +6918,8 @@ This reports the traced functions
 \end{verbatim}
 
 <<defun trace1>>=
-(defun |trace1| (|l|)
- (prog (|$traceNoisely| |constructor| |ops| |lops| temp1 |opt| |a| 
+(defun |trace1| (arg)
+ (prog (|$traceNoisely| constructor |ops| |lops| temp1 opt a 
         |oldL| |newOptions| |domain| |traceList| |optionList| |domainList| 
         |opList| |y| |varList| |argument|)
   (declare (special |$traceNoisely|))
@@ -6780,96 +6936,96 @@ This reports the traced functions
         ((or (spadlet |ops| (|hasOption| |$options| '|ops|))
              (spadlet |lops| (|hasOption| |$options| '|local|)))
           (cond
-           ((null |l|) (|throwKeyedMsg| 's2it0019 nil))
+           ((null arg) (|throwKeyedMsg| 's2it0019 nil))
            (t
-             (spadlet |constructor|
+             (spadlet constructor
               (|unabbrev|
                (cond
-                ((atom |l|) |l|)
-                ((null (cdr |l|))
+                ((atom arg) arg)
+                ((null (cdr arg))
                   (cond
-                   ((atom (car |l|)) (car |l|))
-                   (t (car (car |l|)))))
+                   ((atom (car arg)) (car arg))
+                   (t (car (car arg)))))
                 (t nil))))
              (cond
-              ((null (|isFunctor| |constructor|))
+              ((null (|isFunctor| constructor))
                 (|throwKeyedMsg| 's2it0020 nil))
               (t
                 (cond (|ops| (spadlet |ops| (|getTraceOption| |ops|)) nil))
                 (cond 
                  (|lops|
                   (spadlet |lops| (cdr (|getTraceOption| |lops|)))
-                  (|untraceDomainLocalOps| |constructor| |lops|))
+                  (|untraceDomainLocalOps| constructor |lops|))
                  (t nil)))))))
         ((and (qslessp 1 (|#| |$options|))
               (null (|hasOption| |$options| '|nonquietly|)))
           (|throwKeyedMsg| 's2it0021 nil))
-        (t (|untrace| |l|))))
+        (t (|untrace| arg))))
       ((|hasOption| |$options| '|stats|)
         (cond
          ((qslessp 1 (|#| |$options|))
           (|throwKeyedMsg| 's2it0001 (cons ")trace ... )stats" nil)))
          (t
            (spadlet temp1 (car |$options|))
-           (spadlet |opt| (cdr temp1))
+           (spadlet opt (cdr temp1))
            (cond
-            ((null |opt|)
+            ((null opt)
               (|centerAndHighlight| "Traced function execution times" 78 '-)
               (|ptimers|)
               (say " ")
               (|centerAndHighlight| "Traced function execution counts" 78 '-)
               (|pcounters|))
             (t
-              (|selectOptionLC| (car |opt|) '(|reset|) '|optionError|)
+              (|selectOptionLC| (car opt) '(|reset|) '|optionError|)
               (|resetSpacers|)
               (|resetTimers|)
               (|resetCounters|)
               (|throwKeyedMsg| 's2it0002 nil))))))
-      ((spadlet |a| (|hasOption| |$options| '|restore|))
+      ((spadlet a (|hasOption| |$options| '|restore|))
         (cond
          ((null (spadlet |oldL| |$lastUntraced|)) nil)
          (t
-           (spadlet |newOptions| (|delete| |a| |$options|))
+           (spadlet |newOptions| (|delete| a |$options|))
            (cond
-            ((null |l|) (|trace1| |oldL|))
+            ((null arg) (|trace1| |oldL|))
             (t
-             (do ((t0 |l| (cdr t0)) (|x|l nil))
-                 ((or (atom t0) (progn (setq |x| (car t0)) nil)) nil)
+             (do ((t0 arg (cdr t0)) (xl nil))
+                 ((or (atom t0) (progn (setq x (car t0)) nil)) nil)
               (seq
                (exit
                 (cond
-                 ((and (pairp |x|)
+                 ((and (pairp x)
                        (progn
-                        (spadlet |domain| (qcar |x|))
-                        (spadlet |opList| (qcdr |x|))
+                        (spadlet |domain| (qcar x))
+                        (spadlet |opList| (qcdr x))
                         t)
                        (vecp |domain|))
                    (|sayKeyedMsg| 's2it0003 (cons (|devaluate| |domain|) nil)))
                  (t
                    (spadlet |$options|
-                    (append |newOptions| (lassoc |x| |$optionAlist|)))
-                   (|trace1| (list |x|))))))))))))
-      ((null |l|) nil)
-      ((and (pairp |l|) (eq (qcdr |l|) nil) (eq (qcar |l|) '?)) (|?t|))
+                    (append |newOptions| (lassoc x |$optionAlist|)))
+                   (|trace1| (list x))))))))))))
+      ((null arg) nil)
+      ((and (pairp arg) (eq (qcdr arg) nil) (eq (qcar arg) '?)) (|?t|))
       (t
        (spadlet |traceList|
         (or
          (prog (t1)
           (spadlet t1 nil)
           (return
-           (do ((t2 |l| (cdr t2)) (|x| nil))
+           (do ((t2 arg (cdr t2)) (x nil))
                ((or (atom t2) 
-                    (progn (setq |x| (car t2)) nil))
+                    (progn (setq x (car t2)) nil))
                 (nreverse0 t1))
             (seq
              (exit
-              (setq t1 (cons (|transTraceItem| |x|) t1)))))))
+              (setq t1 (cons (|transTraceItem| x) t1)))))))
          (return nil)))
-       (do ((t3 |traceList| (cdr t3)) (|x| nil))
-           ((or (atom t3) (progn (setq |x| (car t3)) nil)) nil)
+       (do ((t3 |traceList| (cdr t3)) (x nil))
+           ((or (atom t3) (progn (setq x (car t3)) nil)) nil)
          (seq
           (exit 
-           (spadlet |$optionAlist| (addassoc |x| |$options| |$optionAlist|)))))
+           (spadlet |$optionAlist| (addassoc x |$options| |$optionAlist|)))))
        (spadlet |optionList| (|getTraceOptions| |$options|))
        (spadlet |argument|
         (cond
@@ -6931,7 +7087,7 @@ This reports the traced functions
 
 <<defun getTraceOptions>>=
 (defun |getTraceOptions| (|options|)
- (prog (|$traceErrorStack| |optionList| temp1 |key| |parms|)
+ (prog (|$traceErrorStack| |optionList| temp1 key |parms|)
   (declare (special |$traceErrorStack|))
   (return
    (seq
@@ -6941,19 +7097,19 @@ This reports the traced functions
       (prog (t0) 
        (spadlet t0 nil)
        (return
-        (do ((t1 |options| (cdr t1)) (|x| nil))
-            ((or (atom t1) (progn (setq |x| (car t1)) nil)) (nreverse0 t0))
+        (do ((t1 |options| (cdr t1)) (x nil))
+            ((or (atom t1) (progn (setq x (car t1)) nil)) (nreverse0 t0))
          (seq
           (exit
-           (setq t0 (cons (|getTraceOption| |x|) t0))))))))
+           (setq t0 (cons (|getTraceOption| x) t0))))))))
      (cond
       (|$traceErrorStack|
        (cond
         ((null (cdr |$traceErrorStack|))
           (spadlet temp1 (car |$traceErrorStack|))
-          (spadlet |key| (car temp1))
+          (spadlet key (car temp1))
           (spadlet |parms| (cadr temp1))
-          (|throwKeyedMsg| |key| (cons "" |parms|)))
+          (|throwKeyedMsg| key (cons "" |parms|)))
         (t
           (|throwListOfKeyedMsgs| 's2it0017
            (cons (|#| |$traceErrorStack|) nil)
@@ -7000,22 +7156,22 @@ This reports the traced functions
 
 <<defun getMapSig>>=
 (defun |getMapSig| (|mapName| |subName|)
- (PROG (|lmms| |sig|)
-  (RETURN
-   (SEQ
-    (COND
-     ((SPADLET |lmms| (|get| |mapName| '|localModemap| |$InteractiveFrame|))
-      (EXIT
-       (SEQ
-        (DO ((t0 |lmms| (CDR t0)) (|mm| nil) (t1 nil |sig|))
-            ((OR (ATOM t0) (PROGN (SETQ |mm| (CAR t0)) nil) t1) nil)
-         (SEQ
-          (EXIT
-           (COND 
-            ((BOOT-EQUAL (CADR |mm|) |subName|)
-              (EXIT 
-               (SPADLET |sig| (CDAR |mm|))))))))
-        (EXIT |sig|))))))))) 
+ (prog (|lmms| |sig|)
+  (return
+   (seq
+    (cond
+     ((spadlet |lmms| (|get| |mapName| '|localModemap| |$InteractiveFrame|))
+      (exit
+       (seq
+        (do ((t0 |lmms| (cdr t0)) (|mm| nil) (t1 nil |sig|))
+            ((or (atom t0) (progn (setq |mm| (car t0)) nil) t1) nil)
+         (seq
+          (exit
+           (cond 
+            ((boot-equal (cadr |mm|) |subName|)
+              (exit 
+               (spadlet |sig| (cdar |mm|))))))))
+        (exit |sig|))))))))) 
 
 @
 
@@ -7072,37 +7228,37 @@ This reports the traced functions
 \end{verbatim}
 
 <<defun getTraceOption,hn>>=
-(defun |getTraceOption,hn| (|x|)
+(defun |getTraceOption,hn| (x)
  (prog (|g|)
   (return
    (seq
-    (if (and (atom |x|) (null (upper-case-p (elt (stringimage |x|) 0))))
+    (if (and (atom x) (null (upper-case-p (elt (stringimage x) 0))))
      (exit
       (seq
-       (if (|isDomainOrPackage| (eval |x|)) (exit |x|))
+       (if (|isDomainOrPackage| (eval x)) (exit x))
        (exit 
         (|stackTraceOptionError|
-         (cons 's2it0013 (cons (cons |x| nil) nil)))))))
-    (if (spadlet |g| (|domainToGenvar| |x|)) (exit |g|))
+         (cons 's2it0013 (cons (cons x nil) nil)))))))
+    (if (spadlet |g| (|domainToGenvar| x)) (exit |g|))
     (exit
-     (|stackTraceOptionError| (cons 's2it0013 (cons (cons |x| nil) nil)))))))) 
+     (|stackTraceOptionError| (cons 's2it0013 (cons (cons x nil) nil)))))))) 
 
 @
 
 <<defun getTraceOption>>=
-(defun |getTraceOption| (|x|)
- (prog (|l| |opts| |key| |a| |n|)
+(defun |getTraceOption| (arg)
+ (prog (|l| |opts| key a |n|)
   (return
    (seq
     (progn
-     (spadlet |key| (car |x|))
-     (spadlet |l| (cdr |x|))
-     (spadlet |key|
-       (|selectOptionLC| |key| |$traceOptionList| '|traceOptionError|))
-     (spadlet |x| (cons |key| |l|))
+     (spadlet key (car arg))
+     (spadlet |l| (cdr arg))
+     (spadlet key
+       (|selectOptionLC| key |$traceOptionList| '|traceOptionError|))
+     (spadlet arg (cons key |l|))
      (cond
-      ((memq |key| '(|nonquietly| |timer| |nt|)) |x|)
-      ((boot-equal |key| '|break|)
+      ((memq key '(|nonquietly| |timer| |nt|)) arg)
+      ((boot-equal key '|break|)
        (cond
         ((null |l|) (cons '|break| (cons '|before| nil)))
         (t
@@ -7131,62 +7287,62 @@ This reports the traced functions
               (cons '|break| |opts|))
            (t
             (|stackTraceOptionError| (cons 's2it0008 (cons nil nil))))))))
-      ((boot-equal |key| '|restore|)
+      ((boot-equal key '|restore|)
        (cond
-        ((null |l|) |x|)
+        ((null |l|) arg)
         (t 
          (|stackTraceOptionError| 
           (cons 's2it0009 
-           (cons (cons (strconc ")" (|object2String| |key|)) nil) nil))))))
-      ((boot-equal |key| '|only|) (cons '|only| (|transOnlyOption| |l|)))
-      ((boot-equal |key| '|within|)
+           (cons (cons (strconc ")" (|object2String| key)) nil) nil))))))
+      ((boot-equal key '|only|) (cons '|only| (|transOnlyOption| |l|)))
+      ((boot-equal key '|within|)
         (cond
          ((and (pairp |l|) 
                (eq (qcdr |l|) nil)
-               (progn (spadlet |a| (qcar |l|)) t)
-               (identp |a|))
-           |x|)
+               (progn (spadlet a (qcar |l|)) t)
+               (identp a))
+           arg)
          (t 
            (|stackTraceOptionError| 
             (cons 's2it0010 (cons (cons ")within" nil) nil))))))
-      ((memq |key| '(|cond| |before| |after|))
-        (spadlet |key| 
+      ((memq key '(|cond| |before| |after|))
+        (spadlet key 
          (cond 
-          ((boot-equal |key| '|cond|) '|when|)
-          (t |key|)))
+          ((boot-equal key '|cond|) '|when|)
+          (t key)))
         (cond
          ((and (pairp |l|) 
                (eq (qcdr |l|) nil)
-               (progn (spadlet |a| (qcar |l|)) t))
-            (cons |key| |l|))
+               (progn (spadlet a (qcar |l|)) t))
+            (cons key |l|))
          (t 
           (|stackTraceOptionError|
            (cons 's2it0011
             (cons
              (cons (strconc ")"
-              (|object2String| |key|)) nil) nil))))))
-      ((boot-equal |key| '|depth|)
+              (|object2String| key)) nil) nil))))))
+      ((boot-equal key '|depth|)
         (cond 
          ((and (pairp |l|) 
                (eq (qcdr |l|) nil)
                (progn (spadlet |n| (qcar |l|)) t)
                (fixp |n|))
-           |x|)
+           arg)
          (t 
           (|stackTraceOptionError| 
            (cons 's2it0012 (cons (cons ")depth" nil) nil))))))
-      ((boot-equal |key| '|count|)
+      ((boot-equal key '|count|)
         (cond 
          ((or (null |l|) 
               (and (pairp |l|) 
                    (eq (qcdr |l|) nil)
                    (progn (spadlet |n| (qcar |l|)) t)
                    (fixp |n|)))
-            |x|)
+            arg)
          (t 
           (|stackTraceOptionError|
             (cons 's2it0012 (cons (cons ")count" nil) nil))))))
-      ((boot-equal |key| '|of|)
+      ((boot-equal key '|of|)
         (cons '|of|
          (prog (t5)
           (spadlet t5 nil)
@@ -7196,37 +7352,37 @@ This reports the traced functions
             (seq
              (exit
               (setq t5 (cons (|getTraceOption,hn| |y|) t5)))))))))
-      ((memq |key| '(|local| |ops| |vars|))
+      ((memq key '(|local| |ops| |vars|))
         (cond
          ((or (null |l|)
               (and (pairp |l|) (eq (qcdr |l|) nil) (eq (qcar |l|) '|all|)))
-           (cons |key| '|all|))
-         ((|isListOfIdentifiersOrStrings| |l|) |x|)
+           (cons key '|all|))
+         ((|isListOfIdentifiersOrStrings| |l|) arg)
          (t
            (|stackTraceOptionError|
             (cons 's2it0015
              (cons
-              (cons (strconc ")" (|object2String| |key|)) nil) nil))))))
-      ((boot-equal |key| '|varbreak|)
+              (cons (strconc ")" (|object2String| key)) nil) nil))))))
+      ((boot-equal key '|varbreak|)
         (cond
          ((or (null |l|) 
               (and (pairp |l|) (eq (qcdr |l|) nil) (eq (qcar |l|) '|all|)))
            (cons '|varbreak| '|all|))
-         ((|isListOfIdentifiers| |l|) |x|)
+         ((|isListOfIdentifiers| |l|) arg)
          (t
            (|stackTraceOptionError|
             (cons 's2it0016
              (cons
-              (cons (strconc ")" (|object2String| |key|)) nil) nil))))))
-      ((boot-equal |key| '|mathprint|)
+              (cons (strconc ")" (|object2String| key)) nil) nil))))))
+      ((boot-equal key '|mathprint|)
         (cond
-         ((null |l|) |x|)
+         ((null |l|) arg)
          (t
            (|stackTraceOptionError|
             (cons 's2it0009
              (cons
-              (cons (strconc ")" (|object2String| |key|)) nil) nil))))))
-      (|key| (|throwKeyedMsg| 's2it0005 (CONS |key| nil))))))))) 
+              (cons (strconc ")" (|object2String| key)) nil) nil))))))
+      (key (|throwKeyedMsg| 's2it0005 (CONS key nil))))))))) 
 
 @
 
@@ -7238,12 +7394,12 @@ This reports the traced functions
 \end{verbatim}
 
 <<defun traceOptionError>>=
-(defun |traceOptionError| (|opt| |keys|)
+(defun |traceOptionError| (opt |keys|)
  (cond
   ((null |keys|)
-    (|stackTraceOptionError| (cons 's2it0007 (cons (cons |opt| nil) nil))))
+    (|stackTraceOptionError| (cons 's2it0007 (cons (cons opt nil) nil))))
   (t
-   (|commandAmbiguityError| '|trace option| |opt| |keys|)))) 
+   (|commandAmbiguityError| '|trace option| opt |keys|)))) 
 
 @
 
@@ -7407,12 +7563,12 @@ This reports the traced functions
 \end{verbatim}
 
 <<defun transOnlyOption>>=
-(defun |transOnlyOption| (|l|)
+(defun |transOnlyOption| (arg)
  (prog (|y| |n|)
   (return
    (cond
-    ((and (pairp |l|) 
-          (progn (spadlet |n| (qcar |l|)) (spadlet |y| (qcdr |l|)) t))
+    ((and (pairp arg) 
+          (progn (spadlet |n| (qcar arg)) (spadlet |y| (qcdr arg)) t))
       (cond
        ((fixp |n|)
          (cons |n| (|transOnlyOption| |y|)))
@@ -7442,7 +7598,7 @@ This reports the traced functions
 
 <<defun removeOption>>=
 (defun |removeOption| (|op| |options|)
- (prog (|opt|)
+ (prog (opt)
   (return
    (seq
     (prog (t0)
@@ -7451,12 +7607,12 @@ This reports the traced functions
       (do ((t1 |options| (cdr t1)) (|optEntry| nil))
           ((or (atom t1)
                (progn (setq |optEntry| (car t1)) nil)
-               (progn (progn (spadlet |opt| (CAR |optEntry|)) |optEntry|) nil))
+               (progn (progn (spadlet opt (CAR |optEntry|)) |optEntry|) nil))
         (nreverse0 t0))
        (seq
         (exit
          (cond
-          ((nequal |opt| |op|) (setq t0 (cons |optEntry| t0))))))))))))) 
+          ((nequal opt |op|) (setq t0 (cons |optEntry| t0))))))))))))) 
 
 @
 
@@ -7471,14 +7627,14 @@ This reports the traced functions
 \end{verbatim}
 
 <<defun domainToGenvar>>=
-(defun |domainToGenvar| (|x|)
+(defun |domainToGenvar| (arg)
  (prog (|$doNotAddEmptyModeIfTrue| |y| |g|)
   (declare (special |$doNotAddEmptyModeIfTrue|))
   (return
    (progn
     (spadlet |$doNotAddEmptyModeIfTrue| t)
     (cond
-     ((and (spadlet |y| (|unabbrevAndLoad| |x|))
+     ((and (spadlet |y| (|unabbrevAndLoad| arg))
            (boot-equal (getdatabase (|opOf| |y|) 'constructorkind) '|domain|))
        (progn
         (spadlet |g| (|genDomainTraceName| |y|))
@@ -7523,17 +7679,17 @@ This reports the traced functions
 \end{verbatim}
 
 <<defun untrace>>=
-(defun |untrace| (|l|)
+(defun |untrace| (arg)
  (prog (|untraceList|)
   (return
    (seq
     (progn
-     (spadlet |$lastUntraced| (cond ((null |l|) (copy /tracenames)) (t |l|)))
+     (spadlet |$lastUntraced| (cond ((null arg) (copy /tracenames)) (t arg)))
      (spadlet |untraceList|
       (prog (t0)
        (spadlet t0 nil)
        (return
-        (do ((t1 |l| (cdr t1)) (|x| nil))
+        (do ((t1 arg (cdr t1)) (|x| nil))
             ((or (atom t1) (progn (setq |x| (car t1)) nil)) (nreverse0 t0))
          (seq
           (exit
@@ -7658,13 +7814,13 @@ This reports the traced functions
                 (t2 |args| (cdr t2))
                 (|arg| nil)
                 (t3 (cdr (lassoc |subName| |$tracedMapSignatures|)) (cdr t3))
-                (|type| nil))
+                (type nil))
                ((or (atom t1)
                     (progn (setq |name| (car t1)) nil)
                     (atom t2)
                     (progn (setq |arg| (car t2)) nil)
                     (atom t3)
-                    (progn (setq |type| (car t3)) nil)) 
+                    (progn (setq type (car t3)) nil)) 
                   (nreverse0 t0))
              (seq
               (exit 
@@ -7674,7 +7830,7 @@ This reports the traced functions
                   (cons |name| 
                    (cons (|objValUnwrap|
                      (|coerceInteractive|
-                      (|objNewWrap| |arg| |type|) |$OutputForm|))
+                      (|objNewWrap| |arg| type) |$OutputForm|))
                         nil)))
                      t0))))))))))
      ((spadsysnamep (pname |name|)) (reverse (cdr (reverse |args|))))
@@ -7710,13 +7866,13 @@ This reports the traced functions
             (t2 |args| (cdr t2))
             (|arg| nil)
             (t3 (cdr |$tracedSpadModemap|) (cdr t3))
-            (|type| nil))
+            (type nil))
            ((or (atom t1)
                 (progn (setq |name| (car t1)) nil)
                 (atom t2)
                 (progn (setq |arg| (car t2)) nil)
                 (atom t3)
-                (progn (setq |type| (car t3)) nil))
+                (progn (setq type (car t3)) nil))
              (nreverse0 t0))
          (seq
           (exit
@@ -7726,7 +7882,7 @@ This reports the traced functions
               (cons |name|
                (cons (|objValUnwrap|
                  (|coerceInteractive| 
-                  (|objNewWrap| |arg| |type|)
+                  (|objNewWrap| |arg| type)
                   |$OutputForm|)) nil)))
               t0)))))))))))) 
 
@@ -7819,14 +7975,14 @@ This reports the traced functions
 \end{verbatim}
 
 <<defun isListOfIdentifiers>>=
-(defun |isListOfIdentifiers| (|l|)
+(defun |isListOfIdentifiers| (arg)
  (prog () 
   (return
    (seq
     (prog (t0)
      (spadlet t0 t)
      (return
-      (do ((t1 nil (null t0)) (t2 |l| (cdr t2)) (|x| nil))
+      (do ((t1 nil (null t0)) (t2 arg (cdr t2)) (|x| nil))
           ((or t1 (atom t2) (progn (setq |x| (car t2)) nil)) t0)
        (seq
         (exit
@@ -7840,14 +7996,14 @@ This reports the traced functions
 \end{verbatim}
 
 <<defun isListOfIdentifiersOrStrings>>=
-(defun |isListOfIdentifiersOrStrings| (|l|)
+(defun |isListOfIdentifiersOrStrings| (arg)
  (prog () 
   (return
    (seq
     (prog (t0)
      (spadlet t0 t)
      (return
-      (do ((t1 nil (null t0)) (t2 |l| (cdr t2)) (|x| nil))
+      (do ((t1 nil (null t0)) (t2 arg (cdr t2)) (|x| nil))
           ((or t1 (atom t2) (progn (setq |x| (car t2)) nil)) t0)
        (seq
         (exit
@@ -7867,14 +8023,14 @@ This reports the traced functions
 \end{verbatim}
 
 <<defun getMapSubNames>>=
-(defun |getMapSubNames| (|l|)
+(defun |getMapSubNames| (arg)
  (prog (|lmm| |subs|)
   (return
    (seq
     (progn
      (spadlet |subs| nil)
      (seq
-      (do ((t0 |l| (cdr t0)) (|mapName| nil))
+      (do ((t0 arg (cdr t0)) (|mapName| nil))
           ((or (atom t0) (progn (setq |mapName| (CAR t0)) nil)) nil)
        (seq
         (exit
@@ -8027,13 +8183,13 @@ This reports the traced functions
 \end{verbatim}
 
 <<defun augmentTraceNames>>=
-(defun |augmentTraceNames| (|l| |mapSubNames|)
+(defun |augmentTraceNames| (arg |mapSubNames|)
  (prog (|mml| |res|)
   (return
    (seq
     (progn
      (spadlet |res| nil)
-     (do ((t0 |l| (cdr t0)) (|traceName| nil))
+     (do ((t0 arg (cdr t0)) (|traceName| nil))
          ((or (atom t0) (progn (setq |traceName| (car t0)) nil)) nil)
       (seq
        (exit
@@ -8535,13 +8691,13 @@ This reports the traced functions
         (prog (t0)
          (spadlet t0 nil)
          (return
-          (do ((t1 |options| (cdr t1)) (|opt| nil))
-              ((or (atom t1) (progn (setq |opt| (car t1)) nil)) (nreverse0 t0))
+          (do ((t1 |options| (cdr t1)) (opt nil))
+              ((or (atom t1) (progn (setq opt (car t1)) nil)) (nreverse0 t0))
            (seq
             (exit
              (cond 
-              ((null (and (pairp |opt|) (eq (qcar |opt|) 'local)))
-                (setq t0 (cons |opt| t0))))))))))))
+              ((null (and (pairp opt) (eq (qcar opt) 'local)))
+                (setq t0 (cons opt t0))))))))))))
      (cond 
       ((and |listOfLocalOps| (null (|getOption| 'ops |options|))) nil)
       (t
@@ -8944,19 +9100,19 @@ This reports the traced functions
 \end{verbatim}
 
 <<defun hasPair>>=
-(defun |hasPair| (|key| |l|)
- (prog (tmp1 |a|)
+(defun |hasPair| (key arg)
+ (prog (tmp1 a)
   (return 
    (cond
-    ((atom |l|) nil)
-    ((and (pairp |l|)
+    ((atom arg) nil)
+    ((and (pairp arg)
           (progn
-           (spadlet tmp1 (qcar |l|))
+           (spadlet tmp1 (qcar arg))
            (and (pairp tmp1)
-                (equal (qcar tmp1) |key|)
-                (progn (spadlet |a| (qcdr tmp1)) t))))
-       |a|)
-    (t (|hasPair| |key| (cdr |l|))))))) 
+                (equal (qcar tmp1) key)
+                (progn (spadlet a (qcdr tmp1)) t))))
+       a)
+    (t (|hasPair| key (cdr arg))))))) 
 
 @
 
@@ -9058,7 +9214,7 @@ This reports the traced functions
 \end{verbatim}
 
 <<defun orderBySlotNumber>>=
-(defun |orderBySlotNumber| (|l|)
+(defun |orderBySlotNumber| (arg)
  (prog (|n|)
   (return 
    (seq
@@ -9067,7 +9223,7 @@ This reports the traced functions
       (prog (t0)
        (spadlet t0 nil)
        (return
-        (do ((t1 |l| (cdr t1)) (|x| nil))
+        (do ((t1 arg (cdr t1)) (|x| nil))
             ((or (atom t1)
                  (progn (setq |x| (car t1)) nil)
                  (progn (progn (spadlet |n| (caddr |x|)) |x|) nil))
@@ -10662,21 +10818,21 @@ whatSpad2Cmd l ==
 
 \subsection{defun whatSpad2Cmd}
 <<defun whatSpad2Cmd>>=
-(defun |whatSpad2Cmd| (|l|)
- (prog (|$e| |key0| |key| |args|)
+(defun |whatSpad2Cmd| (arg)
+ (prog (|$e| |key0| key |args|)
   (declare (special |$e|))
   (return
    (seq
     (progn
      (spadlet |$e| |$EmptyEnvironment|)
      (cond
-      ((null |l|) (|reportWhatOptions|))
+      ((null arg) (|reportWhatOptions|))
       (t
-        (spadlet |key0| (car |l|))
-        (spadlet |args| (cdr |l|))
-        (spadlet |key| (|selectOptionLC| |key0| |$whatOptions| nil))
+        (spadlet |key0| (car arg))
+        (spadlet |args| (cdr arg))
+        (spadlet key (|selectOptionLC| |key0| |$whatOptions| nil))
         (cond
-         ((null |key|) (|sayKeyedMsg| 's2iz0043 nil))
+         ((null key) (|sayKeyedMsg| 's2iz0043 nil))
          (t
           (spadlet |args|
            (prog (t0)
@@ -10691,25 +10847,25 @@ whatSpad2Cmd l ==
                  (setq t0 (cons (|whatSpad2Cmd,fixpat| |p|) t0))))))))
           (seq
            (cond
-            ((boot-equal |key| '|things|)
-              (do ((t2 |$whatOptions| (cdr t2)) (|opt| nil))
-                  ((or (atom t2) (progn (setq |opt| (CAR t2)) nil)) nil)
+            ((boot-equal key '|things|)
+              (do ((t2 |$whatOptions| (cdr t2)) (opt nil))
+                  ((or (atom t2) (progn (setq opt (CAR t2)) nil)) nil)
                (seq
                 (exit
                  (cond
-                  ((null (memq |opt| '(|things|)))
-                    (exit (|whatSpad2Cmd| (cons |opt| |args|)))))))))
-            ((boot-equal |key| '|categories|)
+                  ((null (memq opt '(|things|)))
+                    (exit (|whatSpad2Cmd| (cons opt |args|)))))))))
+            ((boot-equal key '|categories|)
               (|filterAndFormatConstructors| '|category| "Categories" |args|))
-            ((boot-equal |key| '|commands|) (|whatCommands| |args|))
-            ((boot-equal |key| '|domains|)
+            ((boot-equal key '|commands|) (|whatCommands| |args|))
+            ((boot-equal key '|domains|)
               (|filterAndFormatConstructors| '|domain| "Domains" |args|))
-            ((boot-equal |key| '|operations|)
+            ((boot-equal key '|operations|)
                (|apropos| |args|))
-            ((boot-equal |key| '|packages|)
+            ((boot-equal key '|packages|)
               (|filterAndFormatConstructors| '|package| "Packages" |args|))
             (t
-             (cond ((boot-equal |key| '|synonyms|)
+             (cond ((boot-equal key '|synonyms|)
                       (|printSynonyms| |args|))))))))))))))) 
 
 @
@@ -10815,20 +10971,20 @@ apropos l ==
 \end{verbatim}
 
 <<defun apropos>>=
-(defun |apropos| (|l|)
+(defun |apropos| (arg)
  (prog (|ops|)
   (return
    (seq
     (progn
      (spadlet |ops|
       (cond 
-       ((null |l|) (|allOperations|))
+       ((null arg) (|allOperations|))
        (t
          (|filterListOfStrings|
           (prog (t0)
            (spadlet t0 nil)
            (return
-            (do ((t1 |l| (cdr t1)) (|p| nil))
+            (do ((t1 arg (cdr t1)) (|p| nil))
                 ((or (atom t1) (progn (setq |p| (car t1)) nil))
                   (nreverse0 t0))
             (seq (exit (setq t0 (cons (downcase (stringimage |p|)) t0)))))))
@@ -10897,7 +11053,7 @@ workfilesSpad2Cmd args ==
 \end{verbatim}
 <<defun workfilesSpad2Cmd>>=
 (defun |workfilesSpad2Cmd| (|args|)
- (prog (|deleteFlag| |type| |flist| |type1| |fl|)
+ (prog (|deleteFlag| type |flist| |type1| |fl|)
   (return
    (seq
     (cond 
@@ -10907,16 +11063,16 @@ workfilesSpad2Cmd args ==
        (do ((t0 |$options| (cdr t0)) (t1 nil))
            ((or (atom t0)
                 (progn (setq t1 (car t0)) nil)
-                (progn (progn (spadlet |type| (car t1)) t1) nil))
+                (progn (progn (spadlet type (car t1)) t1) nil))
              nil)
         (seq
          (exit
           (progn 
            (spadlet |type1|
-            (|selectOptionLC| |type| '(|boot| |lisp| |meta| |delete|) nil))
+            (|selectOptionLC| type '(|boot| |lisp| |meta| |delete|) nil))
            (cond
             ((null |type1|)
-              (|throwKeyedMsg| 's2iz0048 (cons |type| nil)))
+              (|throwKeyedMsg| 's2iz0048 (cons type nil)))
             ((boot-equal |type1| '|delete|)
               (spadlet |deleteFlag| t)))))))
        (do ((t2 |$options| (cdr t2)) (t3 nil))
@@ -10924,7 +11080,7 @@ workfilesSpad2Cmd args ==
             (progn (setq t3 (CAR t2)) nil)
             (progn
              (progn 
-              (spadlet |type| (car t3))
+              (spadlet type (car t3))
               (spadlet |flist| (cdr t3)) t3)
              nil))
             nil)
@@ -10932,7 +11088,7 @@ workfilesSpad2Cmd args ==
         (exit
          (progn
           (spadlet |type1|
-           (|selectOptionLC| |type| '(|boot| |lisp| |meta| |delete|) nil))
+           (|selectOptionLC| type '(|boot| |lisp| |meta| |delete|) nil))
           (cond
            ((boot-equal |type1| '|delete|) nil)
            (t
@@ -10979,8 +11135,8 @@ workfilesSpad2Cmd args ==
 zsystemdevelopment l == zsystemDevelopmentSpad2Cmd l
 \end{verbatim}
 <<defun zsystemdevelopment>>=
-(defun |zsystemdevelopment| (|l|)
- (|zsystemDevelopmentSpad2Cmd| |l|)) 
+(defun |zsystemdevelopment| (arg)
+ (|zsystemDevelopmentSpad2Cmd| arg)) 
 
 @
 
@@ -10989,8 +11145,8 @@ zsystemdevelopment l == zsystemDevelopmentSpad2Cmd l
 zsystemDevelopmentSpad2Cmd l == zsystemdevelopment1 (l,$InteractiveMode)
 \end{verbatim}
 <<defun zsystemDevelopmentSpad2Cmd>>=
-(defun |zsystemDevelopmentSpad2Cmd| (|l|)
- (|zsystemdevelopment1| |l| |$InteractiveMode|)) 
+(defun |zsystemDevelopmentSpad2Cmd| (arg)
+ (|zsystemdevelopment1| arg |$InteractiveMode|)) 
 
 @
 
@@ -11035,8 +11191,8 @@ zsystemdevelopment1(l,im) ==
       :bright '"c ct e ec ect cls pause update patch compare record"]
 \end{verbatim}
 <<defun zsystemdevelopment1>>=
-(defun |zsystemdevelopment1| (|l| |im|)
- (prog (|$InteractiveMode| |fromopt| |opt| |optargs| |newopt| |opt1|
+(defun |zsystemdevelopment1| (arg |im|)
+ (prog (|$InteractiveMode| |fromopt| opt |optargs| |newopt| |opt1|
         |conStream| |upf| |fun|)
   (declare (special |$InteractiveMode|))
   (return
@@ -11049,7 +11205,7 @@ zsystemdevelopment1(l,im) ==
               (progn (setq t1 (car t0)) nil)
               (progn
                (progn
-                (spadlet |opt| (CAR t1))
+                (spadlet opt (CAR t1))
                 (spadlet |optargs| (CDR t1))
                 t1)
                nil))
@@ -11057,7 +11213,7 @@ zsystemdevelopment1(l,im) ==
       (seq
        (exit
         (progn
-         (spadlet |opt1| (|selectOptionLC| |opt| '(|from|) nil))
+         (spadlet |opt1| (|selectOptionLC| opt '(|from|) nil))
          (cond
           ((boot-equal |opt1| '|from|)
             (spadlet |fromopt| (cons (cons 'from |optargs|) nil))))))))
@@ -11066,7 +11222,7 @@ zsystemdevelopment1(l,im) ==
               (progn (setq t3 (car t2)) nil)
               (progn
                (progn
-                (spadlet |opt| (car t3))
+                (spadlet opt (car t3))
                 (spadlet |optargs| (cdr t3))
                 t3)
                nil))
@@ -11074,38 +11230,38 @@ zsystemdevelopment1(l,im) ==
       (seq
        (exit
         (progn
-         (cond ((null |optargs|) (spadlet |optargs| |l|)))
+         (cond ((null |optargs|) (spadlet |optargs| arg)))
          (spadlet |newopt| (append |optargs| |fromopt|))
-         (spadlet |opt1| (|selectOptionLC| |opt| '(|from|) nil))
+         (spadlet |opt1| (|selectOptionLC| opt '(|from|) nil))
          (cond
           ((boot-equal |opt1| '|from|)
             nil)
-          ((boot-equal |opt| '|c|)
+          ((boot-equal opt '|c|)
             (|/D,1| |newopt| (/COMP) nil nil))
-          ((boot-equal |opt| '|d|)
+          ((boot-equal opt '|d|)
             (|/D,1| |newopt| 'define nil nil))
-          ((boot-equal |opt| '|dt|)
+          ((boot-equal opt '|dt|)
             (|/D,1| |newopt| 'define nil t))
-          ((boot-equal |opt| '|ct|)
+          ((boot-equal opt '|ct|)
             (|/D,1| |newopt| (/COMP) nil t))
-          ((boot-equal |opt| '|ctl|)
+          ((boot-equal opt '|ctl|)
             (|/D,1| |newopt| (/COMP) nil 'tracelet))
-          ((boot-equal |opt| '|ec|)
+          ((boot-equal opt '|ec|)
             (|/D,1| |newopt| (/COMP) t nil))
-          ((boot-equal |opt| '|ect|)
+          ((boot-equal opt '|ect|)
             (|/D,1| |newopt| (/COMP) t t))
-          ((boot-equal |opt| '|e|)
+          ((boot-equal opt '|e|)
             (|/D,1| |newopt| nil t nil))
-          ((boot-equal |opt| '|version|)
+          ((boot-equal opt '|version|)
             (|version|))
-          ((boot-equal |opt| '|pause|)
+          ((boot-equal opt '|pause|)
             (spadlet |conStream|
               (defiostream '((device . console) (qual . v)) 120 0))
             (next |conStream|)
             (shut |conStream|))
           ((or 
-              (boot-equal |opt| '|update|)
-              (boot-equal |opt| '|patch|))
+              (boot-equal opt '|update|)
+              (boot-equal opt '|patch|))
             (spadlet |$InteractiveMode| nil)
             (spadlet |upf|
              (cons
@@ -11115,7 +11271,7 @@ zsystemdevelopment1(l,im) ==
                (cons (or (kaddr |optargs|) '*) nil))))
             (spadlet |fun|
              (cond
-              ((boot-equal |opt| '|patch|) '/update-lib-1)
+              ((boot-equal opt '|patch|) '/update-lib-1)
               (t '/update-1)))
             (catch 'filenam (funcall |fun| |upf|))
             (|sayMessage| "   Update/patch is completed."))
@@ -11123,13 +11279,13 @@ zsystemdevelopment1(l,im) ==
            (|sayBrightly|
             (cons
              "   An argument is required for"
-             (|bright| |opt|))))
+             (|bright| opt))))
           (t
            (|sayMessage|
             (cons
              "   Unknown option:"
              (append
-              (|bright| |opt|)
+              (|bright| opt)
               (cons '|    | (cons '|%l| (cons "   Available options are"
                  (|bright|
                    "c ct e ec ect cls pause update patch compare record")
@@ -11256,6 +11412,8 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 (in-package "BOOT")
 <<initvars>>
 
+<<defun abbreviations>>
+<<defun abbreviationsSpad2Cmd>>
 <<defun addNewInterpreterFrame>>
 <<defun addTraceItem>>
 <<defun apropos>>
@@ -11350,6 +11508,7 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 <<defun letPrint>>
 <<defun letPrint2>>
 <<defun letPrint3>>
+<<defun listConstructorAbbreviations>>
 <<defun loadExposureGroupData>>
 
 <<defmacro funfind>>
