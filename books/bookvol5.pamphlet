@@ -7594,11 +7594,197 @@ userlevel  operation access level of system user      development
 
 Variables with current values of ... have further sub-options. 
 For example, issue )set  system to see what the options are 
-for system. 
-For more information, issue )help set .
+for system. For more information, issue )help set .
 
 \end{verbatim}
-\subsection{The list structure}
+\section{)set list functions}
+\subsection{defun initializeSetVariables}
+The argument settree is initially the \verb|$setOption| variable.
+The fourth element is a union-style switch symbol.
+The fifth element is usually a variable to set.
+The sixth element is a subtree to recurse for the TREE switch.
+The seventh element is usually the default value. For more detailed
+explanations see the list structure section \ref{Theliststructure}.
+<<defun initializeSetVariables>>=
+(defun |initializeSetVariables| (settree) 
+ (dolist (setdata settree)
+  (case (fourth setdata)
+   (FUNCTION
+      (if (|functionp| (fifth setdata))
+        (funcall (fifth setdata) '|%initialize%|))
+        (|sayMSG| "   Function not implemented."))
+   (INTEGER (set (fifth setdata) (seventh setdata)))
+   (STRING  (set (fifth setdata) (seventh setdata)))
+   (LITERALS
+       (set (fifth setdata) (|translateYesNo2TrueFalse| (seventh setdata))))
+   (TREE  (|initializeSetVariables| (sixth setdata))))))
+
+@
+
+\subsection{defun resetWorkspaceVariables}
+<<defun resetWorkspaceVariables>>=
+(defun |resetWorkspaceVariables| () 
+  (setq /countlist nil)
+  (setq /editfile nil)
+  (setq /sourcefiles nil)
+  (setq |$sourceFiles| nil)
+  (setq /pretty nil)
+  (setq /spacelist nil)
+  (setq /timerlist nil)
+  (setq |$existingFiles| (make-hashtable 'uequal))
+  (setq |$functionTable| nil)
+  (setq $boot nil)
+  (setq |$compileMapFlag| nil)
+  (setq |$echoLineStack| nil)
+  (setq |$operationNameList| nil)
+  (setq |$slamFlag| nil)
+  (setq |$CommandSynonymAlist| (copy |$InitialCommandSynonymAlist|))
+  (setq |$UserAbbreviationsAlist| nil)
+  (setq |$msgAlist| nil)
+  (setq |$msgDatabase| nil)
+  (setq |$msgDatabaseName| nil)
+  (setq |$dependeeClosureAlist| nil)
+  (setq |$IOindex| 1)
+  (setq |$coerceIntByMapCounter| 0)
+  (setq |$e| (cons (cons nil nil) nil))
+  (setq |$env| (cons (cons nil nil) nil))
+  (|initializeSetVariables| |$setOptions|)) 
+
+@
+
+\subsection{defun displaySetOptionInformation}
+<<defun displaySetOptionInformation>>=
+(defun |displaySetOptionInformation| (arg setdata)
+ (let (current)
+  (cond
+   ((eq (fourth setdata) 'tree)
+    (|displaySetVariableSettings| (sixth setdata) (first setdata)))
+   (t 
+    (|centerAndHighlight|
+     (strconc "The " (|object2String| arg) " Option")
+      $linelength (|specialChar| '|hbar|))
+    (|sayBrightly|
+     `(|%l| ,@(|bright| "Description:") ,(second setdata)))
+    (case (fourth setdata)
+     (FUNCTION
+      (terpri)
+      (cond 
+       ((|functionp| (fifth setdata))
+         (funcall (fifth setdata) '|%describe%|))
+       (t (|sayMSG| "   Function not implemented."))))
+     (INTEGER
+      (|sayMessage| 
+        `(" The" ,@(|bright| arg) "option" 
+          " may be followed by an integer in the range" 
+          ,@(|bright| (ELT (sixth setdata) 0)) "to" 
+          |%l| ,@(|bright| (ELT (sixth setdata) 1)) "inclusive." 
+          " The current setting is" ,@(|bright| (|eval| (fifth setdata))))))
+     (STRING
+      (|sayMessage| 
+        `(" The" ,@(|bright| arg) "option" 
+          " is followed by a string enclosed in double quote marks." 
+          '|%l| " The current setting is" 
+          ,@(|bright| (list '|"| (|eval| (fifth setdata)) '|"|)))))
+     (LITERALS
+       (|sayMessage|
+        `(" The" ,@(|bright| arg) "option"
+              " may be followed by any one of the following:"))
+       (setq current 
+        (|translateTrueFalse2YesNo| (|eval| (fifth setdata))))
+       (dolist (name (sixth setdata))
+         (if (boot-equal name current)
+           (|sayBrightly| `( " ->" ,@(|bright| (|object2String| name))))
+           (|sayBrightly| (list "    " (|object2String| name)))))
+       (|sayMessage| " The current setting is indicated.")))))))
+
+@
+
+\subsection{defun displaySetVariableSettings}
+<<defun displaySetVariableSettings>>=
+(defun |displaySetVariableSettings| (settree label)
+ (let (setoption st opt subtree subname)
+  (cond
+   ((eq label '||) (setq label ")set"))
+   (t (setq label (strconc "  " (|object2String| label) " "))))
+  (|centerAndHighlight|
+    (strconc "Current Values of" label " Variables") $linelength '| |)
+  (terpri)
+  (|sayBrightly| 
+   (list "Variable     " "Description                                "
+         "Current Value" ))
+  (say (|fillerSpaces| $linelength (|specialChar| '|hbar|)))
+  (setq subtree nil)
+  (dolist (setdata settree)
+   (when (|satisfiesUserLevel| (third setdata))
+     (setq setoption (|object2String| (first setdata)))
+     (setq setoption
+      (strconc setoption
+       (|fillerSpaces| (spaddifference 13 (|#| setoption)) " ")
+       (second setdata)))
+     (setq setoption
+      (strconc setoption
+       (|fillerSpaces| (spaddifference 55 (|#| setoption)) " ")))
+     (setq st (fourth setdata))
+     (case (fourth setdata)
+      (FUNCTION
+       (setq opt
+        (if (|functionp| (fifth setdata))
+         (funcall (fifth setdata) '|%display%|)
+         "unimplemented"))
+       (cond
+        ((pairp opt)
+         (setq opt
+          (do ((t2 opt (cdr t2)) t1 (|o| nil))
+              ((or (atom t2) (progn (setq |o| (car t2)) nil)) t1)
+           (setq t1 (append t1 (cons |o| (cons " " nil))))))))
+       (|sayBrightly| (|concat| setoption '|%b| opt '|%d|)))
+      (STRING
+       (setq opt (|object2String| (|eval| (fifth setdata))))
+       (|sayBrightly| `(,setoption ,@(|bright| opt))))
+      (INTEGER
+       (setq opt (|object2String| (|eval| (fifth setdata))))
+       (|sayBrightly| `(,setoption ,@(|bright| opt))))
+      (LITERALS
+       (setq opt (|object2String| 
+             (|translateTrueFalse2YesNo| (|eval| (fifth setdata)))))
+       (|sayBrightly| `(,setoption ,@(|bright| opt))))
+      (TREE
+         (|sayBrightly| `(,setoption ,@(|bright| "...")))
+         (setq subtree t)
+         (setq subname (|object2String| (first setdata)))))))
+  (terpri)
+  (when subtree
+     (|sayBrightly|
+      `("Variables with current values of" ,@(|bright| "...")
+            "have further sub-options. For example,"))
+     (|sayBrightly|
+      `("issue" ,@(|bright| ")set ") ,subname
+        " to see what the options are for" ,@(|bright| subname) "."
+        |%l| "For more information, issue" ,@(|bright| ")help set") ".")))))
+
+@
+
+\subsection{defun translateYesNo2TrueFalse}
+<<defun translateYesNo2TrueFalse>>=
+(defun |translateYesNo2TrueFalse| (x)
+ (cond
+  ((|member| x '(|yes| |on|)) t)
+  ((|member| x '(|no| |off|)) nil)
+  (t x))) 
+
+@
+
+\subsection{defun translateTrueFalse2YesNo}
+<<defun translateTrueFalse2YesNo>>=
+(defun |translateTrueFalse2YesNo| (x)
+ (cond
+  ((eq x t) '|on|)
+  ((null x) '|off|)
+  (t x))) 
+
+@
+\section{The list structure}
+\label{Theliststructure}
 The structure of each list item consists of 7 items.  Consider this 
 example:
 \begin{verbatim}
@@ -7621,9 +7807,7 @@ the user would see "operation access level of system user".
 accepted. There are three levels: interpreter, compiler, development.
 These commands are restricted to keep the user from causing damage.
 \item {\bf 4} {\sl Type} a symbol, one of {\bf FUNCTION}, {\bf INTEGER},
-{\bf STRING}, {\bf LITERALS}, {\bf FILENAME} or {\bf TREE}. See the function
-{\bf initializeSetVariables} in the file
-{\bf setvars.boot.pamphlet\cite{2}}.
+{\bf STRING}, {\bf LITERALS}, {\bf FILENAME} or {\bf TREE}. 
 \item {\bf 5} {\sl Var} 
 \begin{list}{}
 \item FUNCTION is the function to call
@@ -7721,6 +7905,46 @@ args         arguments for compiling AXIOM code
        |htSetOutputLibrary|
 	)
 @
+\subsection{defun setOutputLibrary}
+<<defun setOutputLibrary>>=
+(defun |setOutputLibrary| (arg)
+ (let (fn)
+   (cond
+    ((eq arg '|%initialize%|) (setq |$outputLibraryName| nil))
+    ((eq arg '|%display%|) (or |$outputLibraryName| "user.lib"))
+    ((or (null arg) (eq arg '|%describe%|) (eq (car arg) '?) (/= (|#| arg) 1))
+     (|describeOutputLibraryArgs|))
+    (t
+     (when (filep (setq fn (stringimage (car arg))))
+       (setq fn (truename fn)))
+     (|openOutputLibrary| (setq |$outputLibraryName| fn))))))
+
+@
+
+\subsection{defun describeOutputLibraryArgs}
+<<defun describeOutputLibraryArgs>>=
+(defun |describeOutputLibraryArgs| ()
+ (|sayBrightly| (list
+  '|%b| ")set compiler output library"
+  '|%d| "is used to tell the compiler where to place"
+  '|%l| "compiled code generated by the library compiler.  By default it goes"
+  '|%l| "in a file called"
+  '|%b| "user.lib"
+  '|%d| "in the current directory.")))
+
+@
+
+\subsection{defun openOutputLibrary}
+The input-libraries and output-library are now truename based.
+<<defun openOutputLibrary>>=
+(defun |openOutputLibrary| (lib)
+ (declare (special output-library input-libraries))
+  (|dropInputLibrary| lib)
+  (setq output-library (truename lib))
+  (push output-library input-libraries))
+
+@
+
 \subsection{input}
 \begin{verbatim}
 ---------------------- The input Option -----------------------
@@ -7742,6 +7966,71 @@ args         arguments for compiling AXIOM code
        NIL
        |htSetInputLibrary|)
 @
+
+\subsection{defun setInputLibrary}
+The input-libraries is now maintained as a list of truenames.
+<<defun setInputLibrary>>=
+(defun |setInputLibrary| (arg)
+ (declare (special input-libraries))
+ (let (tmp1 filename act)
+  (cond
+   ((eq arg '|%initialize%|) t)
+   ((eq arg '|%display%|) (mapcar #'namestring input-libraries))
+   ((or (null arg) (eq arg '|%describe%|) (eq (car arg) '?))
+    (|describeInputLibraryArgs|))
+   ((and (pairp arg)
+         (progn
+          (setq act (qcar arg))
+          (setq tmp1 (qcdr arg))
+          (and (pairp tmp1)
+               (eq (qcdr tmp1) nil)
+               (progn (setq filename (qcar tmp1)) t)))
+         (setq act (|selectOptionLC| act '(|add| |drop|) nil)))
+    (cond
+     ((eq act '|add|)
+      (|addInputLibrary| (truename (stringimage filename))))
+     ((eq act '|drop|)
+      (|dropInputLibrary| (truename (stringimage filename))))))
+   (t (|setInputLibrary| nil)))))
+
+@
+
+\subsection{defun describeInputLibraryArgs}
+<<defun describeInputLibraryArgs>>=
+(defun |describeInputLibraryArgs| ()
+ (|sayBrightly| (list
+  '|%b| ")set compiler input add library"
+  '|%d| "is used to tell AXIOM to add"
+  '|%b| "library"
+  '|%d| "to"
+  '|%l| "the front of the path used to find compile code."
+  '|%l|
+  '|%b| ")set compiler input drop library"
+  '|%d| "is used to tell AXIOM to remove"
+  '|%b| "library"
+  '|%d|
+  '|%l| "from this path.")))
+
+@
+
+\subsection{defun addInputLibrary}
+The input-libraries variable is now maintained as a list of truenames.
+<<defun addInputLibrary>>=
+(defun |addInputLibrary| (lib)
+ (declare (special input-libraries))
+  (|dropInputLibrary| lib)
+  (push (truename lib) input-libraries))
+
+@
+
+\subsection{defun dropInputLibrary}
+<<defun dropInputLibrary>>=
+(defun |dropInputLibrary| (lib) 
+ (declare (special input-libraries))
+ (setq input-libraries (delete (truename lib) input-libraries :test #'equal)))
+
+@
+
 \subsection{args}
 \begin{verbatim}
 ----------------------- The args Option -----------------------
@@ -7770,6 +8059,37 @@ args         arguments for compiling AXIOM code
           "-O -Fasy -Fao -Flsp -laxiom -Mno-AXL__W__WillObsolete -DAxiom -Y $AXIOM/algebra"))
        NIL)
 @
+
+\subsection{defun setAsharpArgs}
+<<defun setAsharpArgs>>=
+(defun |setAsharpArgs| (arg)
+ (cond
+  ((eq arg '|%initialize%|)
+   (setq |$asharpCmdlineFlags|
+    "-O -Fasy -Fao -Flsp -laxiom -Mno-AXL_W_WillObsolete -DAxiom -Y $AXIOM/algebra"))
+  ((eq arg '|%display%|) |$asharpCmdlineFlags|)
+  ((or (null arg) (eq arg '|%describe%|) (eq (car arg) '?))
+   (|describeAsharpArgs|))
+  (t (setq |$asharpCmdlineFlags| (car arg))))) 
+
+@
+
+\subsection{defun describeAsharpArgs}
+<<defun describeAsharpArgs>>=
+(defun |describeAsharpArgs| () 
+ (|sayBrightly| (list
+  '|%b| ")set compiler args "
+  '|%d| "is used to tell AXIOM how to invoke the library compiler "
+  '|%l| " when compiling code for AXIOM."
+  '|%l| " The args option is followed by a string enclosed in double quotes."
+  '|%l|
+  '|%l| " The current setting is"
+  '|%l|
+  '|%b| "\"" |$asharpCmdlineFlags| "\""
+  '|%d|)))
+
+@
+
 \section{expose}
 \begin{verbatim}
 ---------------------- The expose Option ----------------------
@@ -9978,6 +10298,12 @@ prettyprint  prettyprint BOOT func's as they compile    off
 
 @
 
+<<postvars>>=
+(eval-when (eval load)
+ (|initializeSetVariables| |$setOptions|)
+
+@
+
 \section{Set code}
 
 \subsection{defun set}
@@ -10027,49 +10353,49 @@ which gets called with \verb|%describe%|
      (|selectOption| (downcase (car l)) |$setOptionNames| '|optionError|))
     (setq setdata (cons arg (lassoc arg settree)))
     (cond
-     ((null (|satisfiesUserLevel| (elt setdata 2)))
+     ((null (|satisfiesUserLevel| (third setdata)))
       (|sayKeyedMsg| 's2iz0007 (list |$UserLevel| "set option" nil)))
      ((eql 1 (|#| l)) (|displaySetOptionInformation| arg setdata))
      (t
-      (setq st (elt setdata 3))
-      (cond
-       ((eq st 'function)
+      (setq st (fourth setdata))
+      (case (fourth setdata)
+       (FUNCTION
         (setq setfunarg
          (if (eq (elt l 1) 'default) 
           '|%initialize%|
           (kdr l)))
-        (if (|functionp| (elt setdata 4))
-          (funcall (elt setdata 4) setfunarg)
+        (if (|functionp| (fifth setdata))
+          (funcall (fifth setdata) setfunarg)
           (|sayMSG| "   Function not implemented."))
         (when |$displaySetValue|
          (|displaySetOptionInformation| arg setdata))
         NIL)
-       ((eq st 'string)
+       (STRING
         (setq arg2 (elt l 1))
         (cond
-         ((eq arg2 'default) (set (elt setdata 4) (elt setdata 6)))
-         (arg2 (set (elt setdata 4) arg2))
+         ((eq arg2 'default) (set (fifth setdata) (seventh setdata)))
+         (arg2 (set (fifth setdata) arg2))
          (t nil))
         (when (or |$displaySetValue| (null arg2))
          (|displaySetOptionInformation| arg setdata))
         NIL)
-       ((eq st 'integer)
+       (INTEGER
         (setq arg2
          (progn
           (setq num (elt l 1))
           (cond
            ((and (fixp num)
-                 (>= num (elt (elt setdata 5) 0))
-                 (or (null (setq upperlimit (elt (elt setdata 5) 1)))
+                 (>= num (elt (sixth setdata) 0))
+                 (or (null (setq upperlimit (elt (sixth setdata) 1)))
                      (<= num upperlimit)))
             num)
            (t
             (|selectOption| 
              (elt l 1)
-             (cons '|default| (elt setdata 5)) nil)))))
+             (cons '|default| (sixth setdata)) nil)))))
         (cond
-         ((eq arg2 'default) (set (elt setdata 4) (elt setdata 6)))
-         (arg2 (set (elt setdata 4) arg2))
+         ((eq arg2 'default) (set (fifth setdata) (seventh setdata)))
+         (arg2 (set (fifth setdata) arg2))
          (t nil))
         (cond
          ((or |$displaySetValue| (null arg2))
@@ -10080,22 +10406,22 @@ which gets called with \verb|%describe%|
            `(" Your value" ,@(|bright| (|object2String| (elt l 1)))
              "is not among the valid choices.")))
          (t nil)))
-       ((eq st 'literals)
+       (LITERALS
         (cond
          ((setq arg2
           (|selectOption| (elt l 1) 
-           (cons '|default| (elt setdata 5)) nil))
+           (cons '|default| (sixth setdata)) nil))
           (cond
            ((eq arg2 'default)
-            (set (elt setdata 4) 
-              (|translateYesNo2TrueFalse| (elt setdata 6))))
+            (set (fifth setdata) 
+              (|translateYesNo2TrueFalse| (seventh setdata))))
            (t
             (cond ((eq arg2 '|nobreak|) (use-fast-links t)))
             (cond 
              ((eq arg2 '|fastlinks|)
               (use-fast-links nil)
               (setq arg2 '|break|)))
-            (set (elt setdata 4) (|translateYesNo2TrueFalse| arg2))))))
+            (set (fifth setdata) (|translateYesNo2TrueFalse| arg2))))))
         (when (or |$displaySetValue| (null arg2))
           (|displaySetOptionInformation| arg setdata))
         (cond
@@ -10105,7 +10431,7 @@ which gets called with \verb|%describe%|
             (append (|bright| (|object2String| (elt l 1)))
              (cons "is not among the valid choices." nil)))))
          (t nil)))
-       ((eq st 'tree) (|set1| (kdr l) (elt setdata 5)) nil)
+       (TREE (|set1| (kdr l) (sixth setdata)) nil)
        (t 
         (|sayMessage|
          `("Cannot handle set tree node type" ,@(|bright| st) |yet|))
@@ -10113,79 +10439,6 @@ which gets called with \verb|%describe%|
 
 @
 
-\subsection{defun displaySetOptionInformation}
-<<defun displaySetOptionInformation>>=
-(defun |displaySetOptionInformation| (arg setdata)
- (let (st current)
-  (setq st (elt setdata 3))
-  (cond
-   ((eq st 'tree)
-    (|displaySetVariableSettings| (elt setdata 5) (elt setdata 0)))
-   (t 
-    (|centerAndHighlight|
-     (strconc "The " (|object2String| arg) " Option")
-      $linelength (|specialChar| '|hbar|))
-    (|sayBrightly|
-     `(|%l| ,@(|bright| "Description:") ,(elt setdata 1)))
-    (cond
-     ((eq st 'function)
-      (terpri)
-      (cond 
-       ((|functionp| (elt setdata 4))
-         (funcall (elt setdata 4) '|%describe%|))
-       (t (|sayMSG| "   Function not implemented."))))
-     ((eq st 'integer)
-      (|sayMessage| 
-        `(" The" ,@(|bright| arg) "option" 
-          " may be followed by an integer in the range" 
-          ,@(|bright| (ELT (ELT setdata 5) 0)) "to" 
-          |%l| ,@(|bright| (ELT (ELT setdata 5) 1)) "inclusive." 
-          " The current setting is" ,@(|bright| (|eval| (elt setdata 4))))))
-     ((eq st 'string)
-      (|sayMessage| 
-        `(" The" ,@(|bright| arg) "option" 
-          " is followed by a string enclosed in double quote marks." 
-          '|%l| " The current setting is" 
-          ,@(|bright| (list '|"| (|eval| (elt setdata 4)) '|"|)))))
-     ((eq st 'literals)
-       (|sayMessage|
-        `(" The" ,@(|bright| arg) "option"
-              " may be followed by any one of the following:"))
-       (setq current 
-        (|translateTrueFalse2YesNo| (|eval| (elt setdata 4))))
-       (do ((t0 (elt setdata 5) (cdr t0)) (|name| nil))
-           ((or (atom t0) (progn (setq |name| (car t0)) nil)) nil)
-        (seq
-         (exit
-          (cond
-           ((boot-equal |name| current)
-            (|sayBrightly| 
-             `( " ->" ,@(|bright| (|object2String| |name|)))))
-           (t
-            (|sayBrightly| (list "    " (|object2String| |name|))))))))
-       (|sayMessage| " The current setting is indicated.")))))))
-
-@
-
-\subsection{defun translateYesNo2TrueFalse}
-<<defun translateYesNo2TrueFalse>>=
-(defun |translateYesNo2TrueFalse| (x)
- (cond
-  ((|member| x '(|yes| |on|)) t)
-  ((|member| x '(|no| |off|)) nil)
-  (t x))) 
-
-@
-
-\subsection{defun translateTrueFalse2YesNo}
-<<defun translateTrueFalse2YesNo>>=
-(defun |translateTrueFalse2YesNo| (x)
- (cond
-  ((eq x t) '|on|)
-  ((null x) '|off|)
-  (t x))) 
-
-@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \cmdhead{show}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -15314,6 +15567,7 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 
 <<defun abbreviations>>
 <<defun abbreviationsSpad2Cmd>>
+<<defun addInputLibrary>>
 <<defun addNewInterpreterFrame>>
 <<defun addTraceItem>>
 <<defun apropos>>
@@ -15352,6 +15606,9 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 <<defun createCurrentInterpreterFrame>>
 <<defun credits>>
 
+<<defun describeAsharpArgs>>
+<<defun describeInputLibraryArgs>>
+<<defun describeOutputLibraryArgs>>
 <<defun dewritify>>
 <<defun dewritify,dewritifyInner>>
 <<defun dewritify,is?>>
@@ -15362,8 +15619,10 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 <<defun displayMacros>>
 <<defun displayOperations>>
 <<defun displaySetOptionInformation>>
+<<defun displaySetVariableSettings>>
 <<defun displaySpad2Cmd>>
 <<defun domainToGenvar>>
+<<defun dropInputLibrary>>
 
 <<defun emptyInterpreterFrame>>
 
@@ -15415,6 +15674,7 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 <<defun initHist>>
 <<defun initHistList>>
 <<defun initializeInterpreterFrameRing>>
+<<defun initializeSetVariables>>
 <<defun init-memory-config>>
 <<defun initroot>>
 <<defun intloop>>
@@ -15453,6 +15713,7 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 <<defun nextInterpreterFrame>>
 
 <<defun oldHistFileName>>
+<<defun openOutputLibrary>>
 <<defun openserver>>
 <<defun orderBySlotNumber>>
 
@@ -15488,6 +15749,7 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 <<defun resetInCoreHist>>
 <<defun resetSpacers>>
 <<defun resetTimers>>
+<<defun resetWorkspaceVariables>>
 <<defun restart>>
 <<defun restoreHistory>>
 <<defun runspad>>
@@ -15499,9 +15761,12 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 <<defun ScanOrPairVec>>
 <<defun set>>
 <<defun set1>>
+<<defun setAsharpArgs>>
 <<defun setCurrentLine>>
 <<defun setHistoryCore>>
+<<defun setInputLibrary>>
 <<defun setIOindex>>
+<<defun setOutputLibrary>>
 <<defun set-restart-hook>>
 <<defun shortenForPrinting>>
 <<defun showHistory>>
