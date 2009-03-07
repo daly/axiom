@@ -511,38 +511,31 @@ has the default function \verb|InterpExecuteSpadSystemCommand|.
 Thus, when a system command is entered this function is called.
 <<defun SpadInterpretStream>>=
 (defun |SpadInterpretStream| (str source interactive?) 
- (prog (|$promptMsg| |$shoeReadLineFunction| |$systemCommandFunction| 
-        |$ncMsgList| |$erMsgToss| |$lastPos| |$inclAssertions| 
-        |$okToExecuteMachineCode| |$newcompErrorCount| |$newcompMode| 
-        |$libQuiet| |$fn|)
+ (let (|$promptMsg| |$shoeReadLineFunction| |$systemCommandFunction| 
+       |$ncMsgList| |$erMsgToss| |$lastPos| |$inclAssertions| 
+       |$okToExecuteMachineCode| |$newcompErrorCount| |$newcompMode| 
+       |$libQuiet| |$fn|)
   (declare (special |$promptMsg| |$shoeReadLineFunction| 
             |$systemCommandFunction| |$ncMsgList| |$erMsgToss| |$lastPos| 
             |$inclAssertions| |$okToExecuteMachineCode| |$newcompErrorCount| 
             |$newcompMode| |$libQuiet| |$fn| |$nopos|))
-   (return 
-    (progn 
-     (setq |$fn| source) 
-     (setq |$libQuiet| (null interactive?)) 
-     (setq |$newcompMode| nil) 
-     (setq |$newcompErrorCount| 0) 
-     (setq |$okToExecuteMachineCode| t) 
-     (setq |$inclAssertions| (list 'aix '|CommonLisp|)) 
-     (setq |$lastPos| |$nopos|) 
-     (setq |$erMsgToss| nil) 
-     (setq |$ncMsgList| nil) 
-     (setq |$systemCommandFunction| #'|InterpExecuteSpadSystemCommand|) 
-     (setq |$shoeReadLineFunction| #'|serverReadLine|) 
-     (setq |$promptMsg| 'S2CTP023) 
-     (cond 
-      (interactive? 
-       (progn 
-        (princ (mkprompt)) 
-        (|intloopReadConsole| "" str) 
-        nil))
-      (t 
-       (progn 
-        (|intloopInclude| source 0) 
-        nil)))))))
+  (setq |$fn| source) 
+  (setq |$libQuiet| (null interactive?)) 
+  (setq |$newcompMode| nil) 
+  (setq |$newcompErrorCount| 0) 
+  (setq |$okToExecuteMachineCode| t) 
+  (setq |$inclAssertions| (list 'aix '|CommonLisp|)) 
+  (setq |$lastPos| |$nopos|) 
+  (setq |$erMsgToss| nil) 
+  (setq |$ncMsgList| nil) 
+  (setq |$systemCommandFunction| #'|InterpExecuteSpadSystemCommand|) 
+  (setq |$shoeReadLineFunction| #'|serverReadLine|) 
+  (setq |$promptMsg| 'S2CTP023) 
+  (if interactive? 
+   (progn 
+     (princ (mkprompt)) 
+     (|intloopReadConsole| "" str))
+   (|intloopInclude| source 0))))
 
 @
 \section{The Read-Eval-Print Loop}
@@ -855,9 +848,12 @@ See:\\
 \item The \fnref{zsystemdevelopment} command
 \end{itemize}
 
+\defdollar{systemCommands}
 <<initvars>>=
 (defvar |$systemCommands| nil)
 
+@
+<<postvars>>=
 (eval-when (eval load)
  (setq |$systemCommands|
  '(
@@ -901,12 +897,16 @@ See:\\
 
 @
 
-\defdollar{SYSCOMMANDS}
+\defdollar{syscommands}
 This table is used to look up a symbol to see if it might be a command.
 <<initvars>>=
-(defvar $SYSCOMMANDS nil)
+(defvar $syscommands nil)
+
+@
+
+<<postvars>>=
 (eval-when (eval load)
- (setq $SYSCOMMANDS (mapcar #'car |$systemCommands|)))
+ (setq $syscommands (mapcar #'car |$systemCommands|)))
 
 @
 \defdollar{noParseCommands}
@@ -928,6 +928,68 @@ all kinds of input that will not be acceptable to the interpreter.
     |synonym|
     |system|
     )))
+
+@
+\defun{handleNoParseCommands}
+The system commands given by the global variable
+\verb|$noParseCommands| require essentially no preprocessing/parsing
+of their arguments. Here we dispatch the functions which implement
+these commands.
+
+There are four standard commands which receive arguments
+\begin{itemize}
+\item boot
+\item lisp
+\item synonym 
+\item system
+\end{itemize}
+
+There are five standard commands
+which do not receive arguments -- 
+\begin{itemize}
+\item quit
+\item fin
+\item pquit
+\item credits
+\item copyright
+\end{itemize}
+
+As these commands do not necessarily
+exhaust those mentioned in \verb|$noParseCommands|, we provide a
+generic dispatch based on two conventions: commands which do not
+require an argument name themselves, those which do have their names
+prefixed by ``np''. This makes it possible to dynamically define
+new system commands provided you handle the argument parsing.
+
+<<defun handleNoParseCommands>>=
+(defun |handleNoParseCommands| (unab string)
+ (let (spaceindex funname)
+  (setq string (|stripSpaces| string))
+  (setq spaceindex (search " " string))
+  (cond
+   ((eq unab '|lisp|)
+    (if spaceindex
+     (|nplisp| (|stripLisp| string))
+     (|sayKeyedMsg| 's2iv0005 nil)))
+   ((eq unab '|boot|)
+    (if spaceindex
+     (|npboot| (subseq string (1+ spaceindex)))
+     (|sayKeyedMsg| 's2iv0005 nil)))
+   ((eq unab '|system|)
+    (if spaceindex
+      (|npsystem| unab string)
+      (|sayKeyedMsg| 's2iv0005 nil)))
+   ((eq unab '|synonym|)
+    (if spaceindex
+     (|npsynonym| unab (subseq string (1+ spaceindex)))
+     (|npsynonym| unab "")))
+   ((null spaceindex)
+    (funcall unab))
+   ((|member| unab '(|quit| |fin| |pquit| |credits| |copyright|))
+    (|sayKeyedMsg| 's2iv0005 nil))
+   (t
+    (setq funname (intern (concat "np" (string unab))))
+    (funcall funname (subseq string (1+ spaceindex)))))))
 
 @
 \defdollar{tokenCommands}
@@ -1033,6 +1095,10 @@ above initial list of synonyms. The user synonyms that are added
 during a session are pushed onto this list for later lookup.
 <<initvars>>=
 (defvar |$CommandSynonymAlist| nil)
+
+@
+
+<<postvars>>=
 (eval-when (eval load)
  (setq |$CommandSynonymAlist| (copy-alist |$InitialCommandSynonymAlist|)))
 
@@ -1061,6 +1127,7 @@ for processing \verb|)read| of input files.
      n))))
 
 @
+
 \defun{ncloopPrefix?}
 If we find the prefix string in the whole string starting at position zero
 we return the remainder of the string without the leading prefix.
@@ -1068,6 +1135,37 @@ we return the remainder of the string without the leading prefix.
 (defun |ncloopPrefix?| (prefix whole)
  (when (eql (search prefix whole) 0)
   (subseq whole (length prefix))))
+
+@
+
+\defun{selectOptionLC}
+<<defun selectOptionLC>>=
+(defun |selectOptionLC| (x l errorFunction)
+ (|selectOption| (downcase (|object2Identifier| x)) l errorFunction)) 
+
+@
+
+\defun{selectOption}
+<<defun selectOption>>=
+(defun |selectOption| (x l errorfunction)
+ (let (u y)
+  (cond
+   ((|member| x l) x)
+   ((null (identp x))
+    (cond
+     (errorfunction (funcall errorfunction x u))
+     (t nil)))
+   (t
+    (setq u
+     (let (t0)
+       (do ((t1 l (CDR t1)) (y NIL))
+           ((or (atom t1) (progn (setq y (car t1)) nil)) (nreverse0 t0))
+          (if (|stringPrefix?| (pname x) (pname y))
+             (setq t0 (cons y t0))))))
+    (cond
+     ((and (pairp u) (eq (qcdr u) nil) (progn (setq y (qcar u)) t)) y)
+     (errorfunction (funcall errorfunction x u))
+     (t nil))))))
 
 @
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -1167,36 +1265,6 @@ constructor name {\tt VectorFunctions2} from the system:
 
 @
 \defun{abbreviationsSpad2Cmd}
-\begin{verbatim}
-;abbreviationsSpad2Cmd l ==
-;  null l => helpSpad2Cmd '(abbreviations)
-;  abopts := '(query domain category package remove)
-;  quiet := nil
-;  for [opt] in $options repeat
-;    opt := selectOptionLC(opt,'(quiet),'optionError)
-;    opt = 'quiet => quiet := true
-;  l is [opt,:al] =>
-;    key := opOf CAR al
-;    type := selectOptionLC(opt,abopts,'optionError)
-;    type is 'query =>
-;      null al => listConstructorAbbreviations()
-;      constructor := abbreviation?(key) => abbQuery(constructor)
-;      abbQuery(key)
-;    type is 'remove =>
-;      DELDATABASE(key,'ABBREVIATION)
-;    ODDP SIZE al => sayKeyedMsg("S2IZ0002",[type])
-;    repeat
-;      null al => return 'fromLoop
-;      [a,b,:al] := al
-;      mkUserConstructorAbbreviation(b,a,type)
-;      SETDATABASE(b,'ABBREVIATION,a)
-;      SETDATABASE(b,'CONSTRUCTORKIND,type)
-;    null quiet =>
-;      sayKeyedMsg("S2IZ0001",[a,type,opOf b])
-;      nil
-;  nil
-\end{verbatim}
-
 <<defun abbreviationsSpad2Cmd>>=
 (defun |abbreviationsSpad2Cmd| (arg)
  (let (abopts quiet opt key type constructor t2 a b al)
@@ -1211,22 +1279,16 @@ constructor name {\tt VectorFunctions2} from the system:
              (progn (setq t1 (car t0)) nil)
              (progn (progn (setq opt (car t1)) t1) nil))
           nil)
-     (seq
-      (exit
-       (progn
-        (setq opt
-         (|selectOptionLC| opt '(|quiet|) '|optionError|))
-        (cond ((eq opt '|quiet|)
-          (setq quiet t)))))))
-    (cond
-     ((and (pairp arg) 
+      (setq opt (|selectOptionLC| opt '(|quiet|) '|optionError|))
+      (when (eq opt '|quiet|) (setq quiet t)))
+    (when
+     (and (pairp arg) 
            (progn 
             (setq opt (qcar arg))
             (setq al (qcdr arg))
             t))
        (setq key (|opOf| (car al)))
-       (setq type
-         (|selectOptionLC| opt abopts '|optionError|))
+       (setq type (|selectOptionLC| opt abopts '|optionError|))
        (cond
         ((eq type '|query|)
          (cond 
@@ -1237,7 +1299,7 @@ constructor name {\tt VectorFunctions2} from the system:
         ((eq type '|remove|)
          (deldatabase key 'abbreviation))
         ((oddp (size al))
-         (|sayKeyedMsg| 's2iz0002 (cons type nil)))
+         (|sayKeyedMsg| 's2iz0002 (list type)))
         (t
          (do () (nil nil)
           (seq 
@@ -1252,11 +1314,8 @@ constructor name {\tt VectorFunctions2} from the system:
                (|mkUserConstructorAbbreviation| b a type)
                (setdatabase b 'abbreviation a)
                (setdatabase b 'constructorkind type))))))
-         (cond ((null quiet)
-          (progn
-           (|sayKeyedMsg| 's2iz0001
-             (cons a (cons type (cons (|opOf| b) nil)))) nil))))))
-     (t nil))))))
+         (unless quiet
+           (|sayKeyedMsg| 's2iz0001 (list a type (|opOf| b)))))))))))
 
 @
 
@@ -1658,6 +1717,12 @@ system function and constructor caches.
 \fnref{frame}, and
 \fnref{undo}
 
+\defdollar{clearOptions}
+<<initvars>>=
+(defvar |$clearOptions| '(|modes| |operations| |properties| |types| |values|))
+
+@
+
 \defun{clear}
 <<defun clear>>=
 (defun |clear| (l)
@@ -1687,9 +1752,8 @@ system function and constructor caches.
 
 <<defun clearSpad2Cmd>>=
 (defun |clearSpad2Cmd| (l)
-  (let (|$clearExcept| |opt| |optList| |arg|)
+  (let (|$clearExcept| opt optlist arg)
   (declare (special |$clearExcept| |$options| |$clearOptions|))
-  (setq |$clearExcept| nil)
   (cond 
    (|$options|
     (setq |$clearExcept|
@@ -1702,31 +1766,31 @@ system function and constructor caches.
            ((or t1 
                 (atom t2)
                 (progn (setq t3 (car t2)) nil)
-                (progn (progn (setq |opt| (car t3)) t3) nil))
+                (progn (progn (setq opt (car t3)) t3) nil))
               t0)
         (setq t0
          (and t0 
               (eq
-               (|selectOptionLC| |opt| '(|except|) '|optionError|)
+               (|selectOptionLC| opt '(|except|) '|optionError|)
                '|except|)))))))))
   (cond
    ((null l)
-     (setq |optList|
+     (setq optlist
       (prog (t4)
        (setq t4 nil)
        (return
         (do ((t5 |$clearOptions| (cdr t5)) (x nil))
             ((or (atom t5) (progn (setq x (car t5)) nil)) t4)
          (setq t4 (append t4 `(|%l| "       " ,x)))))))
-     (|sayKeyedMsg| 's2iz0010 (cons |optList| nil)))
+     (|sayKeyedMsg| 's2iz0010 (list optlist)))
    (t
-     (setq |arg|
+     (setq arg
       (|selectOptionLC| (car l) '(|all| |completely| |scaches|) nil))
      (cond
-      ((eq |arg| '|all|)        (|clearCmdAll|))
-      ((eq |arg| '|completely|) (|clearCmdCompletely|))
-      ((eq |arg| '|scaches|)    (|clearCmdSortedCaches|))
-      (|$clearExcept|           (|clearCmdExcept| l))
+      ((eq arg '|all|)        (|clearCmdAll|))
+      ((eq arg '|completely|) (|clearCmdCompletely|))
+      ((eq arg '|scaches|)    (|clearCmdSortedCaches|))
+      (|$clearExcept|         (|clearCmdExcept| l))
       (t 
        (|clearCmdParts| l)
        (|updateCurrentInterpreterFrame|))))))) 
@@ -3174,7 +3238,8 @@ All of the other options are just subcases.
 
 There is a slight mismatch between the \$displayOptions list of
 symbols and the options this command accepts so we have a cond
-branch to clean up the option variable.
+branch to clean up the option variable. This allows for the options
+to be plural.
 
 If we fall all the way thru we use the \$displayOptions list
 to construct a list of strings for the sayMessage function
@@ -3211,6 +3276,20 @@ and tell the user what options are available.
       '("  )display keyword arguments are")
       (mapcar #'(lambda (x) (format nil "~%     ~a" x)) |$displayOptions|)
       (format nil "~%  or abbreviations thereof"))))))
+
+@
+
+\defun{abbQuery}
+<<defun abbQuery>>=
+(defun |abbQuery| (x)
+ (let (abb)
+  (cond
+   ((setq abb (getdatabase x 'abbreviation))
+    (|sayKeyedMsg| 's2iz0001 (list abb (getdatabase x 'constructorkind) x)))
+   ((setq abb (getdatabase x 'constructor))
+    (|sayKeyedMsg| 's2iz0001 (list x (getdatabase abb 'constructorkind) abb)))
+   (t
+     (|sayKeyedMsg| 's2iz0003 (list x))))))
 
 @
 \defun{displayOperations}
@@ -3479,6 +3558,38 @@ calls {\tt emacs} to edit the file.
 \fnref{compiler}, and
 \fnref{read}
 
+\defun{edit}
+<<defun edit>>=
+(defun |edit| (l) (|editSpad2Cmd| l)) 
+
+@
+
+\defun{editSpad2Cmd}
+<<defun editSpad2Cmd>>=
+(defun |editSpad2Cmd| (l)
+ (let (olddir filetypes ll rc)
+    (setq l (cond ((null l) /editfile) (t (car l))))
+    (setq l (|pathname| l))
+    (setq olddir (|pathnameDirectory| l))
+    (setq filetypes
+     (cond 
+      ((|pathnameType| l) (list (|pathnameType| l)))
+      ((eq |$UserLevel| '|interpreter|) '("input" "INPUT" "spad" "SPAD"))
+      ((eq |$UserLevel| '|compiler|) '("input" "INPUT" "spad" "SPAD"))
+      (t '("input" "INPUT" "spad" "SPAD" "boot" "BOOT" 
+           "lisp" "LISP" "meta" "META"))))
+    (setq ll
+     (cond
+      ((string= olddir "")
+        (|pathname| ($findfile (|pathnameName| l) filetypes)))
+      (t l)))
+    (setq l (|pathname| ll))
+    (setq /editfile l)
+    (setq rc (|editFile| l))
+    (|updateSourceFiles| l)
+    rc))
+
+@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \cmdhead{fin}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -7496,7 +7607,7 @@ explanations see the list structure section \ref{Theliststructure}.
  (dolist (setdata settree)
   (case (fourth setdata)
    (FUNCTION
-      (if (|functionp| (fifth setdata))
+      (if (functionp (fifth setdata))
         (funcall (fifth setdata) '|%initialize%|))
         (|sayMSG| "   Function not implemented."))
    (INTEGER (set (fifth setdata) (seventh setdata)))
@@ -7554,7 +7665,7 @@ explanations see the list structure section \ref{Theliststructure}.
     (case (fourth setdata)
      (FUNCTION
       (terpri)
-      (if (|functionp| (fifth setdata))
+      (if (functionp (fifth setdata))
         (funcall (fifth setdata) '|%describe%|)
         (|sayMSG| "   Function not implemented.")))
      (INTEGER
@@ -7612,7 +7723,7 @@ explanations see the list structure section \ref{Theliststructure}.
      (case (fourth setdata)
       (FUNCTION
        (setq opt
-        (if (|functionp| (fifth setdata))
+        (if (functionp (fifth setdata))
          (funcall (fifth setdata) '|%display%|)
          "unimplemented"))
        (cond
@@ -8706,6 +8817,57 @@ linker       linker arguments (e.g. libraries to search) -lxlf
            "/tmp/"))
          NIL)
 @
+
+\defun{setFortTmpDir}
+<<defun setFortTmpDir>>=
+(defun |setFortTmpDir| (arg)
+ (let (mode)
+   (cond
+    ((eq arg '|%initialize%|) (setq |$fortranTmpDir| "/tmp/"))
+    ((eq arg '|%display%|)
+     (if (stringp |$fortranTmpDir|)
+      |$fortranTmpDir|
+      (pname |$fortranTmpDir|)))
+    ((or (null arg) (eq arg '|%describe%|) (eq (car arg) '?))
+     (|describeSetFortTmpDir|))
+    ((null (setq mode (|validateOutputDirectory| arg)))
+     (|sayBrightly| 
+      `(" Sorry, but your argument(s)" ,@(|bright| arg) 
+            "is(are) not valid." |%l|))
+      (|describeSetFortTmpDir|))
+    (t (setq |$fortranTmpDir| mode)))))
+
+@
+
+\defun{validateOutputDirectory}
+<<defun validateOutputDirectory>>=
+(defun |validateOutputDirectory| (x)
+ (let ((dirname (car x)))
+  (when (and (pathname-directory dirname) (null (probe-file dirname)))
+   dirname)))
+
+@
+
+\defun{describeSetFortTmpDir}
+<<defun describeSetFortTmpDir>>=
+(defun |describeSetFortTmpDir| ()
+ (|sayBrightly| (list
+  '|%b| ")set fortran calling tempfile"
+  '|%d| " is used to tell AXIOM where"
+  '|%l| " to place intermediate FORTRAN data files . This must be the "
+  '|%l| " name of a valid existing directory to which you have permission "
+  '|%l| " to write (including the final slash)."
+  '|%l|
+  '|%l| " Syntax:"
+  '|%l| "   )set fortran calling tempfile DIRECTORYNAME"
+  '|%l|
+  '|%l| " The current setting is"
+  '|%b| |$fortranTmpDir|
+  '|%d|)))
+
+@
+
+
 \subsubsection{directory}
 \begin{verbatim}
 -------------------- The directory Option ---------------------
@@ -8734,6 +8896,47 @@ linker       linker arguments (e.g. libraries to search) -lxlf
            |chkDirectory|
            "./"))
          NIL)
+@
+
+\defun{setFortDir}
+<<defun setFortDir>>=
+(defun |setFortDir| (arg)
+ (declare (special |$fortranDirectory|))
+ (let (mode)
+   (COND
+    ((eq arg '|%initialize%|) (setq |$fortranDirectory| "./"))
+    ((eq arg '|%display%|)
+     (if (stringp |$fortranDirectory|) 
+      |$fortranDirectory|
+      (pname |$fortranDirectory|)))
+    ((or (null arg) (eq arg '|%describe%|) (eq (car arg) '?))
+      (|describeSetFortDir|))
+    ((null (setq mode (|validateOutputDirectory| arg)))
+     (|sayBrightly|
+      `(" Sorry, but your argument(s)" ,@(|bright| arg) 
+        "is(are) not valid." |%l|))
+     (|describeSetFortDir|))
+    (t (setq |$fortranDirectory| mode)))))
+
+@
+\defun{describeSetFortDir}
+<<defun describeSetFortDir>>=
+(defun |describeSetFortDir| ()
+ (declare (special |$fortranDirectory|))
+ (|sayBrightly| (list
+  '|%b| ")set fortran calling directory"
+  '|%d| " is used to tell AXIOM where"
+  '|%l| " to place generated FORTRAN files. This must be the name "
+  '|%l| " of a valid existing directory to which you have permission "
+  '|%l| " to write (including the final slash)."
+  '|%l|
+  '|%l| " Syntax:"
+  '|%l| "   )set fortran calling directory DIRECTORYNAME"
+  '|%l|
+  '|%l| " The current setting is"
+  '|%b| |$fortranDirectory|
+  '|%d|)))
+
 @
 \subsubsection{linker}
 \begin{verbatim}
@@ -8766,6 +8969,45 @@ linker       linker arguments (e.g. libraries to search) -lxlf
          NIL
          )
 @
+
+\defun{setLinkerArgs}
+<<defun setLinkerArgs>>=
+(defun |setLinkerArgs| (arg)
+ (declare (special |$fortranLibraries|))
+ (cond
+  ((eq arg '|%initialize%|) (setq |$fortranLibraries| "-lxlf"))
+  ((eq arg '|%display%|) (|object2String| |$fortranLibraries|))
+  ((or (null arg) (eq arg '|%describe%|) (eq (car arg) '?))
+    (|describeSetLinkerArgs|))
+  ((and (listp arg) (stringp (car arg)))
+    (setq |$fortranLibraries| (car arg)))
+  (t (|describeSetLinkerArgs|)))) 
+
+@
+
+\defun{describeSetLinkerArgs}
+<<defun describeSetLinkerArgs>>=
+(defun |describeSetLinkerArgs| ()
+ (declare (special |$fortranLibraries|))
+ (|sayBrightly| (list
+  '|%b| ")set fortran calling linkerargs"
+  '|%d| " is used to pass arguments to the linker"
+  '|%l| " when using "
+  '|%b| "mkFort"
+  '|%d| " to create functions which call Fortran code."
+  '|%l| " For example, it might give a list of libraries to be searched,"
+  '|%l| " and their locations."
+  '|%l| " The string is passed verbatim, so must be the correct syntax for"
+  '|%l| " the particular linker being used."
+  '|%l|
+  '|%l| " Example: )set fortran calling linker \"-lxlf\""
+  '|%l|
+  '|%l| " The current setting is"
+  '|%b| |$fortranLibraries|
+  '|%d|)))
+
+@
+
 \section{kernel}
 \begin{verbatim}
               Current Values of  kernel  Variables                    
@@ -10436,7 +10678,7 @@ prettyprint  prettyprint BOOT func's as they compile    off
 
 <<postvars>>=
 (eval-when (eval load)
- (|initializeSetVariables| |$setOptions|)
+ (|initializeSetVariables| |$setOptions|))
 
 @
 
@@ -10480,11 +10722,11 @@ which gets called with \verb|%describe%|
    ((null l) (|displaySetVariableSettings| settree '||))
    (t
     (setq |$setOptionNames|
-      (do ((t1 settree (cdr t1)) t0 (|x| nil))
-          ((or (atom t1) (progn (setq |x| (car t1)) nil)) (nreverse0 t0))
+      (do ((t1 settree (cdr t1)) t0 (x nil))
+          ((or (atom t1) (progn (setq x (car t1)) nil)) (nreverse0 t0))
        (seq
         (exit 
-         (setq t0 (cons (elt |x| 0) t0))))))
+         (setq t0 (cons (elt x 0) t0))))))
     (setq arg 
      (|selectOption| (downcase (car l)) |$setOptionNames| '|optionError|))
     (setq setdata (cons arg (lassoc arg settree)))
@@ -10500,7 +10742,7 @@ which gets called with \verb|%describe%|
          (if (eq (elt l 1) 'default) 
           '|%initialize%|
           (kdr l)))
-        (if (|functionp| (fifth setdata))
+        (if (functionp (fifth setdata))
           (funcall (fifth setdata) setfunarg)
           (|sayMSG| "   Function not implemented."))
         (when |$displaySetValue|
@@ -11208,7 +11450,7 @@ This reports the traced functions
 (defun |trace1| (arg)
  (prog (|$traceNoisely| constructor |ops| |lops| temp1 opt a 
         |oldL| |newOptions| |domain| |traceList| |optionList| |domainList| 
-        |opList| |y| |varList| |argument|)
+        |opList| y |varList| |argument|)
   (declare (special |$traceNoisely|))
   (return
    (seq
@@ -11327,8 +11569,8 @@ This reports the traced functions
                 (t nil)))
               (setq |varList|
                (cond
-                ((setq |y| (lassoc '|vars| |optionList|))
-                  (list (cons '|vars| |y|)))
+                ((setq y (lassoc '|vars| |optionList|))
+                  (list (cons '|vars| y)))
                 (t nil)))
               (append |domainList| (append |opList| |varList|)))))
          (|optionList| (append |traceList| |optionList|))
@@ -11534,59 +11776,59 @@ This reports the traced functions
 
 <<defun getTraceOption>>=
 (defun |getTraceOption| (arg)
- (prog (|l| |opts| key a |n|)
+ (prog (l |opts| key a |n|)
   (return
    (seq
     (progn
      (setq key (car arg))
-     (setq |l| (cdr arg))
+     (setq l (cdr arg))
      (setq key
        (|selectOptionLC| key |$traceOptionList| '|traceOptionError|))
-     (setq arg (cons key |l|))
+     (setq arg (cons key l))
      (cond
       ((memq key '(|nonquietly| |timer| |nt|)) arg)
       ((eq key '|break|)
        (cond
-        ((null |l|) (cons '|break| (cons '|before| nil)))
+        ((null l) (cons '|break| (cons '|before| nil)))
         (t
           (setq |opts|
            (prog (t0)
             (setq t0 nil)
             (return
-             (do ((t1 |l| (cdr t1)) (|y| nil))
+             (do ((t1 l (cdr t1)) (y nil))
                  ((or (atom t1)
-                      (progn (setq |y| (car t1)) nil))
+                      (progn (setq y (car t1)) nil))
                     (nreverse0 t0))
               (seq 
                (exit 
                 (setq t0 
                  (cons 
-                  (|selectOptionLC| |y| '(|before| |after|) nil) t0))))))))
+                  (|selectOptionLC| y '(|before| |after|) nil) t0))))))))
           (cond
            ((prog (t2)
              (setq t2 t)
              (return 
-              (do ((t3 nil (null t2)) (t4 |opts| (cdr t4)) (|y| nil))
-                  ((or t3 (atom t4) (progn (setq |y| (car t4)) nil)) t2)
+              (do ((t3 nil (null t2)) (t4 |opts| (cdr t4)) (y nil))
+                  ((or t3 (atom t4) (progn (setq y (car t4)) nil)) t2)
                  (seq
                   (exit
-                   (setq t2 (and t2 (identp |y|))))))))
+                   (setq t2 (and t2 (identp y))))))))
               (cons '|break| |opts|))
            (t
             (|stackTraceOptionError| (cons 's2it0008 (cons nil nil))))))))
       ((eq key '|restore|)
        (cond
-        ((null |l|) arg)
+        ((null l) arg)
         (t 
          (|stackTraceOptionError| 
           (cons 's2it0009 
            (cons (cons (strconc ")" (|object2String| key)) nil) nil))))))
-      ((eq key '|only|) (cons '|only| (|transOnlyOption| |l|)))
+      ((eq key '|only|) (cons '|only| (|transOnlyOption| l)))
       ((eq key '|within|)
         (cond
-         ((and (pairp |l|) 
-               (eq (qcdr |l|) nil)
-               (progn (setq a (qcar |l|)) t)
+         ((and (pairp l) 
+               (eq (qcdr l) nil)
+               (progn (setq a (qcar l)) t)
                (identp a))
            arg)
          (t 
@@ -11598,10 +11840,10 @@ This reports the traced functions
           ((eq key '|cond|) '|when|)
           (t key)))
         (cond
-         ((and (pairp |l|) 
-               (eq (qcdr |l|) nil)
-               (progn (setq a (qcar |l|)) t))
-            (cons key |l|))
+         ((and (pairp l) 
+               (eq (qcdr l) nil)
+               (progn (setq a (qcar l)) t))
+            (cons key l))
          (t 
           (|stackTraceOptionError|
            (cons 's2it0011
@@ -11610,9 +11852,9 @@ This reports the traced functions
               (|object2String| key)) nil) nil))))))
       ((eq key '|depth|)
         (cond 
-         ((and (pairp |l|) 
-               (eq (qcdr |l|) nil)
-               (progn (setq |n| (qcar |l|)) t)
+         ((and (pairp l) 
+               (eq (qcdr l) nil)
+               (progn (setq |n| (qcar l)) t)
                (fixp |n|))
            arg)
          (t 
@@ -11620,10 +11862,10 @@ This reports the traced functions
            (cons 's2it0012 (cons (cons ")depth" nil) nil))))))
       ((eq key '|count|)
         (cond 
-         ((or (null |l|) 
-              (and (pairp |l|) 
-                   (eq (qcdr |l|) nil)
-                   (progn (setq |n| (qcar |l|)) t)
+         ((or (null l) 
+              (and (pairp l) 
+                   (eq (qcdr l) nil)
+                   (progn (setq |n| (qcar l)) t)
                    (fixp |n|)))
             arg)
          (t 
@@ -11634,17 +11876,17 @@ This reports the traced functions
          (prog (t5)
           (setq t5 nil)
           (return
-           (do ((t6 |l| (cdr t6)) (|y| nil))
-               ((or (atom t6) (progn (setq |y| (car t6)) nil)) (nreverse0 t5))
+           (do ((t6 l (cdr t6)) (y nil))
+               ((or (atom t6) (progn (setq y (car t6)) nil)) (nreverse0 t5))
             (seq
              (exit
-              (setq t5 (cons (|getTraceOption,hn| |y|) t5)))))))))
+              (setq t5 (cons (|getTraceOption,hn| y) t5)))))))))
       ((memq key '(|local| |ops| |vars|))
         (cond
-         ((or (null |l|)
-              (and (pairp |l|) (eq (qcdr |l|) nil) (eq (qcar |l|) '|all|)))
+         ((or (null l)
+              (and (pairp l) (eq (qcdr l) nil) (eq (qcar l) '|all|)))
            (cons key '|all|))
-         ((|isListOfIdentifiersOrStrings| |l|) arg)
+         ((|isListOfIdentifiersOrStrings| l) arg)
          (t
            (|stackTraceOptionError|
             (cons 's2it0015
@@ -11652,10 +11894,10 @@ This reports the traced functions
               (cons (strconc ")" (|object2String| key)) nil) nil))))))
       ((eq key '|varbreak|)
         (cond
-         ((or (null |l|) 
-              (and (pairp |l|) (eq (qcdr |l|) nil) (eq (qcar |l|) '|all|)))
+         ((or (null l) 
+              (and (pairp l) (eq (qcdr l) nil) (eq (qcar l) '|all|)))
            (cons '|varbreak| '|all|))
-         ((|isListOfIdentifiers| |l|) arg)
+         ((|isListOfIdentifiers| l) arg)
          (t
            (|stackTraceOptionError|
             (cons 's2it0016
@@ -11663,7 +11905,7 @@ This reports the traced functions
               (cons (strconc ")" (|object2String| key)) nil) nil))))))
       ((eq key '|mathprint|)
         (cond
-         ((null |l|) arg)
+         ((null l) arg)
          (t
            (|stackTraceOptionError|
             (cons 's2it0009
@@ -11851,20 +12093,20 @@ This reports the traced functions
 
 <<defun transOnlyOption>>=
 (defun |transOnlyOption| (arg)
- (prog (|y| |n|)
+ (prog (y |n|)
   (return
    (cond
     ((and (pairp arg) 
-          (progn (setq |n| (qcar arg)) (setq |y| (qcdr arg)) t))
+          (progn (setq |n| (qcar arg)) (setq y (qcdr arg)) t))
       (cond
        ((fixp |n|)
-         (cons |n| (|transOnlyOption| |y|)))
+         (cons |n| (|transOnlyOption| y)))
        ((memq (setq |n| (upcase |n|)) '(V A C))
-         (cons |n| (|transOnlyOption| |y|)))
+         (cons |n| (|transOnlyOption| y)))
        (t 
          (|stackTraceOptionError|
            (cons 's2it0006 (cons (cons |n| nil) nil)))
-         (|transOnlyOption| |y|))))
+         (|transOnlyOption| y))))
     (t nil))))) 
 
 @
@@ -11915,17 +12157,17 @@ This reports the traced functions
 
 <<defun domainToGenvar>>=
 (defun |domainToGenvar| (arg)
- (prog (|$doNotAddEmptyModeIfTrue| |y| |g|)
+ (prog (|$doNotAddEmptyModeIfTrue| y |g|)
   (declare (special |$doNotAddEmptyModeIfTrue|))
   (return
    (progn
     (setq |$doNotAddEmptyModeIfTrue| t)
     (cond
-     ((and (setq |y| (|unabbrevAndLoad| arg))
-           (eq (getdatabase (|opOf| |y|) 'constructorkind) '|domain|))
+     ((and (setq y (|unabbrevAndLoad| arg))
+           (eq (getdatabase (|opOf| y) 'constructorkind) '|domain|))
        (progn
-        (setq |g| (|genDomainTraceName| |y|))
-        (set |g| (|evalDomain| |y|)) |g|))))))) 
+        (setq |g| (|genDomainTraceName| y))
+        (set |g| (|evalDomain| y)) |g|))))))) 
 
 @
 
@@ -12020,7 +12262,7 @@ This reports the traced functions
 
 <<defun transTraceItem>>=
 (defun |transTraceItem| (x)
- (prog (|$doNotAddEmptyModeIfTrue| |value| |y|)
+ (prog (|$doNotAddEmptyModeIfTrue| |value| y)
   (declare (special |$doNotAddEmptyModeIfTrue|))
   (return
    (progn
@@ -12033,18 +12275,18 @@ This reports the traced functions
                 '((|Mode|) (|Domain|) (|SubDomain| (|Domain|)))))
           (setq x (|objVal| |value|))
           (cond 
-           ((setq |y| (|domainToGenvar| x)) |y|)
+           ((setq y (|domainToGenvar| x)) y)
            (t x)))
         ((upper-case-p (elt (stringimage x) 0))
-          (setq |y| (|unabbrev| x))
+          (setq y (|unabbrev| x))
           (cond
-           ((|constructor?| |y|) |y|)
-           ((and (pairp |y|) (|constructor?| (car |y|))) (car |y|))
-           ((setq |y| (|domainToGenvar| x)) |y|)
+           ((|constructor?| y) y)
+           ((and (pairp y) (|constructor?| (car y))) (car y))
+           ((setq y (|domainToGenvar| x)) y)
            (t x)))
         (t x)))
      ((vecp (car x)) (|transTraceItem| (|devaluate| (car x))))
-     ((setq |y| (|domainToGenvar| x)) |y|)
+     ((setq y (|domainToGenvar| x)) y)
      (t (|throwKeyedMsg| 's2it0018 (cons x nil)))))))) 
 
 @
@@ -12217,16 +12459,16 @@ This reports the traced functions
 
 <<defun coerceTraceFunValue2E>>=
 (defun |coerceTraceFunValue2E| (|traceName| |subName| |value|)
- (prog (name |u|)
+ (prog (name u)
   (return
    (cond
     ((memq (setq name |subName|) |$mathTraceList|)
       (cond
        ((spadsysnamep (pname |traceName|)) (|coerceSpadFunValue2E| |value|))
-       ((setq |u| (lassoc |subName| |$tracedMapSignatures|))
+       ((setq u (lassoc |subName| |$tracedMapSignatures|))
          (|objValUnwrap|
           (|coerceInteractive|
-           (|objNewWrap| |value| (CAR |u|))
+           (|objNewWrap| |value| (CAR u))
              |$OutputForm|)))
        (t |value|)))
     (t |value|))))) 
@@ -12393,10 +12635,10 @@ This reports the traced functions
 
 <<defun lassocSub>>=
 (defun |lassocSub| (x |subs|)
- (prog (|y|) 
+ (prog (y) 
   (return 
    (cond 
-    ((setq |y| (lassq x |subs|)) |y|)
+    ((setq y (lassq x |subs|)) y)
     (t x))))) 
 
 @
@@ -12410,10 +12652,10 @@ This reports the traced functions
 
 <<defun rassocSub>>=
 (defun |rassocSub| (x |subs|)
- (prog (|y|)
+ (prog (y)
   (return
    (cond
-    ((setq |y| (|rassoc| x |subs|)) |y|)
+    ((setq y (|rassoc| x |subs|)) y)
     (t x))))) 
 
 @
@@ -12576,16 +12818,16 @@ This reports the traced functions
      (prog (t0)
       (setq t0 nil)
       (return
-       (do ((t1 ops (cdr t1)) (|u| nil))
-           ((or (atom t1) (progn (setq |u| (car t1)) nil)) (nreverse0 t0))
+       (do ((t1 ops (cdr t1)) (u nil))
+           ((or (atom t1) (progn (setq u (car t1)) nil)) (nreverse0 t0))
         (seq
          (exit
           (cond
-           ((and (pairp |u|)
+           ((and (pairp u)
                  (progn
-                  (setq tmp1 (qcar |u|))
+                  (setq tmp1 (qcar u))
                   (and (pairp tmp1) (equal (qcar tmp1) opname))))
-             (setq t0 (cons |u| t0)))))))))))))) 
+             (setq t0 (cons u t0)))))))))))))) 
 
 @
 
@@ -13171,25 +13413,25 @@ This reports the traced functions
 
 <<defun letPrint>>=
 (defun |letPrint| (x |val| |currentFunction|)
- (prog (|y|)
+ (prog (y)
   (return
    (progn
     (cond ((and |$letAssoc| 
                 (or
-                 (setq |y| (lassoc |currentFunction| |$letAssoc|))
-                 (setq |y| (lassoc '|all| |$letAssoc|))))
+                 (setq y (lassoc |currentFunction| |$letAssoc|))
+                 (setq y (lassoc '|all| |$letAssoc|))))
      (cond
-      ((and (or (eq |y| '|all|)
-                 (memq x |y|))
+      ((and (or (eq y '|all|)
+                 (memq x y))
             (null 
              (or (is_genvar x) (|isSharpVarWithNum| x) (gensymp x))))
         (|sayBrightlyNT| (append (|bright| x) (cons '|: | nil)))
         (prin0 (|shortenForPrinting| |val|))
         (terpri)))
      (cond
-      ((and (setq |y| (|hasPair| 'break |y|))
-            (or (eq |y| '|all|)
-                (and (memq x |y|)
+      ((and (setq y (|hasPair| 'break y))
+            (or (eq y '|all|)
+                (and (memq x y)
                      (null (memq (elt (pname x) 0) '($ |#|)))
                      (null (gensymp x)))))
        (|break|
@@ -13228,18 +13470,18 @@ This reports the traced functions
 
 <<defun letPrint2>>=
 (defun |letPrint2| (x |printform| |currentFunction|)
- (prog (|$BreakMode| |flag| |y|)
+ (prog (|$BreakMode| |flag| y)
   (declare (special |$BreakMode|))
   (return
    (progn
     (setq |$BreakMode| nil)
     (cond
      ((and |$letAssoc| 
-           (or (setq |y| (lassoc |currentFunction| |$letAssoc|))
-               (setq |y| (lassoc '|all| |$letAssoc|))))
+           (or (setq y (lassoc |currentFunction| |$letAssoc|))
+               (setq y (lassoc '|all| |$letAssoc|))))
       (cond
        ((and
-          (or (eq |y| '|all|) (memq x |y|))
+          (or (eq y '|all|) (memq x y))
           (null (or (is_genvar x) (|isSharpVarWithNum| x) (gensymp x))))
          (setq |$BreakMode| '|letPrint2|)
          (setq |flag| nil)
@@ -13250,10 +13492,10 @@ This reports the traced functions
           (t nil))))
       (cond 
        ((and 
-         (setq |y| (|hasPair| 'break |y|))
-         (or (eq |y| '|all|)
+         (setq y (|hasPair| 'break y))
+         (or (eq y '|all|)
              (and 
-              (memq x |y|)
+              (memq x y)
               (null (memq (elt (pname x) 0) '($ |#|)))
               (null (gensymp x)))))
         (|break|
@@ -13290,18 +13532,18 @@ This reports the traced functions
 
 <<defun letPrint3>>=
 (defun |letPrint3| (x |xval| |printfn| |currentFunction|)
- (prog (|$BreakMode| |flag| |y|)
+ (prog (|$BreakMode| |flag| y)
   (declare (special |$BreakMode|))
   (return
    (progn
     (setq |$BreakMode| nil)
     (cond
      ((and |$letAssoc| 
-       (or (setq |y| (lassoc |currentFunction| |$letAssoc|))
-           (setq |y| (lassoc '|all| |$letAssoc|))))
+       (or (setq y (lassoc |currentFunction| |$letAssoc|))
+           (setq y (lassoc '|all| |$letAssoc|))))
        (cond
         ((and
-           (or (eq |y| '|all|) (memq x |y|))
+           (or (eq y '|all|) (memq x y))
            (null (or (is_genvar x) (|isSharpVarWithNum| x) (gensymp x))))
           (setq |$BreakMode| '|letPrint2|)
           (setq |flag| nil)
@@ -13314,11 +13556,11 @@ This reports the traced functions
            (t nil))))
        (cond
         ((and
-          (setq |y| (|hasPair| 'break |y|))
+          (setq y (|hasPair| 'break y))
           (or
-           (eq |y| '|all|)
+           (eq y '|all|)
            (and
-            (memq x |y|)
+            (memq x y)
             (null (memq (elt (pname x) 0) '($ |#|)))
             (null (gensymp x)))))
           (|break|
@@ -13461,7 +13703,7 @@ This reports the traced functions
 
 <<defun reportSpadTrace>>=
 (defun |reportSpadTrace| (|header| t0)
- (prog (|op| |sig| |n| |t| |msg| |namePart| |y| |tracePart|)
+ (prog (|op| |sig| |n| |t| |msg| |namePart| y |tracePart|)
   (return 
    (progn
     (setq |op| (car t0))
@@ -13485,11 +13727,11 @@ This reports the traced functions
       (setq |namePart| nil)
       (setq |tracePart|
        (cond
-        ((and (pairp |t|) (progn (setq |y| (qcar |t|)) t) (null (null |y|)))
+        ((and (pairp |t|) (progn (setq y (qcar |t|)) t) (null (null y)))
           (cond
-           ((eq |y| '|all|)
+           ((eq y '|all|)
              (cons '|%b| (cons '|all| (cons '|%d| (cons '|vars| nil)))))
-           (t (cons '| vars: | (cons |y| nil)))))
+           (t (cons '| vars: | (cons y nil)))))
         (t nil)))
       (|sayBrightly| (append |msg| (append |namePart| |tracePart|))))))))) 
 
@@ -13921,7 +14163,7 @@ This reports the traced functions
 
 <<defun ?t>>=
 (defun |?t| ()
- (prog (|llm| x |d| |l| |suffix|)
+ (prog (|llm| x |d| l |suffix|)
   (return
    (seq
     (cond
@@ -13948,7 +14190,7 @@ This reports the traced functions
         (exit
          (cond
           ((and (pairp x) 
-                (progn (setq |d| (qcar x)) (setq |l| (qcdr x)) t)
+                (progn (setq |d| (qcar x)) (setq l (qcdr x)) t)
                 (|isDomainOrPackage| |d|))
            (progn
             (setq |suffix| (cond ((|isDomain| |d|) "domain") (t "package")))
@@ -13959,7 +14201,7 @@ This reports the traced functions
                 (cons (|devaluate| |d|) 
                  (cons '|%d| 
                   (cons ":" nil)))))))
-            (do ((t2 (|orderBySlotNumber| |l|) (cdr t2)) (x nil))
+            (do ((t2 (|orderBySlotNumber| l) (cdr t2)) (x nil))
                 ((or (atom t2) (progn (setq x (car t2)) nil)) nil)
               (seq
                (exit
@@ -13990,7 +14232,7 @@ This reports the traced functions
 
 <<defun tracelet>>=
 (defun |tracelet| (|fn| |vars|)
- (prog ($traceletflag |$QuickLet| |l|)
+ (prog ($traceletflag |$QuickLet| l)
   (declare (special $traceletflag |$QuickLet|))
   (return
    (progn
@@ -14006,7 +14248,7 @@ This reports the traced functions
        (setq |vars|
          (cond
           ((eq |vars| '|all|) '|all|)
-          ((setq |l| (lassoc |fn| |$letAssoc|)) (|union| |vars| |l|))
+          ((setq l (lassoc |fn| |$letAssoc|)) (|union| |vars| l))
           (t |vars|)))
        (setq |$letAssoc| (cons (cons |fn| |vars|) |$letAssoc|))
        (cond (|$letAssoc| (setletprintflag t)))
@@ -14357,13 +14599,13 @@ recordFrame(systemNormal) ==
                 (prog (tmp2)
                  (setq tmp2 nil)
                  (return
-                  (do ((tmp3 (cdr x) (cdr tmp3)) (|y| nil))
+                  (do ((tmp3 (cdr x) (cdr tmp3)) (y nil))
                       ((or (atom tmp3) 
-                           (progn (setq |y| (car tmp3)) nil))
+                           (progn (setq y (car tmp3)) nil))
                         (nreverse0 tmp2))
                    (seq
                     (exit
-                     (setq tmp2 (cons (cons (car |y|) (cdr |y|)) tmp2))))))))
+                     (setq tmp2 (cons (cons (car y) (cdr y)) tmp2))))))))
                 tmp0))))))))
        (car |$frameRecord|))))))) 
 
@@ -15053,6 +15295,13 @@ The command synonym  {\tt )apropos} is equivalent to
 \fnref{set}, and
 \fnref{show}
 
+\defdollar{whatOptions}
+<<initvars>>=
+(defvar |$whatOptions| '(|operations| |categories| |domains| |packages| 
+                         |commands| |synonyms| |things|))
+
+@
+
 \defun{what}
 \begin{verbatim}
 what l == whatSpad2Cmd l
@@ -15175,17 +15424,17 @@ filterAndFormatConstructors(constrType,label,patterns) ==
 
 <<defun filterAndFormatConstructors>>=
 (defun |filterAndFormatConstructors| (|constrType| |label| |patterns|)
- (prog (|l|)
+ (prog (l)
   (return
    (progn (|centerAndHighlight| |label| $linelength 
            (|specialChar| '|hbar|))
-    (setq |l|
+    (setq l
      (|filterListOfStringsWithFn| |patterns|
        (|whatConstructors| |constrType|)
        (|function| cdr)))
     (cond (|patterns|
      (cond
-      ((null |l|)
+      ((null l)
        (|sayMessage|
         (cons "   No "
          (cons |label|
@@ -15204,7 +15453,7 @@ filterAndFormatConstructors(constrType,label,patterns) ==
              (cons '|%b|
               (append (|blankList| |patterns|)
                (cons '|%d| nil))))))))))))
-    (cond (|l| (|pp2Cols| |l|)))))))
+    (cond (l (|pp2Cols| l)))))))
 
 @ 
 
@@ -15695,13 +15944,131 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 
 @
 
+\chapter{Special Lisp Functions}
+
+\defmacro{identp}
+<<defmacro identp>>=
+(defmacro identp (x) 
+ (if (atom x)
+  `(and ,x (symbolp ,x))
+   (let ((xx (gensym)))
+    `(let ((,xx ,x))
+      (and ,xx (symbolp ,xx))))))
+
+@
+
+\defun{concat}
+<<defun concat>>=
+(defun concat (a b &rest l)
+ (if (bit-vector-p a)
+   (if l 
+     (apply #'concatenate 'bit-vector a b l)
+     (concatenate 'bit-vector a b))
+   (if l 
+     (apply #'system:string-concatenate a b l)
+     (system:string-concatenate a b))))
+
+@
+
+\defun{functionp}
+<<defun functionp>>=
+(defun |functionp| (fn)
+ (if (identp fn)
+  (and (fboundp fn) (not (macro-function fn)))
+  (functionp fn)))
+
+@
+
+;; --------------------> NEW DEFINITION (override in msgdb.boot.pamphlet)
+\defun{brightprint}
+<<defun brightprint>>=
+(defun brightprint (x)
+ (messageprint x))
+
+@
+ 
+;; --------------------> NEW DEFINITION (override in msgdb.boot.pamphlet)
+\defun{brightprint-0}
+<<defun brightprint-0>>=
+(defun brightprint-0 (x)
+ (messageprint-1 x))
+ 
+@
+
+\defun{member}
+<<defun member>>=
+(defun |member| (item sequence)
+ (cond
+   ((symbolp item) (member item sequence :test #'eq))
+   ((stringp item) (member item sequence :test #'equal))
+   ((and (atom item) (not (arrayp item))) (member item sequence))
+   (t (member item sequence :test #'equalp))))
+
+@
+
+\defun{messageprint}
+<<defun messageprint>>=
+(defun messageprint (x)
+ (mapc #'messageprint-1 x))
+ 
+@
+
+\defun{messageprint-1}
+<<defun messageprint-1>>=
+(defun messageprint-1 (x)
+ (cond
+  ((or (eq x '|%l|) (equal x "%l")) (terpri))
+  ((stringp x) (princ x))
+  ((identp x) (princ x))
+  ((atom x) (princ x))
+  ((princ "(") 
+   (messageprint-1 (car x))
+   (messageprint-2 (cdr x))
+   (princ ")"))))
+
+@
+
+\defun{messageprint-2}
+<<defun messageprint-2>>=
+(defun messageprint-2 (x)
+  (if (atom x)
+   (unless x (progn (princ " . ") (messageprint-1 x)))
+   (progn (princ " ") (messageprint-1 (car x)) (messageprint-2 (cdr x)))))
+
+@
+ 
+\defun{sayBrightly1}
+<<defun sayBrightly1>>=
+(defun sayBrightly1 (x *standard-output*)
+  (if (atom x)
+   (progn (brightprint-0 x) (terpri) (force-output))
+   (progn (brightprint   x) (terpri) (force-output))))
+
+@
+ 
+\defdollar{algebraOutputStream}
+<<initvars>>=
+(defvar |$algebraOutputStream| *standard-output*)
+ 
+@
+
+\defun{sayMSG}
+<<defun sayMSG>>=
+(defun |sayMSG| (x)
+ (declare (special |$algebraOutputStream|))
+ (when x (sayBrightly1 x |$algebraOutputStream|)))
+
+@
+ 
 \chapter{The Interpreter}
 <<Interpreter>>=
 (in-package "BOOT")
 <<initvars>>
 
 <<defmacro funfind>>
+<<defmacro identp>>
 
+<<defun abbQuery>>
 <<defun abbreviations>>
 <<defun abbreviationsSpad2Cmd>>
 <<defun addInputLibrary>>
@@ -15712,6 +16079,8 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 
 <<defun break>>
 <<defun breaklet>>
+<<defun brightprint>>
+<<defun brightprint-0>>
 <<defun browse>>
 
 <<defun changeHistListLen>>
@@ -15739,6 +16108,7 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 <<defun compileBoot>>
 <<defun compiler>>
 <<defun compileSpadLispCmd>>
+<<defun concat>>
 <<defun copyright>>
 <<defun createCurrentInterpreterFrame>>
 <<defun credits>>
@@ -15746,6 +16116,9 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 <<defun describeAsharpArgs>>
 <<defun describeInputLibraryArgs>>
 <<defun describeOutputLibraryArgs>>
+<<defun describeSetFortDir>>
+<<defun describeSetFortTmpDir>>
+<<defun describeSetLinkerArgs>>
 <<defun dewritify>>
 <<defun dewritify,dewritifyInner>>
 <<defun dewritify,is?>>
@@ -15764,6 +16137,8 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 <<defun domainToGenvar>>
 <<defun dropInputLibrary>>
 
+<<defun edit>>
+<<defun editSpad2Cmd>>
 <<defun emptyInterpreterFrame>>
 
 <<defun fetchOutput>>
@@ -15784,6 +16159,7 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 <<defun frameName>>
 <<defun frameNames>>
 <<defun frameSpad2Cmd>>
+<<defun functionp>>
 <<defun funfind,LAM>>
 
 <<defun genDomainTraceName>>
@@ -15799,6 +16175,7 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 <<defun getTraceOption,hn>>
 <<defun getTraceOptions>>
 
+<<defun handleNoParseCommands>>
 <<defun hasPair>>
 <<defun help>>
 <<defun helpSpad2Cmd>>
@@ -15840,6 +16217,10 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 <<defun makeHistFileName>>
 <<defun makeInitialModemapFrame>>
 <<defun mapLetPrint>>
+<<defun member>>
+<<defun messageprint>>
+<<defun messageprint-1>>
+<<defun messageprint-2>>
 
 <<defun ncIntLoop>>
 <<defun ncloopCommand>>
@@ -15897,8 +16278,12 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 <<defun safeWritify>>
 <<defun saveHistory>>
 <<defun saveMapSig>>
+<<defun sayBrightly1>>
 <<defun sayExample>>
+<<defun sayMSG>>
 <<defun ScanOrPairVec>>
+<<defun selectOption>>
+<<defun selectOptionLC>>
 <<defun set>>
 <<defun set1>>
 <<defun setAsharpArgs>>
@@ -15910,8 +16295,11 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 <<defun setExposeDrop>>
 <<defun setExposeDropConstr>>
 <<defun setExposeDropGroup>>
+<<defun setFortDir>>
+<<defun setFortTmpDir>>
 <<defun setHistoryCore>>
 <<defun setInputLibrary>>
+<<defun setLinkerArgs>>
 <<defun setIOindex>>
 <<defun setOutputLibrary>>
 <<defun set-restart-hook>>
@@ -15974,6 +16362,8 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 <<defun updateHist>>
 <<defun updateInCoreHist>>
 
+<<defun validateOutputDirectory>>
+
 <<defun what>>
 <<defun whatConstructors>>
 <<defun whatSpad2Cmd>>
@@ -15994,6 +16384,8 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 <<defun zsystemdevelopment>>
 <<defun zsystemdevelopment1>>
 <<defun zsystemDevelopmentSpad2Cmd>>
+
+<<postvars>>
 
 @
 \chapter{The Global Variables}
