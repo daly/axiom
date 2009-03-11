@@ -395,7 +395,7 @@
             BOOT::|infix?| BOOT::|matchSegment?| BOOT::|stringMatch|
             BOOT::|skipBlanks| BOOT::|dbPresentConsSaturn|
             BOOT::MAKE-DEFUN BOOT::|compOrCroak| BOOT::|profileRecord|
-            BOOT::|getSignature| BOOT::|traceDomainLocalOps|
+            BOOT::|getSignature| 
             BOOT::|getArgumentModeOrMoan|
             BOOT::|filterListOfStringsWithFn|
             BOOT::|mkGrepPattern1,charPosition|
@@ -2331,9 +2331,9 @@
             BOOT::|bright| BOOT::GET-STRING-TOKEN
             BOOT::|formatUnabbreviated| BOOT::GET-IDENTIFIER-TOKEN
             BOOT::BVEC-NOT BOOT::TOKEN-LOOKAHEAD-TYPE
-            BOOT::|orderBySlotNumber| BOOT::|traceSpad2Cmd|
+            BOOT::|orderBySlotNumber| 
             BOOT::|compArgumentConditions| BOOT::|e02defSolve,flam|
-            BOOT::|trace1| BOOT::LINE-PRINT BOOT::|saveMapSig|
+            BOOT::LINE-PRINT BOOT::|saveMapSig|
             BOOT::LINE-PAST-END-P BOOT::|untrace|
             BOOT::|stripOffArgumentConditions|
             BOOT::DATABASE-CONSTRUCTORKIND BOOT::SPAD_ERROR_LOC
@@ -2870,7 +2870,7 @@
             BOOT::|objSetMode| VMLISP:SORTBY BOOT::MONITOR-GETVALUE
             VMLISP:|member| BOOT::MONITOR-EVALTRAN1
             BOOT::|coerceIntByMapInner| BOOT::|getConstantFromDomain|
-            BOOT::|valueArgsEqual?| BOOT::|traceDomainConstructor|
+            BOOT::|valueArgsEqual?| 
             BOOT::|coerceIntByMap| BOOT::|equalZero|
             BOOT::|replaceLast| BOOT::|coerceIntTest| VMLISP:ADDOPTIONS
             BOOT::|isSubTowerOf| BOOT::|starstarcond| BOOT::|equalOne|
@@ -3251,9 +3251,9 @@
             BOOT::|NRTassignCapsuleFunctionSlot|
             BOOT::|reportSpadTrace| BOOT::BVEC-NOR BOOT::BVEC-NAND
             BOOT::|addDomain| BOOT::|giveFormalParametersValues|
-            BOOT::PRINT-DEFUN BOOT::|augmentTraceNames|
+            BOOT::PRINT-DEFUN 
             BOOT::|stripOffSubdomainConditions|
-            BOOT::|untraceDomainLocalOps| BOOT::TRANSLABEL1
+            BOOT::TRANSLABEL1
             BOOT::|getOption| BOOT::TRANSLABEL BOOT::|traceOptionError|
             BOOT::GET-GLIPH-TOKEN BOOT::|funfind,LAM|
             BOOT::|mergePathnames| BOOT::|subTypes| BOOT::|lassocSub|
