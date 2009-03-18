@@ -496,8 +496,7 @@ information is initialized.
   (|spad|))
 
 @
-\defun{spad}{spad}
-Starts the interpreter but does not read in profiles, etc.
+\defun{spad}{Starts the interpreter but do not read in profiles}
 <<defun spad>>=
 (defun |spad| () 
  (let (|$PrintCompilerMessageIfTrue| |$inLispVM|) 
@@ -626,6 +625,7 @@ Thus, when a system command is entered this function is called.
    (|intloopInclude| source 0))))
 
 @
+
 \section{The Read-Eval-Print Loop}
 \defun{intloopReadConsole}{intloopReadConsole}
 Note that this function relies on the fact that lisp can do tail-recursion.
@@ -737,7 +737,7 @@ This function performs those setup commands.
 
 @
 
-\pagehead{initroot}{initroot}
+\pagehead{initroot}{Set \$spadroot to be the AXIOM shell variable}
 Sets up the system to use the {\bf AXIOM} shell variable if we can
 and default to the {\bf \$spadroot} variable (which was the value
 of the {\bf AXIOM} shell variable at build time) if we can't.
@@ -750,12 +750,13 @@ Called from \fnref{restart}.
 
 @
 
-\defun{intloopPrefix?}{intloopPrefix?}
+\defun{intloopPrefix?}{Does the string start with this prefix?}
 If the prefix string is the same as the whole string initial characters
 (ignoring spaces in the whole string) then we return the whole string
 minus any leading spaces.
 <<defun intloopPrefix?>>=
 (defun |intloopPrefix?| (prefix whole)
+ "Does the string start with this prefix?"
  (let ((newprefix (string-left-trim '(#\space) prefix))
        (newwhole  (string-left-trim '(#\space) whole)))
   (when (<= (length newprefix) (length newwhole))
@@ -764,10 +765,11 @@ minus any leading spaces.
 
 @
 
-\defun{make-absolute-filename}{make-absolute-filename}
+\defun{make-absolute-filename}{Prepend the absolute path to a filename}
 Prefix a filename with the {\bf AXIOM} shell variable.
 <<defun make-absolute-filename>>=
 (defun make-absolute-filename (name)
+ "Prepend the absolute path to a filename"
  (declare (special $spadroot))
  (concatenate 'string $spadroot name))
 
@@ -876,6 +878,111 @@ this is what the current code does so I won't change it.
   ((stringp s) (rplacd (last |$currentLine|) (cons s nil)))
   (t (rplacd (last |$currentLine|) s)))
  |$currentLine|)
+
+@
+
+\defun{mkprompt}{Show the Axiom prompt}
+<<defun mkprompt>>=
+(defun mkprompt ()
+ "Show the Axiom prompt"
+ (declare (special |$inputPromptType| |$IOindex| |$interpreterFrameName|))
+ (case |$inputPromptType|
+  (|none| "")
+  (|plain| "-> ")
+  (|step|  (strconc "(" (stringimage |$IOindex|) ") -> "))
+  (|frame|
+   (strconc (stringimage |$interpreterFrameName|) " ("
+            (stringimage |$IOindex|) ") -> "))
+  (t (strconc (stringimage |$interpreterFrameName|) " ["
+              (substring (currenttime) 8 nil) "] [" 
+              (stringimage |$IOindex|) "] -> "))))
+
+@
+
+\defun{intloopInclude}{Include a file into the stream}
+<<defun intloopInclude>>=
+(defun |intloopInclude| (name n)
+  (with-open-file (st name) (|intloopInclude0| st name n)))
+
+@
+
+\defun{intloopInclude0}{intloopInclude0}
+<<defun intloopInclude0>>=
+(defun |intloopInclude0| (|st| |name| |n|)
+ (let (|$lines|)
+ (declare (special |$lines|))
+  (setq |$lines| (|incStream| |st| |name|))
+  (|intloopProcess| |n| NIL 
+   (|next| (function |intloopEchoParse|) 
+    (|next| (function |insertpile|) 
+     (|next| (function |lineoftoks|) 
+      |$lines|))))))
+
+@
+
+\defun{ncloopInclude0}{ncloopInclude0}
+<<defun ncloopInclude0>>=
+(defun |ncloopInclude0| (st name n)
+ (let (|$lines|)
+ (declare (special |$lines|))
+   (setq |$lines| (|incStream| st name))
+   (|ncloopProcess| n nil
+    (|next| (function |ncloopEchoParse|)
+     (|next| (function |insertpile|)
+      (|next| (function |lineoftoks|)
+       |$lines|))))))
+
+@
+
+\defun{incStream}{incStream}
+<<defun incStream>>=
+(defun |incStream| (st fn)
+ (declare (special |Top|))
+ (|incRenumber| (|incLude| 0 (|incRgen| st) 0 (list fn) (list |Top|))))
+
+@
+
+\defun{incRgen}{incRgen}
+Note that incRgen1 recursively calls this function.
+<<defun incRgen>>=
+(defun |incRgen| (s)
+ (|Delay| (function |incRgen1|) (list s)))
+
+@
+
+\defun{Delay}{Delay}
+<<defun Delay>>=
+(defun |Delay| (f x)
+ (cons '|nonnullstream| (cons f x)))
+
+@
+
+<<initvars>>=
+(defvar |StreamNil| (list '|nullstream|))
+
+@
+
+<<postvars>>=
+(eval-when (eval load)
+  (setq |StreamNil| (list '|nullstream|)))
+
+@
+
+\defun{incRgen1}{incRgen1}
+This function reads a line from the stream and then conses it up
+with a recursive call to incRgen.
+Note that incRgen recursively wraps this function in a delay list.
+<<defun incRgen1>>=
+(defun |incRgen1| (&rest z)
+ (let (a s)
+ (declare (special |StreamNil|))
+  (setq s (car z))
+  (setq a (|shoeread-line| s))
+  (if (null a)
+   (progn
+    (close s) 
+    |StreamNil|)
+   (cons a (|incRgen| s)))))
 
 @
 
@@ -14840,6 +14947,8 @@ $boot
 |$ConstructorCache|
 |$constructors|
 /countlist
+curinstream
+curoutstream
 $current-directory
 |$currentFrameNum|
 |$currentLine|
@@ -14891,6 +15000,7 @@ in-stream
 |$letAssoc| 
 |$libQuiet|
 $library-directory-list
+|$lines|
 |$localExposureData|
 |$localExposureDataDefault|
 |$lookupDefaults|
@@ -14936,6 +15046,7 @@ $spadroot
 |$texOutputStream|
 /timerlist
 |$timerTicksPerSecond|
+|Top|
 |$tracedMapSignatures|
 |$tracedModemap|
 |$tracedSpadModemap|
@@ -14952,8 +15063,23 @@ $traceletflag
 |$xdatabase|
 \end{verbatim}
 
-\section{functions}
+\section{undefined functions}
 \begin{verbatim}
+currenttime
+error
+|incLude|
+|incRenumber|
+|incRgen1|
+|insertpile|
+|ncloopEchoParse|
+|ncloopProcess|
+|intloopProcessString|
+|intnplisp|
+|lineoftoks|
+|resetStackLimits|
+|serverReadLine|
+|shoeread-line|
+stringimage
 \end{verbatim}
 
 \chapter{The Interpreter}
@@ -15006,6 +15132,7 @@ $traceletflag
 <<defun credits>>
 
 <<defun defiostream>>
+<<defun Delay>>
 <<defun describeAsharpArgs>>
 <<defun describeFortPersistence>>
 <<defun describeInputLibraryArgs>>
@@ -15094,6 +15221,9 @@ $traceletflag
 <<defun importFromFrame>>
 <<defun incBiteOff>>
 <<defun incFileName>>
+<<defun incRgen>>
+<<defun incRgen1>>
+<<defun incStream>>
 <<defun initHist>>
 <<defun initHistList>>
 <<defun initializeInterpreterFrameRing>>
@@ -15101,6 +15231,8 @@ $traceletflag
 <<defun init-memory-config>>
 <<defun initroot>>
 <<defun intloop>>
+<<defun intloopInclude>>
+<<defun intloopInclude0>>
 <<defun intloopPrefix?>>
 <<defun intloopReadConsole>>
 <<defun isDomainOrPackage>>
@@ -15131,12 +15263,14 @@ $traceletflag
 <<defun messageprint>>
 <<defun messageprint-1>>
 <<defun messageprint-2>>
+<<defun mkprompt>>
 
 <<defun ncIntLoop>>
 <<defun ncloopCommand>>
 <<defun ncloopEscaped>>
 <<defun ncloopIncFileName>>
 <<defun ncloopInclude>>
+<<defun ncloopInclude0>>
 <<defun ncloopInclude1>>
 <<defun ncloopPrefix?>>
 <<defun ncTopLevel>>
