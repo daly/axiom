@@ -851,6 +851,110 @@ this is what the current code does so I won't change it.
 
 @
 
+\defdollar{frameAlist}
+<<initvars>>=
+(defvar |$frameAlist| nil) 
+
+@
+\defdollar{frameNumber}
+<<initvars>>=
+(defvar |$frameNumber| 0) 
+
+@
+\defdollar{currentFrameNum}
+<<initvars>>=
+(defvar |$currentFrameNum| 0) 
+
+@
+\defdollar{EndServerSession}
+<<initvars>>=
+(defvar |$EndServerSession| nil) 
+
+@
+\defdollar{NeedToSignalSessionManager}
+<<initvars>>=
+(defvar |$NeedToSignalSessionManager| nil) 
+
+@
+\defdollar{sockBufferLength}
+<<initvars>>=
+(defvar |$sockBufferLength| 9217) 
+
+@
+
+\defun{serverReadLine}{serverReadLine}
+<<defun serverReadLine>>=
+(defun |serverReadLine| (stream)
+ "used in place of READ-LINE in a scratchpad server system."
+ (let (in-stream *eof* l framename currentframe form stringbuf line)
+ (declare (special in-stream *eof* |$SpadServer| |$EndServerSession|
+     |$NeedToSignalSessionManager| |$SessionManager| |$EndOfOutput|
+     |$CallInterp| |$CreateFrame| |$frameAlist| |$frameNumber|
+     |$currentFrameNum| |$CreateFrameAnswer| |$SwitchFrames| |$EndSession|
+     |$EndServerSession| |$LispCommand| |$sockBufferLength| |$MenuServer|
+     |$QuietSpadCommand| |$SpadCommand| |$NonSmanSession| |$KillLispSystem|))
+  (force-output)
+  (if (or (null |$SpadServer|) (null (is-console stream)))
+   (|read-line| stream)
+   (progn
+    (setq in-stream stream)
+    (setq *eof* nil)
+    (setq line
+     (do ()
+         ((null (and (null |$EndServerSession|) (null *eof*))) nil)
+         (when |$NeedToSignalSessionManager|
+          (|sockSendInt| |$SessionManager| |$EndOfOutput|))
+      (setq |$NeedToSignalSessionManager| nil)
+      (case  (|serverSwitch|)
+       (|$CallInterp|
+        (setq l (|read-line| stream))
+        (setq |$NeedToSignalSessionManager| t)
+        (return l))
+       (|$CreateFrame|
+        (setq framename (gentemp "frame"))
+        (|addNewInterpreterFrame| framename)
+        (setq |$frameAlist|
+         (cons (cons |$frameNumber| framename) |$frameAlist|))
+        (setq |$currentFrameNum| |$frameNumber|)
+        (|sockSendInt| |$SessionManager| |$CreateFrameAnswer|)
+        (|sockSendInt| |$SessionManager| |$frameNumber|)
+        (setq |$frameNumber| (plus |$frameNumber| 1))
+        (|sockSendString| |$SessionManager| (mkprompt)))
+       (|$SwitchFrames|
+        (setq |$currentFrameNum| (|sockGetInt| |$SessionManager|))
+        (setq currentframe (lassoc |$currentFrameNum| |$frameAlist|))
+        (|changeToNamedInterpreterFrame| currentframe))
+       (|$EndSession|
+        (setq |$EndServerSession| t))
+       (|$LispCommand|
+        (setq |$NeedToSignalSessionManager| t)
+        (setq stringbuf (make-string |$sockBufferLength|))
+        (|sockGetString| |$MenuServer| stringbuf |$sockBufferLength|)
+        (setq form
+         (|unescapeStringsInForm| (read-from-string stringbuf)))
+        (|protectedEVAL| form))
+       (|$QuietSpadCommand|
+        (setq |$NeedToSignalSessionManager| t)
+        (|executeQuietCommand|))
+       (|$SpadCommand|
+        (setq |$NeedToSignalSessionManager| t)
+        (setq stringbuf (make-string 512))
+        (|sockGetString| |$MenuServer| stringbuf 512)
+        (catch '|coerceFailure|
+         (catch '|top_level|
+          (catch 'spad_reader
+           (|parseAndInterpret| stringbuf))))
+        (princ (mkprompt))
+        (finish-output))
+       (|$NonSmanSession| (setq |$SpadServer| nil))
+       (|$KillLispSystem| (bye))
+       (t nil))))
+    (cond
+     (line line)
+     (t '||))))))
+
+@
+
 \defun{intloopInclude}{Include a file into the stream}
 <<defun intloopInclude>>=
 (defun |intloopInclude| (name n)
@@ -891,6 +995,295 @@ this is what the current code does so I won't change it.
 (defun |incStream| (st fn)
  (declare (special |Top|))
  (|incRenumber| (|incLude| 0 (|incRgen| st) 0 (list fn) (list |Top|))))
+
+@
+
+\defun{incLude}{incLude}
+<<defun incLude>>=
+(defun |incLude| (eb ss ln ufos states) 
+ (|Delay| (function |incLude1|) (list eb ss ln ufos states)))
+
+@
+
+\defmacro{Rest}
+<<defmacro Rest>>=
+(defmacro |Rest| (s)
+ "used in incLude1 for parsing; s is not used."
+ '(|incLude| eb (cdr ss) lno ufos states))
+
+@
+
+\defvar{Top}
+<<initvars>>=
+(defvar |Top| 1 "used in incLude1 for parsing")
+
+@
+\defvar{IfSkipToEnd}
+<<initvars>>=
+(defvar |IfSkipToEnd| 10 "used in incLude1 for parsing")
+
+@
+\defvar{IfKeepPart}
+<<initvars>>=
+(defvar |IfKeepPart| 11 "used in incLude1 for parsing")
+
+@
+\defvar{IfSkipPart}
+<<initvars>>=
+(defvar |IfSkipPart| 12 "used in incLude1 for parsing")
+
+@
+\defvar{ElseifSkipToEnd}
+<<initvars>>=
+(defvar |ElseifSkipToEnd| 20 "used in incLude1 for parsing")
+
+@
+\defvar{ElseifKeepPart}
+<<initvars>>=
+(defvar |ElseifKeepPart| 21 "used in incLude1 for parsing")
+
+@
+\defvar{ElseifSkipPart}
+<<initvars>>=
+(defvar |ElseifSkipPart| 22 "used in incLude1 for parsing")
+
+@
+\defvar{ElseSkipToEnd}
+<<initvars>>=
+(defvar |ElseSkipToEnd| 30 "used in incLude1 for parsing")
+
+@
+\defvar{ElseKeepPart}
+<<initvars>>=
+(defvar |ElseKeepPart| 31 "used in incLude1 for parsing")
+
+@
+
+\defvar{Top?}
+<<defun Top?>>=
+(defun |Top?| (|st|)
+ "used in incLude1 for parsing"
+ (eql (quotient |st| 10) 0))
+
+@
+\defvar{If?}
+<<defun If?>>=
+(defun |If?| (|st|)
+ "used in incLude1 for parsing"
+ (eql (quotient |st| 10) 1))
+
+@
+\defvar{Elseif?}
+<<defun Elseif?>>=
+(defun |Elseif?| (|st|)
+ "used in incLude1 for parsing"
+ (eql (quotient |st| 10) 2))
+
+@
+\defvar{Else?}
+<<defun Else?>>=
+(defun |Else?| (|st|)
+ "used in incLude1 for parsing"
+ (eql (quotient |st| 10) 3))
+
+@
+\defvar{SkipEnd?}
+<<defun SkipEnd?>>=
+(defun |SkipEnd?| (|st|)
+ "used in incLude1 for parsing"
+ (eql (remainder |st| 10) 0))
+
+@
+\defvar{KeepPart?}
+<<defun KeepPart?>>=
+(defun |KeepPart?| (|st|)
+ "used in incLude1 for parsing"
+ (eql (remainder |st| 10) 1))
+
+@
+\defvar{SkipPart?}
+<<defun SkipPart?>>=
+(defun |SkipPart?| (|st|)
+ "used in incLude1 for parsing"
+ (eql (remainder |st| 10) 2))
+
+@
+\defvar{Skipping?}
+<<defun Skipping?>>=
+(defun |Skipping?| (|st|)
+ "used in incLude1 for parsing"
+ (null (|KeepPart?| |st|)))
+
+@
+
+\defun{incLude1}{incLude1}
+<<defun incLude1>>=
+(defun |incLude1| (&rest z)
+(let (pred s1 n tail head includee fn1 info str state lno states ufos ln ss eb)
+  (setq eb (car z))
+  (setq ss (cadr . (z)))
+  (setq ln (caddr . (z)))
+  (setq ufos (cadddr . (z)))
+  (setq states (car (cddddr . (z))))
+  (setq lno (+ ln 1))
+  (setq state (elt states 0))
+  (cond
+   ((|StreamNull| ss)
+     (cond
+      ((null (|Top?| state))
+       (cons (|xlPrematureEOF| eb ")--premature end" lno ufos)
+             |StreamNil|))
+      (t |StreamNil|)))
+   (t
+    (progn
+     (setq str (expand-tabs (car ss)))
+     (setq info (|incClassify| str))
+     (cond
+      ((null (elt info 0))
+       (cond
+        ((|Skipping?| state)
+         (cons (|xlSkip| eb str lno (elt ufos 0)) (|Rest| |s|)))
+        (t
+         (cons (|xlOK| eb str lno (elt ufos 0)) (|Rest| |s|)))))
+      ((equal (elt info 2) "other")
+       (cond
+        ((|Skipping?| state)
+         (cons (|xlSkip| eb str lno (elt ufos 0)) (|Rest| |s|)))
+        (t
+         (cons
+          (|xlOK1| eb str (concat ")command" str) lno (elt ufos 0))
+          (|Rest| |s|)))))
+      ((equal (elt info 2) "say")
+       (cond
+        ((|Skipping?| state)
+         (cons (|xlSkip| eb str lno (elt ufos 0)) (|Rest| |s|)))
+        (t
+         (progn
+          (setq str (|incCommandTail| str info))
+          (cons (|xlSay| eb str lno ufos str)
+           (cons (|xlOK| eb str lno (ELT ufos 0)) (|Rest| |s|)))))))
+      ((equal (elt info 2) "include")
+       (cond
+        ((|Skipping?| state)
+         (cons (|xlSkip| eb str lno (elt ufos 0)) (|Rest| |s|)))
+        (t
+         (progn
+          (setq fn1 (|inclFname| str info))
+          (cond
+           ((null fn1)
+            (cons (|xlNoSuchFile| eb str lno ufos |fn|) (|Rest| |s|)))
+           ((null (probe-file fn1))
+            (cons (|xlCannotRead| eb str lno ufos fn1) (|Rest| |s|)))
+           ((|incActive?| fn1 ufos)
+            (cons (|xlFileCycle| eb str lno ufos fn1) (|Rest| |s|)))
+           (t
+            (progn
+             (setq includee
+              (|incLude| (+ eb (elt info 1))
+                         (|incFileInput| fn1)
+                         0
+                         (cons fn1 ufos)
+                         (cons |Top| states)))
+             (cons (|xlOK| eb str lno (elt ufos 0))
+                   (|incAppend| includee (|Rest| |s|))))))))))
+      ((equal (elt info 2) "console")
+       (cond
+        ((|Skipping?| state)
+         (cons (|xlSkip| eb str lno (elt ufos 0)) (|Rest| |s|)))
+        (t
+         (progn
+          (setq head
+           (|incLude| (+ eb (elt info 1))
+                      (|incConsoleInput|)
+                      0
+                      (cons "console" ufos)
+                      (cons |Top| states)))
+          (setq tail (|Rest| |s|))
+          (setq n (|incNConsoles| ufos))
+          (cond
+           ((< 0 n)
+            (setq head
+             (cons (|xlConActive| eb str lno ufos n) head))
+            (setq tail
+             (cons (|xlConStill| eb str lno ufos n) tail))))
+          (setq head (cons (|xlConsole| eb str lno ufos) head))
+          (cons (|xlOK| eb str lno (elt ufos 0))
+                (|incAppend| head tail))))))
+      ((equal (elt info 2) "fin")
+       (cond
+        ((|Skipping?| state)
+         (cons (|xlSkippingFin| eb str lno ufos) (|Rest| |s|)))
+        ((null (|Top?| state))
+         (cons (|xlPrematureFin| eb str lno ufos) |StreamNil|))
+        (t
+         (cons (|xlOK| eb str lno (elt ufos 0)) |StreamNil|))))
+      ((equal (elt info 2) "assert")
+       (cond
+        ((|Skipping?| state)
+         (cons (|xlSkippingFin| eb str lno ufos) (|Rest| |s|)))
+        (t
+         (progn
+          (|assertCond| str info)
+          (cons (|xlOK| eb str lno (elt ufos 0))
+                (|incAppend| includee (|Rest| |s|)))))))
+      ((equal (elt info 2) "if")
+       (progn
+        (setq s1
+         (cond
+          ((|Skipping?| state) |IfSkipToEnd|)
+          (t
+           (cond
+            ((|ifCond| str info) |IfKeepPart|)
+            (t |IfSkipPart|)))))
+        (cons (|xlOK| eb str lno (elt ufos 0))
+              (|incLude| eb (cdr ss) lno ufos (cons s1 states)))))
+      ((equal (elt info 2) "elseif")
+       (cond
+        ((and (null (|If?| state)) (null (|Elseif?| state)))
+         (cons (|xlIfSyntax| eb str lno ufos info states)
+               |StreamNil|))
+        (t
+         (cond
+          ((or (|SkipEnd?| state) 
+               (|KeepPart?| state)
+               (|SkipPart?| state))
+           (setq s1
+            (cond
+             ((|SkipPart?| state)
+              (setq pred (|ifCond| str info))
+              (cond
+               (pred |ElseifKeepPart|)
+               (t |ElseifSkipPart|)))
+             (t |ElseifSkipToEnd|)))
+           (cons (|xlOK| eb str lno (elt ufos 0))
+                 (|incLude| eb (cdr ss) lno ufos (cons s1 (cdr states)))))
+          (t
+           (cons (|xlIfBug| eb str lno ufos) |StreamNil|))))))
+      ((equal (elt info 2) "else")
+       (cond
+        ((and (null (|If?| state)) (null (|Elseif?| state)))
+         (cons (|xlIfSyntax| eb str lno ufos info states)
+               |StreamNil|))
+        (t
+         (cond
+          ((or (|SkipEnd?| state) 
+               (|KeepPart?| state) 
+               (|SkipPart?| state))
+            (setq s1
+             (cond ((|SkipPart?| state) |ElseKeepPart|) (t |ElseSkipToEnd|)))
+            (cons (|xlOK| eb str lno (elt ufos 0))
+                  (|incLude| eb (cdr ss) lno ufos (cons s1 (cdr states)))))
+          (t
+           (cons (|xlIfBug| eb str lno ufos) |StreamNil|))))))
+      ((equal (elt info 2) "endif")
+       (cond
+        ((|Top?| state)
+         (cons (|xlIfSyntax| eb str lno ufos info states)
+               |StreamNil|))
+        (t
+         (cons (|xlOK| eb str lno (elt ufos 0))
+               (|incLude| eb (cdr ss) lno ufos (cdr states))))))
+      (t (cons (|xlCmdBug| eb str lno ufos) |StreamNil|))))))))
 
 @
 
@@ -6228,9 +6621,9 @@ Also used in the output routines.
       (|sayMSG| (list "   [" |ind| "] " (car vec)))
       (progn
        (|sayMSG| (list "   [" |ind| "] "))
-       (do ((tmp0 l (cdr tmp0)) (|ln| nil))
-           ((or (atom tmp0) (progn (setq |ln| (car tmp0)) nil)) nil)
-         (|sayMSG| (list "      " |ln|))))))))
+       (do ((tmp0 l (cdr tmp0)) (ln nil))
+           ((or (atom tmp0) (progn (setq ln (car tmp0)) nil)) nil)
+         (|sayMSG| (list "      " ln))))))))
 
 @
 \defun{showInOut}{showInOut}
@@ -16598,17 +16991,17 @@ $traceletflag
 \begin{verbatim}
 currenttime
 error
-|incLude|
 |incRenumber|
 |incRgen1|
 |insertpile|
-|ncloopEchoParse|
-|ncloopProcess|
+|intloopEchoParse|
+|intloopProcess|
 |intloopProcessString|
 |intnplisp|
 |lineoftoks|
+|ncloopEchoParse|
+|ncloopProcess|
 |resetStackLimits|
-|serverReadLine|
 |shoeread-line|
 stringimage
 \end{verbatim}
@@ -16620,6 +17013,7 @@ stringimage
 
 <<defmacro funfind>>
 <<defmacro identp>>
+<<defmacro Rest>>
 
 <<defun abbQuery>>
 <<defun abbreviations>>
@@ -16702,6 +17096,8 @@ stringimage
 
 <<defun edit>>
 <<defun editSpad2Cmd>>
+<<defun Else?>>
+<<defun Elseif?>>
 <<defun emptyInterpreterFrame>>
 <<defun eofp>>
 
@@ -16749,8 +17145,11 @@ stringimage
 <<defun history>>
 <<defun historySpad2Cmd>>
 
+<<defun If?>>
 <<defun importFromFrame>>
 <<defun incBiteOff>>
+<<defun incLude>>
+<<defun incLude1>>
 <<defun incFileName>>
 <<defun incRgen>>
 <<defun incRgen1>>
@@ -16773,6 +17172,8 @@ stringimage
 <<defun isSubForRedundantMapName>>
 <<defun isTraceGensym>>
 <<defun isUncompiledMap>>
+
+<<defun KeepPart?>>
 
 <<defun lassocSub>>
 <<defun leaveScratchpad>>
@@ -16864,6 +17265,7 @@ stringimage
 <<defun ScanOrPairVec,ScanOrInner>>
 <<defun selectOption>>
 <<defun selectOptionLC>>
+<<defun serverReadLine>>
 <<defun set>>
 <<defun set1>>
 <<defun setAsharpArgs>>
@@ -16898,6 +17300,9 @@ stringimage
 <<defun showInOut>>
 <<defun showInput>>
 <<defun shut>>
+<<defun SkipEnd?>>
+<<defun SkipPart?>>
+<<defun Skipping?>>
 <<defun spad>>
 <<defun spadClosure?>>
 <<defun SpadInterpretStream>>
@@ -16919,6 +17324,7 @@ stringimage
 <<defun summary>>
 
 <<defun ?t>>
+<<defun Top?>>
 <<defun trace>>
 <<defun trace1>>
 <<defun traceDomainConstructor>>
