@@ -548,13 +548,23 @@ The system commands are handled by the function kept in the ``hook''
 variable \verb|$systemCommandFunction| which
 has the default function \verb|InterpExecuteSpadSystemCommand|.
 Thus, when a system command is entered this function is called.
+
+The \verb|$promptMsg| variable is set to the constant S2CTP023. This 
+constant points to a message in src/doc/msgs/s2-us.msgs. This message
+does nothing but print the argument value.
+\defdollar{promptMsg}
+<<initvars>>=
+(defvar |$promptMsg| 'S2CTP023)
+
+@
+
 <<defun SpadInterpretStream>>=
 (defun |SpadInterpretStream| (str source interactive?) 
- (let (|$promptMsg| |$shoeReadLineFunction| |$systemCommandFunction| 
+ (let (|$promptMsg| |$systemCommandFunction| 
        |$ncMsgList| |$erMsgToss| |$lastPos| |$inclAssertions| 
        |$okToExecuteMachineCode| |$newcompErrorCount| |$newcompMode| 
        |$libQuiet| |$fn|)
-  (declare (special |$promptMsg| |$shoeReadLineFunction| 
+  (declare (special |$promptMsg| 
             |$systemCommandFunction| |$ncMsgList| |$erMsgToss| |$lastPos| 
             |$inclAssertions| |$okToExecuteMachineCode| |$newcompErrorCount| 
             |$newcompMode| |$libQuiet| |$fn| |$nopos|))
@@ -568,7 +578,6 @@ Thus, when a system command is entered this function is called.
   (setq |$erMsgToss| nil) 
   (setq |$ncMsgList| nil) 
   (setq |$systemCommandFunction| #'|InterpExecuteSpadSystemCommand|) 
-  (setq |$shoeReadLineFunction| #'|serverReadLine|) 
   (setq |$promptMsg| 's2ctp023) 
   (if interactive? 
    (progn 
@@ -905,12 +914,13 @@ this is what the current code does so I won't change it.
          (when |$NeedToSignalSessionManager|
           (|sockSendInt| |$SessionManager| |$EndOfOutput|))
       (setq |$NeedToSignalSessionManager| nil)
-      (case  (|serverSwitch|)
-       (|$CallInterp|
+      (setq action (|serverSwitch|))
+      (cond 
+       ((= action |$CallInterp|)
         (setq l (|read-line| stream))
         (setq |$NeedToSignalSessionManager| t)
         (return l))
-       (|$CreateFrame|
+       ((= action |$CreateFrame|)
         (setq framename (gentemp "frame"))
         (|addNewInterpreterFrame| framename)
         (setq |$frameAlist|
@@ -920,23 +930,23 @@ this is what the current code does so I won't change it.
         (|sockSendInt| |$SessionManager| |$frameNumber|)
         (setq |$frameNumber| (plus |$frameNumber| 1))
         (|sockSendString| |$SessionManager| (mkprompt)))
-       (|$SwitchFrames|
+       ((= action |$SwitchFrames|)
         (setq |$currentFrameNum| (|sockGetInt| |$SessionManager|))
         (setq currentframe (lassoc |$currentFrameNum| |$frameAlist|))
         (|changeToNamedInterpreterFrame| currentframe))
-       (|$EndSession|
+       ((= action |$EndSession|)
         (setq |$EndServerSession| t))
-       (|$LispCommand|
+       ((= action |$LispCommand|)
         (setq |$NeedToSignalSessionManager| t)
         (setq stringbuf (make-string |$sockBufferLength|))
         (|sockGetString| |$MenuServer| stringbuf |$sockBufferLength|)
         (setq form
          (|unescapeStringsInForm| (read-from-string stringbuf)))
         (|protectedEVAL| form))
-       (|$QuietSpadCommand|
+       ((= action |$QuietSpadCommand|)
         (setq |$NeedToSignalSessionManager| t)
         (|executeQuietCommand|))
-       (|$SpadCommand|
+       ((= action |$SpadCommand|)
         (setq |$NeedToSignalSessionManager| t)
         (setq stringbuf (make-string 512))
         (|sockGetString| |$MenuServer| stringbuf 512)
@@ -946,8 +956,8 @@ this is what the current code does so I won't change it.
            (|parseAndInterpret| stringbuf))))
         (princ (mkprompt))
         (finish-output))
-       (|$NonSmanSession| (setq |$SpadServer| nil))
-       (|$KillLispSystem| (bye))
+       ((= action |$NonSmanSession|) (setq |$SpadServer| nil))
+       ((= action |$KillLispSystem|) (bye))
        (t nil))))
     (cond
      (line line)
@@ -16468,7 +16478,7 @@ o )library
 @
 \chapter{The Spad Server Mechanism}
 <<initvars>>=
-(defvar $openServerIfTrue t "t means try starting an open server")
+(defvar $openServerIfTrue nil "t means try starting an open server")
 
 @
 <<initvars>>=
@@ -16960,7 +16970,6 @@ $relative-library-directory-list
 |$seen|
 |$SessionManager|
 |$setOptions|
-|$shoeReadLineFunction|
 |$slamFlag|
 /sourcefiles
 |$sourceFiles|
@@ -17496,11 +17505,9 @@ curoutstream                 & ncIntLoop           & \\
                              & recordFrame         & recordFrame \\
 \$printLoadMsgs              & restart             & \\
 \$PrintCompilerMessageIfTrue & spad                & \\
-\$promptMsg                  & SpadInterpretStream & \\
 \$relative-directory-list    &                     & reroot \\
 \$relative-library-directory-list &                & reroot \\
 \$reportUndo                 & initvars            & diffAlist \\
-\$shoeReadLineFunction       & SpadInterpretStream & \\
 \$spad                       & ncTopLevel          & \\
 \$spadroot                   & reroot              & initroot \\
                              &                     & make-absolute-filename \\
@@ -17792,11 +17799,6 @@ will be used as an open server, probably for OpenMath use.
 
 If an open server is not requested then this variable to NIL
 
-\subsection{\$promptMsg}
-The \verb|$promptMsg| variable is set to the constant S2CTP023. This 
-constant points to a message in src/doc/msgs/s2-us.msgs. This message
-does nothing but print the argument value.
-
 \subsection{\$relative-directory-list}
 The \verb|$relative-directory-list| is used in reroot to create 
 \verb|$directory-list| which is a list of absolute directory names.
@@ -17813,10 +17815,6 @@ bound but has been set to T in initvars. If the variable is set
 to T then we call reportUndo.
 
 It is part of the undo mechanism.
-
-\subsection{\$shoeReadLineFunction}
-The \verb|$shoeReadLineFunction| is set in SpadInterpretStream
-to point to the serverReadLine 
 
 \subsection{\$spadroot}
 The \verb|$spadroot| variable is the internal name for the AXIOM
