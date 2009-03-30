@@ -62,8 +62,12 @@ failures are marked.
 <<*>>=
 (in-package "BOOT")
 
+(defvar *all-tests-ran* nil "true implies that all tests ran")
+
 (defun regress (infile)
  (let (name comment test (count 0) (passed 0) (failed 0))
+ (declare (special *all-tests-ran*))
+  (setq *all-tests-ran* nil)
   (with-open-file (stream infile :direction :input)
    (setq name (getspoolname stream)) 
    (when name
@@ -83,7 +87,9 @@ failures are marked.
     (format t "regression result passed ~a of ~a stanzas ~Tfile ~a~%"
      passed count name)
     (format t "regression result FAILED ~a of ~a stanzas ~Tfile ~a~%"
-     failed count name))))))
+     failed count name))
+   (unless *all-tests-ran*
+    (format t "regression result FAILED early exit in file ~a?~%" name))))))
 
 @
 \subsection{defun getspoolname}
@@ -217,10 +223,20 @@ This is useful for handling random results or gensym symbols.
 @
 \subsection{defun startp}
 This test returns true if we have a ``start'' line. That is, a line
-with a ``--S'' prefix.
+with a ``--S'' prefix. 
+
+The *all-tests-ran* variable is true if the start line is of the form
+"--S N of M" and N=M, that is, it checks that all tests were performed
+since this should only occur on the last start line. This will detect
+``premature exit'' in processing.
 <<*>>=
 (defun startp (oneline)
- (and (>= (length oneline) 3) (string= (subseq oneline 0 3) "--S")))
+ (let (result)
+  (when
+   (setq result
+    (and (>= (length oneline) 3) (string= (subseq oneline 0 3) "--S")))
+   (setq *all-tests-ran* (lastcount oneline)))
+  result))
 
 @
 \subsection{defun endedp}
@@ -245,6 +261,39 @@ with a ``--I'' prefix.
 <<*>>=
 (defun ignorep (oneline)
  (and (>= (length oneline) 3) (string= (subseq oneline 0 3) "--I")))
+
+@
+\subsection{defun lastcount}
+If the ``--S'' line has the format ``--S n of m'' we return true if 
+n=m, false otherwise.
+Thus,
+\begin{verbatim}
+ "--S"              => nil
+ "--S 1 of 4"       => nil
+ "--S 10 of 40"     => nil
+ "--S 4 of 4"       => t
+ "--S 40 of 40"     => t
+ "--S 1 of a"       => nil
+\end{verbatim}
+This is used as a final end check to make sure that all of the
+tests actually ran rather than having the regression test exit
+early and quietly. This will be false on all but the last test
+and will be false if the ``--S'' line does not contain the optional
+count marker. It is not required but is highly recommended.
+<<*>>=
+(defun lastcount (oneline)
+ (let ((n :done) (m :done) next somemore)
+ (when (and (>= (length oneline) 3) (string= (subseq oneline 0 3) "--S"))
+  (setq somemore (string-trim " " (subseq oneline 3)))
+  (when somemore
+   (multiple-value-setq (n next) (read-from-string somemore nil :done))
+   (when (integerp n)
+    (setq somemore (string-trim " " (subseq somemore next)))
+    (multiple-value-setq (isof next) (read-from-string somemore nil :done))
+    (when (string= isof "OF")
+     (setq somemore (string-trim " " (subseq somemore next)))
+     (multiple-value-setq (m next) (read-from-string somemore nil :done))))))
+  (and (integerp m) (integerp n) (= m n))))
 
 @
 \eject
