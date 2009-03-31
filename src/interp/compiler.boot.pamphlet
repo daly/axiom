@@ -257,19 +257,77 @@ hasFormalMapVariable(x, vl) ==
      hasone? x == MEMQ(x,$formalMapVariables)
 
 @
+\subsection{argsToSig}
+<<*>>=
+argsToSig(args) ==
+  args is [":",v,t] => [[v],[t]]
+  sig1:=[]
+  arg1:=[]
+  bad:=false
+  for arg in args repeat
+    arg is [":",v,t] =>
+      sig1:=[t,:sig1]
+      arg1:=[v,:arg1]
+    bad:=true
+  bad=>[nil,nil]
+  [REVERSE(arg1),REVERSE(sig1)]
+
+@
+\subsection{compLambda}
+<<*>>=
+compLambda(x is ["+->",vl,body],m,e) ==
+  vl is [":",args,target] =>
+    args:=
+      args is ["Tuple",:a1] => a1
+      args
+    LISTP(args) =>
+      [arg1,sig1]:=argsToSig(args)
+      sig1 =>
+        ress:=compAtSign(["@",["+->",arg1,body],["Mapping",target,:sig1]],m,e)
+        ress
+      stackAndThrow["compLambda",x]
+    stackAndThrow["compLambda",x]
+  stackAndThrow["compLambda",x]
+
+@
 \subsection{compWithMappingMode}
 <<*>>=
-compWithMappingMode(x,m is ["Mapping",m',:sl],oldE) ==
+compWithMappingMode(x,m,oldE) ==
+  compWithMappingMode1(x,m,oldE,$formalArgList)
+
+@
+\subsection{compWithMappingMode1}
+<<*>>=
+compWithMappingMode1(x,m is ["Mapping",m',:sl],oldE,$formalArgList) ==
   $killOptimizeIfTrue: local:= true
   e:= oldE
   isFunctor x =>
     if get(x,"modemap",$CategoryFrame) is [[[.,target,:argModeList],.],:.] and
-      (and/[extendsCategoryForm("$",s,mode) for mode in argModeList for s in sl]
-        ) and extendsCategoryForm("$",target,m') then return [x,m,e]
+     (and/[extendsCategoryForm("$",s,mode) for mode in argModeList for s in sl]
+       ) and extendsCategoryForm("$",target,m') then return [x,m,e]
   if STRINGP x then x:= INTERN x
-  for m in sl for v in (vl:= take(#sl,$FormalMapVariableList)) repeat
+  ress:=nil
+  old_style:=true
+  if x is ["+->",vl,nx] then
+    old_style:=false
+    vl is [":",:.] =>
+      ress:=compLambda(x,m,oldE)
+      ress
+    vl:=
+      vl is ["Tuple",:vl1] => vl1
+      vl
+    vl:=
+      SYMBOLP(vl) => [vl]
+      LISTP(vl) and (and/[SYMBOLP(v) for v in vl]) => vl
+      stackAndThrow ["bad +-> arguments:",vl]
+    $formatArgList:=[:vl,:$formalArgList]
+    x:=nx
+  else
+    vl:=take(#sl,$FormalMapVariableList)
+  ress => ress
+  for m in sl for v in vl repeat
     [.,.,e]:= compMakeDeclaration([":",v,m],$EmptyMode,e)
-  not null vl and not hasFormalMapVariable(x, vl) => return
+  old_style and not null vl and not hasFormalMapVariable(x, vl) => return
     [u,.,.] := comp([x,:vl],m',e) or return nil
     extractCodeAndConstructTriple(u, m, oldE)
   null vl and (t := comp([x], m', e)) => return
@@ -328,20 +386,14 @@ compWithMappingMode(x,m is ["Mapping",m',:sl],oldE) ==
       ['LAMBDA,[:vl,vec], :CDDR expandedFunction]
     scode:=nil
     vec:=nil
-    slist:=nil
     locals:=nil
     i:=-1
     for v in frees repeat
       i:=i+1
       vec:=[first v,:vec]
-      rest v = 1 =>
-                --Only used once
-        slist:=[[first v,($QuickCode => 'QREFELT;'ELT),"$$",i],:slist]
       scode:=[['SETQ,first v,[($QuickCode => 'QREFELT;'ELT),"$$",i]],:scode]
       locals:=[first v,:locals]
-    body:=
-      slist => SUBLISNQ(slist,CDDR expandedFunction)
-      CDDR expandedFunction
+    body:=CDDR expandedFunction
     if locals then
       if body is [['DECLARE,:.],:.] then
         body:=[CAR body,['PROG,locals,:scode,['RETURN,['PROGN,:CDR body]]]]
