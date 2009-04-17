@@ -274,14 +274,13 @@
 
 (defun ischunk-latex (line)
  "Find chunks delimited by latex syntax"
- (let ((len (length line)) 
-       (mark (search "chunk" line))
+ (let ((mark (search "chunk" line))      ; is this a line we care about?
        (point 0)
-       name preline postline
-       (beginstring "\\begin{chunk}{")
+       name 
+       (beginstring "\\begin{chunk}{")   ; this is the define marker string
        beginlength
-       (endstring "\end{chunk}")
-       (referstring "\getchunk{")
+       (endstring "\end{chunk}")         ; this is the end marker string
+       (referstring "\getchunk{")        ; this is the refer string
        referlength)
   (setq beginlength (length beginstring))
   (setq referlength (length referstring))

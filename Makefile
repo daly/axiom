@@ -16,7 +16,7 @@ LSP=${SPD}/lsp
 #GCLVERSION=gcl-2.6.7
 #GCLVERSION=gcl-2.6.8pre
 #GCLVERSION=gcl-2.6.8pre2
-GCLVERSION=gcl-2.6.8pre3
+GCLVERSION=gcl-2.6.8pre3 
 AWK=gawk
 GCLDIR=${LSP}/${GCLVERSION}
 SRC=${SPD}/src
@@ -24,6 +24,7 @@ INT=${SPD}/int
 OBJ=${SPD}/obj
 MNT=${SPD}/mnt
 ZIPS=${SPD}/zips
+BOOKS=${SPD}/books
 TMP=${OBJ}/tmp
 SPADBIN=${MNT}/${SYS}/bin
 INC=${SPD}/src/include
@@ -35,6 +36,7 @@ TANGLE=${SPADBIN}/lib/notangle
 WEAVE=${SPADBIN}/lib/noweave
 NOISE="-o ${TMP}/trace"
 PATCH=patch
+UNCOMPRESS=gunzip
 
 PART=	cprogs
 SUBPART= everything
@@ -45,7 +47,7 @@ ENV= SPAD=${SPAD} SYS=${SYS} SPD=${SPD} LSP=${LSP} GCLDIR=${GCLDIR} \
      SPADBIN=${SPADBIN} INC=${INC} CCLBASE=${CCLBASE} PART=${PART} \
      SUBPART=${SUBPART} NOISE=${NOISE} GCLVERSION=${GCLVERSION} \
      TANGLE=${TANGLE} VERSION=${VERSION} PATCH=${PATCH} DOCUMENT=${DOCUMENT} \
-     WEAVE=${WEAVE}
+     WEAVE=${WEAVE} UNCOMPRESS=${UNCOMPRESS} BOOKS=${BOOKS}
 
 all: noweb ${MNT}/${SYS}/bin/document
 	@ echo 1 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
@@ -115,7 +117,7 @@ install:
 	@echo export AXIOM >>${COMMAND}
 	@echo PATH='$${AXIOM}/bin':'$${PATH}' >>${COMMAND}
 	@echo export PATH >>${COMMAND}
-	@cat ${SRC}/etc/axiom >>${COMMAND}
+	@cat ${INT}/sman/axiom >>${COMMAND}
 	@chmod +x ${COMMAND}
 	@echo 79 Axiom installation finished.
 	@echo
@@ -148,3 +150,4 @@ clean:
 	@ for i in `find src -name "Makefile"` ; do rm -f $$i ; done
 	@ for i in `find src -name "Makefile.dvi"` ; do rm -f $$i ; done
 	@ rm -f lastBuildDate
+
