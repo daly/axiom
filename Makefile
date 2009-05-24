@@ -61,6 +61,24 @@ all: noweb ${MNT}/${SYS}/bin/document
 
 start: noweb ${MNT}/${SYS}/bin/document
 
+parallel: noweb ${MNT}/${SYS}/bin/document
+	@ echo p1 making a parallel system build
+	@ echo 1 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
+	@ echo 2 Environment ${ENV}
+	@ ${TANGLE} -t8 -RMakefile.${SYS} Makefile.pamphlet >Makefile.${SYS}
+	@ ${DOCUMENT} Makefile
+	@ mkdir -p ${MNT}/${SYS}/doc/src
+	@ cp Makefile.dvi ${MNT}/${SYS}/doc/src/root.Makefile.dvi
+	@ echo p2 starting parallel make of books
+	@ echo 52 ${SPD}/books/Makefile from ${SPD}/books/Makefile.pamphlet
+	( cd ${SPD}/books ; \
+           ${DOCUMENT} ${NOISE} Makefile ; \
+           cp Makefile.dvi ${MNT}/${SYS}/doc/src/books.Makefile.dvi ; \
+	   ${ENV} ${MAKE} & )
+	@ echo p3 starting parallel make of src
+	@ ${ENV} $(MAKE) -f Makefile.${SYS} 
+	@ echo 3 finished system build on `date` | tee >lastBuildDate
+
 book:
 	@ echo 79 building the book as ${MNT}/${SYS}/doc/book.dvi 
 	@ mkdir -p ${TMP}
