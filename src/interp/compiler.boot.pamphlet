@@ -257,19 +257,77 @@ hasFormalMapVariable(x, vl) ==
      hasone? x == MEMQ(x,$formalMapVariables)
 
 @
+\subsection{argsToSig}
+<<*>>=
+argsToSig(args) ==
+  args is [":",v,t] => [[v],[t]]
+  sig1:=[]
+  arg1:=[]
+  bad:=false
+  for arg in args repeat
+    arg is [":",v,t] =>
+      sig1:=[t,:sig1]
+      arg1:=[v,:arg1]
+    bad:=true
+  bad=>[nil,nil]
+  [REVERSE(arg1),REVERSE(sig1)]
+
+@
+\subsection{compLambda}
+<<*>>=
+compLambda(x is ["+->",vl,body],m,e) ==
+  vl is [":",args,target] =>
+    args:=
+      args is ["Tuple",:a1] => a1
+      args
+    LISTP(args) =>
+      [arg1,sig1]:=argsToSig(args)
+      sig1 =>
+        ress:=compAtSign(["@",["+->",arg1,body],["Mapping",target,:sig1]],m,e)
+        ress
+      stackAndThrow ["compLambda",x]
+    stackAndThrow ["compLambda",x]
+  stackAndThrow ["compLambda",x]
+
+@
 \subsection{compWithMappingMode}
 <<*>>=
-compWithMappingMode(x,m is ["Mapping",m',:sl],oldE) ==
+compWithMappingMode(x,m,oldE) ==
+  compWithMappingMode1(x,m,oldE,$formalArgList)
+
+@
+\subsection{compWithMappingMode1}
+<<*>>=
+compWithMappingMode1(x,m is ["Mapping",m',:sl],oldE,$formalArgList) ==
   $killOptimizeIfTrue: local:= true
   e:= oldE
   isFunctor x =>
     if get(x,"modemap",$CategoryFrame) is [[[.,target,:argModeList],.],:.] and
-      (and/[extendsCategoryForm("$",s,mode) for mode in argModeList for s in sl]
-        ) and extendsCategoryForm("$",target,m') then return [x,m,e]
+     (and/[extendsCategoryForm("$",s,mode) for mode in argModeList for s in sl]
+       ) and extendsCategoryForm("$",target,m') then return [x,m,e]
   if STRINGP x then x:= INTERN x
-  for m in sl for v in (vl:= take(#sl,$FormalMapVariableList)) repeat
+  ress:=nil
+  old_style:=true
+  if x is ["+->",vl,nx] then
+    old_style:=false
+    vl is [":",:.] =>
+      ress:=compLambda(x,m,oldE)
+      ress
+    vl:=
+      vl is ["Tuple",:vl1] => vl1
+      vl
+    vl:=
+      SYMBOLP(vl) => [vl]
+      LISTP(vl) and (and/[SYMBOLP(v) for v in vl]) => vl
+      stackAndThrow ["bad +-> arguments:",vl]
+    $formatArgList:=[:vl,:$formalArgList]
+    x:=nx
+  else
+    vl:=take(#sl,$FormalMapVariableList)
+  ress => ress
+  for m in sl for v in vl repeat
     [.,.,e]:= compMakeDeclaration([":",v,m],$EmptyMode,e)
-  not null vl and not hasFormalMapVariable(x, vl) => return
+  old_style and not null vl and not hasFormalMapVariable(x, vl) => return
     [u,.,.] := comp([x,:vl],m',e) or return nil
     extractCodeAndConstructTriple(u, m, oldE)
   null vl and (t := comp([x], m', e)) => return
@@ -328,20 +386,14 @@ compWithMappingMode(x,m is ["Mapping",m',:sl],oldE) ==
       ['LAMBDA,[:vl,vec], :CDDR expandedFunction]
     scode:=nil
     vec:=nil
-    slist:=nil
     locals:=nil
     i:=-1
     for v in frees repeat
       i:=i+1
       vec:=[first v,:vec]
-      rest v = 1 =>
-                --Only used once
-        slist:=[[first v,($QuickCode => 'QREFELT;'ELT),"$$",i],:slist]
       scode:=[['SETQ,first v,[($QuickCode => 'QREFELT;'ELT),"$$",i]],:scode]
       locals:=[first v,:locals]
-    body:=
-      slist => SUBLISNQ(slist,CDDR expandedFunction)
-      CDDR expandedFunction
+    body:=CDDR expandedFunction
     if locals then
       if body is [['DECLARE,:.],:.] then
         body:=[CAR body,['PROG,locals,:scode,['RETURN,['PROGN,:CDR body]]]]
@@ -1649,417 +1701,6 @@ modeEqualSubst(m1,m,e) ==
 -- in the DEFAULTS package
         and/[modeEqualSubst(xm1,xm2,e) for xm1 in l1 for xm2 in l2]
   nil
-
-@
-\section{)compile}
-This is the implementation of the )compile command.
-
-You use this command to invoke the new Axiom library compiler or the
-old Axiom system compiler.  The {\tt )compile} system command is
-actually a combination of Axiom processing and a call to the Aldor
-compiler.  It is performing double-duty, acting as a front-end to both
-the Aldor compiler and the old Axiom system compiler.  (The old Axiom
-system compiler was written in Lisp and was an integral part of the
-Axiom environment.  The Aldor compiler is written in C and executed by
-the operating system when called from within Axiom.)
-
-\par\noindent{\bf User Level Required:} compiler
-
-\par\noindent{\bf Command Syntax:}
-
-\begin{list}{}
-\item {\tt )compile}
-\item {\tt )compile {\it fileName}}
-\item {\tt )compile {\it fileName}.spad}
-\item {\tt )compile {\it directory/fileName}.spad}
-\item {\tt )compile {\it fileName} )old}
-\item {\tt )compile {\it fileName} )translate}
-\item {\tt )compile {\it fileName} )quiet}
-\item {\tt )compile {\it fileName} )noquiet}
-\item {\tt )compile {\it fileName} )moreargs}
-\item {\tt )compile {\it fileName} )onlyargs}
-\item {\tt )compile {\it fileName} )break}
-\item {\tt )compile {\it fileName} )nobreak}
-\item {\tt )compile {\it fileName} )library}
-\item {\tt )compile {\it fileName} )nolibrary}
-\item {\tt )compile {\it fileName} )vartrace}
-\item {\tt )compile {\it fileName} )constructor} {\it nameOrAbbrev}
-\end{list}
-
-These command forms invoke the Aldor compiler.
-\begin{list}{}
-\item {\tt )compile {\it fileName}.as}
-\item {\tt )compile {\it directory/fileName}.as}
-\item {\tt )compile {\it fileName}.ao}
-\item {\tt )compile {\it directory/fileName}.ao}
-\item {\tt )compile {\it fileName}.al}
-\item {\tt )compile {\it directory/fileName}.al}
-\item {\tt )compile {\it fileName}.lsp}
-\item {\tt )compile {\it directory/fileName}.lsp}
-\item {\tt )compile {\it fileName} )new}
-\end{list}
-
-\par\noindent{\bf Command Description:}
-
-The first thing {\tt )compile} does is look for a source code
-filename among its arguments.
-Thus
-\begin{verbatim}
-)compile mycode.spad
-)compile /u/jones/mycode.spad
-)compile mycode
-\end{verbatim}
-all invoke {\tt )compiler} on the file {\tt
-/u/jones/mycode.spad} if the current Axiom working
-directory is {\tt /u/jones.} (Recall that you can set the
-working directory via the {\tt )cd} command. If you don't set it
-explicitly, it is the directory from which you started
-Axiom.)
-
-If you omit the file extension, the command looks to see if you have
-specified the {\tt )new} or {\tt )old} option.  If you have given one
-of these options, the corresponding compiler is used.
-
-The command first looks in the standard system directories for files
-with extension {\it .as, .ao} and {\it .al} and then files with
-extension {\it .spad}.  The first file found has the appropriate
-compiler invoked on it.  If the command cannot find a matching file,
-an error message is displayed and the command terminates.
-
-The first thing {\tt )compile} does is look for a source code
-filename among its arguments.
-Thus
-\begin{verbatim}
-)compile mycode.as
-)compile /u/jones/as/mycode.as
-)compile mycode
-\end{verbatim}
-all invoke {\tt )compiler} on the file {\tt
-/u/jones/as/mycode.as} if the current Axiom working
-directory is {\tt /u/jones/as.} (Recall that you can set the
-working directory via the {\tt )cd} command. If you don't set it
-explicitly, it is the directory from which you started
-Axiom.)
-
-This is frequently all you need to compile your file.
-
-This simple command:
-\begin{enumerate}
-\item Invokes the chosen compiler and produces Lisp output.
-\item Calls the Lisp compiler if the compilation was
-successful.
-\item Uses the {\tt )library} command to tell Axiom about
-the contents of your compiled file and arrange to have those
-contents loaded on demand.
-\end{enumerate}
-
-Should you not want the {\tt )library} command automatically
-invoked, call {\tt )compile} with the {\tt )nolibrary} option.
-For example,
-\begin{verbatim}
-)compile mycode )nolibrary
-\end{verbatim}
-
-By default, the {\tt )library} system command {\it exposes} all
-domains and categories it processes.
-This means that the Axiom intepreter will consider those
-domains and categories when it is trying to resolve a reference
-to a function.
-Sometimes domains and categories should not be exposed.
-For example, a domain may just be used privately by another
-domain and may not be meant for top-level use.
-The {\tt )library} command should still be used, though, so that
-the code will be loaded on demand.
-In this case, you should use the {\tt )nolibrary} option on {\tt
-)compile} and the {\tt )noexpose} option in the {\tt )library}
-command. For example,
-\begin{verbatim}
-)compile mycode )nolibrary
-)library mycode )noexpose
-\end{verbatim}
-
-Once you have established your own collection of compiled code,
-you may find it handy to use the {\tt )dir} option on the
-{\tt )library} command.
-This causes {\tt )library} to process all compiled code in the
-specified directory. For example,
-\begin{verbatim}
-)library )dir /u/jones/quantum
-\end{verbatim}
-You must give an explicit directory after {\tt )dir}, even if you
-want all compiled code in the current working directory
-processed, e.g.
-\begin{verbatim}
-)library )dir .
-\end{verbatim}
-
-\subsection{Spad compiler}
-This command compiles files with file extension {\tt .spad}
-with the old Axiom system compiler.  
-
-The {\tt )translate} option is used to invoke a special version of the
-old system compiler that will translate a {\it .spad} file to a {\it
-.as} file.  That is, the {\it .spad} file will be parsed and analyzed
-and a file using the new syntax will be created.
-
-By default, the {\it .as} file is created in the same directory as the
-{\it .spad} file. If that directory is not writable, the current
-directory is used. If the current directory is not writable, an error
-message is given and the command terminates.  Note that {\tt )translate} 
-implies the {\tt )old} option so the file extension can
-safely be omitted. If {\tt )translate} is given, all other options are
-ignored.  Please be aware that the translation is not necessarily one
-hundred percent complete or correct.  You should attempt to compile
-the output with the Aldor compiler and make any necessary corrections.
-
-You can compile category, domain, and package constructors contained
-in files with file extension {\it .spad}.  You can compile individual
-constructors or every constructor in a file.
-
-The full filename is remembered between invocations of this command and
-{\tt )edit} commands. The sequence of commands
-\begin{verbatim}
-)compile matrix.spad
-)edit
-)compile
-\end{verbatim}
-will call the compiler, edit, and then call the compiler again on the
-file {\bf matrix.spad.}  If you do not specify a {\it directory,} the
-working current directory is searched for the file.  If the file is
-not found, the standard system directories are searched.
-
-If you do not give any options, all constructors within a file are
-compiled.  Each constructor should have an {\tt )abbreviation} command
-in the file in which it is defined.  We suggest that you place the
-{\tt )abbreviation} commands at the top of the file in the order in
-which the constructors are defined.
-
-The {\tt )library} option causes directories containing the compiled
-code for each constructor to be created in the working current
-directory.  The name of such a directory consists of the constructor
-abbreviation and the {\bf .nrlib} file extension.  For example, the
-directory containing the compiled code for the {\tt MATRIX}
-constructor is called {\bf MATRIX.nrlib.}  The {\tt )nolibrary} option
-says that such files should not be created.  The default is 
-{\tt )library.}  Note that the semantics of {\tt )library} and 
-{\tt )nolibrary} for the new Aldor compiler and for the old system 
-compiler are completely different.
-
-The {\tt )vartrace} option causes the compiler to generate
-extra code for the constructor to support conditional tracing of
-variable assignments. (see 
-\ref{ugSysCmdtrace} on page~\pageref{ugSysCmdtrace}). Without
-this option, this code is suppressed and one cannot use
-the {\tt )vars} option for the trace command.
-
-The {\tt )constructor} option is used to
-specify a particular constructor to compile.
-All other constructors in the file are ignored.
-The constructor name or abbreviation follows {\tt )constructor.}
-Thus either
-\begin{verbatim}
-)compile matrix.spad )constructor RectangularMatrix
-\end{verbatim}
-or
-\begin{verbatim}
-)compile matrix.spad )constructor RMATRIX
-\end{verbatim}
-compiles  the {\tt RectangularMatrix} constructor
-defined in {\bf matrix.spad.}
-
-The {\tt )break} and {\tt )nobreak} options determine what
-the spad compiler does when it encounters an error.
-{\tt )break} is the default and it indicates that processing
-should stop at the first error.
-The value of the {\tt )set break} variable then controls what happens.
-
-\subsection{Aldor compiler}
-This command compiles files with file extensions {\it .as, .ao} and
-{\it .al} with the Aldor compiler. It also can compile files
-with file extension {\it .lsp}. These are assumed to be Lisp files
-genererated by the Aldor compiler.  
-
-The general description of Aldor command line arguments is in
-the Aldor documentation.
-The default options used by the {\tt )compile} command can be
-viewed and set using the {\tt )set compiler args} Axiom
-system command.
-The current defaults are
-\begin{verbatim}
--O -Fasy -Fao -Flsp -laxiom -Mno-AXL_W_WillObsolete -DAxiom
-\end{verbatim}
-These options mean:
-\begin{itemize}
-\item {\tt -O}: perform all optimizations,
-\item {\tt -Fasy}: generate a {\tt .asy} file,
-\item {\tt -Fao}: generate a {\tt .ao} file,
-\item {\tt -Flsp}: generate a {\tt .lsp} (Lisp) file,
-\item {\tt -laxiom}: use the {\tt axiom} library {\tt libaxiom.al},
-\item {\tt -Mno-AXL\_W\_WillObsolete}: do not display messages
-about older generated files becoming obsolete, and
-\item {\tt -DAxiom}: define the global assertion {\tt Axiom} so that the
-Aldor libraries for generating stand-alone code
-are not accidentally used with Axiom.
-\end{itemize}
-
-To supplement these default arguments, use the {\tt )moreargs} option on
-{\tt )compile.}
-For example,
-\begin{verbatim}
-)compile mycode.as )moreargs "-v"
-\end{verbatim}
-uses the default arguments and appends the {\tt -v} (verbose)
-argument flag.
-The additional argument specification {\bf must be enclosed in
-double quotes.}
-
-To completely replace these default arguments for a particular
-use of {\tt )compile}, use the {\tt )onlyargs} option.
-For example,
-\begin{verbatim}
-)compile mycode.as )onlyargs "-v -O"
-\end{verbatim}
-only uses the {\tt -v} (verbose) and {\tt -O} (optimize)
-arguments.
-The argument specification {\bf must be enclosed in double quotes.}
-In this example, Lisp code is not produced and so the compilation
-output will not be available to Axiom.
-
-To completely replace the default arguments for all calls to {\tt
-)compile} within your Axiom session, use {\tt )set compiler args.}
-For example, to use the above arguments for all compilations, issue
-\begin{verbatim}
-)set compiler args "-v -O"
-\end{verbatim}
-Make sure you include the necessary {\tt -l} and {\tt -Y}
-arguments along with those needed for Lisp file creation.
-As above, {\bf the argument specification must be enclosed in double
-quotes.}
-
-The {\tt )compile} command works with several file extensions. We saw
-above what happens when it is invoked on a file with extension {\tt
-.as.} A {\tt .ao} file is a portable binary compiled version of a
-{\tt .as} file, and {\tt )compile} simply passes the {\tt .ao} file
-onto Aldor. The generated Lisp file is compiled and {\tt )library}
-is automatically called, just as if you had specified a {\tt .as} file.
-
-A {\tt .al} file is an archive file containing {\tt .ao} files. The
-archive is created (on Unix systems) with the {\tt ar} program. When
-{\tt )compile} is given a {\tt .al} file, it creates a directory whose
-name is based on that of the archive. For example, if you issue
-\begin{verbatim}
-)compile mylib.al
-\end{verbatim}
-the directory {\tt mylib.axldir} is created. All members of the
-archive are unarchived into the directory and {\tt )compile} is called
-on each {\tt .ao} file found. It is your responsibility to remove the
-directory and its contents, if you choose to do so.
-
-A {\tt .lsp} file is a Lisp source file, generated by Aldor
-when called with the {\tt -Flsp} option. When {\tt )compile} is used
-with a {\tt .lsp} file, the Lisp file is compiled and {\tt )library}
-is called. For Aldor, You must also have present a {\tt .asy}
-generated from the same source file.
-
-\subsection{compileSpad2Cmd}
-<<*>>=
-compileSpad2Cmd args ==
-    -- This is the old compiler
-    -- Assume we entered from the "compiler" function, so args ^= nil
-    -- and is a file with file extension .spad.
-
-    path := pathname args
-    pathnameType path ^= '"spad" => throwKeyedMsg("S2IZ0082", nil)
-    ^PROBE_-FILE path => throwKeyedMsg("S2IL0003",[namestring args])
-
-    SETQ(_/EDITFILE, path)
-    updateSourceFiles path
-    sayKeyedMsg("S2IZ0038",[namestring args])
-
-    optList :=  '( _
-      break _
-      constructor _
-      functions _
-      library _
-      lisp _
-      new _
-      old _
-      nobreak _
-      nolibrary _
-      noquiet _
-      vartrace _
-      quiet _
-      translate _
-        )
-
-    -- next three are for the OLD NEW compiler
-    -- should be unhooked
-
-    $newcompMode             : local := nil
-    $ncConverse              : local := nil
-    $newComp                 : local := nil
-
-    translateOldToNew        := nil
-
-    $scanIfTrue              : local := nil
-    $compileOnlyCertainItems : local := nil
-    $f                       : local := nil  -- compiler
-    $m                       : local := nil  --   variables
-
-    -- following are for )quick option for code generation
-    $QuickLet   : local := true
-    $QuickCode  : local := true
-
-    fun         := ['rq, 'lib]
-    constructor := nil
-    $sourceFileTypes : local := '("SPAD")
-
-    for opt in $options repeat
-        [optname,:optargs] := opt
-        fullopt := selectOptionLC(optname,optList,nil)
-
-        fullopt = 'new    => error "Internal error: compileSpad2Cmd got )new"
-        fullopt = 'old         => NIL     -- no opt
-        fullopt = 'translate   => translateOldToNew := true
-
-        fullopt = 'library     => fun.1 := 'lib
-        fullopt = 'nolibrary   => fun.1 := 'nolib
-
-        -- Ignore quiet/nonquiet if "constructor" is given.
-        fullopt = 'quiet       => if fun.0 ^= 'c then fun.0 := 'rq
-        fullopt = 'noquiet     => if fun.0 ^= 'c then fun.0 := 'rf
-        fullopt = 'nobreak     => $scanIfTrue := true
-        fullopt = 'break       => $scanIfTrue := nil
-        fullopt = 'vartrace      =>
-          $QuickLet  := false
-        fullopt = 'lisp        =>
-          throwKeyedMsg("S2IZ0036",['")lisp"])
-        fullopt = 'functions   =>
-            null optargs =>
-              throwKeyedMsg("S2IZ0037",['")functions"])
-            $compileOnlyCertainItems := optargs
-        fullopt = 'constructor =>
-            null optargs =>
-              throwKeyedMsg("S2IZ0037",['")constructor"])
-            fun.0       := 'c
-            constructor := [unabbrev o for o in optargs]
-        throwKeyedMsg("S2IZ0036",[STRCONC('")",object2String optname)])
-
-    $InteractiveMode : local := nil
-    if translateOldToNew then
-	oldParserAutoloadOnceTrigger()
-        browserAutoloadOnceTrigger()
-        spad2AsTranslatorAutoloadOnceTrigger()
-        sayKeyedMsg("S2IZ0085", nil)
-        convertSpadToAsFile path
-    else if $compileOnlyCertainItems then
-        null constructor => sayKeyedMsg("S2IZ0040",NIL)
-        compilerDoitWithScreenedLisplib(constructor, fun)
-    else
-        compilerDoit(constructor, fun)
-    extendLocalLibdb $newConlist
-    terminateSystemCommand()
-    spadPrompt()
 
 @
 \subsection{convertSpadToAsFile}

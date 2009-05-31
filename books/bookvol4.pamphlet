@@ -3553,6 +3553,254 @@ occur in algebra code. This section walks thru a small problem and
 illustrates some techniques that can be used to find bugs. The 
 point of this exercise is to show a few techniques, not to show a
 general method.
+\subsection{Finding Anonymous Function Signatures}
+This is a technique, adapted from Waldek Hebisch, 
+for asking the interpreter to reveal the actual
+function that will be called in a given circumstance. Here we have a
+function tanint from the domain ElementaryIntegration. 
+\begin{verbatim}
+     tanint(f, x, k) ==
+       eta' := differentiate(eta := first argument k, x)
+       r1  := tanintegrate(univariate(f, k), differentiate(#1,
+               differentiate(#1, x), monomial(eta', 2) + eta'::UP),
+                 rischDEsys(#1, 2 * eta, #2, #3, x, lflimitedint(#1, x, #2),
+                    lfextendedint(#1, x, #2)))
+       map(multivariate(#1, k), r1.answer) + lfintegrate(r1.a0, x)
+\end{verbatim}
+
+We would like to know the type signature of the first argument to the 
+inner call to the differentiate function:
+\begin{verbatim}
+               differentiate(#1, x), monomial(eta', 2) + eta'::UP),
+\end{verbatim}
+
+We see that differentiate is called with \verb|#1|, which is Axiom's
+notation for an anonymous function. How can we determine the signature?
+
+Axiom has a second notation for anonymous functions using the 
+\verb|+->| notation. This notation allows you to explicitly specify
+type information. In the above code, we would like to replace the
+\verb|#1| variable with the \verb|+->| and explicit type information.
+
+The first step is to look at the output of the Spad compiler. 
+The abbreviation for ElementaryIntegration can be found from the 
+interpreter by:
+\begin{verbatim}
+  )show ElementaryIntegration
+    Abbreviation for ElementaryIntegration is INTEF 
+\end{verbatim}
+
+So the compiler output is in the int/algebra/INTEF.nrlib/code.lsp file.
+
+There we see the definition of the lisp tanint function. Notice that the
+\verb|$| is a hidden, internal fourth argument to an Axiom three argument
+function. This is the vector of the current domain containing slots where
+we can look up information, called the domain vector.
+
+\begin{verbatim}
+(DEFUN |INTEF;tanint| (|f| |x| |k| $)
+ (PROG (|eta| |eta'| |r1|)
+  (RETURN
+   (SEQ
+    (LETT |eta'|
+     (SPADCALL
+       (LETT |eta|
+        (|SPADfirst|
+          (SPADCALL |k| (QREFELT $ 18)))
+          |INTEF;tanint|)
+       |x|
+       (QREFELT $ 19))
+     |INTEF;tanint|)
+    (LETT |r1|
+     (SPADCALL
+       (SPADCALL |f| |k| (QREFELT $ 22))
+       (CONS (FUNCTION |INTEF;tanint!1|) (VECTOR |eta'| |x| $))
+       (CONS (FUNCTION |INTEF;tanint!4|) (VECTOR |x| $ |eta|))
+       (QREFELT $ 50))
+     |INTEF;tanint|)
+    (EXIT
+     (SPADCALL
+      (SPADCALL 
+        (CONS 
+          (FUNCTION |INTEF;tanint!5|)
+          (VECTOR $ |k|))
+        (QCAR |r1|)
+        (QREFELT $ 57))
+      (SPADCALL (QCDR |r1|) |x| (QREFELT $ 58))
+      (QREFELT $ 59))))))) 
+\end{verbatim}
+
+The assignment line for \verb|eta'| is:
+\begin{verbatim}
+       eta' := differentiate(eta := first argument k, x)
+\end{verbatim}
+which is implemented by the code:
+\begin{verbatim}
+    (LETT |eta'|
+     (SPADCALL
+       (LETT |eta|
+        (|SPADfirst|
+          (SPADCALL |k| (QREFELT $ 18)))
+          |INTEF;tanint|)
+       |x|
+       (QREFELT $ 19))
+     |INTEF;tanint|)
+\end{verbatim}
+from which we see that the inner differentiate is slot 19 in
+the domain vector. Every domain has an associated domain vector
+which contains references to other functions from other domains,
+among other things. The QREFELT function takes the domain vector
+\verb|$| and slot number and does a "quick array reference". The
+return value is a pair, the car of which is a function to call. 
+The SPADCALL macro uses the last argument, in this case the result 
+of \verb|(QREFELT $ 19)| to find the function to call.
+
+The function from slot 19 can be found with:
+\begin{verbatim}
+)lisp (setq $dalymode t)
+(setf *print-circle* t)
+(setf *print-array* nil)
+(setf dv (|ElementaryIntegration| (|Integer|) (|Expression| (|Integer|))))
+(|replaceGoGetSlot| (cdr (aref dv 19)))
+Value = (#<compiled-function |FS-;differentiate;SSS;99|> . #<vector 090cbccc>)
+\end{verbatim}
+
+The call of \verb|(setq $dalymode t)| changes the Axiom top level
+loop to interpret any input that begins with an open parenthesis to
+be interpreted as a lisp s-expression rather than Axiom input. This
+saves typing \verb|)lisp| in front of every lisp expression. Be sure
+to do a \verb|(setq $dalymode nil)| when you are finished.
+
+The *print-circle* needs to be true because the domain vector contains
+circular references to itself and we need to make sure that we check for
+this during printing so the print is not infinite.
+
+The *print-array* needs to be nil so that the arrays just print some
+identifying information rather than the detailed array contents.
+
+The \verb|(setf dv ...| uses the Lisp internal names for the domains.
+In Axiom, the names of types are case-sensitive symbols. These are
+represented in lisp surrounded by vertical bars because lisp is not
+case sensitive. The dv variable is essentially being set to the Axiom
+equivalent of:
+\begin{verbatim}
+  dv:=ElementaryIntegration(Integer,Expression(Integer))
+\end{verbatim}
+except we do this in lisp. The end result is that dv will contain the
+domain vector for the newly constructed domain. From the lisp code
+
+Consider the call of the form:
+\begin{verbatim}
+  (SPADCALL A B '(C . D))
+\end{verbatim}
+
+The SPADCALL macro takes a set of arguments, the last of which is 
+a pair where C is the function to call and D is the domain vector. 
+So if we do:
+\begin{verbatim}
+(macroexpand-1 '(spadcall a b '(c . d)))
+Value =
+  (LET ((#0=#:G1417 (QUOTE (C . D))))
+   (THE (VALUES T) (FUNCALL (CAR #0#) A B (CDR #0#))))
+\end{verbatim}
+Note that \verb|#0| is a "pointer", in this case to the list '(c)
+and \verb|#0#| is a use of that pointer. This is done to make sure that
+you reference the exact cons cell of the argument.
+
+In Axiom compiler output
+\begin{verbatim}
+  (SPADCALL eta k (QREFELT $ 19))
+\end{verbatim}
+approximately translates to
+\begin{verbatim}
+  (FUNCALL (CAR (QREFELT $ 19)) eta k (CDR (QREFELT $ 19)))
+\end{verbatim}
+which calls the function from the domain slot 19 on the value
+assigned to eta and the variable k and the domain. 
+Thus, the full expansion becomes
+\begin{verbatim}
+  (FUNCALL #<compiled-function |FS-;differentiate;SSS;99|>
+    eta k #<vector 090cbccc>)
+\end{verbatim}
+
+From this we can see a reference to \verb|FS-;differentiate;SSS;99|
+which is the internal name of the differentiate function from the 
+\verb|FS-| category.
+
+Note that FunctionSpace is a category. When categories contain
+implementation code the compiler generates 2 nrlibs. The Axiom convention for
+categorical implementation of code using a trailing ``-'' so the actual
+code for \verb|FS-;differentiate;SSS;99| lives in 
+int/algebra/FS-.nrlib/code.lsp
+
+We can see that the differentiate function is coming from the category
+\begin{verbatim}
+)show FS
+ FunctionSpace R: OrderedSet  is a category constructor
+ Abbreviation for FunctionSpace is FS 
+
+ ....
+
+ differentiate : (%,Symbol) -> % if R has RING
+ differentiate : (%,List Symbol) -> % if R has RING
+ differentiate : (%,Symbol,NonNegativeInteger) -> % if R has RING
+ differentiate : (%,List Symbol,List NonNegativeInteger) -> % if R has RING
+\end{verbatim}
+
+From the above signatures we know there is only one differentiate that
+is a two argument form so the call 
+\begin{verbatim}
+               differentiate(#1, x), monomial(eta', 2) + eta'::UP),
+\end{verbatim}
+must be the first instance.
+
+From the sources (bookvol10.4) we see that the tanint function has 
+the signature:
+\begin{verbatim}
+    tanint      : (F, SE, K) -> IR
+\end{verbatim}
+and that 
+\begin{verbatim}
+  SE  ==> Symbol
+  F : Join(AlgebraicallyClosedField, TranscendentalFunctionCategory,
+           FunctionSpace R)
+  K   ==> Kernel F
+\end{verbatim}
+
+The differentiate function takes something of type F and a Symbol
+and returns something of type F. If we write this as an anonymous
+function it becomes:
+\begin{verbatim}
+   (x2 : F) : F +-> differentiate(x2, x)
+\end{verbatim}
+
+Thus, we can rewrite the differentiate call as:
+\begin{verbatim}
+               differentiate(#1, x), monomial(eta', 2) + eta'::UP),
+\end{verbatim}
+as
+\begin{verbatim}
+                   (x2 : F) : F +-> differentiate(x2, x),
+                   monomial(eta', 2) + eta'::UP),
+\end{verbatim}
+
+
+Continuing in this way we can fully rewrite the assignments as:
+\begin{verbatim}
+       r1  := tanintegrate(univariate(f, k),
+                (x1 : UP) : UP +-> differentiate(x1,
+                   (x2 : F) : F +-> differentiate(x2, x),
+                   monomial(eta', 2) + eta'::UP),
+                (x6 : Integer, x2 : F, x3 : F) : Union(List F, "failed") +->
+                   rischDEsys(x6, 2 * eta, x2, x3, x,
+                     (x4 : F, x5 : List F) : U3 +-> lflimitedint(x4, x, x5),
+                     (x4 : F, x5 : F) : U2 +-> lfextendedint(x4, x, x5)))
+       map((x1 : RF) : F +-> multivariate(x1, k), r1.answer) + _
+             lfintegrate(r1.a0, x)
+\end{verbatim}
+
+Note that rischDEsys is tricky, because rischDEsys returns only List F,
+but tanintegrate expects union. 
 \subsection{The example bug}
 Axiom can generate TeX output by typing:
 \begin{verbatim}
