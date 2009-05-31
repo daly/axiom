@@ -1,4 +1,4 @@
-VERSION="Axiom (March 2009)"
+VERSION="Axiom (May 2009)"
 SPD=$(shell pwd)
 SYS=$(notdir $(AXIOM))
 SPAD=${SPD}/mnt/${SYS}
