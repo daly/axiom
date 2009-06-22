@@ -77,11 +77,14 @@ parallel: noweb ${MNT}/${SYS}/bin/document
 	   ${ENV} ${MAKE} & )
 	@ echo p4 starting parallel make of input documents
 	@ ${ENV} ${MAKE} parallelinput ${NOISE} &
-	@ echo p5 starting parallel make of src
+	@ echo p5 starting parallel make of xhtml documents
+	@ ${ENV} ${MAKE} parallelxhtml ${NOISE} &
+	@ echo p6 starting parallel make of src
 	@ ${ENV} $(MAKE) -f Makefile.${SYS} 
 	@ echo 3 finished system build on `date` | tee >lastBuildDate
 
 parallelinput:
+	@ echo p6 parallel making input documents
 	@ ( mkdir -p ${MNT}/${SYS}/doc/src/input ; \
             cd ${MNT}/${SYS}/doc/src/input ; \
 	    cp ${SRC}/scripts/tex/axiom.sty . ; \
@@ -94,6 +97,14 @@ parallelinput:
 	     rm -f *.tex ; \
 	     rm -f *.toc ; \
 	     rm -f *.aux )
+
+parallelxhtml:
+	@ echo p7 parallel making xhtml pages
+	@mkdir -p ${MNT}/${SYS}/doc/hypertex/bitmaps
+	@(cd ${MNT}/${SYS}/doc/hypertex ; \
+	  ${TANGLE} -t8 ${SPD}/books/bookvol11.pamphlet >Makefile11 ; \
+	  ${ENV} ${MAKE} -j 10 -f Makefile11 ; \
+	  rm -f Makefile11 )
 
 book:
 	@ echo 79 building the book as ${MNT}/${SYS}/doc/book.dvi 
