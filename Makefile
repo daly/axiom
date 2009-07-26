@@ -1,4 +1,4 @@
-VERSION="Axiom (May 2009)"
+VERSION="Axiom (July 2009)"
 SPD=$(shell pwd)
 SYS=$(notdir $(AXIOM))
 SPAD=${SPD}/mnt/${SYS}
@@ -60,6 +60,61 @@ all: noweb ${MNT}/${SYS}/bin/document
 	@echo 3 finished system build on `date` | tee >lastBuildDate
 
 start: noweb ${MNT}/${SYS}/bin/document
+
+parallel: noweb ${MNT}/${SYS}/bin/document
+	@ echo p1 making a parallel system build
+	@ echo 1 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
+	@ echo 2 Environment ${ENV}
+	@ ${TANGLE} -t8 -RMakefile.${SYS} Makefile.pamphlet >Makefile.${SYS}
+	@ ${DOCUMENT} Makefile
+	@ mkdir -p ${MNT}/${SYS}/doc/src
+	@ cp Makefile.dvi ${MNT}/${SYS}/doc/src/root.Makefile.dvi
+	@ echo p2 starting parallel make of books
+	@ echo p3 ${SPD}/books/Makefile from ${SPD}/books/Makefile.pamphlet
+	@ ( cd ${SPD}/books ; \
+           ${DOCUMENT} ${NOISE} Makefile ; \
+           cp Makefile.dvi ${MNT}/${SYS}/doc/src/books.Makefile.dvi ; \
+	   ${ENV} ${MAKE} & )
+	@ echo p4 starting parallel make of input documents
+	@ ${ENV} ${MAKE} parallelinput ${NOISE} &
+	@ echo p5 starting parallel make of xhtml documents
+	@ ${ENV} ${MAKE} parallelxhtml ${NOISE} &
+	@ echo p6 starting parallel make of help
+	@ ${ENV} $(MAKE) parallelhelp ${NOISE} &
+	@ echo p7 starting parallel make of src
+	@ ${ENV} $(MAKE) -f Makefile.${SYS} 
+	@ echo 3 finished system build on `date` | tee >lastBuildDate
+
+parallelhelp:
+	@ echo p8 parallel making of help files
+	@ ( mkdir -p ${MNT}/${SYS}/doc/spadhelp ; \
+	    mkdir -p ${INT}/input ; \
+	    cd ${SRC}/algebra ; \
+	    ${TANGLE} -t8 Makefile.pamphlet >Makefile.help ; \
+	    ${ENV} $(MAKE) -f Makefile.help parallelhelp )
+
+parallelinput:
+	@ echo p9 parallel making input documents
+	@ ( mkdir -p ${MNT}/${SYS}/doc/src/input ; \
+            cd ${MNT}/${SYS}/doc/src/input ; \
+	    cp ${SRC}/scripts/tex/axiom.sty . ; \
+	    for i in `ls ${SRC}/input/*.input.pamphlet` ; \
+              do latex $$i ; \
+              done ; \
+	     rm -f *~ ; \
+	     rm -f *.pamphlet~ ; \
+	     rm -f *.log ; \
+	     rm -f *.tex ; \
+	     rm -f *.toc ; \
+	     rm -f *.aux )
+
+parallelxhtml:
+	@ echo p10 parallel making xhtml pages
+	@mkdir -p ${MNT}/${SYS}/doc/hypertex/bitmaps
+	@(cd ${MNT}/${SYS}/doc/hypertex ; \
+	  ${TANGLE} -t8 ${SPD}/books/bookvol11.pamphlet >Makefile11 ; \
+	  ${ENV} ${MAKE} -j 10 -f Makefile11 ; \
+	  rm -f Makefile11 )
 
 book:
 	@ echo 79 building the book as ${MNT}/${SYS}/doc/book.dvi 

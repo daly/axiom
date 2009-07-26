@@ -742,7 +742,700 @@ unescapeStringsInForm form ==
   form
 
 
+htsv() ==
+  startHTPage(50)
+  htSetVars()
 
+htSetVars() ==
+  $path := nil
+  $lastTree := nil
+  if 0 ^= LASTATOM $setOptions then htMarkTree($setOptions,0)
+  htShowSetTree($setOptions)
+
+htShowSetTree(setTree) ==
+  $path := TAKE(- LASTATOM setTree,$path)
+  page := htInitPage(mkSetTitle(),nil)
+  htpSetProperty(page, 'setTree, setTree)
+  links := nil
+  maxWidth1 := maxWidth2 := 0
+  for setData in setTree repeat
+    satisfiesUserLevel setData.setLevel =>
+      okList := [setData,:okList]
+      maxWidth1 := MAX(# PNAME setData.setName,maxWidth1)
+      maxWidth2 := MAX(htShowCount STRINGIMAGE setData.setLabel,maxWidth2)
+  maxWidth1 := MAX(9,maxWidth1)
+  maxWidth2 := MAX(41,maxWidth2)
+  tabset1 := STRINGIMAGE (maxWidth1)
+  tabset2 := STRINGIMAGE (maxWidth2 + maxWidth1 - 1)
+  htSay('"\tab{2}\newline Variable\tab{",STRINGIMAGE (maxWidth1 + (maxWidth2/3)),'"}Description\tab{",STRINGIMAGE(maxWidth2 + maxWidth1 + 2),'"}Value\newline\beginitems ")
+  for setData in REVERSE okList repeat
+      htSay '"\item"
+      label := STRCONC('"\menuitemstyle{",setData.setName,'"}")
+      links := [label,[['text,'"\tab{",tabset1,'"}",setData.setLabel,'"\tab{",tabset2,'"}{\em ",htShowSetTreeValue setData,'"}"]],
+                'htShowSetPage, setData.setName]
+      htMakePage [['bcLispLinks, links,'options,'(indent . 0)]]
+  htSay '"\enditems"
+  htShowPage()
+
+htShowCount s == --# discounting {\em .. }
+  m := #s
+  m < 8 => m - 1
+  i := 0
+  count := 0
+  while i < m - 7 repeat
+    s.i = char '_{ and  s.(i+1) = char '_\ and s.(i+2) = char 'e
+      and s.(i+3) = char 'm => i := i + 6     --discount {\em }
+    i := i + 1
+    count := count + 1
+  count + (m - i)
+
+htShowSetTreeValue(setData) ==
+  st := setData.setType
+  st = 'FUNCTION => object2String FUNCALL(setData.setVar,"%display%")
+  st = 'INTEGER  => object2String eval setData.setVar
+  st = 'STRING  => object2String eval setData.setVar
+  st = 'LITERALS =>
+    object2String translateTrueFalse2YesNo eval setData.setVar
+  st = 'TREE     => '"..."
+  systemError()
+
+mkSetTitle() == STRCONC('"Command {\em )set ",listOfStrings2String $path,'"}")
+
+listOfStrings2String u ==
+  null u => '""
+  STRCONC(listOfStrings2String rest u,'" ",stringize first u)
+
+htShowSetPage(htPage, branch) ==
+  setTree := htpProperty(htPage, 'setTree)
+  $path := [branch,:TAKE(- LASTATOM setTree,$path)]
+  setData := ASSOC(branch, setTree)
+  null setData =>
+    systemError('"No Set Data")
+  st := setData.setType
+  st = 'FUNCTION => htShowFunctionPage(htPage, setData)
+  st = 'INTEGER  =>  htShowIntegerPage(htPage,setData)
+  st = 'LITERALS => htShowLiteralsPage(htPage, setData)
+  st = 'TREE     => htShowSetTree(setData.setLeaf)
+
+  st = 'STRING   =>  -- have to add this
+     htSetNotAvailable(htPage,'")set compiler")
+
+  systemError '"Unknown data type"
+
+htShowLiteralsPage(htPage, setData) ==
+  htSetLiterals(htPage,setData.setName,setData.setLabel,
+                setData.setVar,setData.setLeaf,'htSetLiteral)
+
+htSetLiterals(htPage,name,message,variable,values,functionToCall) ==
+  page := htInitPage('"Set Command", htpPropertyList htPage)
+  htpSetProperty(page, 'variable, variable)
+  bcHt ['"\centerline{Set {\em ", name, '"}}\newline"]
+  bcHt ['"{\em Description: } ", message, '"\newline\vspace{1} "]
+  bcHt '"Select one of the following: \newline\tab{3} "
+  links := [[STRCONC('"",STRINGIMAGE opt), '"\newline\tab{3}", functionToCall, opt] for opt in values]
+  htMakePage [['bcLispLinks, :links]]
+  bcHt ["\indent{0}\newline\vspace{1} The current setting is: {\em ",
+        translateTrueFalse2YesNo EVAL variable, '"} "]
+  htShowPage()
+
+htSetLiteral(htPage, val) ==
+  htInitPage('"Set Command", nil)
+  SET(htpProperty(htPage, 'variable), translateYesNo2TrueFalse val)
+  htKill(htPage,val)
+
+htShowIntegerPage(htPage, setData) ==
+  page := htInitPage(mkSetTitle(), htpPropertyList htPage)
+  htpSetProperty(page, 'variable, setData.setVar)
+  bcHt ['"\centerline{Set {\em ", setData.setName, '"}}\newline"]
+--  message := isKeyedMsgInDb($path,'(setvar text A)) or setData.setLabel
+  message := setData.setLabel
+  bcHt ['"{\em Description: } ", message, '"\newline\vspace{1} "]
+  [$htInitial,$htFinal] := setData.setLeaf
+  if $htFinal = $htInitial + 1
+    then
+      bcHt '"Enter the integer {\em "
+      bcHt stringize $htInitial
+      bcHt '"} or {\em "
+      bcHt stringize $htFinal
+      bcHt '"}:"
+    else if null $htFinal then
+      bcHt '"Enter an integer greater than {\em "
+      bcHt stringize ($htInitial - 1)
+      bcHt '"}:"
+    else
+      bcHt '"Enter an integer between {\em "
+      bcHt stringize $htInitial
+      bcHt '"} and {\em "
+      bcHt stringize $htFinal
+      bcHt '"}:"
+  htMakePage [
+    '(domainConditions (Satisfies S chkRange)),
+      ['bcStrings,[5,eval setData.setVar,'value,'S]]]
+  htSetvarDoneButton('"Select to Set Value",'htSetInteger)
+  htShowPage()
+
+htSetInteger(htPage) ==
+  htInitPage(mkSetTitle(), nil)
+  val := chkRange htpLabelInputString(htPage,'value)
+  not INTEGERP val =>
+    errorPage(htPage,['"Value Error",nil,'"\vspace{3}\centerline{{\em ",val,'"}}\vspace{2}\newline\centerline{Click on \UpBitmap{} to re-enter value}"])
+  SET(htpProperty(htPage, 'variable), val)
+  htKill(htPage,val)
+
+htShowFunctionPage(htPage,setData) ==
+  fn := setData.setDef => FUNCALL(fn,htPage)
+  htpSetProperty(htPage,'setData,setData)
+  htpSetProperty(htPage,'parts, setData.setLeaf)
+  htShowFunctionPageContinued(htPage)
+
+htShowFunctionPageContinued(htPage) ==
+  parts := htpProperty(htPage,'parts)
+  setData := htpProperty(htPage,'setData)
+  [[phrase,kind,variable,checker,initValue,:.],:restParts] := parts
+  htpSetProperty(htPage, 'variable, variable)
+  htpSetProperty(htPage, 'checker, checker)
+  htpSetProperty(htPage, 'parts, restParts)
+  kind = 'LITERALS => htSetLiterals(htPage,setData.setName,
+                                    phrase,variable,checker,'htFunctionSetLiteral)
+  page := htInitPage(mkSetTitle(), htpPropertyList htPage)
+  bcHt ['"\centerline{Set {\em ", setData.setName, '"}}\newline"]
+  bcHt ['"{\em Description: } ", setData.setLabel, '"\newline\vspace{1} "]
+  currentValue := EVAL variable
+  htMakePage
+    [ ['domainConditions, ['Satisfies,'S,checker]],
+      ['text,:phrase],
+        ['inputStrings,
+          [ '"", '"", 60, currentValue, 'value, 'S]]]
+  htSetvarDoneButton('"Select To Set Value",'htSetFunCommand)
+  htShowPage()
+
+htSetvarDoneButton(message, func) ==
+  bcHt '"\newline\vspace{1}\centerline{"
+
+  if message = '"Select to Set Value" or message = '"Select to Set Values"  then
+    bchtMakeButton('"\lisplink",'"\ControlBitmap{clicktoset}", func)
+  else
+    bchtMakeButton('"\lisplink",CONCAT('"\fbox{", message, '"}"), func)
+
+  bcHt '"} "
+
+
+htFunctionSetLiteral(htPage, val) ==
+  htInitPage('"Set Command", nil)
+  SET(htpProperty(htPage, 'variable), translateYesNo2TrueFalse val)
+  htSetFunCommandContinue(htPage,val)
+
+htSetFunCommand(htPage) ==
+  variable := htpProperty(htPage,'variable)
+  checker := htpProperty(htPage,'checker)
+  value := htCheck(checker,htpLabelInputString(htPage,'value))
+  SET(variable,value) --kill this later
+  htSetFunCommandContinue(htPage,value)
+
+htSetFunCommandContinue(htPage,value) ==
+  parts := htpProperty(htPage,'parts)
+  continue :=
+    null parts => false
+    parts is [['break,predicate],:restParts] => eval predicate
+    true
+  continue =>
+    htpSetProperty(htPage,'parts,restParts)
+    htShowFunctionPageContinued(htPage)
+  htKill(htPage,value)
+
+htKill(htPage,value) ==
+  htInitPage('"System Command", nil)
+  string := STRCONC('"{\em )set ",listOfStrings2String [value,:$path],'"}")
+  htMakePage [
+     '(text
+        "{Here is the AXIOM system command you could have issued:}"
+            "\vspace{2}\newline\centerline{\tt"),
+      ['text,:string]]
+  htMakePage '((text . "}\vspace{1}\newline\rm"))
+  htSay '"\vspace{2}{Select \  \UpButton{} \  to go back.}"
+  htSay '"\newline{Select \  \ExitButton{QuitPage} \  to remove this window.}"
+  htProcessDoitButton ['"Press to Remove Page",'"",'htDoNothing]
+  htShowPage()
+
+htSetNotAvailable(htPage,whatToType) ==
+  page := htInitPage('"Unavailable Set Command", htpPropertyList htPage)
+  htInitPage('"Unavailable System Command", nil)
+  string := STRCONC('"{\em ",whatToType,'"}")
+  htMakePage [
+     '(text "\vspace{1}\newline"
+        "{Sorry, but this system command is not available through HyperDoc. Please directly issue this command in an AXIOM window for more information:}"
+            "\vspace{2}\newline\centerline{\tt"),
+      ['text,:string]]
+  htMakePage '((text . "}\vspace{1}\newline"))
+  htProcessDoitButton ['"Press to Remove Page",'"",'htDoNothing]
+  htShowPage()
+
+htDoNothing(htPage,command) == nil
+
+htCheck(checker,value) ==
+  PAIRP checker => htCheckList(checker,parseWord value)
+  FUNCALL(checker,value)
+
+parseWord x ==
+  STRINGP x =>
+    and/[DIGITP x.i for i in 0..MAXINDEX x] => PARSE_-INTEGER x
+    INTERN x
+  x
+
+htCheckList(checker,value) ==
+  if value in '(y ye yes Y YE YES) then value := 'yes
+  if value in '(n no N NO) then value := 'no
+  checker is [n,m] and INTEGERP n =>
+    m = n + 1 =>
+      value in checker => value
+      n
+    null m =>
+      INTEGERP value and value >= n => value
+      n
+    INTEGERP m =>
+      INTEGERP value and value >= n and value <= m => value
+      n
+  value in checker => value
+  first checker
+--  emlist := "STRCONC"/[STRCONC('" {\em ",PNAME x,'"} ") for x in checker]
+--  STRCONC('"Please enter one of: ",emlist)
+
+translateYesNoToTrueFalse x ==
+  x = 'yes => true
+  x = 'no => false
+  x
+
+chkNameList x ==
+  u := bcString2ListWords x
+  parsedNames := [ncParseFromString x for x in u]
+  and/[IDENTP x for x in parsedNames] => parsedNames
+  '"Please enter a list of identifiers separated by blanks"
+
+chkPosInteger s ==
+  (u := parseOnly s) and INTEGERP u and u > 0 => u
+  '"Please enter a positive integer"
+
+chkOutputFileName s ==
+  bcString2WordList s in '(CONSOLE console) => 'console
+  chkDirectory s
+
+chkDirectory s == s
+
+chkNonNegativeInteger s ==
+  (u := ncParseFromString s) and INTEGERP u and u >= 0 => u
+  '"Please enter a non-negative integer"
+
+chkRange s ==
+  (u := ncParseFromString s) and INTEGERP u
+    and u >= $htInitial and (NULL $htFinal or u <= $htFinal)
+      => u
+  null $htFinal =>
+    STRCONC('"Please enter an integer greater than ",stringize ($htInitial - 1))
+  STRCONC('"Please enter an integer between ",stringize $htInitial,'" and ",
+            stringize $htFinal)
+
+chkAllNonNegativeInteger s ==
+  (u := ncParseFromString s) and u in '(a al all A AL ALL) and 'ALL
+    or chkNonNegativeInteger s
+       or '"Please enter {\em all} or a non-negative integer"
+
+htMakePathKey path ==
+  null path => systemError '"path is not set"
+  INTERN fn(PNAME first path,rest path) where
+    fn(a,b) ==
+      null b => a
+      fn(STRCONC(a,'".",PNAME first b),rest b)
+
+htMarkTree(tree,n) ==
+  RPLACD(LASTTAIL tree,n)
+  for branch in tree repeat
+    branch.3 = 'TREE => htMarkTree(branch.5,n + 1)
+
+htSetHistory htPage ==
+  msg := "when the history facility is on (yes), results of computations are saved in memory"
+  data := ['history,msg,'history,'LITERALS,'$HiFiAccess,'(on off yes no)]
+  htShowLiteralsPage(htPage,data)
+
+htSetOutputLibrary htPage == 
+  htSetNotAvailable(htPage,'")set compiler output")
+
+htSetInputLibrary htPage == 
+  htSetNotAvailable(htPage,'")set compiler input")
+
+htSetExpose htPage ==
+  htSetNotAvailable(htPage,'")set expose")
+
+htSetKernelProtect htPage ==
+ htSetNotAvailable(htPage,'")set kernel protect")
+
+htSetKernelWarn htPage ==
+ htSetNotAvailable(htPage,'")set kernel warn")
+
+htSetOutputCharacters htPage ==
+  htSetNotAvailable(htPage,'")set output characters")
+
+htSetLinkerArgs htPage ==
+  htSetNotAvailable(htPage,'")set fortran calling linker")
+
+htSetCache(htPage,:options) ==
+  $path := '(functions cache)
+  htPage := htInitPage(mkSetTitle(),nil)
+  $valueList := nil
+  htMakePage '(
+   (text
+    "Use this system command to cause the AXIOM interpreter to `remember' "
+    "past values of interpreter functions. "
+    "To remember a past value of a function, the interpreter "
+    "sets up a {\em cache} for that function based on argument values. "
+    "When a value is cached for a given argument value, its value is gotten "
+    "from the cache and not recomputed. Caching can often save much "
+    "computing time, particularly with recursive functions or functions that "
+    "are expensive to compute and that are called repeatedly "
+    "with the same argument."
+    "\vspace{1}\newline ")
+   (domainConditions (Satisfies S chkNameList))
+   (text
+      "Enter below a list of interpreter functions you would like specially cached. "
+      "Use the name {\em all} to give a default setting for all "
+      "interpreter functions. "
+      "\vspace{1}\newline "
+      "Enter {\em all} or a list of names (separate names by blanks):")
+   (inputStrings ("" "" 60 "all" names S))
+   (doneButton "Push to enter names" htCacheAddChoice))
+  htShowPage()
+
+htCacheAddChoice htPage ==
+  names := bcString2WordList htpLabelInputString(htPage,'names)
+  $valueList := [listOfStrings2String names,:$valueList]
+  null names => htCacheAddQuery()
+  null rest names => htCacheOne names
+  page := htInitPage(mkSetTitle(),nil)
+  htpSetProperty(page,'names,names)
+  htMakePage '(
+    (domainConditions (Satisfies ALLPI chkAllPositiveInteger))
+    (text
+      "For each function, enter below a {\em cache length}, a positive integer. "
+      "This number tells how many past values will "
+      "be cached. "
+      "A cache length of {\em 0} means the function won't be cached. "
+      "To cache all past values, "
+      "enter {\em all}."
+      "\vspace{1}\newline "
+      "For each function name, enter {\em all} or a positive integer:"))
+  for i in 1.. for name in names repeat htMakePage [
+      ['inputStrings,
+        [STRCONC('"Function {\em ",name,'"} will cache"),
+          '"values",5,10,htMakeLabel('"c",i),'ALLPI]]]
+  htSetvarDoneButton('"Select to Set Values",'htCacheSet)
+  htShowPage()
+
+htMakeLabel(prefix,i) == INTERN STRCONC(prefix,stringize i)
+
+htCacheSet htPage ==
+  names := htpProperty(htPage,'names)
+  for i in 1.. for name in names repeat
+    num := chkAllNonNegativeInteger
+             htpLabelInputString(htPage,htMakeLabel('"c",i))
+    $cacheAlist := ADDASSOC(INTERN name,num,$cacheAlist)
+  if (n := LASSOC('all,$cacheAlist)) then
+    $cacheCount := n
+    $cacheAlist := deleteAssoc('all,$cacheAlist)
+  htInitPage('"Cache Summary",nil)
+  bcHt '"In general, interpreter functions "
+  bcHt
+    $cacheCount = 0 => "will {\em not} be cached."
+    bcHt '"cache "
+    htAllOrNum $cacheCount
+    '"} values."
+  bcHt '"\vspace{1}\newline "
+  if $cacheAlist then
+--    bcHt '" However, \indent{3}"
+    for [name,:val] in $cacheAlist | val ^= $cacheCount repeat
+      bcHt '"\newline function {\em "
+      bcHt stringize name
+      bcHt '"} will cache "
+      htAllOrNum val
+      bcHt '"} values"
+  htProcessDoitButton ['"Press to Remove Page",'"",'htDoNothing]
+  htShowPage()
+
+htAllOrNum val == bcHt
+  val = 'all => '"{\em all"
+  val = 0 => '"{\em no"
+  STRCONC('"the last {\em ",stringize val)
+
+htCacheOne names ==
+  page := htInitPage(mkSetTitle(),nil)
+  htpSetProperty(page,'names,names)
+  htMakePage '(
+    (domainConditions (Satisfies ALLPI chkAllPositiveInteger))
+    (text
+      "Enter below a {\em cache length}, a positive integer. "
+      "This number tells how many past values will "
+      "be cached. To cache all past values, "
+      "enter {\em all}."
+      "\vspace{1}\newline ")
+    (inputStrings
+      ("Enter {\em all} or a positive integer:"
+       "" 5 10 c1 ALLPI)))
+  htSetvarDoneButton('"Select to Set Value",'htCacheSet)
+  htShowPage()
+
+$historyDisplayWidth := 120
+$newline := char 10
+
+downlink page ==
+  $saturn => downlinkSaturn page
+  htInitPage('"Bridge",nil)
+  htSay('"\replacepage{", page, '"}")
+  htShowPage()
+
+downlinkSaturn fn ==
+  u := dbReadLines(fn)
+  lines := '""
+  while u is [line,:u] repeat
+    n := MAXINDEX line
+    n < 1 => nil
+    line.0 = (char '_%) => nil
+    lines := STRCONC(lines,line)
+  issueHTSaturn lines
+
+dbNonEmptyPattern pattern ==
+  null pattern => '"*"
+  pattern := STRINGIMAGE pattern
+  #pattern > 0 => pattern
+  '"*"
+
+htSystemVariables() == main where
+  main ==
+    not $fullScreenSysVars => htSetVars()
+    classlevel := $UserLevel
+    $levels : local := '(compiler development interpreter)
+    $heading  : local := nil
+    while classlevel ^= first $levels repeat $levels := rest $levels
+    table := NREVERSE fn($setOptions,nil,true)
+    htInitPage('"System Variables",nil)
+    htSay '"\beginmenu"
+    lastHeading := nil
+    for [heading,name,message,.,key,variable,options,func] in table repeat
+      htSay('"\newline\item ")
+      if heading = lastHeading then htSay '"\tab{8}" else
+        htSay(heading,'"\tab{8}")
+        lastHeading := heading
+      htSay('"{\em ",name,"}\tab{22}",message)
+      htSay('"\tab{80}")
+      key = 'FUNCTION =>
+         null options => htMakePage [['bcLinks,['"reset",'"",func,nil]]]
+         [msg,class,var,valuesOrFunction,:.] := first options  --skip first message
+         functionTail(name,class,var,valuesOrFunction)
+         for option in rest options repeat
+           option is ['break,:.] => 'skip
+           [msg,class,var,valuesOrFunction,:.] := option
+           htSay('"\newline\tab{22}", msg,'"\tab{80}")
+           functionTail(name,class,var,valuesOrFunction)
+      val := eval variable
+      displayOptions(name,key,variable,val,options)
+    htSay '"\endmenu"
+    htShowPage()
+  functionTail(name,class,var,valuesOrFunction) ==
+    val := eval var
+    atom valuesOrFunction =>
+      htMakePage '((domainConditions (isDomain STR (String))))
+      htMakePage [['bcLinks,['"reset",'"",'htSetSystemVariableKind,[var,name,nil]]]]
+      htMakePage [['bcStrings,[30,STRINGIMAGE val,name,valuesOrFunction]]]
+    displayOptions(name,class,var,val,valuesOrFunction)
+  displayOptions(name,class,variable,val,options) ==
+    class = 'INTEGER =>
+      htMakePage [['bcLispLinks,[[['text,options.0,'"-",options.1 or '""]],'"",'htSetSystemVariableKind,[variable,name,'PARSE_-INTEGER]]]]
+      htMakePage '((domainConditions (isDomain INT (Integer))))
+      htMakePage  [['bcStrings,[5,STRINGIMAGE val,name,'INT]]]
+    class = 'STRING =>
+      htSay('"{\em ",val,'"}\space{1}")
+    for x in options repeat
+      val = x or val = true and x = 'on or null val and x = 'off =>
+        htSay('"{\em ",x,'"}\space{1}")
+      htMakePage [['bcLispLinks,[x,'" ",'htSetSystemVariable,[variable,x]]]]
+  fn(t,al,firstTime) ==
+    atom t => al
+    if firstTime then $heading := opOf first t
+    fn(rest t,gn(first t,al),firstTime)
+  gn(t,al) ==
+    [.,.,class,key,.,options,:.] := t
+    not MEMQ(class,$levels) => al
+    key = 'LITERALS or key = 'INTEGER or key = 'STRING => [[$heading,:t],:al]
+    key = 'TREE => fn(options,al,false)
+    key = 'FUNCTION => [[$heading,:t],:al]
+    systemError key
+
+htSetSystemVariableKind(htPage,[variable,name,fun]) ==
+  value := htpLabelInputString(htPage,name)
+  if STRINGP value and fun then value := FUNCALL(fun,value)
+--SCM::what to do???  if not FIXP value then userError ???
+  SET(variable,value)
+  htSystemVariables ()
+
+htSetSystemVariable(htPage,[name,value]) ==
+  value :=
+    value = 'on => true
+    value = 'off => nil
+    value
+  SET(name,value)
+  htSystemVariables ()
+
+htGloss(pattern) == htGlossPage(nil,dbNonEmptyPattern pattern or '"*",true)
+
+htGlossPage(htPage,pattern,tryAgain?) ==
+  $wildCard: local := char '_*
+  pattern = '"*" => downlink 'GlossaryPage
+  filter := pmTransFilter pattern
+  grepForm := mkGrepPattern(filter,'none)
+  $key: local := 'none
+  results := applyGrep(grepForm,'gloss)
+  --pathname := STRCONC('"/tmp/",PNAME resultFile,'".text.", getEnv '"SPADNUM")
+  --instream := MAKE_-INSTREAM pathname
+  defstream := MAKE_-INSTREAM STRCONC(getEnv '"AXIOM",'"/algebra/glossdef.text")
+  lines := gatherGlossLines(results,defstream)
+  -- OBEY STRCONC('"rm -f ", pathname)
+  --PROBE_-FILE(pathname) and DELETE_-FILE(pathname)
+  --SHUT instream
+  heading :=
+    pattern = '"" => '"Glossary"
+    null lines => ['"No glossary items match {\em ",pattern,'"}"]
+    ['"Glossary items matching {\em ",pattern,'"}"]
+  null lines =>
+    tryAgain? and #pattern > 0 =>
+      (pattern.(k := MAXINDEX(pattern))) = char 's =>
+        htGlossPage(htPage,SUBSTRING(pattern,0,k),true)
+      UPPER_-CASE_-P pattern.0 =>
+        htGlossPage(htPage,DOWNCASE pattern,false)
+      errorPage(htPage,['"Sorry",nil,['"\centerline{",:heading,'"}"]])
+    errorPage(htPage,['"Sorry",nil,['"\centerline{",:heading,'"}"]])
+  htInitPageNoScroll(nil,heading)
+  htSay('"\beginscroll\beginmenu")
+  for line in lines repeat
+    tick := charPosition($tick,line,1)
+    htSay('"\item{\em \menuitemstyle{}}\tab{0}{\em ",escapeString SUBSTRING(line,0,tick),'"} ",SUBSTRING(line,tick + 1,nil))
+  htSay '"\endmenu "
+  htSay '"\endscroll\newline "
+  htMakePage [['bcLinks,['"Search",'"",'htGlossSearch,nil]]]
+  htSay '" for glossary entry matching "
+  htMakePage [['bcStrings, [24,'"*",'filter,'EM]]]
+  htShowPageNoScroll()
+
+gatherGlossLines(results,defstream) ==
+  acc := nil
+  for keyline in results repeat
+    --keyline := READLINE instream
+    n := charPosition($tick,keyline,0)
+    keyAndTick := SUBSTRING(keyline,0,n + 1)
+    byteAddress := string2Integer SUBSTRING(keyline,n + 1,nil)
+    FILE_-POSITION(defstream,byteAddress)
+    line := READLINE defstream
+    k := charPosition($tick,line,1)
+    pointer := SUBSTRING(line,0,k)
+    def := SUBSTRING(line,k + 1,nil)
+    xtralines := nil
+    while not EOFP defstream and (x := READLINE defstream) and
+      (j := charPosition($tick,x,1)) and (nextPointer := SUBSTRING(x,0,j))
+        and (nextPointer = pointer) repeat
+          xtralines := [SUBSTRING(x,j + 1,nil),:xtralines]
+    acc := [STRCONC(keyAndTick,def, "STRCONC"/NREVERSE xtralines),:acc]
+  REVERSE acc
+
+htGlossSearch(htPage,junk) ==  htGloss htpLabelInputString(htPage,'filter)
+
+htGreekSearch(filter) ==
+  ss := dbNonEmptyPattern filter
+  s := pmTransFilter ss
+  s is ['error,:.] => bcErrorPage s
+  not s => errorPage(nil,[['"Missing search string"],nil,
+    '"\vspace{2}\centerline{To select one of the greek letters:}\newline ",
+      '"\centerline{{\em first} enter a search key into the input area}\newline ",
+        '"\centerline{{\em then } move the mouse cursor to the work {\em search} and click}"])
+  filter := patternCheck s
+  names := '(alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu pi)
+  for x in names repeat
+    superMatch?(filter,PNAME x) => matches := [x,:matches]
+    nonmatches := [x,:nonmatches]
+  matches    := NREVERSE matches
+  nonmatches := NREVERSE nonmatches
+  htInitPage('"Greek Names",nil)
+  null matches =>
+    htInitPage(['"Greek names matching search string {\em ",ss,'"}"],nil)
+    htSay("\vspace{2}\centerline{Sorry, but no greek letters match your search string}\centerline{{\em ",ss,"}}\centerline{Click on the up-arrow to try again}")
+    htShowPage()
+  htInitPage(['"Greek letters matching search string {\em ",ss,'"}"],nil)
+  if nonmatches
+    then htSay('"The greek letters that {\em match} your search string {\em ",ss,'"}:")
+    else htSay('"Your search string {\em ",ss,"} matches all of the greek letters:")
+  htSay('"{\em \table{")
+  for x in matches repeat htSay('"{",x,'"}")
+  htSay('"}}\vspace{1}")
+  if nonmatches then
+    htSay('"The greek letters that {\em do not match} your search string:{\em \table{")
+    for x in nonmatches repeat htSay('"{",x,'"}")
+    htSay('"}}")
+  htShowPage()
+
+htTextSearch(filter) ==
+  s := pmTransFilter dbNonEmptyPattern filter
+  s is ['error,:.] => bcErrorPage s
+  not s => errorPage(nil,[['"Missing search string"],nil,
+    '"\vspace{2}\centerline{To select one of the lines of text:}\newline ",
+      '"\centerline{{\em first} enter a search key into the input area}\newline ",
+        '"\centerline{{\em then } move the mouse cursor to the work {\em search} and click}"])
+  filter := s
+  lines := ['"{{\em Fruit flies} *like* a {\em banana and califlower ears.}}",
+            '"{{\em Sneak Sears Silas with Savings Snatch}}"]
+  for x in lines repeat
+    superMatch?(filter,x) => matches := [x,:matches]
+    nonmatches := [x,:nonmatches]
+  matches    := NREVERSE matches
+  nonmatches := NREVERSE nonmatches
+  htInitPage('"Text Matches",nil)
+  null matches =>
+    htInitPage(['"Lines matching search string {\em ",s,'"}"],nil)
+    htSay("\vspace{2}\centerline{Sorry, but no lines match your search string}\centerline{{\em ",s,"}}\centerline{Click on the up-arrow to try again}")
+    htShowPage()
+  htInitPage(['"Lines matching search string {\em ",s,'"}"],nil)
+  if nonmatches
+    then htSay('"The lines that {\em match} your search string {\em ",s,'"}:")
+    else htSay('"Your search string {\em ",s,"} matches both lines:")
+  htSay('"{\em \table{")
+  for x in matches repeat htSay('"{",x,'"}")
+  htSay('"}}\vspace{1}")
+  if nonmatches then
+    htSay('"The line that {\em does not match} your search string:{\em \table{")
+    for x in nonmatches repeat htSay('"{",x,'"}")
+    htSay('"}}")
+  htShowPage()
+
+htTutorialSearch pattern ==
+  s := dbNonEmptyPattern pattern or return
+    errorPage(nil,['"Empty search key",nil,'"\vspace{3}\centerline{You must enter some search string"])
+  s := mkUnixPattern s
+  source := '"$AXIOM/doc/hypertex/pages/ht.db"
+  target :='"/tmp/temp.text.$SPADNUM"
+  OBEY STRCONC('"$AXIOM/lib/hthits",'" _"",s,'"_" ",source,'" > ",target)
+  lines := dbReadLines 'temp
+  htInitPageNoScroll(nil,['"Tutorial Pages mentioning {\em ",pattern,'"}"])
+  htSay('"\beginscroll\table{")
+  for line in lines repeat
+    [name,title,.] := dbParts(line,3,0)
+    htSay ['"{\downlink{",title,'"}{",name,'"}}"]
+  htSay '"}"
+  htShowPage()
+
+mkUnixPattern s ==
+  u := mkUpDownPattern s
+  starPositions := REVERSE [i for i in 1..(-1 + MAXINDEX u) | u.i = $wild]
+  for i in starPositions repeat
+    u := STRCONC(SUBSTRING(u,0,i),'".*",SUBSTRING(u,i + 1,nil))
+  if u.0 ^= $wild then u := STRCONC('"[^a-zA-Z]",u)
+                  else u := SUBSTRING(u,1,nil)
+  if u.(k := MAXINDEX u) ^= $wild then u := STRCONC(u,'"[^a-zA-Z]")
+                                  else u := SUBSTRING(u,0,k)
+  u
 
 
 @
