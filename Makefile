@@ -50,18 +50,6 @@ ENV= SPAD=${SPAD} SYS=${SYS} SPD=${SPD} LSP=${LSP} GCLDIR=${GCLDIR} \
      WEAVE=${WEAVE} UNCOMPRESS=${UNCOMPRESS} BOOKS=${BOOKS}
 
 all: noweb ${MNT}/${SYS}/bin/document
-	@ echo 1 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
-	@ echo 2 Environment ${ENV}
-	@ ${TANGLE} -t8 -RMakefile.${SYS} Makefile.pamphlet >Makefile.${SYS}
-	@ ${DOCUMENT} Makefile
-	@ mkdir -p ${MNT}/${SYS}/doc/src
-	@ cp Makefile.dvi ${MNT}/${SYS}/doc/src/root.Makefile.dvi
-	@ ${ENV} $(MAKE) -f Makefile.${SYS} 
-	@echo 3 finished system build on `date` | tee >lastBuildDate
-
-start: noweb ${MNT}/${SYS}/bin/document
-
-parallel: noweb ${MNT}/${SYS}/bin/document
 	@ echo p1 making a parallel system build
 	@ echo 1 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
 	@ echo 2 Environment ${ENV}
