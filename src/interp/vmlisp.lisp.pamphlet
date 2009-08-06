@@ -2271,6 +2271,477 @@ Camm issued a fix. This used to read:
           (QRPLACD V (SETQ V (CONS I NIL))) ) )
       (GO LP1) ) )
 
+#+:AKCL (defvar *lisp-bin-filetype* "o")
+
+#+:AKCL (defvar *lisp-source-filetype* "lsp")
+
+;; definition of our stream structure
+(defstruct libstream  mode dirname (indextable nil)  (indexstream nil))
+;indextable is a list of entries (key class <location or filename>)
+;filename is of the form filenumber.lsp or filenumber.o
+
+(defvar optionlist nil "alist which controls compiler output")
+
+(defun addoptions (key value) "adds pairs to optionlist"
+  (push (cons key value) optionlist)
+  (if (equal key 'FILE)
+      (push 
+       (cons 'COMPILER-OUTPUT-STREAM
+                   (open (concat (libstream-dirname value) "/" "code.lsp")
+                         :direction :output :if-exists :supersede))
+             optionlist)))
+
+(defun directory? (filename) (|directoryp| filename))
+
+;; (RDEFIOSTREAM ((MODE . IO) (FILE fn ft dir))) IO is I,O,INPUT,OUTPUT
+#+:AKCL
+(defun rdefiostream (options &optional (missing-file-error-flag t))
+  (let ((mode (cdr (assoc 'mode options)))
+	(file (assoc 'file options))
+	(stream nil)
+	(fullname nil)
+	(indextable nil))
+        (cond ((equal (elt (string mode) 0) #\I)
+	       ;;(setq fullname (make-input-filename (cdr file) 'LISPLIB))
+	       (setq fullname (make-input-filename (cdr file) 'NIL))
+	       (setq stream (get-input-index-stream fullname))
+               (if (null stream)
+		   (if missing-file-error-flag
+		       (ERROR (format nil "Library ~s doesn't exist"
+			      ;;(make-filename (cdr file) 'LISPLIB))
+			      (make-filename (cdr file) 'NIL)))
+		     NIL)
+               (make-libstream :mode 'input  :dirname fullname
+                               :indextable (get-index-table-from-stream stream)
+			       :indexstream stream)))
+              ((equal (elt (string mode) 0) #\O)
+	       ;;(setq fullname (make-full-namestring (cdr file) 'LISPLIB))
+	       (setq fullname (make-full-namestring (cdr file) 'NIL))
+	       (case (directory? fullname)
+		     (-1 (makedir fullname))
+		     (0 (error (format nil "~s is an existing file, not a library" fullname)))
+		     (otherwise))
+	       (multiple-value-setq (stream indextable) (get-io-index-stream fullname))
+	       (make-libstream :mode 'output  :dirname fullname
+			       :indextable indextable
+			       :indexstream stream ))
+              ('t  (ERROR "Unknown MODE")))))
+
+#+:CCL
+(defun rdefiostream (options &optional (missing-file-error-flag t))
+  (let ((mode (cdr (assoc 'mode options)))
+        (file (assoc 'file options))
+        (stream nil)
+        (fullname nil)
+        (indextable nil))
+        (cond ((equal (elt (string mode) 0) #\I)
+               (setq fullname (make-input-filename (cdr file) NIL))
+               (setq stream (get-input-index-stream fullname))
+               (if (null stream)
+                   (if missing-file-error-flag
+                       (ERROR (format nil "Library ~s doesn't exist"
+                              (make-filename (cdr file) NIL)))
+                     NIL)
+               (make-libstream :mode 'input  :dirname fullname
+                               :indextable (get-index-table-from-stream stream)
+                               :indexstream stream)))
+              ((equal (elt (string mode) 0) #\O)
+               (setq fullname (make-full-namestring (cdr file) NIL))
+               (create-directory fullname)
+               (multiple-value-setq (stream indextable)
+                        (get-io-index-stream fullname))
+               (make-libstream :mode 'output  :dirname fullname
+                               :indextable indextable
+                               :indexstream stream ))
+              ('t  (ERROR "Unknown MODE")))))
+
+#+:AKCL (defvar *index-filename* "index.kaf")
+#+:CCL (defvar *index-filename* "index.kaf")
+
+;get the index table of the lisplib in dirname
+(defun getindextable (dirname)
+  (let ((index-file (concat dirname "/" *index-filename*)))
+     (if (probe-file index-file)
+         (with-open-file (stream index-file) (get-index-table-from-stream stream))
+            ;; create empty index file to mark directory as lisplib
+         (with-open-file (stream index-file :direction :output) nil))))
+
+;get the index stream of the lisplib in dirname
+(defun get-input-index-stream (dirname)
+  (let ((index-file (concat dirname "/" *index-filename*)))
+    (open index-file :direction :input :if-does-not-exist nil)))
+
+(defun get-index-table-from-stream (stream)
+  (let ((pos (read  stream)))
+    (cond ((numberp pos)
+	   (file-position stream pos)
+	   (read stream))
+	  (t pos))))
+
+#+:AKCL
+(defun get-io-index-stream (dirname)
+  (let* ((index-file (concat dirname "/" *index-filename*))
+	 (stream (open index-file :direction :io :if-exists :overwrite
+		       :if-does-not-exist :create))
+	 (indextable ())
+	 (pos (read stream nil nil)))
+    (cond ((numberp pos)
+	   (file-position stream pos)
+	   (setq indextable (read stream))
+	   (file-position stream pos))
+	  (t (file-position stream 0)
+	     (princ "                    " stream)
+	     (setq indextable pos)))
+    (values stream indextable)))
+
+#+:CCL
+(defun get-io-index-stream (dirname)
+  (let ((index-file (concat dirname "/" *index-filename*))
+        (indextable ())
+        (stream) (pos))
+    (cond ((probe-file index-file)
+           (setq stream (open index-file :direction :io :if-exists :overwrite))
+           (setq pos (read stream))
+           (file-position stream pos)
+           (setq indextable (read stream))
+           (file-position stream pos))
+          (t (setq stream (open index-file :direction :io
+                       :if-does-not-exist :create))
+             ;(file-position stream 0)
+             (princ "                    " stream)))
+    (values stream indextable)))
+
+
+;substitute indextable in dirname
+
+(defun write-indextable (indextable stream)
+  (let ((pos (file-position stream)))
+    (write indextable :stream stream :level nil :length nil :escape t)
+    (finish-output stream)
+    (file-position stream 0)
+    (princ pos stream)
+    (finish-output stream)))
+
+;;#+:ccl
+;;(defun putindextable (indextable dirname)
+;;  (with-open-file
+;;    (stream (concat dirname "/" *index-filename*)
+;;             :direction :io :if-does-not-exist :create)
+;;    (file-position stream :end)
+;;    (write-indextable indextable stream)))
+;;#-:ccl
+(defun putindextable (indextable dirname)
+  (with-open-file
+    (stream (concat dirname "/" *index-filename*)
+             :direction :io :if-exists :overwrite
+             :if-does-not-exist :create)
+    (file-position stream :end)
+    (write-indextable indextable stream)))
+
+;makedir (fname) fname is a directory name.
+#+:AKCL
+(defun makedir (fname)
+  (system (concat "mkdir " fname)))
+
+;; (RREAD key rstream)
+(defun rread (key rstream &optional (error-val nil error-val-p))
+  (if (equal (libstream-mode rstream) 'output) (error "not input stream"))
+  (let* ((entry
+	 (and (stringp key)
+	      (assoc key (libstream-indextable rstream) :test #'string=)))
+	 (file-or-pos (and entry (caddr entry))))
+    (cond ((null entry)
+	   (if error-val-p error-val (error (format nil "key ~a not found" key))))
+	  ((null (caddr entry)) (cdddr entry))  ;; for small items
+	  ((numberp file-or-pos)
+	   (file-position (libstream-indexstream rstream) file-or-pos)
+	   (read (libstream-indexstream rstream)))
+	  (t
+	   (with-open-file
+	    (stream (concat (libstream-dirname rstream) "/" file-or-pos))
+	    (read  stream))) )))
+
+(defvar *lib-var*)
+
+;; (RKEYIDS filearg) -- interned version of keys
+(defun rkeyids (&rest filearg)
+  (mapcar #'intern (mapcar #'car (getindextable
+				  (make-input-filename filearg 'NIL)))))
+;;(defun rkeyids (&rest filearg)
+;;  (mapcar #'intern (mapcar #'car (getindextable
+;;				  (make-input-filename filearg 'LISPLIB)))))
+
+;; (RWRITE cvec item rstream)
+(defun rwrite (key item rstream)
+  (if (equal (libstream-mode rstream) 'input) (error "not output stream"))
+  (let ((stream (libstream-indexstream rstream))
+	(pos (if item (cons (file-position (libstream-indexstream rstream)) nil)
+	       (cons nil item))))   ;; for small items
+    (make-entry (string key) rstream pos)
+    (when (numberp (car pos))
+	  (write item :stream stream :level nil :length nil
+		 :circle t :array t :escape t)
+	  (terpri stream))))
+
+(defun make-entry (key rstream value-or-pos)
+   (let ((entry (assoc key (libstream-indextable rstream) :test #'equal)))
+     (if (null entry)
+	 (push (setq entry (cons key (cons 0 value-or-pos)))
+	       (libstream-indextable rstream))
+       (progn
+	 (if (stringp (caddr entry)) ($erase (caddr entry)))
+	 (setf (cddr entry) value-or-pos)))
+     entry))
+
+;;(defun rshut (rstream)
+;;  (when (and (equal rstream (cdr (assoc 'FILE OPTIONLIST)))
+;;             (assoc 'compiler-output-stream optionlist))
+;;        (close (cdr (assoc 'compiler-output-stream optionlist)))
+;;        (setq optionlist nil))
+;;  (if (eq (libstream-mode rstream) 'output)
+;;      (write-indextable (libstream-indextable rstream) (libstream-indexstream rstream)))
+;;  (close (libstream-indexstream rstream)))
+(defun rshut (rstream)
+  (when (and (equal rstream (cdr (assoc 'FILE OPTIONLIST)))
+             (assoc 'compiler-output-stream optionlist))
+        (close (cdr (assoc 'compiler-output-stream optionlist)))
+        (setq optionlist (cddr optionlist)))
+  (if (eq (libstream-mode rstream) 'output)
+      (write-indextable (libstream-indextable rstream) (libstream-indexstream rstream)))
+  (close (libstream-indexstream rstream)))
+
+@
+\section{GCL code.lsp name change}
+When we compile an algebra file we create an nrlib directory which contains
+several files. One of the files is named code.lsp. 
+On certain platforms this causes linking problems for GCL. 
+The problem is that the compiler produces an init code block which is
+sensitive to the name of the source file.
+Since all of the code.lsp files have the same name all of
+the init blocks have the same name. At link time this causes
+the names to collide. Here we rename the file before we compile,
+do the compile, and then rename the result back to code.o.
+<<*>>=
+;; filespec is id or list of 1, 2 or 3 ids
+;; filearg is filespec or 1, 2 or 3 ids
+;; (RPACKFILE filearg)  -- compiles code files and converts to compressed format
+(defun rpackfile (filespec)
+  (setq filespec (make-filename filespec))
+  (if (string= (pathname-type filespec) "nrlib")
+#-:GCL (recompile-lib-file-if-necessary 
+         (concat (namestring filespec) "/code.lsp"))
+#+:GCL (let* ((base (pathname-name filespec))
+             (code (concatenate 'string (namestring filespec) "/code.lsp"))
+             (temp (concatenate 'string (namestring filespec) "/" base ".lsp"))
+             (o (make-pathname :type "o")))
+        (si::system (format nil "cp ~S ~S" code temp))
+        (recompile-lib-file-if-necessary temp)
+        (si::system (format nil "mv ~S ~S~%" 
+           (namestring (merge-pathnames o temp))
+           (namestring (merge-pathnames o code)))))
+  ;; only pack non libraries to avoid lucid file handling problems    
+    (let* ((rstream (rdefiostream (list (cons 'file filespec) (cons 'mode 'input))))
+	   (nstream nil)
+	   (nindextable nil)
+	   (nrstream nil)
+	   (index-file-name (concat (truename filespec) "/" *index-filename*))
+	   (temp-index-file-name (make-pathname :name "oldindex"
+						:defaults index-file-name)))
+      (rename-file index-file-name temp-index-file-name ) ;; stays until closed
+      (multiple-value-setq (nstream nindextable) (get-io-index-stream filespec))
+      (setq nrstream (make-libstream :mode 'output  :dirname filespec
+				     :indextable nindextable
+				     :indexstream nstream ))
+      (dolist (entry (libstream-indextable rstream))
+	      (rwrite (car entry) (rread (car entry) rstream) nrstream)
+	      (if (stringp (caddr entry))
+		  (delete-file (concat filespec "/" (caddr entry)))))
+      (close (libstream-indexstream rstream))
+      (delete-file temp-index-file-name)
+      (rshut nrstream)))
+  filespec)
+
+#+:AKCL
+(defun recompile-lib-file-if-necessary (lfile)
+   (let* ((bfile (make-pathname :type *lisp-bin-filetype* :defaults lfile))
+          (bdate (and (probe-file bfile) (file-write-date bfile)))
+          (ldate (and (probe-file lfile) (file-write-date lfile))))
+     (if ldate
+	 (if (and bdate (> bdate ldate)) nil
+	   (progn (compile-lib-file lfile) (list bfile))))))
+
+#+:CCL
+(defun recompile-lib-file-if-necessary (lfile)
+ (let ( (mname (pathname-name (file-namestring (directory-namestring lfile))))
+        (mdate (modulep mname))
+        (ldate (filedate lfile)) )
+        (if (or (not mdate) (datelessp mdate ldate)) 
+          (seq
+            (if (null output-library)
+                (boot::|openOutputLibrary|
+                  (setq boot::|$outputLibraryName|
+                   (if (null boot::|$outputLibraryName|)
+                       (make-pathname :directory (get-current-directory)
+                                      :name "user.lib")
+                        (if (filep boot::|$outputLibraryName|)
+                            (truename boot::|$outputLibraryName|)
+                            boot::|$outputLibraryName|)))))
+            (compile-file lfile 
+                          :output-file (intern (pathname-name
+                                               (directory-namestring lfile))))))))
+
+
+#+:AKCL
+(defun spad-fixed-arg (fname )
+   (and (equal (symbol-package fname) (find-package "BOOT"))
+        (not (get fname 'compiler::spad-var-arg))
+	(search ";" (symbol-name fname))
+        (or (get fname 'compiler::fixed-args)
+	    (setf (get fname 'compiler::fixed-args) t)))
+   nil)
+
+#+:AKCL
+(defun compile-lib-file (fn &rest opts)
+  (unwind-protect
+      (progn
+	(trace (compiler::fast-link-proclaimed-type-p
+		:exitcond nil
+		:entrycond (spad-fixed-arg (car system::arglist))))
+	(trace (compiler::t1defun :exitcond nil
+		:entrycond (spad-fixed-arg (caar system::arglist))))
+	(apply #'compile-file fn opts))
+    (untrace compiler::fast-link-proclaimed-type-p compiler::t1defun)))
+#+:CCL
+(define-function 'compile-lib-file #'compile-file)
+
+;; (RDROPITEMS filearg keys) don't delete, used in files.spad
+(defun rdropitems (filearg keys &aux (ctable (getindextable filearg)))
+  (mapc #'(lambda(x)
+           (setq ctable (delete x ctable :key #'car :test #'equal)) )
+           (mapcar #'string keys))
+  (putindextable ctable filearg))
+
+;; cms file operations
+(defun make-filename (filearg &optional (filetype nil))
+  (let ((filetype (if (symbolp filetype) 
+		      (symbol-name filetype)
+		      filetype)))
+    (cond
+     ((pathnamep filearg) 
+      (cond ((pathname-type filearg) (namestring filearg))
+	    (t (namestring (make-pathname :directory (pathname-directory filearg)
+					  :name (pathname-name filearg)
+					  :type filetype)))))
+     ;; Previously, given a filename containing "." and
+     ;; an extension this function would return filearg. MCD 23-8-95.
+     ((and (stringp filearg) (pathname-type filearg) (null filetype)) filearg)
+     ;;  ((and (stringp filearg)
+     ;;    (or (pathname-type filearg) (null filetype)))
+     ;;     filearg)
+     ((and (stringp filearg) (stringp filetype)
+	   (pathname-type filearg) 
+	   (string-equal (pathname-type filearg) filetype))
+      filearg)
+     ((consp filearg)
+      (make-filename (car filearg) (or (cadr filearg) filetype)))
+     (t (if (stringp filetype) (setq filetype (intern filetype "BOOT")))
+	(let ((ft (or (cdr (assoc filetype $filetype-table)) filetype)))
+	  (if ft 
+	      (concatenate 'string (string filearg) "." (string ft))
+	      (string filearg)))))))
+
+(defun make-full-namestring (filearg &optional (filetype nil))
+  (namestring (merge-pathnames (make-filename filearg filetype))))
+
+(defun probe-name (file)
+  (if (probe-file file) (namestring file) nil))
+
+(defun get-directory-list (ft &aux (cd (namestring $current-directory)))
+  (declare (special $current-directory))
+  (cond ((member ft '("nrlib" "daase" "exposed") :test #'string=)
+	   (if (eq BOOT::|$UserLevel| 'BOOT::|development|)
+	       (cons cd $library-directory-list)
+	       $library-directory-list))
+	(t (adjoin cd 
+              (adjoin (namestring (user-homedir-pathname)) $directory-list 
+                      :test #'string=) 
+              :test #'string=))))
+
+(defun make-input-filename (filearg &optional (filetype nil))
+   (let*
+     ((filename  (make-filename filearg filetype))
+      (dirname (pathname-directory filename))
+      (ft (pathname-type filename))
+      (dirs (get-directory-list ft))
+      (newfn nil))   
+    (if (or (null dirname) (eqcar dirname :relative))
+	(dolist (dir dirs (probe-name filename))
+		(when 
+		 (probe-file 
+		  (setq newfn (concatenate 'string dir filename)))
+		 (return newfn)))
+      (probe-name filename))))
+
+(defun $FILEP (&rest filearg) (make-full-namestring filearg))
+(define-function '$OUTFILEP #'$FILEP) ;;temporary bogus def
+
+(defun $findfile (filespec filetypelist)
+  (let ((file-name (if (consp filespec) (car filespec) filespec))
+	(file-type (if (consp filespec) (cadr filespec) nil)))
+    (if file-type (push file-type filetypelist))
+    (some #'(lambda (ft) (make-input-filename file-name ft))
+	  filetypelist)))
+
+;; ($ERASE filearg) -> 0 if succeeds else 1
+(defun $erase (&rest filearg)
+  (system (concat "rm -rf "(make-full-namestring filearg))))
+
+(defun $REPLACE (filespec1 filespec2)
+    ($erase (setq filespec1 (make-full-namestring filespec1)))
+    (rename-file (make-full-namestring filespec2) filespec1))
+
+
+
+;;(defun move-file (namestring1 namestring2)
+;;  (rename-file namestring1 namestring2))
+
+(defun $FCOPY (filespec1 filespec2)
+    (let ((name1 (make-full-namestring filespec1))
+	  (name2 (make-full-namestring filespec2)))
+      (if (library-file name1)
+	(copy-lib-directory name1 name2)
+	(copy-file name1 name2))))
+
+
+#+(OR :AKCL (AND :CCL :UNIX))
+(defun copy-lib-directory (name1 name2)
+   (makedir name2)
+   (system (concat "sh -c 'cp " name1 "/* " name2 "'")))
+
+#+(OR :AKCL (AND :CCL :UNIX))
+(defun copy-file (namestring1 namestring2)
+  (system (concat "cp " namestring1 " " namestring2)))
+
+
+(defvar vmlisp::$filetype-table
+  '((BOOT::LISPLIB . |LILIB|)
+    (BOOT::SPADLIB . |slib|)
+    (BOOT::HISTORY . |hist|)
+    (BOOT::HELPSPAD . |help|)
+    (BOOT::INPUT . |input|)
+    (BOOT::SPAD . |spad|)
+    (BOOT::BOOT . |boot|)
+    (BOOT::LISP . |lsp|)
+    (BOOT::META . |meta|)
+    (BOOT::OUTPUT . |splog|)
+    (BOOT::ERRORLIB . |erlib|)
+    (BOOT::DATABASE . |daase|)
+    (BOOT::SPADDATA . |sdata|)
+    (BOOT::SPADFORT . |sfort|)
+    (BOOT::SPADFORM . |sform|)
+    (BOOT::SPADTEX . |stex|)
+    (BOOT::SPADOUT . |spout|)))
+
 (in-package 'boot)
 
 #+(or :cmu :akcl :gcl)
