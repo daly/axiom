@@ -5144,6 +5144,68 @@ terminals and empty or at-end files.  In Common Lisp, we must assume record size
 (defmacro PRESET (L) `(spadlet . ,L))
 (defmacro RESET (L) `(spadlet . ,L))
 
+;; this files contains basic routines for error handling
+(defun error-format (message args)
+  (let ((|$BreakMode| '|break|))
+    (declare (special |$BreakMode|))
+   (if (stringp message) (apply #'format nil message args) nil)))
+ 
+;;(defmacro |trappedSpadEval| (form) form) ;;nop for now
+
+;; failed union branch --  value returned for numeric failure
+(setq |$numericFailure| (cons 1 "failed")) 
+
+(defvar |$oldBreakMode|)
+
+;; following macro evaluates form returning Union(type-of form, "failed")
+
+(defmacro |trapNumericErrors| (form)
+  `(let ((|$oldBreakMode| |$BreakMode|)
+	 (|$BreakMode| '|trapNumerics|)
+	 (val))
+     (setq val (catch '|trapNumerics| ,form))
+     (if (eq val |$numericFailure|) val
+       (cons 0 val))))
+
+;;;;;; considering this version for kcl
+;;(defmacro |trapNumericErrors| (form)
+;;   `(let ((val))
+;;      (setq val (errorset ,form))
+;;      (if (NULL val) |$numericFailure| (cons 0 (car val)))))
+
+;; the following form embeds around the akcl error handler
+#+:akcl
+(eval-when
+ (load eval)
+ (unembed 'system:universal-error-handler)
+ (embed 'system:universal-error-handler
+	    '(lambda (type correctable? op
+			   continue-string error-string &rest args)
+	       (block
+		nil
+		(setq |$NeedToSignalSessionManager| T)
+		(if (and (boundp '|$inLispVM|) (boundp '|$BreakMode|))
+		    (cond ((eq |$BreakMode| '|validate|)
+			   (|systemError| (error-format error-string args)))
+			  ((and (eq |$BreakMode| '|trapNumerics|)
+				(eq type :ERROR))
+			   (setq |$BreakMode| nil)			   (throw '|trapNumerics| |$numericFailure|))
+                          ((and (eq |$BreakMode| '|trapNumerics|)
+				(boundp '|$oldBreakMode|)
+				(setq |$BreakMode| |$oldBreakMode|)
+				nil)) ;; resets error handler
+			  ((and (null |$inLispVM|)
+				(memq |$BreakMode| '(|nobreak| |query| |resume|)))
+			   (let ((|$inLispVM| T)) ;; turn off handler
+			     (return
+			      (|systemError| (error-format error-string args)))))
+			  ((eq |$BreakMode| '|letPrint2|)
+			   (setq |$BreakMode| nil)
+			   (throw '|letPrint2| nil))))
+		(apply system:universal-error-handler type correctable? op
+		       continue-string error-string args )))))
+
+
 @
 \eject
 \begin{thebibliography}{99}
