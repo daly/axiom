@@ -1,0 +1,1756 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp g-boot.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;--% BOOT to LISP Translation
+;
+;-- these supplement those in DEF and MACRO LISP
+;
+;--% Utilities
+;
+;
+;$LET := 'SPADLET    -- LET is a standard macro in Common Lisp
+
+(SPADLET $LET (QUOTE SPADLET)) 
+;
+;nakedEXIT? c ==
+;  ATOM c => NIL
+;  [a,:d] := c
+;  IDENTP a =>
+;    a = 'EXIT  => true
+;    a = 'QUOTE => NIL
+;    MEMQ(a,'(SEQ PROG LAMBDA MLAMBDA LAM)) => NIL
+;    nakedEXIT?(d)
+;  nakedEXIT?(a) or nakedEXIT?(d)
+
+;;;     ***       |nakedEXIT?| REDEFINED
+
+(DEFUN |nakedEXIT?| (|c|)
+ (PROG (|a| |d|)
+  (RETURN
+   (SEQ
+    (COND
+     ((ATOM |c|) NIL)
+     ((QUOTE T)
+      (SPADLET |a| (CAR |c|))
+      (SPADLET |d| (CDR |c|))
+      (COND
+       ((IDENTP |a|)
+        (COND
+         ((BOOT-EQUAL |a| (QUOTE EXIT)) (QUOTE T))
+         ((BOOT-EQUAL |a| (QUOTE QUOTE)) NIL)
+         ((MEMQ |a| (QUOTE (SEQ PROG LAMBDA MLAMBDA LAM))) NIL)
+         ((QUOTE T) (|nakedEXIT?| |d|))))
+       ((QUOTE T) (OR (|nakedEXIT?| |a|) (|nakedEXIT?| |d|)))))))))) 
+;
+;mergeableCOND x ==
+;  ATOM(x) or x isnt ['COND,:cls] => NIL
+;  -- to be mergeable, every result must be an EXIT and the last
+;  -- predicate must be a pair
+;  ok := true
+;  while (cls and ok) repeat
+;    [[p,:r],:cls] := cls
+;    PAIRP QCDR r => ok := NIL
+;    CAR(r) isnt ['EXIT,.] => ok := NIL
+;    NULL(cls) and ATOM(p) => ok := NIL
+;    NULL(cls) and (p = ''T) => ok := NIL
+;  ok
+
+;;;     ***       |mergeableCOND| REDEFINED
+
+(DEFUN |mergeableCOND| (|x|)
+ (PROG (|LETTMP#1| |p| |r| |cls| |ISTMP#1| |ISTMP#2| |ok|)
+  (RETURN
+   (SEQ
+    (COND
+     ((OR (ATOM |x|)
+          (NULL 
+           (AND (PAIRP |x|) 
+                (EQ (QCAR |x|) (QUOTE COND))
+                (PROGN (SPADLET |cls| (QCDR |x|)) (QUOTE T)))))
+      NIL)
+     ((QUOTE T)
+      (SPADLET |ok| (QUOTE T))
+      (DO ()
+          ((NULL (AND |cls| |ok|)) NIL)
+       (SEQ
+        (EXIT
+         (PROGN
+          (SPADLET |LETTMP#1| |cls|)
+          (SPADLET |p| (CAAR |LETTMP#1|))
+          (SPADLET |r| (CDAR |LETTMP#1|))
+          (SPADLET |cls| (CDR |LETTMP#1|))
+          (COND
+           ((PAIRP (QCDR |r|)) (SPADLET |ok| NIL))
+           ((NULL
+             (PROGN
+              (SPADLET |ISTMP#1| (CAR |r|))
+              (AND (PAIRP |ISTMP#1|)
+                   (EQ (QCAR |ISTMP#1|) (QUOTE EXIT))
+                   (PROGN
+                    (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                    (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL))))))
+            (SPADLET |ok| NIL))
+           ((AND (NULL |cls|) (ATOM |p|)) (SPADLET |ok| NIL))
+           ((AND (NULL |cls|) (BOOT-EQUAL |p| (QUOTE (QUOTE T))))
+            (SPADLET |ok| NIL)))))))
+      |ok|)))))) 
+;
+;mergeCONDsWithEXITs l ==
+;  -- combines things like
+;  -- (COND (foo (EXIT a)))
+;  -- (COND (bar (EXIT b)))
+;  -- into one COND
+;  NULL l => NIL
+;  ATOM l => l
+;  NULL PAIRP QCDR l => l
+;  a := QCAR l
+;  if a is ['COND,:.] then a := flattenCOND a
+;  am := mergeableCOND a
+;  CDR(l) is [b,:k] and am and mergeableCOND(b) =>
+;    b:= flattenCOND b
+;    c := ['COND,:QCDR a,:QCDR b]
+;    mergeCONDsWithEXITs [flattenCOND c,:k]
+;  CDR(l) is [b] and am =>
+;    [removeEXITFromCOND flattenCOND ['COND,:QCDR a,[''T,b]]]
+;  [a,:mergeCONDsWithEXITs CDR l]
+
+;;;     ***       |mergeCONDsWithEXITs| REDEFINED
+
+(DEFUN |mergeCONDsWithEXITs| (|l|)
+ (PROG (|a| |am| |k| |c| |ISTMP#1| |b|)
+  (RETURN
+   (COND
+    ((NULL |l|) NIL)
+    ((ATOM |l|) |l|)
+    ((NULL (PAIRP (QCDR |l|))) |l|)
+    ((QUOTE T)
+     (SPADLET |a| (QCAR |l|))
+     (COND
+      ((AND (PAIRP |a|) (EQ (QCAR |a|) (QUOTE COND)))
+       (SPADLET |a| (|flattenCOND| |a|))))
+     (SPADLET |am| (|mergeableCOND| |a|))
+     (COND
+      ((AND
+        (PROGN
+         (SPADLET |ISTMP#1| (CDR |l|))
+         (AND (PAIRP |ISTMP#1|)
+              (PROGN
+               (SPADLET |b| (QCAR |ISTMP#1|))
+               (SPADLET |k| (QCDR |ISTMP#1|))
+               (QUOTE T))))
+         |am|
+         (|mergeableCOND| |b|))
+       (SPADLET |b| (|flattenCOND| |b|))
+       (SPADLET |c| (CONS (QUOTE COND) (APPEND (QCDR |a|) (QCDR |b|))))
+       (|mergeCONDsWithEXITs| (CONS (|flattenCOND| |c|) |k|)))
+      ((AND
+        (PROGN
+         (SPADLET |ISTMP#1| (CDR |l|))
+         (AND (PAIRP |ISTMP#1|)
+              (EQ (QCDR |ISTMP#1|) NIL)
+              (PROGN (SPADLET |b| (QCAR |ISTMP#1|)) (QUOTE T))))
+         |am|)
+       (CONS
+        (|removeEXITFromCOND|
+         (|flattenCOND|
+          (CONS
+           (QUOTE COND)
+           (APPEND
+            (QCDR |a|)
+            (CONS (CONS (QUOTE (QUOTE T)) (CONS |b| NIL)) NIL)))))
+        NIL))
+      ((QUOTE T) (CONS |a| (|mergeCONDsWithEXITs| (CDR |l|)))))))))) 
+;
+;removeEXITFromCOND? c ==
+;  -- c is '(COND ...)
+;  -- only can do it if every clause simply EXITs
+;  ok := true
+;  c := CDR c
+;  while ok and c repeat
+;    [[p,:r],:c] := c
+;    nakedEXIT? p => ok := NIL
+;    [:f,r1] := r
+;    nakedEXIT? f => ok := NIL
+;    r1 isnt ['EXIT,r2] => ok := NIL
+;    nakedEXIT? r2 => ok := NIL
+;  ok
+
+;;;     ***       |removeEXITFromCOND?| REDEFINED
+
+(DEFUN |removeEXITFromCOND?| (|c|)
+ (PROG (|p| |r| |LETTMP#1| |r1| |f| |ISTMP#1| |r2| |ok|)
+  (RETURN
+   (SEQ
+    (PROGN
+     (SPADLET |ok| (QUOTE T))
+     (SPADLET |c| (CDR |c|))
+     (DO ()
+         ((NULL (AND |ok| |c|)) NIL)
+      (SEQ
+       (EXIT
+        (PROGN
+         (SPADLET |LETTMP#1| |c|)
+         (SPADLET |p| (CAAR |LETTMP#1|))
+         (SPADLET |r| (CDAR |LETTMP#1|))
+         (SPADLET |c| (CDR |LETTMP#1|))
+         (COND
+          ((|nakedEXIT?| |p|) (SPADLET |ok| NIL))
+          ((QUOTE T)
+           (SPADLET |LETTMP#1| (REVERSE |r|))
+           (SPADLET |r1| (CAR |LETTMP#1|))
+           (SPADLET |f| (NREVERSE (CDR |LETTMP#1|)))
+           (COND
+            ((|nakedEXIT?| |f|) (SPADLET |ok| NIL))
+            ((NULL
+              (AND (PAIRP |r1|)
+                   (EQ (QCAR |r1|) (QUOTE EXIT))
+                   (PROGN 
+                    (SPADLET |ISTMP#1| (QCDR |r1|))
+                    (AND (PAIRP |ISTMP#1|)
+                         (EQ (QCDR |ISTMP#1|) NIL)
+                         (PROGN (SPADLET |r2| (QCAR |ISTMP#1|)) (QUOTE T))))))
+             (SPADLET |ok| NIL))
+            ((|nakedEXIT?| |r2|) (SPADLET |ok| NIL)))))))))
+     |ok|))))) 
+;
+;removeEXITFromCOND c ==
+;  -- c is '(COND ...)
+;  z := NIL
+;  for cl in CDR c repeat
+;    ATOM cl => z := CONS(cl,z)
+;    cond := QCAR cl
+;    length1? cl =>
+;      PAIRP(cond) and EQCAR(cond,'EXIT) =>
+;        z := CONS(QCDR cond,z)
+;      z := CONS(cl,z)
+;    cl' := REVERSE cl
+;    lastSE := QCAR cl'
+;    ATOM lastSE => z := CONS(cl,z)
+;    EQCAR(lastSE,'EXIT) =>
+;      z := CONS(REVERSE CONS(CADR lastSE,CDR cl'),z)
+;    z := CONS(cl,z)
+;  CONS('COND,NREVERSE z)
+
+;;;     ***       |removeEXITFromCOND| REDEFINED
+
+(DEFUN |removeEXITFromCOND| (|c|)
+ (PROG (|cond| |cl'| |lastSE| |z|)
+  (RETURN
+   (SEQ
+    (PROGN
+     (SPADLET |z| NIL)
+     (DO ((#0=#:G1988 (CDR |c|) (CDR #0#)) (|cl| NIL))
+         ((OR (ATOM #0#) (PROGN (SETQ |cl| (CAR #0#)) NIL)) NIL)
+      (SEQ
+       (EXIT
+        (COND
+         ((ATOM |cl|) (SPADLET |z| (CONS |cl| |z|)))
+         ((QUOTE T)
+          (SPADLET |cond| (QCAR |cl|))
+          (COND
+           ((|length1?| |cl|)
+            (COND
+             ((AND (PAIRP |cond|) (EQCAR |cond| (QUOTE EXIT)))
+              (SPADLET |z| (CONS (QCDR |cond|) |z|)))
+             ((QUOTE T) (SPADLET |z| (CONS |cl| |z|)))))
+           ((QUOTE T)
+            (SPADLET |cl'| (REVERSE |cl|))
+            (SPADLET |lastSE| (QCAR |cl'|))
+            (COND
+             ((ATOM |lastSE|) (SPADLET |z| (CONS |cl| |z|)))
+             ((EQCAR |lastSE| (QUOTE EXIT))
+              (SPADLET |z|
+               (CONS (REVERSE (CONS (CADR |lastSE|) (CDR |cl'|))) |z|)))
+             ((QUOTE T) (SPADLET |z| (CONS |cl| |z|)))))))))))
+     (CONS (QUOTE COND) (NREVERSE |z|))))))) 
+;
+;flattenCOND body ==
+;  -- transforms nested COND clauses to flat ones, if possible
+;  body isnt ['COND,:.] => body
+;  ['COND,:extractCONDClauses body]
+
+;;;     ***       |flattenCOND| REDEFINED
+
+(DEFUN |flattenCOND| (|body|)
+ (COND
+  ((NULL (AND (PAIRP |body|) (EQ (QCAR |body|) (QUOTE COND)))) |body|)
+  ((QUOTE T) (CONS (QUOTE COND) (|extractCONDClauses| |body|))))) 
+;
+;extractCONDClauses clauses ==
+;  -- extracts nested COND clauses into a flat structure
+;  clauses is ['COND, [pred1,:act1],:restClauses] =>
+;    if act1 is [['PROGN,:acts]] then act1 := acts
+;    restClauses is [[''T,restCond]] =>
+;      [[pred1,:act1],:extractCONDClauses restCond]
+;    [[pred1,:act1],:restClauses]
+;  [[''T,clauses]]
+
+;;;     ***       |extractCONDClauses| REDEFINED
+
+(DEFUN |extractCONDClauses| (|clauses|)
+ (PROG (|pred1| |restClauses| |acts| |act1| |ISTMP#1| |ISTMP#2| |restCond|)
+  (RETURN
+   (COND
+    ((AND (PAIRP |clauses|)
+          (EQ (QCAR |clauses|) (QUOTE COND))
+          (PROGN
+           (SPADLET |ISTMP#1| (QCDR |clauses|))
+           (AND (PAIRP |ISTMP#1|)
+                (PROGN
+                 (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                 (AND (PAIRP |ISTMP#2|)
+                      (PROGN
+                       (SPADLET |pred1| (QCAR |ISTMP#2|))
+                       (SPADLET |act1| (QCDR |ISTMP#2|))
+                       (QUOTE T))))
+                (PROGN (SPADLET |restClauses| (QCDR |ISTMP#1|)) (QUOTE T)))))
+      (COND
+       ((AND (PAIRP |act1|)
+             (EQ (QCDR |act1|) NIL)
+             (PROGN
+              (SPADLET |ISTMP#1| (QCAR |act1|))
+              (AND (PAIRP |ISTMP#1|)
+                   (EQ (QCAR |ISTMP#1|) (QUOTE PROGN))
+                   (PROGN (SPADLET |acts| (QCDR |ISTMP#1|)) (QUOTE T)))))
+       (SPADLET |act1| |acts|)))
+      (COND
+       ((AND (PAIRP |restClauses|)
+             (EQ (QCDR |restClauses|) NIL)
+             (PROGN
+              (SPADLET |ISTMP#1| (QCAR |restClauses|))
+              (AND (PAIRP |ISTMP#1|)
+                   (EQUAL (QCAR |ISTMP#1|) (QUOTE (QUOTE T)))
+                   (PROGN
+                    (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                    (AND (PAIRP |ISTMP#2|)
+                         (EQ (QCDR |ISTMP#2|) NIL)
+                         (PROGN
+                          (SPADLET |restCond| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+         (CONS (CONS |pred1| |act1|) (|extractCONDClauses| |restCond|)))
+       ((QUOTE T) (CONS (CONS |pred1| |act1|) |restClauses|))))
+    ((QUOTE T) (CONS (CONS (QUOTE (QUOTE T)) (CONS |clauses| NIL)) NIL)))))) 
+;
+;--% COND and IF
+;
+;bootIF c ==
+;  -- handles IF expressions by turning them into CONDs
+;  c is [.,p,t] => bootCOND ['COND,[p,t]]
+;  [.,p,t,e] := c
+;  bootCOND ['COND,[p,t],[''T,e]]
+
+;;;     ***       |bootIF| REDEFINED
+
+(DEFUN |bootIF| (|c|)
+ (PROG (|ISTMP#1| |ISTMP#2| |p| |t| |e|)
+  (RETURN
+   (COND
+    ((AND (PAIRP |c|)
+          (PROGN
+           (SPADLET |ISTMP#1| (QCDR |c|))
+           (AND (PAIRP |ISTMP#1|)
+                (PROGN
+                 (SPADLET |p| (QCAR |ISTMP#1|))
+                 (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                 (AND (PAIRP |ISTMP#2|)
+                      (EQ (QCDR |ISTMP#2|) NIL)
+                      (PROGN (SPADLET |t| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+     (|bootCOND| (CONS (QUOTE COND) (CONS (CONS |p| (CONS |t| NIL)) NIL))))
+    ((QUOTE T)
+     (SPADLET |p| (CADR |c|))
+     (SPADLET |t| (CADDR |c|))
+     (SPADLET |e| (CADDDR |c|))
+     (|bootCOND|
+      (CONS
+       (QUOTE COND)
+       (CONS
+        (CONS |p| (CONS |t| NIL))
+        (CONS (CONS (QUOTE (QUOTE T)) (CONS |e| NIL)) NIL))))))))) 
+;
+;bootCOND c ==
+;  -- handles COND expressions: c is ['COND,:.]
+;  cls := CDR c
+;  NULL cls => NIL
+;  cls is [[''T,r],:.] => r
+;  [:icls,fcls] := cls
+;  ncls := NIL
+;  for cl in icls repeat
+;    [p,:r] := cl
+;    ncls :=
+;      r is [['PROGN,:r1]] => CONS([p,:r1],ncls)
+;      CONS(cl,ncls)
+;  fcls := bootPushEXITintoCONDclause fcls
+;  ncls :=
+;    fcls is [''T,['COND,:mcls]] =>
+;      APPEND(REVERSE mcls,ncls)
+;    fcls is [''T,['PROGN,:mcls]] =>
+;      CONS([''T,:mcls],ncls)
+;    CONS(fcls,ncls)
+;  ['COND,:REVERSE ncls]
+
+;;;     ***       |bootCOND| REDEFINED
+
+(DEFUN |bootCOND| (|c|)
+ (PROG (|cls| |LETTMP#1| |icls| |p| |r| |r1| |fcls| |ISTMP#1| |ISTMP#2| 
+        |mcls| |ncls|)
+  (RETURN
+   (SEQ
+    (PROGN
+     (SPADLET |cls| (CDR |c|))
+     (COND
+      ((NULL |cls|) NIL)
+      ((AND (PAIRP |cls|)
+            (PROGN
+             (SPADLET |ISTMP#1| (QCAR |cls|))
+             (AND (PAIRP |ISTMP#1|)
+                  (EQUAL (QCAR |ISTMP#1|) (QUOTE (QUOTE T)))
+                  (PROGN
+                   (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                   (AND (PAIRP |ISTMP#2|)
+                        (EQ (QCDR |ISTMP#2|) NIL)
+                        (PROGN (SPADLET |r| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+       |r|)
+      ((QUOTE T)
+       (SPADLET |LETTMP#1| (REVERSE |cls|))
+       (SPADLET |fcls| (CAR |LETTMP#1|))
+       (SPADLET |icls| (NREVERSE (CDR |LETTMP#1|)))
+       (SPADLET |ncls| NIL)
+       (DO ((#0=#:G2144 |icls| (CDR #0#)) (|cl| NIL))
+           ((OR (ATOM #0#) (PROGN (SETQ |cl| (CAR #0#)) NIL)) NIL)
+        (SEQ
+         (EXIT
+          (PROGN
+           (SPADLET |p| (CAR |cl|))
+           (SPADLET |r| (CDR |cl|))
+           (SPADLET |ncls|
+            (COND
+             ((AND (PAIRP |r|)
+                   (EQ (QCDR |r|) NIL)
+                   (PROGN
+                    (SPADLET |ISTMP#1| (QCAR |r|))
+                    (AND (PAIRP |ISTMP#1|)
+                         (EQ (QCAR |ISTMP#1|) (QUOTE PROGN))
+                         (PROGN (SPADLET |r1| (QCDR |ISTMP#1|)) (QUOTE T)))))
+              (CONS (CONS |p| |r1|) |ncls|))
+             ((QUOTE T) (CONS |cl| |ncls|))))))))
+       (SPADLET |fcls| (|bootPushEXITintoCONDclause| |fcls|))
+       (SPADLET |ncls|
+        (COND
+         ((AND (PAIRP |fcls|)
+               (EQUAL (QCAR |fcls|) (QUOTE (QUOTE T)))
+               (PROGN
+                (SPADLET |ISTMP#1| (QCDR |fcls|))
+                (AND (PAIRP |ISTMP#1|)
+                     (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN
+                      (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                      (AND (PAIRP |ISTMP#2|)
+                           (EQ (QCAR |ISTMP#2|) (QUOTE COND))
+                           (PROGN
+                            (SPADLET |mcls| (QCDR |ISTMP#2|))
+                            (QUOTE T)))))))
+          (APPEND (REVERSE |mcls|) |ncls|))
+         ((AND (PAIRP |fcls|)
+               (EQUAL (QCAR |fcls|) (QUOTE (QUOTE T)))
+               (PROGN
+                (SPADLET |ISTMP#1| (QCDR |fcls|))
+                (AND (PAIRP |ISTMP#1|)
+                     (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN
+                      (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                      (AND (PAIRP |ISTMP#2|)
+                           (EQ (QCAR |ISTMP#2|) (QUOTE PROGN))
+                           (PROGN
+                            (SPADLET |mcls| (QCDR |ISTMP#2|))
+                            (QUOTE T)))))))
+           (CONS (CONS (QUOTE (QUOTE T)) |mcls|) |ncls|))
+         ((QUOTE T) (CONS |fcls| |ncls|))))
+        (CONS (QUOTE COND) (REVERSE |ncls|))))))))) 
+;
+;bootPushEXITintoCONDclause e ==
+;  e isnt [''T,['EXIT,['COND,:cls]]] => e
+;  ncls := NIL
+;  for cl in cls repeat
+;    [p,:r] := cl
+;    ncls :=
+;      r is [['EXIT,:.]] => CONS(cl,ncls)
+;      r is [r1]           => CONS([p,['EXIT,r1]],ncls)
+;      CONS([p,['EXIT,bootTran ['PROGN,:r]]],ncls)
+;  [''T,['COND,:NREVERSE ncls]]
+
+;;;     ***       |bootPushEXITintoCONDclause| REDEFINED
+
+(DEFUN |bootPushEXITintoCONDclause| (|e|)
+ (PROG (|ISTMP#2| |ISTMP#3| |ISTMP#4| |cls| |p| |r| |ISTMP#1| |r1| |ncls|)
+  (RETURN
+   (SEQ
+    (COND
+     ((NULL
+       (AND (PAIRP |e|)
+            (EQUAL (QCAR |e|) (QUOTE (QUOTE T)))
+            (PROGN
+             (SPADLET |ISTMP#1| (QCDR |e|))
+             (AND (PAIRP |ISTMP#1|)
+                  (EQ (QCDR |ISTMP#1|) NIL)
+                  (PROGN
+                   (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                   (AND (PAIRP |ISTMP#2|)
+                        (EQ (QCAR |ISTMP#2|) (QUOTE EXIT))
+                        (PROGN
+                         (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                         (AND (PAIRP |ISTMP#3|)
+                              (EQ (QCDR |ISTMP#3|) NIL)
+                              (PROGN
+                               (SPADLET |ISTMP#4| (QCAR |ISTMP#3|))
+                               (AND (PAIRP |ISTMP#4|)
+                                    (EQ (QCAR |ISTMP#4|) (QUOTE COND))
+                                    (PROGN
+                                     (SPADLET |cls| (QCDR |ISTMP#4|))
+                                     (QUOTE T))))))))))))
+       |e|)
+     ((QUOTE T)
+      (SPADLET |ncls| NIL)
+      (DO ((#0=#:G2220 |cls| (CDR #0#)) (|cl| NIL))
+          ((OR (ATOM #0#) (PROGN (SETQ |cl| (CAR #0#)) NIL)) NIL)
+       (SEQ
+        (EXIT
+         (PROGN
+          (SPADLET |p| (CAR |cl|))
+          (SPADLET |r| (CDR |cl|))
+          (SPADLET |ncls|
+           (COND
+            ((AND (PAIRP |r|)
+                  (EQ (QCDR |r|) NIL)
+                  (PROGN
+                   (SPADLET |ISTMP#1| (QCAR |r|))
+                   (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) (QUOTE EXIT)))))
+             (CONS |cl| |ncls|))
+            ((AND (PAIRP |r|)
+                  (EQ (QCDR |r|) NIL)
+                  (PROGN (SPADLET |r1| (QCAR |r|)) (QUOTE T)))
+             (CONS
+              (CONS |p| (CONS (CONS (QUOTE EXIT) (CONS |r1| NIL)) NIL))
+              |ncls|))
+            ((QUOTE T)
+             (CONS
+              (CONS
+               |p|
+               (CONS
+                (CONS
+                 (QUOTE EXIT)
+                 (CONS (|bootTran| (CONS (QUOTE PROGN) |r|)) NIL))
+                NIL))
+              |ncls|))))))))
+      (CONS
+       (QUOTE (QUOTE T))
+       (CONS (CONS (QUOTE COND) (NREVERSE |ncls|)) NIL)))))))) 
+;
+;--% SEQ and PROGN
+;
+;-- following is a more sophisticated def than that in MACRO LISP
+;-- it is used for boot code
+;
+;tryToRemoveSEQ e ==
+;  -- returns e if unsuccessful
+;  e isnt ['SEQ,cl,:cls] => NIL
+;  nakedEXIT? cl =>
+;    cl is ['COND,[p,['EXIT,r]],:ccls] =>
+;      nakedEXIT? p or nakedEXIT? r => e
+;      null ccls =>
+;        bootCOND ['COND,[p,r],[''T,bootSEQ ['SEQ,:cls]]]
+;      bootCOND ['COND,[p,r],[''T,bootSEQ ['SEQ,['COND,:ccls],:cls]]]
+;    e
+;  bootPROGN ['PROGN,cl,bootSEQ ['SEQ,:cls]]
+
+;;;     ***       |tryToRemoveSEQ| REDEFINED
+
+(DEFUN |tryToRemoveSEQ| (|e|)
+ (PROG (|cl| |cls| |ISTMP#1| |ISTMP#2| |p| |ISTMP#3| |ISTMP#4| |ISTMP#5| 
+        |r| |ccls|)
+  (RETURN
+   (SEQ
+    (COND
+     ((NULL
+       (AND
+         (PAIRP |e|)
+         (EQ (QCAR |e|) (QUOTE SEQ))
+         (PROGN
+          (SPADLET |ISTMP#1| (QCDR |e|))
+          (AND
+           (PAIRP |ISTMP#1|)
+           (PROGN
+            (SPADLET |cl| (QCAR |ISTMP#1|))
+            (SPADLET |cls| (QCDR |ISTMP#1|))
+            (QUOTE T))))))
+      NIL)
+     ((|nakedEXIT?| |cl|)
+       (COND
+        ((AND
+          (PAIRP |cl|)
+          (EQ (QCAR |cl|) (QUOTE COND))
+          (PROGN
+           (SPADLET |ISTMP#1| (QCDR |cl|))
+           (AND
+            (PAIRP |ISTMP#1|)
+            (PROGN
+             (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+             (AND
+              (PAIRP |ISTMP#2|)
+              (PROGN
+               (SPADLET |p| (QCAR |ISTMP#2|))
+               (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+               (AND (PAIRP |ISTMP#3|)
+                    (EQ (QCDR |ISTMP#3|) NIL)
+                    (PROGN
+                     (SPADLET |ISTMP#4| (QCAR |ISTMP#3|))
+                     (AND (PAIRP |ISTMP#4|)
+                          (EQ (QCAR |ISTMP#4|) (QUOTE EXIT))
+                          (PROGN
+                           (SPADLET |ISTMP#5| (QCDR |ISTMP#4|))
+                           (AND (PAIRP |ISTMP#5|)
+                                 (EQ (QCDR |ISTMP#5|) NIL)
+                                 (PROGN
+                                  (SPADLET |r| (QCAR |ISTMP#5|))
+                                  (QUOTE T))))))))))
+                    (PROGN (SPADLET |ccls| (QCDR |ISTMP#1|)) (QUOTE T)))))
+         (COND
+          ((OR (|nakedEXIT?| |p|) (|nakedEXIT?| |r|)) |e|)
+          ((NULL |ccls|)
+           (|bootCOND|
+            (CONS
+             (QUOTE COND)
+             (CONS
+              (CONS |p| (CONS |r| NIL))
+              (CONS
+               (CONS
+                (QUOTE (QUOTE T))
+                (CONS (|bootSEQ| (CONS (QUOTE SEQ) |cls|)) NIL))
+               NIL)))))
+          ((QUOTE T)
+           (|bootCOND|
+            (CONS
+             (QUOTE COND)
+             (CONS
+              (CONS |p| (CONS |r| NIL))
+              (CONS
+               (CONS
+                (QUOTE (QUOTE T))
+                (CONS
+                 (|bootSEQ|
+                  (CONS (QUOTE SEQ) (CONS (CONS (QUOTE COND) |ccls|) |cls|)))
+                 NIL))
+               NIL)))))))
+        ((QUOTE T) |e|)))
+     ((QUOTE T)
+      (|bootPROGN|
+       (CONS
+        (QUOTE PROGN)
+        (CONS |cl| (CONS (|bootSEQ| (CONS (QUOTE SEQ) |cls|)) NIL)))))))))) 
+;
+;bootAbsorbSEQsAndPROGNs e ==
+;  -- assume e is a list from a SEQ or a PROGN
+;  ATOM e => e
+;  [:cls,lcl] := e
+;  g := [:flatten(f) for f in cls] where
+;    flatten x ==
+;      NULL x => NIL
+;      IDENTP x =>
+;        MEMQ(x,$labelsForGO) => [x]
+;        NIL
+;      ATOM x => NIL
+;      x is ['PROGN,:pcls,lpcl] =>
+;        ATOM lpcl => pcls
+;        CDR x
+;      -- next usually comes about from if foo then bar := zap
+;      x is ['COND,y,[''T,'NIL]] => [['COND,y]]
+;      [x]
+;  while lcl is ['EXIT,f] repeat
+;    lcl := f
+;  lcl is ['PROGN,:pcls] => APPEND(g,pcls)
+;  lcl is ['COND,[''T,:pcls]] => APPEND(g,pcls)
+;  lcl is ['COND,[pred,['EXIT,h]]] =>
+;    APPEND(g,[['COND,[pred,h]]])
+;  APPEND(g,[lcl])
+
+;;;     ***       |bootAbsorbSEQsAndPROGNs,flatten| REDEFINED
+
+(DEFUN |bootAbsorbSEQsAndPROGNs,flatten| (|x|)
+ (PROG (|lpcl| |pcls| |ISTMP#1| |y| |ISTMP#2| |ISTMP#3| |ISTMP#4|)
+  (RETURN
+   (SEQ
+    (IF (NULL |x|) (EXIT NIL))
+    (IF (IDENTP |x|)
+     (EXIT
+      (SEQ
+       (IF (MEMQ |x| |$labelsForGO|) (EXIT (CONS |x| NIL))) (EXIT NIL))))
+    (IF (ATOM |x|) (EXIT NIL))
+    (IF (AND (PAIRP |x|)
+             (EQ (QCAR |x|) (QUOTE PROGN))
+             (PROGN
+              (SPADLET |ISTMP#1| (QCDR |x|))
+              (AND
+               (AND (PAIRP |ISTMP#1|)
+                    (PROGN (SPADLET |ISTMP#2| (REVERSE |ISTMP#1|)) (QUOTE T)))
+               (AND (PAIRP |ISTMP#2|)
+                    (PROGN
+                     (SPADLET |lpcl| (QCAR |ISTMP#2|))
+                     (SPADLET |pcls| (QCDR |ISTMP#2|))
+                     (QUOTE T)))
+               (PROGN (SPADLET |pcls| (NREVERSE |pcls|)) (QUOTE T)))))
+     (EXIT (SEQ (IF (ATOM |lpcl|) (EXIT |pcls|)) (EXIT (CDR |x|)))))
+    (IF
+     (AND (PAIRP |x|)
+          (EQ (QCAR |x|) (QUOTE COND))
+          (PROGN
+           (SPADLET |ISTMP#1| (QCDR |x|))
+           (AND
+            (PAIRP |ISTMP#1|)
+            (PROGN
+             (SPADLET |y| (QCAR |ISTMP#1|))
+             (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+             (AND (PAIRP |ISTMP#2|)
+                  (EQ (QCDR |ISTMP#2|) NIL)
+                  (PROGN
+                   (SPADLET |ISTMP#3| (QCAR |ISTMP#2|))
+                   (AND (PAIRP |ISTMP#3|)
+                        (EQUAL (QCAR |ISTMP#3|) (QUOTE (QUOTE T)))
+                        (PROGN
+                         (SPADLET |ISTMP#4| (QCDR |ISTMP#3|))
+                         (AND (PAIRP |ISTMP#4|)
+                              (EQ (QCDR |ISTMP#4|) NIL)
+                              (EQUAL (QCAR |ISTMP#4|) (QUOTE NIL)))))))))))
+     (EXIT (CONS (CONS (QUOTE COND) (CONS |y| NIL)) NIL)))
+    (EXIT (CONS |x| NIL)))))) 
+
+;;;     ***       |bootAbsorbSEQsAndPROGNs| REDEFINED
+
+(DEFUN |bootAbsorbSEQsAndPROGNs| (|e|)
+ (PROG (|LETTMP#1| |cls| |g| |f| |lcl| |pcls| |ISTMP#1| |ISTMP#2| |pred| 
+        |ISTMP#3| |ISTMP#4| |ISTMP#5| |h|)
+  (RETURN
+   (SEQ
+    (COND
+     ((ATOM |e|) |e|)
+     ((QUOTE T)
+      (SPADLET |LETTMP#1| (REVERSE |e|))
+      (SPADLET |lcl| (CAR |LETTMP#1|))
+      (SPADLET |cls| (NREVERSE (CDR |LETTMP#1|)))
+      (SPADLET |g|
+       (PROG (#0=#:G2445)
+        (SPADLET #0# NIL)
+        (RETURN
+         (DO ((#1=#:G2450 |cls| (CDR #1#)) (|f| NIL))
+             ((OR (ATOM #1#) (PROGN (SETQ |f| (CAR #1#)) NIL)) #0#)
+          (SEQ
+           (EXIT
+            (SETQ #0#
+             (APPEND #0# (|bootAbsorbSEQsAndPROGNs,flatten| |f|)))))))))
+      (DO ()
+          ((NULL 
+            (AND (PAIRP |lcl|)
+                 (EQ (QCAR |lcl|) (QUOTE EXIT))
+                 (PROGN
+                  (SPADLET |ISTMP#1| (QCDR |lcl|))
+                  (AND (PAIRP |ISTMP#1|)
+                       (EQ (QCDR |ISTMP#1|) NIL)
+                       (PROGN (SPADLET |f| (QCAR |ISTMP#1|)) (QUOTE T))))))
+            NIL)
+       (SEQ (EXIT (SPADLET |lcl| |f|))))
+      (COND
+       ((AND (PAIRP |lcl|) (EQ (QCAR |lcl|) (QUOTE PROGN)) (PROGN (SPADLET |pcls| (QCDR |lcl|)) (QUOTE T)))
+        (APPEND |g| |pcls|))
+       ((AND (PAIRP |lcl|) (EQ (QCAR |lcl|) (QUOTE COND)) (PROGN (SPADLET |ISTMP#1| (QCDR |lcl|)) (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL) (PROGN (SPADLET |ISTMP#2| (QCAR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQUAL (QCAR |ISTMP#2|) (QUOTE (QUOTE T))) (PROGN (SPADLET |pcls| (QCDR |ISTMP#2|)) (QUOTE T)))))))
+        (APPEND |g| |pcls|))
+       ((AND
+         (PAIRP |lcl|)
+         (EQ (QCAR |lcl|) (QUOTE COND))
+         (PROGN
+          (SPADLET |ISTMP#1| (QCDR |lcl|))
+          (AND
+           (PAIRP |ISTMP#1|)
+           (EQ (QCDR |ISTMP#1|) NIL)
+           (PROGN
+            (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+            (AND
+             (PAIRP |ISTMP#2|)
+             (PROGN
+              (SPADLET |pred| (QCAR |ISTMP#2|))
+              (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+              (AND
+               (PAIRP |ISTMP#3|)
+               (EQ (QCDR |ISTMP#3|) NIL)
+               (PROGN 
+                (SPADLET |ISTMP#4| (QCAR |ISTMP#3|))
+                (AND
+                 (PAIRP |ISTMP#4|)
+                 (EQ (QCAR |ISTMP#4|) (QUOTE EXIT))
+                 (PROGN
+                  (SPADLET |ISTMP#5| (QCDR |ISTMP#4|))
+                  (AND
+                   (PAIRP |ISTMP#5|)
+                   (EQ (QCDR |ISTMP#5|) NIL)
+                   (PROGN (SPADLET |h| (QCAR |ISTMP#5|)) (QUOTE T)))))))))))))
+        (APPEND |g|
+         (CONS
+          (CONS (QUOTE COND) (CONS (CONS |pred| (CONS |h| NIL)) NIL))
+          NIL)))
+       ((QUOTE T) (APPEND |g| (CONS |lcl| NIL)))))))))) 
+;
+;bootSEQ e ==
+;  e := ['SEQ,:mergeCONDsWithEXITs bootAbsorbSEQsAndPROGNs CDR e]
+;  if e is [.,:cls,lcl] and IDENTP lcl and not MEMQ(lcl,$labelsForGO) then
+;    e := ['SEQ,:cls,['EXIT,lcl]]
+;  cls := QCDR e
+;  cls is [['SEQ,:.]] => tryToRemoveSEQ QCAR cls
+;  cls is [['EXIT,body]] =>
+;    nakedEXIT? body => bootTran ['SEQ,body]
+;    body
+;  not (nakedEXIT?(cls) or "or"/[MEMQ(g,$labelsForGO) for g in cls]) =>
+;    bootTran ['PROGN,:cls]
+;  e is ['SEQ,['COND,[pred,['EXIT,r1]]],:r2] =>
+;    nakedEXIT?(pred) or nakedEXIT?(r1) or nakedEXIT?(r2) =>
+;      tryToRemoveSEQ e
+;    bootTran ['COND,[pred,r1],[''T,:r2]]
+;  tryToRemoveSEQ e
+
+;;;     ***       |bootSEQ| REDEFINED
+
+(DEFUN |bootSEQ| (|e|)
+ (PROG (|lcl| |cls| |body| |ISTMP#1| |ISTMP#2| |ISTMP#3| |ISTMP#4| |pred| 
+        |ISTMP#5| |ISTMP#6| |ISTMP#7| |r1| |r2|)
+  (RETURN
+   (SEQ
+    (PROGN
+     (SPADLET |e|
+      (CONS
+       (QUOTE SEQ)
+       (|mergeCONDsWithEXITs| (|bootAbsorbSEQsAndPROGNs| (CDR |e|)))))
+     (COND
+      ((AND 
+        (PAIRP |e|)
+        (PROGN
+         (SPADLET |ISTMP#1| (QCDR |e|))
+         (AND
+          (PAIRP |ISTMP#1|)
+          (PROGN (SPADLET |ISTMP#2| (REVERSE |ISTMP#1|)) (QUOTE T))
+          (PAIRP |ISTMP#2|)
+          (PROGN
+           (SPADLET |lcl| (QCAR |ISTMP#2|))
+           (SPADLET |cls| (QCDR |ISTMP#2|))
+           (QUOTE T))
+          (PROGN (SPADLET |cls| (NREVERSE |cls|)) (QUOTE T))))
+        (IDENTP |lcl|)
+        (NULL (MEMQ |lcl| |$labelsForGO|)))
+      (SPADLET |e|
+       (CONS
+        (QUOTE SEQ)
+        (APPEND |cls| (CONS (CONS (QUOTE EXIT) (CONS |lcl| NIL)) NIL))))))
+     (SPADLET |cls| (QCDR |e|))
+     (COND
+      ((AND
+        (PAIRP |cls|)
+        (EQ (QCDR |cls|) NIL)
+        (PROGN
+         (SPADLET |ISTMP#1| (QCAR |cls|))
+         (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) (QUOTE SEQ)))))
+       (|tryToRemoveSEQ| (QCAR |cls|)))
+      ((AND
+        (PAIRP |cls|)
+        (EQ (QCDR |cls|) NIL)
+        (PROGN
+         (SPADLET |ISTMP#1| (QCAR |cls|))
+         (AND
+          (PAIRP |ISTMP#1|)
+          (EQ (QCAR |ISTMP#1|) (QUOTE EXIT))
+          (PROGN
+           (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+           (AND
+            (PAIRP |ISTMP#2|)
+            (EQ (QCDR |ISTMP#2|) NIL)
+            (PROGN (SPADLET |body| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+       (COND
+        ((|nakedEXIT?| |body|)
+         (|bootTran| (CONS (QUOTE SEQ) (CONS |body| NIL))))
+        ((QUOTE T) |body|)))
+      ((NULL
+        (OR
+         (|nakedEXIT?| |cls|)
+         (PROG (#0=#:G2596)
+          (SPADLET #0# NIL)
+          (RETURN
+           (DO ((#1=#:G2602 NIL #0#) (#2=#:G2603 |cls| (CDR #2#)) (|g| NIL))
+               ((OR #1# (ATOM #2#) (PROGN (SETQ |g| (CAR #2#)) NIL)) #0#)
+            (SEQ (EXIT (SETQ #0# (OR #0# (MEMQ |g| |$labelsForGO|))))))))))
+       (|bootTran| (CONS (QUOTE PROGN) |cls|)))
+      ((AND
+        (PAIRP |e|)
+        (EQ (QCAR |e|) (QUOTE SEQ))
+        (PROGN
+         (SPADLET |ISTMP#1| (QCDR |e|))
+         (AND
+          (PAIRP |ISTMP#1|)
+          (PROGN
+           (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+           (AND
+            (PAIRP |ISTMP#2|)
+            (EQ (QCAR |ISTMP#2|) (QUOTE COND))
+            (PROGN
+             (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+             (AND
+              (PAIRP |ISTMP#3|)
+              (EQ (QCDR |ISTMP#3|) NIL)
+              (PROGN
+               (SPADLET |ISTMP#4| (QCAR |ISTMP#3|))
+               (AND
+                (PAIRP |ISTMP#4|)
+                (PROGN
+                 (SPADLET |pred| (QCAR |ISTMP#4|))
+                 (SPADLET |ISTMP#5| (QCDR |ISTMP#4|))
+                 (AND
+                  (PAIRP |ISTMP#5|)
+                  (EQ (QCDR |ISTMP#5|) NIL)
+                  (PROGN
+                   (SPADLET |ISTMP#6| (QCAR |ISTMP#5|))
+                   (AND
+                    (PAIRP |ISTMP#6|)
+                    (EQ (QCAR |ISTMP#6|) (QUOTE EXIT))
+                    (PROGN
+                     (SPADLET |ISTMP#7| (QCDR |ISTMP#6|))
+                     (AND
+                      (PAIRP |ISTMP#7|)
+                      (EQ (QCDR |ISTMP#7|) NIL)
+                      (PROGN
+                       (SPADLET |r1| (QCAR |ISTMP#7|))
+                       (QUOTE T))))))))))))))
+          (PROGN (SPADLET |r2| (QCDR |ISTMP#1|)) (QUOTE T)))))
+       (COND
+        ((OR (|nakedEXIT?| |pred|) (|nakedEXIT?| |r1|) (|nakedEXIT?| |r2|))
+         (|tryToRemoveSEQ| |e|))
+        ((QUOTE T)
+         (|bootTran|
+          (CONS
+           (QUOTE COND)
+           (CONS
+            (CONS |pred| (CONS |r1| NIL))
+            (CONS (CONS (QUOTE (QUOTE T)) |r2|) NIL)))))))
+      ((QUOTE T) (|tryToRemoveSEQ| |e|)))))))) 
+;
+;bootPROGN e ==
+;  e := ['PROGN,:bootAbsorbSEQsAndPROGNs CDR e]
+;  [.,:cls] := e
+;  NULL cls => NIL
+;  cls is [body] => body
+;  e
+
+;;;     ***       |bootPROGN| REDEFINED
+
+(DEFUN |bootPROGN| (|e|)
+ (PROG (|cls| |body|)
+  (RETURN
+   (PROGN
+    (SPADLET |e| (CONS (QUOTE PROGN) (|bootAbsorbSEQsAndPROGNs| (CDR |e|))))
+    (SPADLET |cls| (CDR |e|))
+    (COND
+     ((NULL |cls|) NIL)
+     ((AND
+       (PAIRP |cls|)
+       (EQ (QCDR |cls|) NIL)
+       (PROGN (SPADLET |body| (QCAR |cls|)) (QUOTE T)))
+      |body|)
+     ((QUOTE T) |e|)))))) 
+;
+;--% LET
+;
+;defLetForm(lhs,rhs) ==
+;--if functionp lhs then
+;--  sayMSG ['"Danger: Reassigning value to LISP function:",:bright lhs]
+;  [$LET,lhs,rhs]
+
+;;;     ***       |defLetForm| REDEFINED
+
+(DEFUN |defLetForm| (|lhs| |rhs|)
+ (CONS $LET (CONS |lhs| (CONS |rhs| NIL)))) 
+
+;
+;defLET1(lhs,rhs) ==
+;  IDENTP lhs         => defLetForm(lhs,rhs)
+;  lhs is ['FLUID,id] => defLetForm(lhs,rhs)
+;  IDENTP rhs and not CONTAINED(rhs,lhs) =>
+;    rhs' := defLET2(lhs,rhs)
+;    EQCAR(rhs',$LET) => MKPROGN [rhs',rhs]
+;    EQCAR(rhs','PROGN) => APPEND(rhs',[rhs])
+;    if IDENTP CAR rhs' then rhs' := CONS(rhs',NIL)
+;    MKPROGN [:rhs',rhs]
+;  PAIRP(rhs) and EQCAR(rhs, $LET) and IDENTP(name := CADR rhs) =>
+;    -- handle things like [a] := x := foo
+;    l1 := defLET1(name,CADDR rhs)
+;    l2 := defLET1(lhs,name)
+;    EQCAR(l2,'PROGN) => MKPROGN [l1,:CDR l2]
+;    if IDENTP CAR l2 then l2 := cons(l2,nil)
+;    MKPROGN [l1,:l2,name]
+;  g := INTERN STRCONC('"LETTMP#",STRINGIMAGE $letGenVarCounter)
+;  $letGenVarCounter := $letGenVarCounter + 1
+;  rhs' := [$LET,g,rhs]
+;  let' := defLET1(lhs,g)
+;  EQCAR(let','PROGN) => MKPROGN [rhs',:CDR let']
+;  if IDENTP CAR let' then let' := CONS(let',NIL)
+;  MKPROGN [rhs',:let',g]
+
+;;;     ***       |defLET1| REDEFINED
+
+(DEFUN |defLET1| (|lhs| |rhs|)
+ (PROG (|ISTMP#1| |id| |name| |l1| |l2| |g| |rhs'| |let'|)
+  (RETURN
+   (COND
+    ((IDENTP |lhs|) (|defLetForm| |lhs| |rhs|))
+    ((AND
+      (PAIRP |lhs|)
+      (EQ (QCAR |lhs|) (QUOTE FLUID))
+      (PROGN
+       (SPADLET |ISTMP#1| (QCDR |lhs|))
+       (AND
+        (PAIRP |ISTMP#1|)
+        (EQ (QCDR |ISTMP#1|) NIL)
+        (PROGN
+         (SPADLET |id| (QCAR |ISTMP#1|))
+         (QUOTE T)))))
+      (|defLetForm| |lhs| |rhs|))
+    ((AND
+      (IDENTP |rhs|)
+      (NULL (CONTAINED |rhs| |lhs|)))
+     (SPADLET |rhs'| (|defLET2| |lhs| |rhs|))
+     (COND
+      ((EQCAR |rhs'| $LET) (MKPROGN (CONS |rhs'| (CONS |rhs| NIL))))
+      ((EQCAR |rhs'| (QUOTE PROGN)) (APPEND |rhs'| (CONS |rhs| NIL)))
+      ((QUOTE T)
+       (COND ((IDENTP (CAR |rhs'|)) (SPADLET |rhs'| (CONS |rhs'| NIL))))
+       (MKPROGN (APPEND |rhs'| (CONS |rhs| NIL))))))
+    ((AND (PAIRP |rhs|)
+          (EQCAR |rhs| $LET)
+          (IDENTP (SPADLET |name| (CADR |rhs|))))
+     (SPADLET |l1| (|defLET1| |name| (CADDR |rhs|)))
+     (SPADLET |l2| (|defLET1| |lhs| |name|))
+     (COND
+      ((EQCAR |l2| (QUOTE PROGN)) (MKPROGN (CONS |l1| (CDR |l2|))))
+      ((QUOTE T)
+       (COND ((IDENTP (CAR |l2|)) (SPADLET |l2| (CONS |l2| NIL))))
+       (MKPROGN (CONS |l1| (APPEND |l2| (CONS |name| NIL)))))))
+    ((QUOTE T)
+     (SPADLET |g|
+      (INTERN
+       (STRCONC (MAKESTRING "LETTMP#") (STRINGIMAGE |$letGenVarCounter|))))
+     (SPADLET |$letGenVarCounter| (PLUS |$letGenVarCounter| 1))
+     (SPADLET |rhs'| (CONS $LET (CONS |g| (CONS |rhs| NIL))))
+     (SPADLET |let'| (|defLET1| |lhs| |g|))
+     (COND
+      ((EQCAR |let'| (QUOTE PROGN)) (MKPROGN (CONS |rhs'| (CDR |let'|))))
+      ((QUOTE T)
+       (COND ((IDENTP (CAR |let'|)) (SPADLET |let'| (CONS |let'| NIL))))
+       (MKPROGN (CONS |rhs'| (APPEND |let'| (CONS |g| NIL))))))))))) 
+;
+;defLET2(lhs,rhs) ==
+;  IDENTP lhs => defLetForm(lhs,rhs)
+;  NULL lhs   => NIL
+;  lhs is ['FLUID,id] => defLetForm(lhs,rhs)
+;  lhs is [=$LET,a,b] =>
+;    a := defLET2(a,rhs)
+;    null (b := defLET2(b,rhs)) => a
+;    ATOM b => [a,b]
+;    PAIRP QCAR b => CONS(a,b)
+;    [a,b]
+;  lhs is ['CONS,var1,var2] =>
+;    var1 = "." or (PAIRP(var1) and EQCAR(var1,'QUOTE)) =>
+;      defLET2(var2,addCARorCDR('CDR,rhs))
+;    l1 := defLET2(var1,addCARorCDR('CAR,rhs))
+;    MEMQ(var2,'(NIL _.)) => l1
+;    if PAIRP l1 and ATOM CAR l1 then l1 := cons(l1,nil)
+;    IDENTP var2 =>
+;      [:l1,defLetForm(var2,addCARorCDR('CDR,rhs))]
+;    l2 := defLET2(var2,addCARorCDR('CDR,rhs))
+;    if PAIRP l2 and ATOM CAR l2 then l2 := cons(l2,nil)
+;    APPEND(l1,l2)
+;  lhs is ['APPEND,var1,var2] =>
+;    patrev := defISReverse(var2,var1)
+;    rev := ['REVERSE,rhs]
+;    g := INTERN STRCONC('"LETTMP#",STRINGIMAGE $letGenVarCounter)
+;    $letGenVarCounter := $letGenVarCounter + 1
+;    l2 := defLET2(patrev,g)
+;    if PAIRP l2 and ATOM CAR l2 then l2 := cons(l2,nil)
+;    var1 = "." => [[$LET,g,rev],:l2]
+;    last l2 is [=$LET, =var1, val1] =>
+;      [[$LET,g,rev],:REVERSE CDR REVERSE l2,
+;       defLetForm(var1,['NREVERSE,val1])]
+;    [[$LET,g,rev],:l2,defLetForm(var1,['NREVERSE,var1])]
+;  lhs is ['EQUAL,var1] =>
+;    ['COND,[['EQUAL,var1,rhs],var1]]
+;  -- let the IS code take over from here
+;  isPred :=
+;    $inDefIS => defIS1(rhs,lhs)
+;    defIS(rhs,lhs)
+;  ['COND,[isPred,rhs]]
+
+;;;     ***       |defLET2| REDEFINED
+
+(DEFUN |defLET2| (|lhs| |rhs|)
+ (PROG (|id| |a| |b| |l1| |var2| |patrev| |rev| |g| |l2| |ISTMP#2| |ISTMP#3| 
+        |val1| |ISTMP#1| |var1| |isPred|)
+  (RETURN
+   (COND
+    ((IDENTP |lhs|) (|defLetForm| |lhs| |rhs|))
+    ((NULL |lhs|) NIL)
+    ((AND
+      (PAIRP |lhs|)
+      (EQ (QCAR |lhs|) (QUOTE FLUID))
+      (PROGN
+       (SPADLET |ISTMP#1| (QCDR |lhs|))
+       (AND
+        (PAIRP |ISTMP#1|)
+        (EQ (QCDR |ISTMP#1|) NIL)
+        (PROGN (SPADLET |id| (QCAR |ISTMP#1|)) (QUOTE T)))))
+     (|defLetForm| |lhs| |rhs|))
+    ((AND
+      (PAIRP |lhs|)
+      (EQUAL (QCAR |lhs|) $LET)
+      (PROGN
+       (SPADLET |ISTMP#1| (QCDR |lhs|))
+       (AND
+        (PAIRP |ISTMP#1|)
+        (PROGN
+         (SPADLET |a| (QCAR |ISTMP#1|))
+         (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+         (AND
+          (PAIRP |ISTMP#2|)
+          (EQ (QCDR |ISTMP#2|) NIL)
+          (PROGN (SPADLET |b| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+     (SPADLET |a| (|defLET2| |a| |rhs|))
+     (COND
+      ((NULL (SPADLET |b| (|defLET2| |b| |rhs|))) |a|)
+      ((ATOM |b|) (CONS |a| (CONS |b| NIL)))
+      ((PAIRP (QCAR |b|)) (CONS |a| |b|))
+      ((QUOTE T) (CONS |a| (CONS |b| NIL)))))
+    ((AND (PAIRP |lhs|)
+          (EQ (QCAR |lhs|) (QUOTE CONS))
+          (PROGN
+           (SPADLET |ISTMP#1| (QCDR |lhs|))
+           (AND
+            (PAIRP |ISTMP#1|)
+            (PROGN
+             (SPADLET |var1| (QCAR |ISTMP#1|))
+             (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+             (AND
+              (PAIRP |ISTMP#2|)
+              (EQ (QCDR |ISTMP#2|) NIL)
+              (PROGN (SPADLET |var2| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+     (COND
+      ((OR
+        (BOOT-EQUAL |var1| (INTERN "." "BOOT"))
+        (AND (PAIRP |var1|) (EQCAR |var1| (QUOTE QUOTE))))
+       (|defLET2| |var2| (|addCARorCDR| (QUOTE CDR) |rhs|)))
+      ((QUOTE T)
+       (SPADLET |l1| (|defLET2| |var1| (|addCARorCDR| (QUOTE CAR) |rhs|)))
+       (COND
+        ((MEMQ |var2| (QUOTE (NIL |.|))) |l1|)
+        ((QUOTE T)
+         (COND
+          ((AND (PAIRP |l1|) (ATOM (CAR |l1|)))
+           (SPADLET |l1| (CONS |l1| NIL))))
+         (COND
+          ((IDENTP |var2|)
+           (APPEND |l1|
+            (CONS
+             (|defLetForm| |var2| (|addCARorCDR| (QUOTE CDR) |rhs|))
+             NIL)))
+          ((QUOTE T)
+           (SPADLET |l2| (|defLET2| |var2| (|addCARorCDR| (QUOTE CDR) |rhs|)))
+           (COND
+            ((AND (PAIRP |l2|) (ATOM (CAR |l2|)))
+             (SPADLET |l2| (CONS |l2| NIL))))
+           (APPEND |l1| |l2|))))))))
+    ((AND
+      (PAIRP |lhs|)
+      (EQ (QCAR |lhs|) (QUOTE APPEND))
+      (PROGN
+       (SPADLET |ISTMP#1| (QCDR |lhs|))
+       (AND
+        (PAIRP |ISTMP#1|)
+        (PROGN
+         (SPADLET |var1| (QCAR |ISTMP#1|))
+         (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+         (AND
+          (PAIRP |ISTMP#2|)
+          (EQ (QCDR |ISTMP#2|) NIL)
+          (PROGN (SPADLET |var2| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+     (SPADLET |patrev| (|defISReverse| |var2| |var1|))
+     (SPADLET |rev| (CONS (QUOTE REVERSE) (CONS |rhs| NIL)))
+     (SPADLET |g|
+      (INTERN
+       (STRCONC (MAKESTRING "LETTMP#") (STRINGIMAGE |$letGenVarCounter|))))
+     (SPADLET |$letGenVarCounter| (PLUS |$letGenVarCounter| 1))
+     (SPADLET |l2| (|defLET2| |patrev| |g|))
+     (COND
+      ((AND (PAIRP |l2|) (ATOM (CAR |l2|))) (SPADLET |l2| (CONS |l2| NIL))))
+     (COND
+      ((BOOT-EQUAL |var1| (INTERN "." "BOOT"))
+       (CONS (CONS $LET (CONS |g| (CONS |rev| NIL))) |l2|))
+      ((PROGN
+        (SPADLET |ISTMP#1| (|last| |l2|))
+        (AND
+         (PAIRP |ISTMP#1|)
+         (EQUAL (QCAR |ISTMP#1|) $LET)
+         (PROGN
+          (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+          (AND
+           (PAIRP |ISTMP#2|)
+           (EQUAL (QCAR |ISTMP#2|) |var1|)
+           (PROGN
+            (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+            (AND
+             (PAIRP |ISTMP#3|)
+             (EQ (QCDR |ISTMP#3|) NIL)
+             (PROGN (SPADLET |val1| (QCAR |ISTMP#3|)) (QUOTE T))))))))
+       (CONS
+        (CONS $LET (CONS |g| (CONS |rev| NIL)))
+        (APPEND 
+         (REVERSE (CDR (REVERSE |l2|)))
+         (CONS
+          (|defLetForm| |var1| (CONS (QUOTE NREVERSE) (CONS |val1| NIL)))
+          NIL))))
+      ((QUOTE T)
+       (CONS
+        (CONS $LET (CONS |g| (CONS |rev| NIL)))
+        (APPEND 
+         |l2| 
+         (CONS 
+          (|defLetForm| |var1| (CONS (QUOTE NREVERSE) (CONS |var1| NIL)))
+          NIL))))))
+    ((AND 
+      (PAIRP |lhs|)
+      (EQ (QCAR |lhs|) (QUOTE EQUAL))
+      (PROGN
+       (SPADLET |ISTMP#1| (QCDR |lhs|))
+       (AND
+        (PAIRP |ISTMP#1|)
+        (EQ (QCDR |ISTMP#1|) NIL)
+        (PROGN (SPADLET |var1| (QCAR |ISTMP#1|)) (QUOTE T)))))
+      (CONS
+       (QUOTE COND)
+       (CONS
+        (CONS
+         (CONS (QUOTE EQUAL) (CONS |var1| (CONS |rhs| NIL)))
+         (CONS |var1| NIL))
+        NIL)))
+    ((QUOTE T)
+     (SPADLET |isPred|
+      (COND
+       (|$inDefIS| (|defIS1| |rhs| |lhs|))
+       ((QUOTE T) (|defIS| |rhs| |lhs|))))
+     (CONS (QUOTE COND) (CONS (CONS |isPred| (CONS |rhs| NIL)) NIL))))))) 
+;
+;defLET(lhs,rhs) ==
+;  $letGenVarCounter : local := 1
+;  $inDefLET : local := true
+;  defLET1(lhs,rhs)
+
+;;;     ***       |defLET| REDEFINED
+
+(DEFUN |defLET| (|lhs| |rhs|)
+ (PROG (|$letGenVarCounter| |$inDefLET|)
+ (DECLARE (SPECIAL |$letGenVarCounter| |$inDefLET|))
+  (RETURN
+   (PROGN
+    (SPADLET |$letGenVarCounter| 1)
+    (SPADLET |$inDefLET| (QUOTE T))
+    (|defLET1| |lhs| |rhs|))))) 
+;
+;addCARorCDR(acc,expr) ==
+;  NULL PAIRP expr => [acc,expr]
+;  acc = 'CAR and EQCAR(expr,'REVERSE) =>
+;    cons('last,QCDR expr)
+;  funs := '(CAR CDR CAAR CDAR CADR CDDR CAAAR CADAR CAADR CADDR
+;            CDAAR CDDAR CDADR CDDDR)
+;  p := position(QCAR expr,funs)
+;  p = -1 => [acc,expr]
+;  funsA := '(CAAR CADR CAAAR CADAR CAADR CADDR CAAAAR CAADAR CAAADR
+;             CAADDR CADAAR CADDAR CADADR CADDDR)
+;  funsR := '(CDAR CDDR CDAAR CDDAR CDADR CDDDR CDAAAR CDADAR CDAADR
+;             CDADDR CDDAAR CDDDAR CDDADR CDDDDR)
+;  if acc = 'CAR then CONS(funsA.p,QCDR expr)
+;  else               CONS(funsR.p,QCDR expr)
+
+;;;     ***       |addCARorCDR| REDEFINED
+
+(DEFUN |addCARorCDR| (|acc| |expr|)
+ (PROG (|funs| |p| |funsA| |funsR|)
+  (RETURN
+   (COND
+    ((NULL (PAIRP |expr|))
+     (CONS |acc| (CONS |expr| NIL)))
+    ((AND (BOOT-EQUAL |acc| (QUOTE CAR)) (EQCAR |expr| (QUOTE REVERSE)))
+     (CONS (QUOTE |last|) (QCDR |expr|)))
+    ((QUOTE T)
+     (SPADLET |funs|
+      (QUOTE
+       (CAR CDR CAAR CDAR CADR CDDR CAAAR CADAR CAADR 
+        CADDR CDAAR CDDAR CDADR CDDDR)))
+     (SPADLET |p| (|position| (QCAR |expr|) |funs|))
+     (COND
+      ((BOOT-EQUAL |p| (SPADDIFFERENCE 1)) (CONS |acc| (CONS |expr| NIL)))
+      ((QUOTE T)
+       (SPADLET |funsA|
+        (QUOTE (CAAR CADR CAAAR CADAR CAADR CADDR CAAAAR CAADAR 
+                CAAADR CAADDR CADAAR CADDAR CADADR CADDDR)))
+       (SPADLET |funsR|
+        (QUOTE (CDAR CDDR CDAAR CDDAR CDADR CDDDR CDAAAR CDADAR 
+                CDAADR CDADDR CDDAAR CDDDAR CDDADR CDDDDR)))
+       (COND
+        ((BOOT-EQUAL |acc| (QUOTE CAR)) (CONS (ELT |funsA| |p|) (QCDR |expr|)))
+        ((QUOTE T) (CONS (ELT |funsR| |p|) (QCDR |expr|))))))))))) 
+;
+;
+;--% IS
+;
+;defISReverse(x,a) ==
+;  -- reverses forms coming from APPENDs in patterns
+;  -- pretty much just a translation of DEF-IS-REV
+;  x is ['CONS,:.] =>
+;    NULL CADDR x => ['CONS,CADR x, a]
+;    y := defISReverse(CADDR x, NIL)
+;    RPLAC(CADDR y,['CONS,CADR x,a])
+;    y
+;  ERRHUH()
+
+;;;     ***       |defISReverse| REDEFINED
+
+(DEFUN |defISReverse| (|x| |a|)
+ (PROG (|y|)
+  (RETURN
+   (COND
+    ((AND (PAIRP |x|) (EQ (QCAR |x|) (QUOTE CONS)))
+     (COND
+      ((NULL (CADDR |x|)) (CONS (QUOTE CONS) (CONS (CADR |x|) (CONS |a| NIL))))
+      ((QUOTE T)
+       (SPADLET |y| (|defISReverse| (CADDR |x|) NIL))
+       (RPLAC (CADDR |y|) (CONS (QUOTE CONS) (CONS (CADR |x|) (CONS |a| NIL))))
+       |y|)))
+    ((QUOTE T) (ERRHUH)))))) 
+;
+;defIS1(lhs,rhs) ==
+;  NULL rhs =>
+;    ['NULL,lhs]
+;  STRINGP rhs =>
+;    ['EQ,lhs,['QUOTE,INTERN rhs]]
+;  NUMBERP rhs =>
+;    ['EQUAL,lhs,rhs]
+;  ATOM rhs =>
+;    ['PROGN,defLetForm(rhs,lhs),''T]
+;  rhs is ['QUOTE,a] =>
+;    IDENTP a => ['EQ,lhs,rhs]
+;    ['EQUAL,lhs,rhs]
+;  rhs is [=$LET,c,d] =>
+;    l :=
+;      $inDefLET => defLET1(c,lhs)
+;      defLET(c,lhs)
+;    ['AND,defIS1(lhs,d),MKPROGN [l,''T]]
+;  rhs is ['EQUAL,a] =>
+;    ['EQUAL,lhs,a]
+;  PAIRP lhs =>
+;    g := INTERN STRCONC('"ISTMP#",STRINGIMAGE $isGenVarCounter)
+;    $isGenVarCounter := $isGenVarCounter + 1
+;    MKPROGN [[$LET,g,lhs],defIS1(g,rhs)]
+;  rhs is ['CONS,a,b] =>
+;    a = "." =>
+;      NULL b =>
+;        ['AND,['PAIRP,lhs],
+;              ['EQ,['QCDR,lhs],'NIL]]
+;      ['AND,['PAIRP,lhs],
+;            defIS1(['QCDR,lhs],b)]
+;    NULL b =>
+;      ['AND,['PAIRP,lhs],
+;            ['EQ,['QCDR,lhs],'NIL],_
+;            defIS1(['QCAR,lhs],a)]
+;    b = "." =>
+;      ['AND,['PAIRP,lhs],defIS1(['QCAR,lhs],a)]
+;    a1 := defIS1(['QCAR,lhs],a)
+;    b1 := defIS1(['QCDR,lhs],b)
+;    a1 is ['PROGN,c,''T] and b1 is ['PROGN,:cls] =>
+;      ['AND,['PAIRP,lhs],MKPROGN [c,:cls]]
+;    ['AND,['PAIRP,lhs],a1,b1]
+;  rhs is ['APPEND,a,b] =>
+;    patrev := defISReverse(b,a)
+;    g := INTERN STRCONC('"ISTMP#",STRINGIMAGE $isGenVarCounter)
+;    $isGenVarCounter := $isGenVarCounter + 1
+;    rev := ['AND,['PAIRP,lhs],['PROGN,[$LET,g,['REVERSE,lhs]],''T]]
+;    l2 := defIS1(g,patrev)
+;    if PAIRP l2 and ATOM CAR l2 then l2 := cons(l2,nil)
+;    a = "." => ['AND,rev,:l2]
+;    ['AND,rev,:l2,['PROGN,defLetForm(a,['NREVERSE,a]),''T]]
+;  SAY '"WARNING (defIS1): possibly bad IS code being generated"
+;  DEF_-IS [lhs,rhs]
+
+;;;     ***       |defIS1| REDEFINED
+
+(DEFUN |defIS1| (|lhs| |rhs|)
+ (PROG (|d| |l| |a1| |b1| |c| |cls| |ISTMP#1| |a| |ISTMP#2| |b| |patrev| |g| 
+        |rev| |l2|)
+  (RETURN
+   (COND
+    ((NULL |rhs|) (CONS (QUOTE NULL) (CONS |lhs| NIL)))
+    ((STRINGP |rhs|) (CONS (QUOTE EQ) (CONS |lhs| (CONS (CONS (QUOTE QUOTE) (CONS (INTERN |rhs|) NIL)) NIL))))
+    ((NUMBERP |rhs|) (CONS (QUOTE EQUAL) (CONS |lhs| (CONS |rhs| NIL))))
+    ((ATOM |rhs|) (CONS (QUOTE PROGN) (CONS (|defLetForm| |rhs| |lhs|) (CONS (QUOTE (QUOTE T)) NIL))))
+    ((AND (PAIRP |rhs|) (EQ (QCAR |rhs|) (QUOTE QUOTE)) (PROGN (SPADLET |ISTMP#1| (QCDR |rhs|)) (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL) (PROGN (SPADLET |a| (QCAR |ISTMP#1|)) (QUOTE T))))) (COND ((IDENTP |a|) (CONS (QUOTE EQ) (CONS |lhs| (CONS |rhs| NIL)))) ((QUOTE T) (CONS (QUOTE EQUAL) (CONS |lhs| (CONS |rhs| NIL))))))
+    ((AND (PAIRP |rhs|) (EQUAL (QCAR |rhs|) $LET) (PROGN (SPADLET |ISTMP#1| (QCDR |rhs|)) (AND (PAIRP |ISTMP#1|) (PROGN (SPADLET |c| (QCAR |ISTMP#1|)) (SPADLET |ISTMP#2| (QCDR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL) (PROGN (SPADLET |d| (QCAR |ISTMP#2|)) (QUOTE T))))))) (SPADLET |l| (COND (|$inDefLET| (|defLET1| |c| |lhs|)) ((QUOTE T) (|defLET| |c| |lhs|)))) (CONS (QUOTE AND) (CONS (|defIS1| |lhs| |d|) (CONS (MKPROGN (CONS |l| (CONS (QUOTE (QUOTE T)) NIL))) NIL))))
+    ((AND (PAIRP |rhs|) (EQ (QCAR |rhs|) (QUOTE EQUAL)) (PROGN (SPADLET |ISTMP#1| (QCDR |rhs|)) (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL) (PROGN (SPADLET |a| (QCAR |ISTMP#1|)) (QUOTE T))))) (CONS (QUOTE EQUAL) (CONS |lhs| (CONS |a| NIL))))
+    ((PAIRP |lhs|) (SPADLET |g| (INTERN (STRCONC (MAKESTRING "ISTMP#") (STRINGIMAGE |$isGenVarCounter|)))) (SPADLET |$isGenVarCounter| (PLUS |$isGenVarCounter| 1)) (MKPROGN (CONS (CONS $LET (CONS |g| (CONS |lhs| NIL))) (CONS (|defIS1| |g| |rhs|) NIL))))
+    ((AND
+       (PAIRP |rhs|)
+       (EQ (QCAR |rhs|) (QUOTE CONS))
+       (PROGN
+        (SPADLET |ISTMP#1| (QCDR |rhs|))
+        (AND
+         (PAIRP |ISTMP#1|)
+         (PROGN
+          (SPADLET |a| (QCAR |ISTMP#1|))
+          (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+          (AND
+           (PAIRP |ISTMP#2|)
+           (EQ (QCDR |ISTMP#2|) NIL)
+           (PROGN (SPADLET |b| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+     (COND
+      ((BOOT-EQUAL |a| (INTERN "." "BOOT"))
+       (COND
+        ((NULL |b|)
+         (CONS
+          (QUOTE AND)
+          (CONS
+           (CONS (QUOTE PAIRP) (CONS |lhs| NIL))
+           (CONS
+            (CONS
+             (QUOTE EQ)
+             (CONS
+              (CONS (QUOTE QCDR) (CONS |lhs| NIL))
+              (CONS (QUOTE NIL) NIL)))
+            NIL))))
+        ((QUOTE T)
+         (CONS
+          (QUOTE AND)
+          (CONS
+           (CONS (QUOTE PAIRP) (CONS |lhs| NIL))
+           (CONS (|defIS1| (CONS (QUOTE QCDR) (CONS |lhs| NIL)) |b|) NIL))))))
+      ((NULL |b|)
+       (CONS
+        (QUOTE AND)
+        (CONS
+         (CONS (QUOTE PAIRP) (CONS |lhs| NIL))
+         (CONS
+          (CONS
+           (QUOTE EQ)
+           (CONS (CONS (QUOTE QCDR) (CONS |lhs| NIL)) (CONS (QUOTE NIL) NIL)))
+          (CONS (|defIS1| (CONS (QUOTE QCAR) (CONS |lhs| NIL)) |a|) NIL)))))
+      ((BOOT-EQUAL |b| (INTERN "." "BOOT"))
+       (CONS
+        (QUOTE AND)
+        (CONS
+         (CONS (QUOTE PAIRP) (CONS |lhs| NIL))
+         (CONS (|defIS1| (CONS (QUOTE QCAR) (CONS |lhs| NIL)) |a|) NIL))))
+      ((QUOTE T)
+       (SPADLET |a1| (|defIS1| (CONS (QUOTE QCAR) (CONS |lhs| NIL)) |a|))
+       (SPADLET |b1| (|defIS1| (CONS (QUOTE QCDR) (CONS |lhs| NIL)) |b|))
+       (COND
+        ((AND
+          (PAIRP |a1|)
+          (EQ (QCAR |a1|) (QUOTE PROGN))
+          (PROGN
+           (SPADLET |ISTMP#1| (QCDR |a1|))
+           (AND
+            (PAIRP |ISTMP#1|)
+            (PROGN
+             (SPADLET |c| (QCAR |ISTMP#1|))
+             (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+             (AND
+              (PAIRP |ISTMP#2|)
+              (EQ (QCDR |ISTMP#2|) NIL)
+              (EQUAL (QCAR |ISTMP#2|) (QUOTE (QUOTE T)))))))
+          (PAIRP |b1|)
+          (EQ (QCAR |b1|) (QUOTE PROGN))
+          (PROGN (SPADLET |cls| (QCDR |b1|)) (QUOTE T)))
+         (CONS
+          (QUOTE AND)
+          (CONS
+           (CONS (QUOTE PAIRP) (CONS |lhs| NIL))
+           (CONS (MKPROGN (CONS |c| |cls|)) NIL))))
+        ((QUOTE T)
+         (CONS
+          (QUOTE AND)
+          (CONS
+           (CONS (QUOTE PAIRP) (CONS |lhs| NIL))
+           (CONS |a1| (CONS |b1| NIL)))))))))
+    ((AND
+      (PAIRP |rhs|)
+      (EQ (QCAR |rhs|) (QUOTE APPEND))
+      (PROGN
+       (SPADLET |ISTMP#1| (QCDR |rhs|))
+       (AND
+        (PAIRP |ISTMP#1|)
+        (PROGN
+         (SPADLET |a| (QCAR |ISTMP#1|))
+         (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+         (AND
+          (PAIRP |ISTMP#2|)
+          (EQ (QCDR |ISTMP#2|) NIL)
+          (PROGN (SPADLET |b| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+     (SPADLET |patrev| (|defISReverse| |b| |a|))
+     (SPADLET |g|
+      (INTERN (STRCONC "ISTMP#" (STRINGIMAGE |$isGenVarCounter|))))
+     (SPADLET |$isGenVarCounter| (PLUS |$isGenVarCounter| 1))
+     (SPADLET |rev|
+      (CONS
+       (QUOTE AND)
+       (CONS
+        (CONS (QUOTE PAIRP) (CONS |lhs| NIL))
+        (CONS
+         (CONS
+          (QUOTE PROGN)
+          (CONS
+           (CONS 
+            $LET 
+            (CONS |g| (CONS (CONS (QUOTE REVERSE) (CONS |lhs| NIL)) NIL)))
+           (CONS (QUOTE (QUOTE T)) NIL)))
+         NIL))))
+     (SPADLET |l2| (|defIS1| |g| |patrev|))
+     (COND
+      ((AND (PAIRP |l2|) (ATOM (CAR |l2|)))
+       (SPADLET |l2| (CONS |l2| NIL))))
+     (COND
+      ((BOOT-EQUAL |a| (INTERN "." "BOOT"))
+       (CONS (QUOTE AND) (CONS |rev| |l2|)))
+      ((QUOTE T)
+       (CONS
+        (QUOTE AND)
+        (CONS |rev|
+         (APPEND |l2|
+          (CONS
+           (CONS
+            (QUOTE PROGN)
+            (CONS
+             (|defLetForm| |a| (CONS (QUOTE NREVERSE) (CONS |a| NIL)))
+             (CONS (QUOTE (QUOTE T)) NIL)))
+           NIL)))))))
+    ((QUOTE T)
+     (SAY "WARNING (defIS1): possibly bad IS code being generated")
+     (DEF-IS (CONS |lhs| (CONS |rhs| NIL)))))))) 
+;
+;defIS(lhs,rhs) ==
+;  $isGenVarCounter : local := 1
+;  $inDefIS : local := true
+;  defIS1(DEFTRAN lhs,rhs)
+
+;;;     ***       |defIS| REDEFINED
+
+(DEFUN |defIS| (|lhs| |rhs|)
+ (PROG (|$isGenVarCounter| |$inDefIS|)
+  (DECLARE (SPECIAL |$isGenVarCounter| |$inDefIS|))
+   (RETURN
+    (PROGN
+     (SPADLET |$isGenVarCounter| 1)
+     (SPADLET |$inDefIS| (QUOTE T))
+     (|defIS1| (DEFTRAN |lhs|) |rhs|))))) 
+;
+;--% OR and AND
+;
+;bootOR e ==
+;  -- flatten any contained ORs.
+;  cls := CDR e
+;  NULL cls => NIL
+;  NULL CDR cls => CAR cls
+;  ncls := [:flatten(c) for c in cls] where
+;    flatten x ==
+;      x is ['OR,:.] => QCDR x
+;      [x]
+;  ['OR,:ncls]
+
+;;;     ***       |bootOR,flatten| REDEFINED
+
+(DEFUN |bootOR,flatten| (|x|)
+ (SEQ 
+  (IF (AND (PAIRP |x|) (EQ (QCAR |x|) (QUOTE OR))) (EXIT (QCDR |x|)))
+  (EXIT (CONS |x| NIL)))) 
+
+;;;     ***       |bootOR| REDEFINED
+
+(DEFUN |bootOR| (|e|)
+ (PROG (|cls| |ncls|)
+  (RETURN
+   (SEQ
+    (PROGN
+     (SPADLET |cls| (CDR |e|))
+     (COND
+      ((NULL |cls|) NIL)
+      ((NULL (CDR |cls|)) (CAR |cls|))
+      ((QUOTE T)
+       (SPADLET |ncls|
+        (PROG (#0=#:G2934)
+         (SPADLET #0# NIL)
+         (RETURN
+          (DO ((#1=#:G2939 |cls| (CDR #1#)) (|c| NIL))
+              ((OR (ATOM #1#) (PROGN (SETQ |c| (CAR #1#)) NIL)) #0#)
+           (SEQ (EXIT (SETQ #0# (APPEND #0# (|bootOR,flatten| |c|)))))))))
+       (CONS (QUOTE OR) |ncls|)))))))) 
+;
+;bootAND e ==
+;  -- flatten any contained ANDs.
+;  cls := CDR e
+;  NULL cls => 'T
+;  NULL CDR cls => CAR cls
+;  ncls := [:flatten(c) for c in cls] where
+;    flatten x ==
+;      x is ['AND,:.] => QCDR x
+;      [x]
+;  ['AND,:ncls]
+
+;;;     ***       |bootAND,flatten| REDEFINED
+
+(DEFUN |bootAND,flatten| (|x|)
+ (SEQ
+  (IF (AND (PAIRP |x|) (EQ (QCAR |x|) (QUOTE AND))) (EXIT (QCDR |x|)))
+  (EXIT (CONS |x| NIL)))) 
+
+;;;     ***       |bootAND| REDEFINED
+
+(DEFUN |bootAND| (|e|)
+ (PROG (|cls| |ncls|)
+  (RETURN
+   (SEQ
+    (PROGN
+     (SPADLET |cls| (CDR |e|))
+     (COND
+      ((NULL |cls|) (QUOTE T))
+      ((NULL (CDR |cls|)) (CAR |cls|))
+      ((QUOTE T)
+       (SPADLET |ncls|
+        (PROG (#0=#:G2957)
+         (SPADLET #0# NIL)
+         (RETURN
+          (DO ((#1=#:G2962 |cls| (CDR #1#)) (|c| NIL))
+              ((OR (ATOM #1#) (PROGN (SETQ |c| (CAR #1#)) NIL)) #0#)
+           (SEQ (EXIT (SETQ #0# (APPEND #0# (|bootAND,flatten| |c|)))))))))
+       (CONS (QUOTE AND) |ncls|)))))))) 
+;
+;--% Main Transformation Functions
+;
+;bootLabelsForGO e ==
+;  ATOM e => NIL
+;  [head,:tail] := e
+;  IDENTP head =>
+;    head = 'GO => $labelsForGO := CONS(CAR tail,$labelsForGO)
+;    head = 'QUOTE => NIL
+;    bootLabelsForGO tail
+;  bootLabelsForGO head
+;  bootLabelsForGO tail
+
+;;;     ***       |bootLabelsForGO| REDEFINED
+
+(DEFUN |bootLabelsForGO| (|e|)
+ (PROG (|head| |tail|)
+  (RETURN
+   (COND
+    ((ATOM |e|) NIL)
+    ((QUOTE T)
+     (SPADLET |head| (CAR |e|))
+     (SPADLET |tail| (CDR |e|))
+     (COND
+      ((IDENTP |head|)
+       (COND
+        ((BOOT-EQUAL |head| (QUOTE GO))
+         (SPADLET |$labelsForGO| (CONS (CAR |tail|) |$labelsForGO|)))
+        ((BOOT-EQUAL |head| (QUOTE QUOTE))
+         NIL)
+        ((QUOTE T)
+         (|bootLabelsForGO| |tail|))))
+      ((QUOTE T) (|bootLabelsForGO| |head|) (|bootLabelsForGO| |tail|)))))))) 
+;
+;bootTran e ==
+;  ATOM e => e
+;  [head,:tail] := e
+;  head = 'QUOTE => e
+;  tail := [bootTran t for t in tail]
+;  e := [head,:tail]
+;  IDENTP head =>
+;    head = 'IF    => bootIF e
+;    head = 'COND  => bootCOND e
+;    head = 'PROGN => bootPROGN  e
+;    head = 'SEQ   => bootSEQ  e
+;    head = 'OR    => bootOR  e
+;    head = 'AND   => bootAND  e
+;    e
+;  [bootTran head,:QCDR e]
+
+;;;     ***       |bootTran| REDEFINED
+
+(DEFUN |bootTran| (|e|)
+ (PROG (|head| |tail|)
+  (RETURN
+   (SEQ
+    (COND
+     ((ATOM |e|) |e|)
+     ((QUOTE T)
+      (SPADLET |head| (CAR |e|))
+      (SPADLET |tail| (CDR |e|))
+      (COND
+       ((BOOT-EQUAL |head| (QUOTE QUOTE)) |e|)
+       ((QUOTE T)
+        (SPADLET |tail|
+         (PROG (#0=#:G2994)
+          (SPADLET #0# NIL)
+           (RETURN
+            (DO ((#1=#:G2999 |tail| (CDR #1#)) (|t| NIL))
+                ((OR (ATOM #1#) (PROGN (SETQ |t| (CAR #1#)) NIL))
+                  (NREVERSE0 #0#))
+              (SEQ (EXIT (SETQ #0# (CONS (|bootTran| |t|) #0#))))))))
+        (SPADLET |e| (CONS |head| |tail|))
+        (COND
+         ((IDENTP |head|)
+          (COND
+           ((BOOT-EQUAL |head| (QUOTE IF)) (|bootIF| |e|))
+           ((BOOT-EQUAL |head| (QUOTE COND)) (|bootCOND| |e|))
+           ((BOOT-EQUAL |head| (QUOTE PROGN)) (|bootPROGN| |e|))
+           ((BOOT-EQUAL |head| (QUOTE SEQ)) (|bootSEQ| |e|))
+           ((BOOT-EQUAL |head| (QUOTE OR)) (|bootOR| |e|))
+           ((BOOT-EQUAL |head| (QUOTE AND)) (|bootAND| |e|))
+           ((QUOTE T) |e|)))
+         ((QUOTE T) (CONS (|bootTran| |head|) (QCDR |e|)))))))))))) 
+;
+;bootTransform e ==
+;--NULL $BOOT => e
+;  $labelsForGO : local := NIL
+;  bootLabelsForGO e
+;  bootTran e
+
+;;;     ***       |bootTransform| REDEFINED
+
+(DEFUN |bootTransform| (|e|)
+ (PROG (|$labelsForGO|)
+ (DECLARE (SPECIAL |$labelsForGO|))
+  (RETURN
+   (PROGN
+    (SPADLET |$labelsForGO| NIL)
+    (|bootLabelsForGO| |e|)
+    (|bootTran| |e|))))) 
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}
