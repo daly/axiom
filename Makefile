@@ -1,8 +1,8 @@
-VERSION="Axiom (July 2009)"
-SPD=$(shell pwd)
-SYS=$(notdir $(AXIOM))
-SPAD=${SPD}/mnt/${SYS}
-LSP=${SPD}/lsp
+VERSION:="Axiom (July 2009)"
+SPD:=$(shell pwd)
+SYS:=$(notdir $(AXIOM))
+SPAD:=${SPD}/mnt/${SYS}
+LSP:=${SPD}/lsp
 #GCLVERSION=gcl-2.4.1
 #GCLVERSION=gcl-2.5
 #GCLVERSION=gcl-2.5.2
@@ -17,32 +17,32 @@ LSP=${SPD}/lsp
 #GCLVERSION=gcl-2.6.8pre
 #GCLVERSION=gcl-2.6.8pre2
 GCLVERSION=gcl-2.6.8pre3 
-AWK=gawk
-GCLDIR=${LSP}/${GCLVERSION}
-SRC=${SPD}/src
-INT=${SPD}/int
-OBJ=${SPD}/obj
-MNT=${SPD}/mnt
-ZIPS=${SPD}/zips
-BOOKS=${SPD}/books
-TMP=${OBJ}/tmp
-SPADBIN=${MNT}/${SYS}/bin
-INC=${SPD}/src/include
-CCLBASE=${OBJ}/${SYS}/ccl/ccllisp
-DESTDIR=/usr/local/axiom
-COMMAND=${DESTDIR}/mnt/${SYS}/bin/axiom
-DOCUMENT=${SPADBIN}/document
-TANGLE=${SPADBIN}/lib/notangle
-WEAVE=${SPADBIN}/lib/noweave
-NOISE="-o ${TMP}/trace"
-PATCH=patch
-UNCOMPRESS=gunzip
+AWK:=gawk
+GCLDIR:=${LSP}/${GCLVERSION}
+SRC:=${SPD}/src
+INT:=${SPD}/int
+OBJ:=${SPD}/obj
+MNT:=${SPD}/mnt
+ZIPS:=${SPD}/zips
+BOOKS:=${SPD}/books
+TMP:=${OBJ}/tmp
+SPADBIN:=${MNT}/${SYS}/bin
+INC:=${SPD}/src/include
+CCLBASE:=${OBJ}/${SYS}/ccl/ccllisp
+DESTDIR:=/usr/local/axiom
+COMMAND:=${DESTDIR}/mnt/${SYS}/bin/axiom
+DOCUMENT:=${SPADBIN}/document
+TANGLE:=${SPADBIN}/lib/notangle
+WEAVE:=${SPADBIN}/lib/noweave
+NOISE:="-o ${TMP}/trace"
+PATCH:=patch
+UNCOMPRESS:=gunzip
 
 PART=	cprogs
 SUBPART= everything
 
 
-ENV= SPAD=${SPAD} SYS=${SYS} SPD=${SPD} LSP=${LSP} GCLDIR=${GCLDIR} \
+ENV:= SPAD=${SPAD} SYS=${SYS} SPD=${SPD} LSP=${LSP} GCLDIR=${GCLDIR} \
      SRC=${SRC} INT=${INT} OBJ=${OBJ} MNT=${MNT} ZIPS=${ZIPS} TMP=${TMP} \
      SPADBIN=${SPADBIN} INC=${INC} CCLBASE=${CCLBASE} PART=${PART} \
      SUBPART=${SUBPART} NOISE=${NOISE} GCLVERSION=${GCLVERSION} \
