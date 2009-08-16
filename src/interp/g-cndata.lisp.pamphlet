@@ -1,0 +1,684 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp g-cndata.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;--% Manipulation of Constructor Datat
+;--=======================================================================
+;--            Build Table of Lower Case Constructor Names
+;--=======================================================================
+;mkLowerCaseConTable() ==
+;--Called at system build time by function BUILD-INTERPSYS (see util.lisp)
+;--Table is referenced by functions conPageFastPath and grepForAbbrev
+;  $lowerCaseConTb := MAKE_-HASH_-TABLE()
+;  for x in allConstructors() repeat augmentLowerCaseConTable x
+;  $lowerCaseConTb
+
+(DEFUN |mkLowerCaseConTable| ()
+ (SEQ
+  (PROGN
+   (SPADLET |$lowerCaseConTb| (MAKE-HASH-TABLE))
+   (DO ((#0=#:G166061 (|allConstructors|) (CDR #0#)) (|x| NIL))
+       ((OR (ATOM #0#) (PROGN (SETQ |x| (CAR #0#)) NIL)) NIL)
+    (SEQ (EXIT (|augmentLowerCaseConTable| |x|))))
+   |$lowerCaseConTb|))) 
+
+;augmentLowerCaseConTable x ==
+;  y:=GETDATABASE(x,'ABBREVIATION)
+;  item:=[x,y,nil]
+;  HPUT($lowerCaseConTb,x,item)
+;  HPUT($lowerCaseConTb,DOWNCASE x,item)
+;  HPUT($lowerCaseConTb,y,item)
+
+(DEFUN |augmentLowerCaseConTable| (|x|)
+ (PROG (|y| |item|)
+  (RETURN
+   (PROGN
+    (SPADLET |y| (GETDATABASE |x| (QUOTE ABBREVIATION)))
+    (SPADLET |item| (CONS |x| (CONS |y| (CONS NIL NIL))))
+    (HPUT |$lowerCaseConTb| |x| |item|)
+    (HPUT |$lowerCaseConTb| (DOWNCASE |x|) |item|)
+    (HPUT |$lowerCaseConTb| |y| |item|))))) 
+
+;getCDTEntry(info,isName) ==
+;  not IDENTP info => NIL
+;  (entry := HGET($lowerCaseConTb,info)) =>
+;    [name,abb,:.] := entry
+;    isName and EQ(name,info) => entry
+;    not isName and EQ(abb,info) => entry
+;    NIL
+;  entry
+
+(DEFUN |getCDTEntry| (|info| |isName|)
+ (PROG (|entry| |name| |abb|)
+  (RETURN
+   (COND
+    ((NULL (IDENTP |info|)) NIL)
+    ((SPADLET |entry| (HGET |$lowerCaseConTb| |info|))
+     (SPADLET |name| (CAR |entry|))
+     (SPADLET |abb| (CADR |entry|))
+     (COND
+      ((AND |isName| (EQ |name| |info|)) |entry|)
+      ((AND (NULL |isName|) (EQ |abb| |info|)) |entry|)
+      ((QUOTE T) NIL)))
+    ((QUOTE T) |entry|))))) 
+;
+;putConstructorProperty(name,prop,val) ==
+;  null (entry := getCDTEntry(name,true)) => NIL
+;  RPLACD(CDR entry,PUTALIST(CDDR entry,prop,val))
+;  true
+
+(DEFUN |putConstructorProperty| (|name| |prop| |val|)
+ (PROG (|entry|)
+  (RETURN
+   (COND
+    ((NULL (SPADLET |entry| (|getCDTEntry| |name| (QUOTE T)))) NIL)
+    ((QUOTE T)
+     (RPLACD (CDR |entry|) (PUTALIST (CDDR |entry|) |prop| |val|))
+     (QUOTE T)))))) 
+
+;attribute? name ==
+;        MEMQ(name, _*ATTRIBUTES_*)
+
+(DEFUN |attribute?| (|name|) (MEMQ |name| *ATTRIBUTES*)) 
+
+;
+;abbreviation? abb ==
+;  -- if it is an abbreviation, return the corresponding name
+;  GETDATABASE(abb,'CONSTRUCTOR)
+
+(DEFUN |abbreviation?| (|abb|) (GETDATABASE |abb| (QUOTE CONSTRUCTOR))) 
+
+;
+;constructor? name ==
+;  -- if it is a constructor name, return the abbreviation
+;  GETDATABASE(name,'ABBREVIATION)
+
+(DEFUN |constructor?| (|name|) (GETDATABASE |name| (QUOTE ABBREVIATION))) 
+
+;
+;domainForm? d ==
+;  GETDATABASE(opOf d,'CONSTRUCTORKIND) = 'domain
+
+(DEFUN |domainForm?| (|d|)
+ (BOOT-EQUAL (GETDATABASE (|opOf| |d|) (QUOTE CONSTRUCTORKIND))
+             (QUOTE |domain|))) 
+
+;packageForm? d ==
+;  GETDATABASE(opOf d,'CONSTRUCTORKIND) = 'package
+
+(DEFUN |packageForm?| (|d|)
+ (BOOT-EQUAL (GETDATABASE (|opOf| |d|) (QUOTE CONSTRUCTORKIND))
+             (QUOTE |package|))) 
+
+;categoryForm? c ==
+;  op := opOf c
+;  MEMQ(op, $CategoryNames) => true
+;  GETDATABASE(op,'CONSTRUCTORKIND) = 'category => true
+;  nil
+
+(DEFUN |categoryForm?| (|c|)
+ (PROG (|op|)
+  (RETURN
+   (PROGN
+    (SPADLET |op| (|opOf| |c|))
+    (COND
+     ((MEMQ |op| |$CategoryNames|) (QUOTE T))
+     ((BOOT-EQUAL (GETDATABASE |op| (QUOTE CONSTRUCTORKIND))
+                  (QUOTE |category|))
+      (QUOTE T))
+     ((QUOTE T) NIL)))))) 
+
+;getImmediateSuperDomain(d) ==
+;  IFCAR GETDATABASE(opOf d, 'SUPERDOMAIN)
+
+(DEFUN |getImmediateSuperDomain| (|d|)
+ (IFCAR (GETDATABASE (|opOf| |d|) (QUOTE SUPERDOMAIN)))) 
+
+;maximalSuperType d ==
+;  d' := GETDATABASE(opOf d, 'SUPERDOMAIN) => maximalSuperType first d'
+;  d
+
+(DEFUN |maximalSuperType| (|d|)
+ (PROG (|d'|)
+  (RETURN
+   (COND
+    ((SPADLET |d'| (GETDATABASE (|opOf| |d|) (QUOTE SUPERDOMAIN)))
+     (|maximalSuperType| (CAR |d'|)))
+    ((QUOTE T) |d|))))) 
+
+;-- probably will switch over to 'libName soon
+;getLisplibName(c) == getConstructorAbbreviation(c)
+
+(DEFUN |getLisplibName| (|c|) (|getConstructorAbbreviation| |c|)) 
+;
+;getConstructorAbbreviation op ==
+;  constructor?(op) or throwKeyedMsg("S2IL0015",[op])
+
+(DEFUN |getConstructorAbbreviation| (|op|)
+ (OR (|constructor?| |op|)
+     (|throwKeyedMsg| (QUOTE S2IL0015) (CONS |op| NIL)))) 
+;
+;getConstructorUnabbreviation op ==
+;  abbreviation?(op) or throwKeyedMsg("S2IL0019",[op])
+
+(DEFUN |getConstructorUnabbreviation| (|op|)
+ (OR (|abbreviation?| |op|) 
+     (|throwKeyedMsg| (QUOTE S2IL0019) (CONS |op| NIL)))) 
+;
+;mkUserConstructorAbbreviation(c,a,type) ==
+;  if not atom c then c:= CAR c  --  Existing constructors will be wrapped
+;  constructorAbbreviationErrorCheck(c,a,type,'abbreviationError)
+;  clearClams()
+;  clearConstructorCache(c)
+;  installConstructor(c,type)
+;  setAutoLoadProperty(c)
+
+(DEFUN |mkUserConstructorAbbreviation| (|c| |a| |type|)
+ (PROGN
+  (COND ((NULL (ATOM |c|)) (SPADLET |c| (CAR |c|))))
+  (|constructorAbbreviationErrorCheck| |c| |a| |type|
+    (QUOTE |abbreviationError|))
+  (|clearClams|)
+  (|clearConstructorCache| |c|)
+  (|installConstructor| |c| |type|)
+  (|setAutoLoadProperty| |c|))) 
+;
+;installConstructor(cname,type) ==
+;  (entry := getCDTEntry(cname,true)) => entry
+;  item := [cname,GETDATABASE(cname,'ABBREVIATION),nil]
+;  if BOUNDP '$lowerCaseConTb and $lowerCaseConTb then
+;    HPUT($lowerCaseConTb,cname,item)
+;    HPUT($lowerCaseConTb,DOWNCASE cname,item)
+
+(DEFUN |installConstructor| (|cname| |type|)
+ (PROG (|entry| |item|)
+  (RETURN
+   (COND
+    ((SPADLET |entry| (|getCDTEntry| |cname| (QUOTE T))) |entry|)
+    ((QUOTE T)
+     (SPADLET |item|
+      (CONS |cname|
+       (CONS (GETDATABASE |cname| (QUOTE ABBREVIATION)) (CONS NIL NIL))))
+     (COND
+      ((AND (BOUNDP (QUOTE |$lowerCaseConTb|)) |$lowerCaseConTb|)
+       (HPUT |$lowerCaseConTb| |cname| |item|)
+       (HPUT |$lowerCaseConTb| (DOWNCASE |cname|) |item|))
+      ((QUOTE T) NIL))))))) 
+;
+;constructorNameConflict(name,kind) ==
+;  userError
+;    ["The name",:bright name,"conflicts with the name of an existing rule",
+;      "%l","please choose another ",kind]
+
+(DEFUN |constructorNameConflict| (|name| |kind|)
+ (|userError|
+  (CONS
+   (QUOTE |The name|)
+   (APPEND
+    (|bright| |name|)
+    (CONS
+     (QUOTE |conflicts with the name of an existing rule|)
+     (CONS
+      (QUOTE |%l|)
+      (CONS (QUOTE |please choose another |) (CONS |kind| NIL)))))))) 
+
+;
+;constructorAbbreviationErrorCheck(c,a,typ,errmess) ==
+;  siz := SIZE (s := PNAME a)
+;  if typ = 'category and siz > 7
+;    then throwKeyedErrorMsg('precompilation,"S2IL0021",NIL)
+;  if siz > 8 then throwKeyedErrorMsg('precompilation,"S2IL0006",NIL)
+;  if s ^= UPCASE s then throwKeyedMsg("S2IL0006",NIL)
+;  abb := GETDATABASE(c,'ABBREVIATION)
+;  name:= GETDATABASE(a,'CONSTRUCTOR)
+;  type := GETDATABASE(c,'CONSTRUCTORKIND)
+;  a=abb and c^=name => lisplibError(c,a,typ,abb,name,type,'duplicateAbb)
+;  a=name and c^=name => lisplibError(c,a,typ,abb,name,type,'abbIsName)
+;  c=name and typ^=type => lisplibError(c,a,typ,abb,name,type,'wrongType)
+
+(DEFUN |constructorAbbreviationErrorCheck| (|c| |a| |typ| |errmess|)
+ (PROG (|s| |siz| |abb| |name| |type|)
+  (RETURN
+   (PROGN
+    (SPADLET |siz| (SIZE (SPADLET |s| (PNAME |a|))))
+    (COND
+     ((AND (BOOT-EQUAL |typ| (QUOTE |category|)) (> |siz| 7))
+      (|throwKeyedErrorMsg| (QUOTE |precompilation|) (QUOTE S2IL0021) NIL)))
+    (COND
+     ((> |siz| 8)
+      (|throwKeyedErrorMsg| (QUOTE |precompilation|) (QUOTE S2IL0006) NIL)))
+    (COND ((NEQUAL |s| (UPCASE |s|)) (|throwKeyedMsg| (QUOTE S2IL0006) NIL)))
+    (SPADLET |abb| (GETDATABASE |c| (QUOTE ABBREVIATION)))
+    (SPADLET |name| (GETDATABASE |a| (QUOTE CONSTRUCTOR)))
+    (SPADLET |type| (GETDATABASE |c| (QUOTE CONSTRUCTORKIND)))
+    (COND
+     ((AND (BOOT-EQUAL |a| |abb|) (NEQUAL |c| |name|))
+      (|lisplibError| |c| |a| |typ| |abb| |name| |type|
+       (QUOTE |duplicateAbb|)))
+     ((AND (BOOT-EQUAL |a| |name|) (NEQUAL |c| |name|))
+      (|lisplibError| |c| |a| |typ| |abb| |name| |type|
+       (QUOTE |abbIsName|)))
+     ((AND (BOOT-EQUAL |c| |name|) (NEQUAL |typ| |type|))
+      (|lisplibError| |c| |a| |typ| |abb| |name| |type|
+       (QUOTE |wrongType|)))))))) 
+
+;
+;abbreviationError(c,a,typ,abb,name,type,error) ==
+;  sayKeyedMsg("S2IL0009",[a,typ,c])
+;  error='duplicateAbb =>
+;    throwKeyedMsg("S2IL0010",[a,typ,name])
+;  error='abbIsName =>
+;    throwKeyedMsg("S2IL0011",[a,type])
+;  error='wrongType =>
+;    throwKeyedMsg("S2IL0012",[c,type])
+;  NIL
+
+(DEFUN |abbreviationError| (|c| |a| |typ| |abb| |name| |type| |error|)
+ (PROGN
+  (|sayKeyedMsg| (QUOTE S2IL0009) (CONS |a| (CONS |typ| (CONS |c| NIL))))
+  (COND
+   ((BOOT-EQUAL |error| (QUOTE |duplicateAbb|))
+    (|throwKeyedMsg| 'S2IL0010 (CONS |a| (CONS |typ| (CONS |name| NIL)))))
+   ((BOOT-EQUAL |error| (QUOTE |abbIsName|))
+    (|throwKeyedMsg| (QUOTE S2IL0011) (CONS |a| (CONS |type| NIL))))
+   ((BOOT-EQUAL |error| (QUOTE |wrongType|))
+    (|throwKeyedMsg| (QUOTE S2IL0012) (CONS |c| (CONS |type| NIL))))
+   ((QUOTE T) NIL)))) 
+
+;
+;abbreviate u ==
+;  u is ['Union,:arglist] =>
+;    ['Union,:[abbreviate a for a in arglist]]
+;  u is [op,:arglist] =>
+;    abb := constructor?(op) =>
+;      [abb,:condAbbrev(arglist,getPartialConstructorModemapSig(op))]
+;    u
+;  constructor?(u) or u
+
+(DEFUN |abbreviate| (|u|)
+ (PROG (|op| |arglist| |abb|)
+  (RETURN
+   (SEQ
+    (COND
+     ((AND (PAIRP |u|)
+           (EQ (QCAR |u|) (QUOTE |Union|))
+           (PROGN (SPADLET |arglist| (QCDR |u|)) (QUOTE T)))
+      (CONS
+       (QUOTE |Union|)
+       (PROG (#0=#:G166167) 
+        (SPADLET #0# NIL)
+        (RETURN
+         (DO ((#1=#:G166172 |arglist| (CDR #1#)) (|a| NIL))
+             ((OR (ATOM #1#) (PROGN (SETQ |a| (CAR #1#)) NIL)) (NREVERSE0 #0#))
+          (SEQ (EXIT (SETQ #0# (CONS (|abbreviate| |a|) #0#)))))))))
+     ((AND (PAIRP |u|)
+           (PROGN
+            (SPADLET |op| (QCAR |u|))
+            (SPADLET |arglist| (QCDR |u|))
+            (QUOTE T)))
+      (COND
+       ((SPADLET |abb| (|constructor?| |op|))
+        (CONS |abb| (|condAbbrev| |arglist|
+         (|getPartialConstructorModemapSig| |op|))))
+       ((QUOTE T) |u|)))
+     ((QUOTE T) (OR (|constructor?| |u|) |u|))))))) 
+
+;
+;unabbrev u == unabbrev1(u,nil)
+
+(DEFUN |unabbrev| (|u|) (|unabbrev1| |u| NIL)) 
+
+;
+;unabbrevAndLoad u == unabbrev1(u,true)
+
+(DEFUN |unabbrevAndLoad| (|u|) (|unabbrev1| |u| (QUOTE T))) 
+
+;
+;isNameOfType x ==
+;  $doNotAddEmptyModeIfTrue:local:= true
+;  (val := get(x,'value,$InteractiveFrame)) and
+;    (domain := objMode val) and
+;      domain in '((Mode) (Domain) (SubDomain (Domain))) => true
+;  y := opOf unabbrev x
+;  constructor? y
+
+(DEFUN |isNameOfType| (|x|)
+ (PROG (|$doNotAddEmptyModeIfTrue| |val| |domain| |y|)
+ (DECLARE (SPECIAL |$doNotAddEmptyModeIfTrue|))
+  (RETURN
+   (PROGN
+    (SPADLET |$doNotAddEmptyModeIfTrue| (QUOTE T))
+    (COND
+     ((AND
+       (SPADLET |val| (|get| |x| (QUOTE |value|) |$InteractiveFrame|))
+       (SPADLET |domain| (|objMode| |val|))
+       (|member| |domain|
+         (QUOTE ((|Mode|) (|Domain|) (|SubDomain| (|Domain|))))))
+      (QUOTE T))
+     ((QUOTE T)
+      (SPADLET |y| (|opOf| (|unabbrev| |x|))) (|constructor?| |y|))))))) 
+
+;
+;unabbrev1(u,modeIfTrue) ==
+;  atom u =>
+;    modeIfTrue =>
+;      d:= isDomainValuedVariable u => u
+;      a := abbreviation? u =>
+;        GETDATABASE(a,'NILADIC) => [a]
+;        largs := ['_$EmptyMode for arg in
+;          getPartialConstructorModemapSig(a)]
+;        unabbrev1([u,:largs],modeIfTrue)
+;      u
+;    a:= abbreviation?(u) or u
+;    GETDATABASE(a,'NILADIC) => [a]
+;    a
+;  [op,:arglist] := u
+;  op = 'Join => ['Join, :[unabbrev1(x, modeIfTrue) for x in arglist]]
+;  d:= isDomainValuedVariable op =>
+;    throwKeyedMsg("S2IL0013",[op,d])
+;  (r := unabbrevSpecialForms(op,arglist,modeIfTrue)) => r
+;  (cname := abbreviation? op) or (constructor?(op) and (cname := op)) =>
+;    (r := unabbrevSpecialForms(cname,arglist,modeIfTrue)) => r
+;    -- ??? if modeIfTrue then loadIfNecessary cname
+;    [cname,:condUnabbrev(op,arglist,
+;      getPartialConstructorModemapSig(cname),modeIfTrue)]
+;  u
+
+(DEFUN |unabbrev1| (|u| |modeIfTrue|)
+ (PROG (|largs| |a| |op| |arglist| |d| |cname| |r|)
+  (RETURN
+   (SEQ
+    (COND
+     ((ATOM |u|)
+      (COND
+       (|modeIfTrue|
+        (COND
+         ((SPADLET |d| (|isDomainValuedVariable| |u|)) |u|)
+         ((SPADLET |a| (|abbreviation?| |u|))
+          (COND
+           ((GETDATABASE |a| (QUOTE NILADIC)) (CONS |a| NIL))
+           ((QUOTE T)
+            (SPADLET |largs|
+             (PROG (#0=#:G166214)
+              (SPADLET #0# NIL)
+              (RETURN
+               (DO ((#1=#:G166219
+                     (|getPartialConstructorModemapSig| |a|)
+                     (CDR #1#))
+                    (|arg| NIL))
+                   ((OR (ATOM #1#) (PROGN (SETQ |arg| (CAR #1#)) NIL))
+                     (NREVERSE0 #0#))
+                (SEQ (EXIT (SETQ #0# (CONS (QUOTE |$EmptyMode|) #0#))))))))
+            (|unabbrev1| (CONS |u| |largs|) |modeIfTrue|))))
+         ((QUOTE T) |u|)))
+       ((QUOTE T)
+        (SPADLET |a| (OR (|abbreviation?| |u|) |u|))
+        (COND
+         ((GETDATABASE |a| (QUOTE NILADIC)) (CONS |a| NIL))
+         ((QUOTE T) |a|)))))
+     ((QUOTE T)
+      (SPADLET |op| (CAR |u|))
+      (SPADLET |arglist| (CDR |u|))
+      (COND
+       ((BOOT-EQUAL |op| (QUOTE |Join|))
+        (CONS
+         (QUOTE |Join|)
+         (PROG (#2=#:G166229)
+          (SPADLET #2# NIL)
+          (RETURN
+           (DO ((#3=#:G166234 |arglist| (CDR #3#))
+                (|x| NIL))
+               ((OR (ATOM #3#) (PROGN (SETQ |x| (CAR #3#)) NIL))
+                 (NREVERSE0 #2#))
+            (SEQ
+             (EXIT (SETQ #2# (CONS (|unabbrev1| |x| |modeIfTrue|) #2#)))))))))
+       ((SPADLET |d| (|isDomainValuedVariable| |op|))
+        (|throwKeyedMsg| (QUOTE S2IL0013) (CONS |op| (CONS |d| NIL))))
+       ((SPADLET |r| (|unabbrevSpecialForms| |op| |arglist| |modeIfTrue|)) |r|)
+       ((OR (SPADLET |cname| (|abbreviation?| |op|))
+            (AND (|constructor?| |op|) (SPADLET |cname| |op|)))
+        (COND
+         ((SPADLET |r| (|unabbrevSpecialForms| |cname| |arglist| |modeIfTrue|))
+          |r|)
+         ((QUOTE T)
+          (CONS
+           |cname|
+           (|condUnabbrev| |op| |arglist|
+            (|getPartialConstructorModemapSig| |cname|) |modeIfTrue|)))))
+       ((QUOTE T) |u|)))))))) 
+
+;
+;unabbrevSpecialForms(op,arglist,modeIfTrue) ==
+;  op = 'Mapping => [op,:[unabbrev1(a,modeIfTrue) for a in arglist]]
+;  op = 'Union   =>
+;    [op,:[unabbrevUnionComponent(a,modeIfTrue) for a in arglist]]
+;  op = 'Record =>
+;    [op,:[unabbrevRecordComponent(a,modeIfTrue) for a in arglist]]
+;  nil
+
+(DEFUN |unabbrevSpecialForms| (|op| |arglist| |modeIfTrue|)
+ (PROG () 
+  (RETURN 
+   (SEQ
+    (COND
+     ((BOOT-EQUAL |op| (QUOTE |Mapping|))
+      (CONS |op|
+       (PROG (#0=#:G166261)
+        (SPADLET #0# NIL)
+        (RETURN
+         (DO ((#1=#:G166266 |arglist| (CDR #1#)) (|a| NIL))
+             ((OR (ATOM #1#) (PROGN (SETQ |a| (CAR #1#)) NIL)) (NREVERSE0 #0#))
+          (SEQ
+           (EXIT (SETQ #0# (CONS (|unabbrev1| |a| |modeIfTrue|) #0#)))))))))
+     ((BOOT-EQUAL |op| (QUOTE |Union|))
+      (CONS
+       |op|
+       (PROG (#2=#:G166276)
+        (SPADLET #2# NIL)
+        (RETURN
+         (DO ((#3=#:G166281 |arglist| (CDR #3#)) (|a| NIL))
+             ((OR (ATOM #3#) (PROGN (SETQ |a| (CAR #3#)) NIL)) (NREVERSE0 #2#))
+          (SEQ
+           (EXIT 
+            (SETQ #2#
+             (CONS (|unabbrevUnionComponent| |a| |modeIfTrue|) #2#)))))))))
+     ((BOOT-EQUAL |op| (QUOTE |Record|))
+      (CONS 
+       |op|
+       (PROG (#4=#:G166291)
+        (SPADLET #4# NIL)
+        (RETURN 
+         (DO ((#5=#:G166296 |arglist| (CDR #5#)) (|a| NIL))
+             ((OR (ATOM #5#) (PROGN (SETQ |a| (CAR #5#)) NIL)) (NREVERSE0 #4#))
+          (SEQ
+           (EXIT
+            (SETQ #4#
+             (CONS (|unabbrevRecordComponent| |a| |modeIfTrue|) #4#)))))))))
+     ((QUOTE T) NIL)))))) 
+
+;
+;unabbrevRecordComponent(a,modeIfTrue) ==
+;  a is ["Declare",b,T] or a is [":",b,T] =>
+;    [":",b,unabbrev1(T,modeIfTrue)]
+;  userError "wrong format for Record type"
+
+(DEFUN |unabbrevRecordComponent| (|a| |modeIfTrue|)
+ (PROG (|ISTMP#1| |b| |ISTMP#2| T$)
+  (RETURN
+   (COND
+    ((OR 
+      (AND
+       (PAIRP |a|)
+       (EQ (QCAR |a|) (QUOTE |Declare|))
+       (PROGN
+        (SPADLET |ISTMP#1| (QCDR |a|))
+        (AND (PAIRP |ISTMP#1|)
+             (PROGN
+              (SPADLET |b| (QCAR |ISTMP#1|))
+              (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+              (AND (PAIRP |ISTMP#2|)
+                   (EQ (QCDR |ISTMP#2|) NIL)
+                   (PROGN (SPADLET T$ (QCAR |ISTMP#2|)) (QUOTE T)))))))
+      (AND (PAIRP |a|)
+           (EQ (QCAR |a|) (QUOTE |:|))
+           (PROGN
+            (SPADLET |ISTMP#1| (QCDR |a|))
+            (AND (PAIRP |ISTMP#1|)
+                 (PROGN
+                  (SPADLET |b| (QCAR |ISTMP#1|))
+                  (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                  (AND (PAIRP |ISTMP#2|)
+                       (EQ (QCDR |ISTMP#2|) NIL)
+                       (PROGN (SPADLET T$ (QCAR |ISTMP#2|)) (QUOTE T))))))))
+      (CONS (QUOTE |:|) (CONS |b| (CONS (|unabbrev1| T$ |modeIfTrue|) NIL))))
+    ((QUOTE T) (|userError| (QUOTE |wrong format for Record type|))))))) 
+
+;
+;unabbrevUnionComponent(a,modeIfTrue) ==
+;  a is ["Declare",b,T] or a is [":",b,T] =>
+;    [":",b,unabbrev1(T,modeIfTrue)]
+;  unabbrev1(a, modeIfTrue)
+
+(DEFUN |unabbrevUnionComponent| (|a| |modeIfTrue|)
+ (PROG (|ISTMP#1| |b| |ISTMP#2| T$)
+  (RETURN
+   (COND
+    ((OR
+      (AND (PAIRP |a|)
+           (EQ (QCAR |a|) (QUOTE |Declare|))
+           (PROGN
+            (SPADLET |ISTMP#1| (QCDR |a|))
+            (AND (PAIRP |ISTMP#1|)
+                 (PROGN
+                  (SPADLET |b| (QCAR |ISTMP#1|))
+                  (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                  (AND (PAIRP |ISTMP#2|)
+                       (EQ (QCDR |ISTMP#2|) NIL)
+                       (PROGN (SPADLET T$ (QCAR |ISTMP#2|)) (QUOTE T)))))))
+      (AND (PAIRP |a|)
+           (EQ (QCAR |a|) (QUOTE |:|))
+           (PROGN
+            (SPADLET |ISTMP#1| (QCDR |a|))
+            (AND (PAIRP |ISTMP#1|)
+                 (PROGN
+                  (SPADLET |b| (QCAR |ISTMP#1|))
+                  (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                  (AND (PAIRP |ISTMP#2|)
+                       (EQ (QCDR |ISTMP#2|) NIL)
+                       (PROGN (SPADLET T$ (QCAR |ISTMP#2|)) (QUOTE T))))))))
+      (CONS (QUOTE |:|) (CONS |b| (CONS (|unabbrev1| T$ |modeIfTrue|) NIL))))
+    ((QUOTE T) (|unabbrev1| |a| |modeIfTrue|)))))) 
+
+;
+;condAbbrev(arglist,argtypes) ==
+;  res:= nil
+;  for arg in arglist for type in argtypes repeat
+;    if categoryForm?(type) then arg:= abbreviate arg
+;    res:=[:res,arg]
+;  res
+
+(DEFUN |condAbbrev| (|arglist| |argtypes|)
+ (PROG (|arg| |res|)
+  (RETURN
+   (SEQ
+    (PROGN
+     (SPADLET |res| NIL)
+     (DO ((#0=#:G166404 |arglist| (CDR #0#))
+          (|arg| NIL)
+          (#1=#:G166405 |argtypes| (CDR #1#))
+          (|type| NIL))
+         ((OR (ATOM #0#)
+              (PROGN (SETQ |arg| (CAR #0#)) NIL)
+              (ATOM #1#)
+              (PROGN (SETQ |type| (CAR #1#)) NIL))
+           NIL)
+      (SEQ
+       (EXIT
+        (PROGN
+         (COND ((|categoryForm?| |type|) (SPADLET |arg| (|abbreviate| |arg|))))
+         (SPADLET |res| (APPEND |res| (CONS |arg| NIL)))))))
+     |res|))))) 
+
+;
+;condUnabbrev(op,arglist,argtypes,modeIfTrue) ==
+;  #arglist ^= #argtypes =>
+;    throwKeyedMsg("S2IL0014",[op,plural(#argtypes,'"argument"),
+;      bright(#arglist)])
+;  [newArg for arg in arglist for type in argtypes] where newArg ==
+;    categoryForm?(type) => unabbrev1(arg,modeIfTrue)
+;    arg
+
+(DEFUN |condUnabbrev| (|op| |arglist| |argtypes| |modeIfTrue|)
+ (PROG () 
+  (RETURN
+   (SEQ
+    (COND
+     ((NEQUAL (|#| |arglist|) (|#| |argtypes|))
+      (|throwKeyedMsg| 
+       (QUOTE S2IL0014) 
+       (CONS
+        |op|
+        (CONS
+         (|plural| (|#| |argtypes|) (MAKESTRING "argument"))
+         (CONS (|bright| (|#| |arglist|)) NIL)))))
+     ((QUOTE T)
+      (PROG (#0=#:G166428) 
+       (SPADLET #0# NIL)
+       (RETURN
+        (DO ((#1=#:G166434 |arglist| (CDR #1#))
+             (|arg| NIL)
+             (#2=#:G166435 |argtypes| (CDR #2#))
+             (|type| NIL))
+            ((OR (ATOM #1#)
+                 (PROGN (SETQ |arg| (CAR #1#)) NIL)
+                 (ATOM #2#)
+                 (PROGN (SETQ |type| (CAR #2#)) NIL))
+              (NREVERSE0 #0#))
+         (SEQ
+          (EXIT
+           (SETQ #0#
+            (CONS
+             (COND
+              ((|categoryForm?| |type|) (|unabbrev1| |arg| |modeIfTrue|))
+              ((QUOTE T) |arg|)) #0#))))))))))))) 
+
+;
+;--% Code Being Phased Out
+;
+;nAssocQ(x,l,n) ==
+;  repeat
+;    if atom l then return nil
+;    if EQ(x,(QCAR l).n) then return QCAR l
+;    l:= QCDR l
+;
+
+(DEFUN |nAssocQ| (|x| |l| |n|)
+ (PROG NIL
+  (RETURN
+   (SEQ
+    (DO NIL
+        (NIL NIL)
+     (SEQ
+      (EXIT
+       (PROGN
+        (COND ((ATOM |l|) (RETURN NIL)))
+        (COND ((EQ |x| (ELT (QCAR |l|) |n|)) (RETURN (QCAR |l|))))
+        (SPADLET |l| (QCDR |l|)))))))))) 
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}
