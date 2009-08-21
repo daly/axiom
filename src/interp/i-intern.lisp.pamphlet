@@ -1,0 +1,2651 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp i-intern.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{Internal Interpreter Facilities}
+Vectorized Attributed Trees
+
+The interpreter translates parse forms into vats for analysis.
+These contain a number of slots in each node for information.
+The leaves are now all vectors, though the leaves for basic types
+such as integers and strings used to just be the objects themselves.
+The vectors for the leaves with such constants now have the value
+of \verb|$immediateDataSymbol| as their name. Their are undoubtably still
+some functions that still check whether a leaf is a constant. Note
+that if it is not a vector it is a subtree.
+
+attributed tree nodes have the following form:
+
+\begin{tabular}{cl}
+slot & description\\
+---- & ------------------------- \\
+ 0   & operation name or literal\\
+ 1   & declared mode of variable\\
+ 2   & computed value of subtree from this node\\
+ 3   & modeset: list of single computed mode of subtree\\
+ 4   & prop list for extra things\\
+\end{tabular}
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;SETANDFILEQ($useParserSrcPos, NIL)
+
+(SETANDFILEQ |$useParserSrcPos| NIL) 
+;SETANDFILEQ($transferParserSrcPos, NIL)
+
+(SETANDFILEQ |$transferParserSrcPos| NIL) 
+
+@
+\section{Making trees}
+\subsection{mkAtreeNode}
+<<*>>=
+;mkAtreeNode x ==
+;  -- maker of attrib tree node
+;  v := MAKE_-VEC 5
+;  v.0 := x
+;  v
+
+(DEFUN |mkAtreeNode| (|x|)
+ (PROG (|v|)
+  (RETURN (PROGN (SPADLET |v| (MAKE-VEC 5)) (SETELT |v| 0 |x|) |v|)))) 
+
+@
+\subsection{mkAtree}
+Maker of attrib tree from parser form
+<<*>>=
+;mkAtree x ==
+;  mkAtree1 mkAtreeExpandMacros x
+
+(DEFUN |mkAtree| (|x|) (|mkAtree1| (|mkAtreeExpandMacros| |x|))) 
+
+@
+\subsection{mkAtreeWithSrcPos}
+<<*>>=
+;mkAtreeWithSrcPos(form, posnForm) ==
+;    posnForm and $useParserSrcPos => pf2Atree(posnForm)
+;    transferSrcPosInfo(posnForm, mkAtree form)
+
+(DEFUN |mkAtreeWithSrcPos| (|form| |posnForm|)
+ (COND
+  ((AND |posnForm| |$useParserSrcPos|) (|pf2Atree| |posnForm|))
+  ((QUOTE T) (|transferSrcPosInfo| |posnForm| (|mkAtree| |form|))))) 
+
+@
+\subsection{mkAtree1WithSrcPos}
+<<*>>=
+;mkAtree1WithSrcPos(form, posnForm) ==
+;  transferSrcPosInfo(posnForm, mkAtree1 form)
+
+(DEFUN |mkAtree1WithSrcPos| (|form| |posnForm|)
+ (|transferSrcPosInfo| |posnForm| (|mkAtree1| |form|))) 
+
+@
+\subsection{mkAtreeNodeWithSrcPos}
+<<*>>=
+;mkAtreeNodeWithSrcPos(form, posnForm) ==
+;  transferSrcPosInfo(posnForm, mkAtreeNode form)
+
+(DEFUN |mkAtreeNodeWithSrcPos| (|form| |posnForm|)
+ (|transferSrcPosInfo| |posnForm| (|mkAtreeNode| |form|))) 
+
+@
+\subsection{transferSrcPosInfo}
+<<*>>=
+;transferSrcPosInfo(pf, atree) ==
+;    not (pf and $transferParserSrcPos) => atree
+;    pos := pfPosOrNopos(pf)
+;    pfNoPosition?(pos) => atree
+;
+;    -- following is a hack because parser code for getting filename
+;    -- seems wrong.
+;    fn := lnPlaceOfOrigin poGetLineObject(pos)
+;    if NULL fn or fn = '"strings" then fn := '"console"
+;
+;    putSrcPos(atree, fn, pfSourceText(pf), pfLinePosn(pos), pfCharPosn(pos))
+;    atree
+
+(DEFUN |transferSrcPosInfo| (|pf| |atree|)
+ (PROG (|pos| |fn|)
+  (RETURN
+   (COND
+    ((NULL (AND |pf| |$transferParserSrcPos|)) |atree|)
+    ((QUOTE T)
+     (SPADLET |pos| (|pfPosOrNopos| |pf|))
+     (COND
+      ((|pfNoPosition?| |pos|) |atree|)
+      ((QUOTE T)
+       (SPADLET |fn| (|lnPlaceOfOrigin| (|poGetLineObject| |pos|)))
+       (COND
+        ((OR (NULL |fn|) (BOOT-EQUAL |fn| (MAKESTRING "strings")))
+         (SPADLET |fn| (MAKESTRING "console"))))
+       (|putSrcPos| |atree| |fn|
+        (|pfSourceText| |pf|)
+        (|pfLinePosn| |pos|)
+        (|pfCharPosn| |pos|))
+       |atree|))))))) 
+
+@
+\subsection{mkAtreeExpandMacros}
+Handle macro expansion. if the macros have args we require that
+we match the correct number of args
+<<*>>=
+;mkAtreeExpandMacros x ==
+;  if x isnt ['MDEF,:.] and x isnt ['DEF,['macro,:.],:.] then
+;    atom x and (m := isInterpMacro x) =>
+;      [args,:body] := m
+;      args => 'doNothing
+;      x := body
+;    x is [op,:argl] =>
+;      op = 'QUOTE => 'doNothing
+;      op = 'where and argl is [before,after] =>
+;        -- in a where clause, what follows "where" (the "after" parm
+;        -- above) might be a local macro, so do not expand the "before"
+;        -- part yet
+;        x := [op,before,mkAtreeExpandMacros after]
+;      argl := [mkAtreeExpandMacros a for a in argl]
+;      (m := isInterpMacro op) =>
+;        [args,:body] := m
+;        #args = #argl =>
+;          sl := [[a,:s] for a in args for s in argl]
+;          x := SUBLISNQ(sl,body)
+;        null args => x := [body,:argl]
+;        x := [op,:argl]
+;      x := [mkAtreeExpandMacros op,:argl]
+;  x
+
+(DEFUN |mkAtreeExpandMacros| (|x|)
+ (PROG (|ISTMP#2| |op| |before| |ISTMP#1| |after| |argl| |m| 
+        |args| |body| |sl|)
+  (RETURN
+   (SEQ
+    (PROGN
+     (COND
+      ((AND
+        (NULL (AND (PAIRP |x|) (EQ (QCAR |x|) (QUOTE MDEF))))
+        (NULL 
+         (AND (PAIRP |x|)
+              (EQ (QCAR |x|) (QUOTE DEF))
+              (PROGN
+               (SPADLET |ISTMP#1| (QCDR |x|))
+               (AND
+                (PAIRP |ISTMP#1|)
+                (PROGN
+                 (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                 (AND
+                  (PAIRP |ISTMP#2|)
+                  (EQ (QCAR |ISTMP#2|) (QUOTE |macro|)))))))))
+       (COND
+        ((AND (ATOM |x|) (SPADLET |m| (|isInterpMacro| |x|)))
+         (SPADLET |args| (CAR |m|))
+         (SPADLET |body| (CDR |m|))
+         (COND (|args| (QUOTE |doNothing|)) ((QUOTE T) (SPADLET |x| |body|))))
+        ((AND (PAIRP |x|)
+              (PROGN
+               (SPADLET |op| (QCAR |x|))
+               (SPADLET |argl| (QCDR |x|))
+               (QUOTE T)))
+         (COND
+          ((BOOT-EQUAL |op| (QUOTE QUOTE)) (QUOTE |doNothing|))
+          ((AND (BOOT-EQUAL |op| (QUOTE |where|))
+                (PAIRP |argl|)
+                (PROGN
+                 (SPADLET |before| (QCAR |argl|))
+                 (SPADLET |ISTMP#1| (QCDR |argl|))
+                 (AND
+                  (PAIRP |ISTMP#1|)
+                  (EQ (QCDR |ISTMP#1|) NIL)
+                  (PROGN (SPADLET |after| (QCAR |ISTMP#1|)) (QUOTE T)))))
+           (SPADLET |x|
+            (CONS |op|
+             (CONS |before|
+              (CONS (|mkAtreeExpandMacros| |after|) NIL)))))
+          ((QUOTE T)
+           (SPADLET |argl|
+            (PROG (#0=#:G166116)
+             (SPADLET #0# NIL)
+             (RETURN
+              (DO ((#1=#:G166121 |argl| (CDR #1#)) (|a| NIL))
+                  ((OR (ATOM #1#) (PROGN (SETQ |a| (CAR #1#)) NIL))
+                    (NREVERSE0 #0#))
+                (SEQ
+                 (EXIT
+                  (SETQ #0# (CONS (|mkAtreeExpandMacros| |a|) #0#))))))))
+           (COND
+            ((SPADLET |m| (|isInterpMacro| |op|))
+             (SPADLET |args| (CAR |m|))
+             (SPADLET |body| (CDR |m|))
+             (COND
+              ((BOOT-EQUAL (|#| |args|) (|#| |argl|))
+               (SPADLET |sl|
+                (PROG (#2=#:G166132)
+                 (SPADLET #2# NIL)
+                 (RETURN
+                  (DO ((#3=#:G166138 |args| (CDR #3#))
+                       (|a| NIL)
+                       (#4=#:G166139 |argl| (CDR #4#))
+                       (|s| NIL))
+                      ((OR (ATOM #3#)
+                           (PROGN (SETQ |a| (CAR #3#)) NIL)
+                           (ATOM #4#)
+                           (PROGN (SETQ |s| (CAR #4#)) NIL))
+                       (NREVERSE0 #2#))
+                    (SEQ (EXIT (SETQ #2# (CONS (CONS |a| |s|) #2#))))))))
+               (SPADLET |x| (SUBLISNQ |sl| |body|)))
+              ((NULL |args|) (SPADLET |x| (CONS |body| |argl|)))
+              ((QUOTE T) (SPADLET |x| (CONS |op| |argl|)))))
+            ((QUOTE T)
+             (SPADLET |x| (CONS (|mkAtreeExpandMacros| |op|) |argl|))))))))))
+     |x|)))))
+ 
+@
+\subsection{mkAtree1}
+<<*>>=
+;mkAtree1 x ==
+;  -- first special handler for making attrib tree
+;  null x => throwKeyedMsg("S2IP0005",['"NIL"])
+;  VECP x => x
+;  atom x =>
+;    x in '(noBranch noMapVal) => x
+;    x in '(nil true false) => mkAtree2([x],x,NIL)
+;    x = '_/throwAway =>
+;      -- don't want to actually compute this
+;      tree := mkAtree1 '(void)
+;      putValue(tree,objNewWrap(voidValue(),$Void))
+;      putModeSet(tree,[$Void])
+;      tree
+;    getBasicMode x =>
+;      v := mkAtreeNode $immediateDataSymbol
+;      putValue(v,getBasicObject x)
+;      v
+;    IDENTP x => mkAtreeNode x
+;    keyedSystemError("S2II0002",[x])
+;  x is [op,:argl] => mkAtree2(x,op,argl)
+;  systemErrorHere '"mkAtree1"
+
+(DEFUN |mkAtree1| (|x|)
+ (PROG (|tree| |v| |op| |argl|)
+  (RETURN
+   (COND
+    ((NULL |x|)
+     (|throwKeyedMsg| (QUOTE S2IP0005) (CONS (MAKESTRING "NIL") NIL)))
+    ((VECP |x|) |x|)
+    ((ATOM |x|)
+     (COND
+      ((|member| |x| (QUOTE (|noBranch| |noMapVal|))) |x|)
+      ((|member| |x| (QUOTE (|nil| |true| |false|)))
+       (|mkAtree2| (CONS |x| NIL) |x| NIL))
+      ((BOOT-EQUAL |x| (QUOTE |/throwAway|))
+       (SPADLET |tree| (|mkAtree1| (QUOTE (|void|))))
+       (|putValue| |tree| (|objNewWrap| (|voidValue|) |$Void|))
+       (|putModeSet| |tree| (CONS |$Void| NIL)) |tree|)
+      ((|getBasicMode| |x|)
+       (SPADLET |v| (|mkAtreeNode| |$immediateDataSymbol|))
+       (|putValue| |v| (|getBasicObject| |x|)) |v|)
+      ((IDENTP |x|) (|mkAtreeNode| |x|))
+      ((QUOTE T) (|keyedSystemError| (QUOTE S2II0002) (CONS |x| NIL)))))
+    ((AND (PAIRP |x|)
+          (PROGN
+           (SPADLET |op| (QCAR |x|))
+           (SPADLET |argl| (QCDR |x|))
+           (QUOTE T)))
+     (|mkAtree2| |x| |op| |argl|))
+    ((QUOTE T) (|systemErrorHere| (MAKESTRING "mkAtree1"))))))) 
+
+@
+\subsection{mkAtree2}
+mkAtree2 and mkAtree3 were created because mkAtree1 got so big
+<<*>>=
+;mkAtree2(x,op,argl) ==
+;  nargl := #argl
+;  (op= '_-) and (nargl = 1) and (INTEGERP CAR argl) =>
+;    mkAtree1(MINUS CAR argl)
+;  op='_: and argl is [y,z] => [mkAtreeNode 'Declare,:argl]
+;  op='COLLECT => [mkAtreeNode op,:transformCollect argl]
+;  op= 'break =>
+;    argl is [.,val] =>
+;      if val = '$NoValue then val := '(void)
+;      [mkAtreeNode op,mkAtree1 val]
+;    [mkAtreeNode op,mkAtree1 '(void)]
+;  op= 'return =>
+;    argl is [val] =>
+;      if val = '$NoValue then val := '(void)
+;      [mkAtreeNode op,mkAtree1 val]
+;    [mkAtreeNode op,mkAtree1 '(void)]
+;  op='exit => mkAtree1 CADR argl
+;  op = 'QUOTE => [mkAtreeNode op,:argl]
+;  op='SEGMENT =>
+;    argl is [a] => [mkAtreeNode op, mkAtree1 a]
+;    z :=
+;      null argl.1 => nil
+;      mkAtree1 argl.1
+;    [mkAtreeNode op, mkAtree1 argl.0,z]
+;  op in '(pretend is isnt) =>
+;    [mkAtreeNode op,mkAtree1 first argl,:rest argl]
+;  op =  '_:_: =>
+;    [mkAtreeNode 'COERCE,mkAtree1 first argl,CADR argl]
+;  x is ['_@, expr, type] =>
+;    t := evaluateType unabbrev type
+;    t = '(DoubleFloat) and expr is [['_$elt, '(Float), 'float], :args] =>
+;        mkAtree1 [['_$elt, '(DoubleFloat), 'float], :args]
+;    t = '(DoubleFloat) and INTEGERP expr =>
+;        v := mkAtreeNode $immediateDataSymbol
+;        putValue(v,getBasicObject float expr)
+;        v
+;    t = '(Float) and INTEGERP expr =>
+;        mkAtree1 ["::", expr, t]
+;    typeIsASmallInteger(t) and INTEGERP expr =>
+;        mkAtree1 ["::", expr, t]
+;    [mkAtreeNode 'TARGET,mkAtree1 expr, type]
+;  (op='case) and (nargl = 2)  =>
+;    [mkAtreeNode 'case,mkAtree1 first argl,unabbrev CADR argl]
+;  op='REPEAT => [mkAtreeNode op,:transformREPEAT argl]
+;  op='LET and argl is [['construct,:.],rhs] =>
+;    [mkAtreeNode 'LET,first argl,mkAtree1 rhs]
+;  op='LET and argl is [['_:,a,.],rhs] =>
+;    mkAtree1 ['SEQ,first argl,['LET,a,rhs]]
+;  op is ['_$elt,D,op1] =>
+;    op1 is '_= =>
+;      a' := [mkAtreeNode '_=,:[mkAtree1 arg for arg in argl]]
+;      [mkAtreeNode 'Dollar,D,a']
+;    [mkAtreeNode 'Dollar,D,mkAtree1 [op1,:argl]]
+;  op='_$elt =>
+;    argl is [D,a] =>
+;      INTEGERP a =>
+;        a = 0 => mkAtree1 [['_$elt,D,'Zero]]
+;        a = 1 => mkAtree1 [['_$elt,D,'One]]
+;        t := evaluateType unabbrev [D]
+;        typeIsASmallInteger(t) and SINTP a =>
+;            v := mkAtreeNode $immediateDataSymbol
+;            putValue(v,mkObjWrap(a, t))
+;            v
+;        mkAtree1 ["*",a,[['_$elt,D,'One]]]
+;      [mkAtreeNode 'Dollar,D,mkAtree1 a]
+;    keyedSystemError("S2II0003",['"$",argl,
+;      '"not qualifying an operator"])
+;  mkAtree3(x,op,argl)
+
+(DEFUN |mkAtree2| (|x| |op| |argl|)
+ (PROG (|nargl| |y| |val| |z| |expr| |type| |args| |ISTMP#3| |ISTMP#4| 
+        |rhs| |ISTMP#2| |op1| |a'| D |ISTMP#1| |a| |t| |v|)
+  (RETURN
+   (SEQ 
+    (PROGN
+     (SPADLET |nargl| (|#| |argl|))
+     (COND
+      ((AND (BOOT-EQUAL |op| (QUOTE -))
+            (EQL |nargl| 1)
+            (INTEGERP (CAR |argl|)))
+       (|mkAtree1| (MINUS (CAR |argl|))))
+      ((AND (BOOT-EQUAL |op| (QUOTE |:|))
+            (PAIRP |argl|)
+            (PROGN
+             (SPADLET |y| (QCAR |argl|))
+             (SPADLET |ISTMP#1| (QCDR |argl|))
+             (AND
+              (PAIRP |ISTMP#1|)
+              (EQ (QCDR |ISTMP#1|) NIL)
+              (PROGN (SPADLET |z| (QCAR |ISTMP#1|)) (QUOTE T)))))
+       (CONS (|mkAtreeNode| (QUOTE |Declare|)) |argl|))
+      ((BOOT-EQUAL |op| (QUOTE COLLECT))
+       (CONS (|mkAtreeNode| |op|) (|transformCollect| |argl|)))
+      ((BOOT-EQUAL |op| (QUOTE |break|))
+       (COND
+        ((AND (PAIRP |argl|)
+              (PROGN
+               (SPADLET |ISTMP#1| (QCDR |argl|))
+               (AND
+                (PAIRP |ISTMP#1|)
+                (EQ (QCDR |ISTMP#1|) NIL)
+                (PROGN (SPADLET |val| (QCAR |ISTMP#1|)) (QUOTE T)))))
+         (COND
+          ((BOOT-EQUAL |val| (QUOTE |$NoValue|))
+           (SPADLET |val| (QUOTE (|void|)))))
+         (CONS (|mkAtreeNode| |op|) (CONS (|mkAtree1| |val|) NIL)))
+        ((QUOTE T)
+         (CONS
+          (|mkAtreeNode| |op|)
+          (CONS (|mkAtree1| (QUOTE (|void|))) NIL)))))
+      ((BOOT-EQUAL |op| (QUOTE |return|))
+       (COND
+        ((AND (PAIRP |argl|)
+              (EQ (QCDR |argl|) NIL)
+              (PROGN (SPADLET |val| (QCAR |argl|)) (QUOTE T)))
+         (COND
+          ((BOOT-EQUAL |val| (QUOTE |$NoValue|))
+           (SPADLET |val| (QUOTE (|void|)))))
+         (CONS (|mkAtreeNode| |op|) (CONS (|mkAtree1| |val|) NIL)))
+        ((QUOTE T)
+         (CONS
+          (|mkAtreeNode| |op|)
+          (CONS (|mkAtree1| (QUOTE (|void|))) NIL)))))
+      ((BOOT-EQUAL |op| (QUOTE |exit|)) (|mkAtree1| (CADR |argl|)))
+      ((BOOT-EQUAL |op| (QUOTE QUOTE)) (CONS (|mkAtreeNode| |op|) |argl|))
+      ((BOOT-EQUAL |op| (QUOTE SEGMENT))
+       (COND
+        ((AND (PAIRP |argl|)
+              (EQ (QCDR |argl|) NIL)
+              (PROGN (SPADLET |a| (QCAR |argl|)) (QUOTE T)))
+         (CONS (|mkAtreeNode| |op|) (CONS (|mkAtree1| |a|) NIL)))
+        ((QUOTE T)
+         (SPADLET |z|
+          (COND
+           ((NULL (ELT |argl| 1)) NIL)
+           ((QUOTE T) (|mkAtree1| (ELT |argl| 1)))))
+         (CONS
+          (|mkAtreeNode| |op|)
+          (CONS (|mkAtree1| (ELT |argl| 0)) (CONS |z| NIL))))))
+      ((|member| |op| (QUOTE (|pretend| |is| |isnt|)))
+       (CONS
+        (|mkAtreeNode| |op|)
+        (CONS (|mkAtree1| (CAR |argl|)) (CDR |argl|))))
+      ((BOOT-EQUAL |op| (QUOTE |::|))
+       (CONS
+        (|mkAtreeNode| (QUOTE COERCE))
+        (CONS (|mkAtree1| (CAR |argl|)) (CONS (CADR |argl|) NIL))))
+      ((AND (PAIRP |x|)
+            (EQ (QCAR |x|) (QUOTE @))
+            (PROGN
+             (SPADLET |ISTMP#1| (QCDR |x|))
+             (AND
+              (PAIRP |ISTMP#1|)
+              (PROGN
+               (SPADLET |expr| (QCAR |ISTMP#1|))
+               (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+               (AND
+                (PAIRP |ISTMP#2|)
+                (EQ (QCDR |ISTMP#2|) NIL)
+                (PROGN (SPADLET |type| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+       (SPADLET |t| (|evaluateType| (|unabbrev| |type|)))
+       (COND
+        ((AND
+          (BOOT-EQUAL |t| (QUOTE (|DoubleFloat|)))
+          (PAIRP |expr|)
+          (PROGN
+           (SPADLET |ISTMP#1| (QCAR |expr|))
+           (AND
+            (PAIRP |ISTMP#1|)
+            (EQ (QCAR |ISTMP#1|) (QUOTE |$elt|))
+            (PROGN
+             (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+             (AND
+              (PAIRP |ISTMP#2|)
+              (EQUAL (QCAR |ISTMP#2|) (QUOTE (|Float|)))
+              (PROGN
+               (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+               (AND
+                (PAIRP |ISTMP#3|)
+                (EQ (QCDR |ISTMP#3|) NIL)
+                (EQ (QCAR |ISTMP#3|) (QUOTE |float|))))))))
+          (PROGN (SPADLET |args| (QCDR |expr|)) (QUOTE T)))
+         (|mkAtree1|
+          (CONS
+           (CONS
+            (QUOTE |$elt|)
+            (CONS (QUOTE (|DoubleFloat|)) (CONS (QUOTE |float|) NIL)))
+           |args|)))
+        ((AND (BOOT-EQUAL |t| (QUOTE (|DoubleFloat|))) (INTEGERP |expr|))
+         (SPADLET |v| (|mkAtreeNode| |$immediateDataSymbol|))
+         (|putValue| |v| (|getBasicObject| (|float| |expr|)))
+         |v|)
+        ((AND (BOOT-EQUAL |t| (QUOTE (|Float|))) (INTEGERP |expr|))
+         (|mkAtree1| (CONS (QUOTE |::|) (CONS |expr| (CONS |t| NIL)))))
+        ((AND (|typeIsASmallInteger| |t|) (INTEGERP |expr|))
+         (|mkAtree1| (CONS (QUOTE |::|) (CONS |expr| (CONS |t| NIL)))))
+        ((QUOTE T)
+         (CONS
+          (|mkAtreeNode| (QUOTE TARGET))
+          (CONS (|mkAtree1| |expr|) (CONS |type| NIL))))))
+      ((AND (BOOT-EQUAL |op| (QUOTE |case|)) (EQL |nargl| 2))
+       (CONS
+        (|mkAtreeNode| (QUOTE |case|))
+        (CONS
+         (|mkAtree1| (CAR |argl|))
+         (CONS (|unabbrev| (CADR |argl|)) NIL))))
+      ((BOOT-EQUAL |op| (QUOTE REPEAT))
+       (CONS (|mkAtreeNode| |op|) (|transformREPEAT| |argl|)))
+      ((AND
+        (BOOT-EQUAL |op| (QUOTE LET))
+        (PAIRP |argl|)
+        (PROGN
+         (SPADLET |ISTMP#1| (QCAR |argl|))
+         (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) (QUOTE |construct|))))
+        (PROGN
+         (SPADLET |ISTMP#2| (QCDR |argl|))
+         (AND (PAIRP |ISTMP#2|)
+              (EQ (QCDR |ISTMP#2|) NIL)
+              (PROGN (SPADLET |rhs| (QCAR |ISTMP#2|)) (QUOTE T)))))
+       (CONS
+        (|mkAtreeNode| (QUOTE LET))
+        (CONS (CAR |argl|) (CONS (|mkAtree1| |rhs|) NIL))))
+      ((AND
+        (BOOT-EQUAL |op| (QUOTE LET))
+        (PAIRP |argl|)
+        (PROGN
+         (SPADLET |ISTMP#1| (QCAR |argl|))
+         (AND
+          (PAIRP |ISTMP#1|)
+          (EQ (QCAR |ISTMP#1|) (QUOTE |:|))
+          (PROGN
+           (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+           (AND
+            (PAIRP |ISTMP#2|)
+            (PROGN
+             (SPADLET |a| (QCAR |ISTMP#2|))
+             (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+             (AND (PAIRP |ISTMP#3|) (EQ (QCDR |ISTMP#3|) NIL)))))))
+        (PROGN
+         (SPADLET |ISTMP#4| (QCDR |argl|))
+         (AND
+          (PAIRP |ISTMP#4|)
+          (EQ (QCDR |ISTMP#4|) NIL)
+          (PROGN (SPADLET |rhs| (QCAR |ISTMP#4|)) (QUOTE T)))))
+        (|mkAtree1|
+         (CONS
+          (QUOTE SEQ)
+          (CONS
+           (CAR |argl|)
+           (CONS (CONS (QUOTE LET) (CONS |a| (CONS |rhs| NIL))) NIL)))))
+      ((AND (PAIRP |op|)
+            (EQ (QCAR |op|) (QUOTE |$elt|))
+            (PROGN
+             (SPADLET |ISTMP#1| (QCDR |op|))
+             (AND
+              (PAIRP |ISTMP#1|)
+              (PROGN
+               (SPADLET D (QCAR |ISTMP#1|))
+               (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+               (AND
+                (PAIRP |ISTMP#2|)
+                (EQ (QCDR |ISTMP#2|) NIL)
+                (PROGN (SPADLET |op1| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+       (COND
+        ((EQ |op1| (QUOTE =))
+         (SPADLET |a'|
+          (CONS
+           (|mkAtreeNode| (QUOTE =))
+           (PROG (#0=#:G166300)
+            (SPADLET #0# NIL)
+            (RETURN
+             (DO ((#1=#:G166305 |argl| (CDR #1#)) (|arg| NIL))
+                 ((OR (ATOM #1#) (PROGN (SETQ |arg| (CAR #1#)) NIL))
+                   (NREVERSE0 #0#))
+               (SEQ (EXIT (SETQ #0# (CONS (|mkAtree1| |arg|) #0#)))))))))
+         (CONS (|mkAtreeNode| (QUOTE |Dollar|)) (CONS D (CONS |a'| NIL))))
+        ((QUOTE T)
+         (CONS
+          (|mkAtreeNode| (QUOTE |Dollar|))
+          (CONS D (CONS (|mkAtree1| (CONS |op1| |argl|)) NIL))))))
+      ((BOOT-EQUAL |op| (QUOTE |$elt|))
+       (COND
+        ((AND (PAIRP |argl|)
+              (PROGN
+               (SPADLET D (QCAR |argl|))
+               (SPADLET |ISTMP#1| (QCDR |argl|))
+               (AND
+                (PAIRP |ISTMP#1|)
+                (EQ (QCDR |ISTMP#1|) NIL)
+                (PROGN (SPADLET |a| (QCAR |ISTMP#1|)) (QUOTE T)))))
+         (COND
+          ((INTEGERP |a|)
+           (COND
+            ((EQL |a| 0)
+             (|mkAtree1|
+              (CONS
+               (CONS (QUOTE |$elt|) (CONS D (CONS (QUOTE |Zero|) NIL)))
+               NIL)))
+            ((EQL |a| 1)
+             (|mkAtree1|
+              (CONS
+               (CONS (QUOTE |$elt|) (CONS D (CONS (QUOTE |One|) NIL)))
+               NIL)))
+            ((QUOTE T)
+             (SPADLET |t| (|evaluateType| (|unabbrev| (CONS D NIL))))
+             (COND
+              ((AND (|typeIsASmallInteger| |t|) (SINTP |a|))
+               (SPADLET |v| (|mkAtreeNode| |$immediateDataSymbol|))
+               (|putValue| |v| (|mkObjWrap| |a| |t|)) |v|)
+              ((QUOTE T)
+               (|mkAtree1|
+                (CONS
+                 (QUOTE *)
+                 (CONS |a|
+                  (CONS
+                   (CONS
+                    (CONS (QUOTE |$elt|) (CONS D (CONS (QUOTE |One|) NIL)))
+                    NIL)
+                   NIL)))))))))
+          ((QUOTE T)
+           (CONS
+            (|mkAtreeNode| (QUOTE |Dollar|))
+            (CONS D (CONS (|mkAtree1| |a|) NIL))))))
+        ((QUOTE T)
+         (|keyedSystemError| (QUOTE S2II0003)
+          (CONS "$" (CONS |argl| (CONS "not qualifying an operator" NIL)))))))
+      ((QUOTE T) (|mkAtree3| |x| |op| |argl|)))))))) 
+
+@
+\subsection{mkAtree3}
+mkAtree2 and mkAtree3 were created because mkAtree1 got so big
+<<*>>=
+;mkAtree3(x,op,argl) ==
+;  op='REDUCE and argl is [op1,axis,body] =>
+;    [mkAtreeNode op,axis,mkAtree1 op1,mkAtree1 body]
+;  op='has => [mkAtreeNode op, :argl]
+;  op='_| => [mkAtreeNode 'AlgExtension,:[mkAtree1 arg for arg in argl]]
+;  op='_= => [mkAtreeNode 'equation,:[mkAtree1 arg for arg in argl]]
+;  op='not and argl is [["=",lhs,rhs]] =>
+;    [mkAtreeNode 'not,[mkAtreeNode "=",mkAtree1 lhs,mkAtree1 rhs]]
+;  op='in and argl is [var ,['SEGMENT,lb,ul]] =>
+;    upTest:=
+;      null ul => NIL
+;      mkLessOrEqual(var,ul)
+;    lowTest:=mkLessOrEqual(lb,var)
+;    z :=
+;      ul => ['and,lowTest,upTest]
+;      lowTest
+;    mkAtree1 z
+;  x is ['IF,p,'noBranch,a] => mkAtree1 ['IF,['not,p],a,'noBranch]
+;  x is ['RULEDEF,:.] => [mkAtreeNode 'RULEDEF,:CDR x]
+;  x is ['MDEF,sym,junk1,junk2,val] =>
+;    -- new macros look like  macro f ==  or macro f(x) ===
+;    -- so transform into that format
+;    mkAtree1 ['DEF,['macro,sym],junk1,junk2,val]
+;  x is ["~=",a,b] => mkAtree1 ['not,["=",a,b]]
+;  x is ["+->",funargs,funbody] =>
+;    if funbody is [":",body,type] then
+;      types := [type]
+;      funbody := body
+;    else types := [NIL]
+;    v := collectDefTypesAndPreds funargs
+;    types := [:types,:v.1]
+;    [mkAtreeNode 'ADEF,[v.0,types,[NIL for a in types],funbody],
+;      if v.2 then v.2 else true, false]
+;  x is ['ADEF,arg,:r] =>
+;    r := mkAtreeValueOf r
+;    v :=
+;      null arg => VECTOR(NIL,NIL,NIL)
+;      PAIRP arg and rest arg and first arg^= "|" =>
+;        collectDefTypesAndPreds ['Tuple,:arg]
+;      null rest arg => collectDefTypesAndPreds first arg
+;      collectDefTypesAndPreds arg
+;    [types,:r'] := r
+;    at := [fn(x,y) for x in rest types for y in v.1] where
+;      fn(a,b) ==
+;        a and b =>
+;          if a = b then a
+;          else throwMessage '"   double declaration of parameter"
+;        a or b
+;    r := [[first types,:at],:r']
+;    [mkAtreeNode 'ADEF,[v.0,:r],if v.2 then v.2 else true,false]
+;  x is ['where,before,after] =>
+;    [mkAtreeNode 'where,before,mkAtree1 after]
+;  x is ['DEF,['macro,form],.,.,body] =>
+;    [mkAtreeNode 'MDEF,form,body]
+;  x is ['DEF,a,:r] =>
+;    r := mkAtreeValueOf r
+;    a is [op,:arg] =>
+;      v :=
+;        null arg => VECTOR(NIL,NIL,NIL)
+;        PAIRP arg and rest arg and first arg^= "|" =>
+;          collectDefTypesAndPreds ['Tuple,:arg]
+;        null rest arg => collectDefTypesAndPreds first arg
+;        collectDefTypesAndPreds arg
+;      [types,:r'] := r
+;      -- see case for ADEF above for defn of fn
+;      at := [fn(x,y) for x in rest types for y in v.1]
+;      r := [[first types,:at],:r']
+;      [mkAtreeNode 'DEF,[[op,:v.0],:r],if v.2 then v.2 else true,false]
+;    [mkAtreeNode 'DEF,[a,:r],true,false]
+;--x is ['when,y,pred] =>
+;--  y isnt ['DEF,a,:r] =>
+;--    keyedSystemError("S2II0003",['"when",y,'"improper argument form"])
+;--  a is [op,p1,:pr] =>
+;--    null pr => mkAtree1 ['DEF,[op,["|",p1,pred]],:r]
+;--    mkAtree1 ['DEF,[op,["|",['Tuple,p1,:pr],pred]],:r]
+;--  [mkAtreeNode 'DEF, CDR y,pred,false]
+;--x is ['otherwise,u] =>
+;--  throwMessage '"   otherwise is no longer supported."
+;  z :=
+;    getBasicMode op =>
+;      v := mkAtreeNode $immediateDataSymbol
+;      putValue(v,getBasicObject op)
+;      v
+;    atom op => mkAtreeNode op
+;    mkAtree1 op
+;  [z,:[mkAtree1 y for y in argl]]
+
+(DEFUN |mkAtree3,fn| (|a| |b|)
+ (SEQ
+  (IF (AND |a| |b|)
+   (EXIT
+    (IF (BOOT-EQUAL |a| |b|)
+     |a|
+     (|throwMessage| (MAKESTRING "   double declaration of parameter")))))
+  (EXIT (OR |a| |b|)))) 
+
+(DEFUN |mkAtree3| (|x| |op| |argl|)
+ (PROG (|op1| |axis| |lhs| |rhs| |var| |lb| |ul| |upTest| |lowTest| |p| 
+        |sym| |junk1| |junk2| |val| |b| |funargs| |type| |funbody| 
+        |before| |after| |ISTMP#2| |ISTMP#3| |form| |ISTMP#4| |ISTMP#5| 
+        |ISTMP#6| |body| |ISTMP#1| |a| |arg| |types| |r'| |at| |r| |v| |z|)
+  (RETURN
+   (SEQ
+    (COND
+     ((AND (BOOT-EQUAL |op| (QUOTE REDUCE))
+           (PAIRP |argl|)
+           (PROGN
+            (SPADLET |op1| (QCAR |argl|))
+            (SPADLET |ISTMP#1| (QCDR |argl|))
+            (AND
+             (PAIRP |ISTMP#1|)
+             (PROGN
+              (SPADLET |axis| (QCAR |ISTMP#1|))
+              (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+              (AND
+               (PAIRP |ISTMP#2|)
+               (EQ (QCDR |ISTMP#2|) NIL)
+               (PROGN (SPADLET |body| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+      (CONS
+       (|mkAtreeNode| |op|)
+       (CONS |axis| (CONS (|mkAtree1| |op1|) (CONS (|mkAtree1| |body|) NIL)))))
+     ((BOOT-EQUAL |op| (QUOTE |has|)) (CONS (|mkAtreeNode| |op|) |argl|))
+     ((BOOT-EQUAL |op| (QUOTE |\||))
+      (CONS
+       (|mkAtreeNode| (QUOTE |AlgExtension|))
+       (PROG (#0=#:G166691)
+        (SPADLET #0# NIL)
+        (RETURN
+         (DO ((#1=#:G166696 |argl| (CDR #1#)) (|arg| NIL))
+             ((OR (ATOM #1#) (PROGN (SETQ |arg| (CAR #1#)) NIL))
+              (NREVERSE0 #0#))
+           (SEQ (EXIT (SETQ #0# (CONS (|mkAtree1| |arg|) #0#)))))))))
+     ((BOOT-EQUAL |op| (QUOTE =))
+      (CONS
+       (|mkAtreeNode| (QUOTE |equation|))
+       (PROG (#2=#:G166706)
+        (SPADLET #2# NIL)
+        (RETURN
+         (DO ((#3=#:G166711 |argl| (CDR #3#)) (|arg| NIL))
+             ((OR (ATOM #3#) (PROGN (SETQ |arg| (CAR #3#)) NIL))
+               (NREVERSE0 #2#))
+          (SEQ (EXIT (SETQ #2# (CONS (|mkAtree1| |arg|) #2#)))))))))
+     ((AND (BOOT-EQUAL |op| (QUOTE |not|))
+           (PAIRP |argl|)
+           (EQ (QCDR |argl|) NIL)
+           (PROGN
+            (SPADLET |ISTMP#1| (QCAR |argl|))
+            (AND
+             (PAIRP |ISTMP#1|)
+             (EQ (QCAR |ISTMP#1|) (QUOTE =))
+             (PROGN
+              (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+              (AND
+               (PAIRP |ISTMP#2|)
+               (PROGN
+                (SPADLET |lhs| (QCAR |ISTMP#2|))
+                (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                (AND
+                 (PAIRP |ISTMP#3|)
+                 (EQ (QCDR |ISTMP#3|) NIL)
+                 (PROGN (SPADLET |rhs| (QCAR |ISTMP#3|)) (QUOTE T)))))))))
+      (CONS
+       (|mkAtreeNode| (QUOTE |not|))
+       (CONS
+        (CONS
+         (|mkAtreeNode| (QUOTE =))
+         (CONS (|mkAtree1| |lhs|) (CONS (|mkAtree1| |rhs|) NIL)))
+        NIL)))
+     ((AND (BOOT-EQUAL |op| (QUOTE |in|))
+           (PAIRP |argl|)
+           (PROGN
+            (SPADLET |var| (QCAR |argl|))
+            (SPADLET |ISTMP#1| (QCDR |argl|))
+            (AND
+             (PAIRP |ISTMP#1|)
+             (EQ (QCDR |ISTMP#1|) NIL)
+             (PROGN
+              (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+              (AND
+               (PAIRP |ISTMP#2|)
+               (EQ (QCAR |ISTMP#2|) (QUOTE SEGMENT))
+               (PROGN
+                (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                (AND
+                 (PAIRP |ISTMP#3|)
+                 (PROGN
+                  (SPADLET |lb| (QCAR |ISTMP#3|))
+                  (SPADLET |ISTMP#4| (QCDR |ISTMP#3|))
+                  (AND
+                   (PAIRP |ISTMP#4|)
+                   (EQ (QCDR |ISTMP#4|) NIL)
+                   (PROGN (SPADLET |ul| (QCAR |ISTMP#4|)) (QUOTE T)))))))))))
+       (SPADLET |upTest|
+        (COND
+         ((NULL |ul|) NIL)
+         ((QUOTE T) (|mkLessOrEqual| |var| |ul|))))
+       (SPADLET |lowTest| (|mkLessOrEqual| |lb| |var|))
+       (SPADLET |z|
+        (COND
+         (|ul| (CONS (QUOTE |and|) (CONS |lowTest| (CONS |upTest| NIL))))
+         ((QUOTE T) |lowTest|)))
+       (|mkAtree1| |z|))
+     ((AND (PAIRP |x|)
+           (EQ (QCAR |x|) (QUOTE IF))
+           (PROGN
+            (SPADLET |ISTMP#1| (QCDR |x|))
+            (AND
+             (PAIRP |ISTMP#1|)
+             (PROGN
+              (SPADLET |p| (QCAR |ISTMP#1|))
+              (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+              (AND
+               (PAIRP |ISTMP#2|)
+               (EQ (QCAR |ISTMP#2|) (QUOTE |noBranch|))
+               (PROGN
+                (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                (AND
+                 (PAIRP |ISTMP#3|)
+                 (EQ (QCDR |ISTMP#3|) NIL)
+                 (PROGN (SPADLET |a| (QCAR |ISTMP#3|)) (QUOTE T)))))))))
+      (|mkAtree1|
+       (CONS (QUOTE IF)
+        (CONS
+         (CONS (QUOTE |not|) (CONS |p| NIL))
+         (CONS |a| (CONS (QUOTE |noBranch|) NIL))))))
+     ((AND (PAIRP |x|) (EQ (QCAR |x|) (QUOTE RULEDEF)))
+      (CONS (|mkAtreeNode| (QUOTE RULEDEF)) (CDR |x|)))
+     ((AND (PAIRP |x|)
+           (EQ (QCAR |x|) (QUOTE MDEF))
+           (PROGN
+            (SPADLET |ISTMP#1| (QCDR |x|))
+            (AND
+             (PAIRP |ISTMP#1|)
+             (PROGN
+              (SPADLET |sym| (QCAR |ISTMP#1|))
+              (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+              (AND
+               (PAIRP |ISTMP#2|)
+               (PROGN
+                (SPADLET |junk1| (QCAR |ISTMP#2|))
+                (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                (AND
+                 (PAIRP |ISTMP#3|)
+                 (PROGN
+                  (SPADLET |junk2| (QCAR |ISTMP#3|))
+                  (SPADLET |ISTMP#4| (QCDR |ISTMP#3|))
+                  (AND
+                   (PAIRP |ISTMP#4|)
+                   (EQ (QCDR |ISTMP#4|) NIL)
+                   (PROGN (SPADLET |val| (QCAR |ISTMP#4|)) (QUOTE T)))))))))))
+      (|mkAtree1|
+       (CONS (QUOTE DEF)
+        (CONS
+         (CONS (QUOTE |macro|) (CONS |sym| NIL))
+         (CONS |junk1| (CONS |junk2| (CONS |val| NIL)))))))
+     ((AND (PAIRP |x|)
+           (EQ (QCAR |x|) (QUOTE ~=))
+           (PROGN
+            (SPADLET |ISTMP#1| (QCDR |x|))
+            (AND
+             (PAIRP |ISTMP#1|)
+             (PROGN
+              (SPADLET |a| (QCAR |ISTMP#1|))
+              (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+              (AND
+               (PAIRP |ISTMP#2|)
+               (EQ (QCDR |ISTMP#2|) NIL)
+               (PROGN (SPADLET |b| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+      (|mkAtree1|
+       (CONS (QUOTE |not|)
+        (CONS (CONS (QUOTE =) (CONS |a| (CONS |b| NIL))) NIL))))
+     ((AND (PAIRP |x|)
+           (EQ (QCAR |x|) (QUOTE +->))
+           (PROGN
+            (SPADLET |ISTMP#1| (QCDR |x|))
+            (AND (PAIRP |ISTMP#1|)
+                 (PROGN
+                  (SPADLET |funargs| (QCAR |ISTMP#1|))
+                  (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                  (AND
+                   (PAIRP |ISTMP#2|)
+                   (EQ (QCDR |ISTMP#2|) NIL)
+                   (PROGN (SPADLET |funbody| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+       (COND
+        ((AND (PAIRP |funbody|)
+              (EQ (QCAR |funbody|) (QUOTE |:|))
+              (PROGN
+               (SPADLET |ISTMP#1| (QCDR |funbody|))
+               (AND (PAIRP |ISTMP#1|)
+                    (PROGN
+                     (SPADLET |body| (QCAR |ISTMP#1|))
+                     (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                     (AND
+                      (PAIRP |ISTMP#2|)
+                      (EQ (QCDR |ISTMP#2|) NIL)
+                      (PROGN (SPADLET |type| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+         (SPADLET |types| (CONS |type| NIL)) (SPADLET |funbody| |body|))
+        ((QUOTE T) (SPADLET |types| (CONS NIL NIL))))
+       (SPADLET |v| (|collectDefTypesAndPreds| |funargs|))
+       (SPADLET |types| (APPEND |types| (ELT |v| 1)))
+       (CONS
+        (|mkAtreeNode| (QUOTE ADEF))
+        (CONS
+         (CONS
+          (ELT |v| 0)
+          (CONS |types|
+           (CONS
+            (PROG (#4=#:G166721)
+             (SPADLET #4# NIL)
+             (RETURN
+              (DO ((#5=#:G166726 |types| (CDR #5#)) (|a| NIL))
+                  ((OR (ATOM #5#) (PROGN (SETQ |a| (CAR #5#)) NIL))
+                    (NREVERSE0 #4#))
+                (SEQ (EXIT (SETQ #4# (CONS NIL #4#)))))))
+            (CONS |funbody| NIL))))
+         (CONS
+          (COND ((ELT |v| 2) (ELT |v| 2)) ((QUOTE T) (QUOTE T)))
+          (CONS NIL NIL)))))
+     ((AND (PAIRP |x|)
+           (EQ (QCAR |x|) (QUOTE ADEF))
+           (PROGN
+            (SPADLET |ISTMP#1| (QCDR |x|))
+            (AND (PAIRP |ISTMP#1|)
+                 (PROGN
+                  (SPADLET |arg| (QCAR |ISTMP#1|))
+                  (SPADLET |r| (QCDR |ISTMP#1|))
+                  (QUOTE T)))))
+      (SPADLET |r| (|mkAtreeValueOf| |r|))
+      (SPADLET |v|
+       (COND
+        ((NULL |arg|) (VECTOR NIL NIL NIL))
+        ((AND (PAIRP |arg|) (CDR |arg|) (NEQUAL (CAR |arg|) (QUOTE |\||)))
+         (|collectDefTypesAndPreds| (CONS (QUOTE |Tuple|) |arg|)))
+        ((NULL (CDR |arg|)) (|collectDefTypesAndPreds| (CAR |arg|)))
+        ((QUOTE T) (|collectDefTypesAndPreds| |arg|))))
+      (SPADLET |types| (CAR |r|))
+      (SPADLET |r'| (CDR |r|))
+      (SPADLET |at|
+       (PROG (#6=#:G166737)
+        (SPADLET #6# NIL)
+        (RETURN
+         (DO ((#7=#:G166743 (CDR |types|) (CDR #7#))
+              (|x| NIL)
+              (#8=#:G166744 (ELT |v| 1) (CDR #8#))
+              (|y| NIL))
+             ((OR (ATOM #7#)
+                  (PROGN (SETQ |x| (CAR #7#)) NIL)
+                  (ATOM #8#)
+                  (PROGN (SETQ |y| (CAR #8#)) NIL))
+               (NREVERSE0 #6#))
+          (SEQ (EXIT (SETQ #6# (CONS (|mkAtree3,fn| |x| |y|) #6#))))))))
+      (SPADLET |r| (CONS (CONS (CAR |types|) |at|) |r'|))
+      (CONS 
+       (|mkAtreeNode| (QUOTE ADEF))
+       (CONS
+        (CONS (ELT |v| 0) |r|)
+        (CONS
+         (COND ((ELT |v| 2) (ELT |v| 2)) ((QUOTE T) (QUOTE T)))
+         (CONS NIL NIL)))))
+     ((AND (PAIRP |x|)
+           (EQ (QCAR |x|) (QUOTE |where|))
+           (PROGN
+            (SPADLET |ISTMP#1| (QCDR |x|))
+            (AND
+             (PAIRP |ISTMP#1|)
+             (PROGN
+              (SPADLET |before| (QCAR |ISTMP#1|))
+              (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+              (AND
+               (PAIRP |ISTMP#2|)
+               (EQ (QCDR |ISTMP#2|) NIL)
+               (PROGN (SPADLET |after| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+      (CONS
+       (|mkAtreeNode| (QUOTE |where|))
+       (CONS |before| (CONS (|mkAtree1| |after|) NIL))))
+     ((AND (PAIRP |x|)
+           (EQ (QCAR |x|) (QUOTE DEF))
+           (PROGN
+            (SPADLET |ISTMP#1| (QCDR |x|))
+            (AND
+             (PAIRP |ISTMP#1|)
+             (PROGN
+              (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+              (AND
+               (PAIRP |ISTMP#2|)
+               (EQ (QCAR |ISTMP#2|) (QUOTE |macro|))
+               (PROGN
+                (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                (AND
+                 (PAIRP |ISTMP#3|)
+                 (EQ (QCDR |ISTMP#3|) NIL)
+                 (PROGN (SPADLET |form| (QCAR |ISTMP#3|)) (QUOTE T))))))
+             (PROGN
+              (SPADLET |ISTMP#4| (QCDR |ISTMP#1|))
+              (AND
+               (PAIRP |ISTMP#4|)
+               (PROGN
+                (SPADLET |ISTMP#5| (QCDR |ISTMP#4|))
+                (AND
+                 (PAIRP |ISTMP#5|)
+                 (PROGN
+                  (SPADLET |ISTMP#6| (QCDR |ISTMP#5|))
+                  (AND
+                   (PAIRP |ISTMP#6|)
+                   (EQ (QCDR |ISTMP#6|) NIL)
+                   (PROGN (SPADLET |body| (QCAR |ISTMP#6|)) (QUOTE T)))))))))))
+      (CONS (|mkAtreeNode| (QUOTE MDEF)) (CONS |form| (CONS |body| NIL))))
+     ((AND (PAIRP |x|)
+           (EQ (QCAR |x|) (QUOTE DEF))
+           (PROGN
+            (SPADLET |ISTMP#1| (QCDR |x|))
+            (AND
+             (PAIRP |ISTMP#1|)
+             (PROGN
+              (SPADLET |a| (QCAR |ISTMP#1|))
+              (SPADLET |r| (QCDR |ISTMP#1|))
+              (QUOTE T)))))
+      (SPADLET |r| (|mkAtreeValueOf| |r|))
+      (COND
+       ((AND (PAIRP |a|)
+             (PROGN
+              (SPADLET |op| (QCAR |a|))
+              (SPADLET |arg| (QCDR |a|))
+              (QUOTE T)))
+        (SPADLET |v|
+         (COND
+          ((NULL |arg|) (VECTOR NIL NIL NIL))
+          ((AND (PAIRP |arg|) (CDR |arg|) (NEQUAL (CAR |arg|) (QUOTE |\||)))
+           (|collectDefTypesAndPreds| (CONS (QUOTE |Tuple|) |arg|)))
+          ((NULL (CDR |arg|)) (|collectDefTypesAndPreds| (CAR |arg|)))
+          ((QUOTE T) (|collectDefTypesAndPreds| |arg|))))
+        (SPADLET |types| (CAR |r|))
+        (SPADLET |r'| (CDR |r|))
+        (SPADLET |at|
+         (PROG (#9=#:G166758)
+          (SPADLET #9# NIL)
+          (RETURN
+           (DO ((#10=#:G166764 (CDR |types|) (CDR #10#))
+                (|x| NIL)
+                (#11=#:G166765 (ELT |v| 1) (CDR #11#))
+                (|y| NIL))
+               ((OR (ATOM #10#)
+                    (PROGN (SETQ |x| (CAR #10#)) NIL)
+                    (ATOM #11#)
+                    (PROGN (SETQ |y| (CAR #11#)) NIL))
+                 (NREVERSE0 #9#))
+            (SEQ (EXIT (SETQ #9# (CONS (|mkAtree3,fn| |x| |y|) #9#))))))))
+        (SPADLET |r| (CONS (CONS (CAR |types|) |at|) |r'|))
+        (CONS
+         (|mkAtreeNode| (QUOTE DEF))
+         (CONS
+          (CONS (CONS |op| (ELT |v| 0)) |r|)
+          (CONS
+           (COND ((ELT |v| 2) (ELT |v| 2)) ((QUOTE T) (QUOTE T)))
+           (CONS NIL NIL)))))
+       ((QUOTE T)
+        (CONS
+         (|mkAtreeNode| (QUOTE DEF))
+         (CONS (CONS |a| |r|) (CONS (QUOTE T) (CONS NIL NIL)))))))
+     ((QUOTE T)
+      (SPADLET |z|
+       (COND
+        ((|getBasicMode| |op|)
+         (SPADLET |v| (|mkAtreeNode| |$immediateDataSymbol|))
+         (|putValue| |v| (|getBasicObject| |op|)) |v|)
+        ((ATOM |op|) (|mkAtreeNode| |op|)) ((QUOTE T) (|mkAtree1| |op|))))
+      (CONS |z|
+       (PROG (#12=#:G166778)
+        (SPADLET #12# NIL)
+        (RETURN
+         (DO ((#13=#:G166783 |argl| (CDR #13#)) (|y| NIL))
+             ((OR (ATOM #13#) (PROGN (SETQ |y| (CAR #13#)) NIL))
+               (NREVERSE0 #12#))
+          (SEQ (EXIT (SETQ #12# (CONS (|mkAtree1| |y|) #12#)))))))))))))) 
+
+@
+\subsection{collectDefTypesAndPreds}
+Given an arglist to a DEF-like form, this function returns
+a vector of three things:
+\begin{itemize}
+\item slot 0: just the variables
+\item slot 1: the type declarations on the variables
+\item slot 2: a predicate for all arguments
+\end{itemize}
+<<*>>=
+;collectDefTypesAndPreds args ==
+;  pred := types := vars := NIL
+;  junk :=
+;    IDENTP args =>
+;      types := [NIL]
+;      vars  := [args]
+;    args is [":",var,type] =>
+;      types := [type]
+;      var is ["|",var',p] =>
+;        vars := [var']
+;        pred := addPred(pred,p) where
+;          addPred(old,new) ==
+;            null new => old
+;            null old => new
+;            ['and,old,new]
+;      vars := [var]
+;    args is ["|",var,p] =>
+;      pred := addPred(pred,p)
+;      var is [":",var',type] =>
+;        types := [type]
+;        vars := [var']
+;      var is ['Tuple,:.] or var is ["|",:.] =>
+;        v := collectDefTypesAndPreds var
+;        vars  := [:vars,:v.0]
+;        types := [:types,:v.1]
+;        pred  := addPred(pred,v.2)
+;      vars := [var]
+;      types := [NIL]
+;    args is ['Tuple,:args'] =>
+;      for a in args' repeat
+;        v := collectDefTypesAndPreds a
+;        vars  := [:vars,first v.0]
+;        types := [:types,first v.1]
+;        pred  := addPred(pred,v.2)
+;    types := [NIL]
+;    vars  := [args]
+;  VECTOR(vars,types,pred)
+
+(DEFUN |collectDefTypesAndPreds,addPred| (|old| |new|)
+ (SEQ
+  (IF (NULL |new|) (EXIT |old|))
+  (IF (NULL |old|) (EXIT |new|))
+  (EXIT (CONS (QUOTE |and|) (CONS |old| (CONS |new| NIL)))))) 
+
+(DEFUN |collectDefTypesAndPreds| (|args|)
+ (PROG (|var| |p| |ISTMP#1| |var'| |ISTMP#2| |type| |args'| |v| |pred| 
+        |types| |vars| |junk|)
+  (RETURN
+   (SEQ
+    (PROGN
+     (SPADLET |pred| (SPADLET |types| (SPADLET |vars| NIL)))
+     (SPADLET |junk|
+      (COND
+       ((IDENTP |args|)
+        (SPADLET |types| (CONS NIL NIL))
+        (SPADLET |vars| (CONS |args| NIL)))
+       ((AND (PAIRP |args|)
+             (EQ (QCAR |args|) (QUOTE |:|))
+             (PROGN
+              (SPADLET |ISTMP#1| (QCDR |args|))
+              (AND
+               (PAIRP |ISTMP#1|)
+               (PROGN
+                (SPADLET |var| (QCAR |ISTMP#1|))
+                (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                (AND
+                 (PAIRP |ISTMP#2|)
+                 (EQ (QCDR |ISTMP#2|) NIL)
+                 (PROGN (SPADLET |type| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+        (SPADLET |types| (CONS |type| NIL))
+        (COND
+         ((AND (PAIRP |var|)
+               (EQ (QCAR |var|) (QUOTE |\||))
+               (PROGN
+                (SPADLET |ISTMP#1| (QCDR |var|))
+                (AND
+                 (PAIRP |ISTMP#1|)
+                 (PROGN
+                  (SPADLET |var'| (QCAR |ISTMP#1|))
+                  (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                  (AND
+                   (PAIRP |ISTMP#2|)
+                   (EQ (QCDR |ISTMP#2|) NIL)
+                   (PROGN (SPADLET |p| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+          (SPADLET |vars| (CONS |var'| NIL))
+          (SPADLET |pred| (|collectDefTypesAndPreds,addPred| |pred| |p|)))
+         ((QUOTE T) (SPADLET |vars| (CONS |var| NIL)))))
+       ((AND (PAIRP |args|)
+             (EQ (QCAR |args|) (QUOTE |\||))
+             (PROGN
+              (SPADLET |ISTMP#1| (QCDR |args|))
+              (AND
+               (PAIRP |ISTMP#1|)
+               (PROGN
+                (SPADLET |var| (QCAR |ISTMP#1|))
+                (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                (AND
+                 (PAIRP |ISTMP#2|)
+                 (EQ (QCDR |ISTMP#2|) NIL)
+                 (PROGN (SPADLET |p| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+        (SPADLET |pred| (|collectDefTypesAndPreds,addPred| |pred| |p|))
+        (COND
+         ((AND (PAIRP |var|)
+               (EQ (QCAR |var|) (QUOTE |:|))
+               (PROGN
+                (SPADLET |ISTMP#1| (QCDR |var|))
+                (AND
+                 (PAIRP |ISTMP#1|)
+                 (PROGN
+                  (SPADLET |var'| (QCAR |ISTMP#1|))
+                  (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                  (AND
+                   (PAIRP |ISTMP#2|)
+                   (EQ (QCDR |ISTMP#2|) NIL)
+                   (PROGN (SPADLET |type| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+          (SPADLET |types| (CONS |type| NIL))
+          (SPADLET |vars| (CONS |var'| NIL)))
+         ((OR (AND (PAIRP |var|) (EQ (QCAR |var|) (QUOTE |Tuple|)))
+              (AND (PAIRP |var|) (EQ (QCAR |var|) (QUOTE |\||))))
+          (SPADLET |v| (|collectDefTypesAndPreds| |var|))
+          (SPADLET |vars| (APPEND |vars| (ELT |v| 0)))
+          (SPADLET |types| (APPEND |types| (ELT |v| 1)))
+          (SPADLET |pred|
+           (|collectDefTypesAndPreds,addPred| |pred| (ELT |v| 2))))
+         ((QUOTE T)
+          (SPADLET |vars| (CONS |var| NIL))
+          (SPADLET |types| (CONS NIL NIL)))))
+       ((AND (PAIRP |args|)
+             (EQ (QCAR |args|) (QUOTE |Tuple|))
+             (PROGN (SPADLET |args'| (QCDR |args|)) (QUOTE T)))
+        (DO ((#0=#:G166967 |args'| (CDR #0#)) (|a| NIL))
+            ((OR (ATOM #0#) (PROGN (SETQ |a| (CAR #0#)) NIL)) NIL)
+         (SEQ
+          (EXIT
+           (PROGN
+            (SPADLET |v| (|collectDefTypesAndPreds| |a|))
+            (SPADLET |vars| (APPEND |vars| (CONS (CAR (ELT |v| 0)) NIL)))
+            (SPADLET |types| (APPEND |types| (CONS (CAR (ELT |v| 1)) NIL)))
+            (SPADLET |pred|
+             (|collectDefTypesAndPreds,addPred| |pred| (ELT |v| 2))))))))
+       ((QUOTE T)
+        (SPADLET |types| (CONS NIL NIL))
+        (SPADLET |vars| (CONS |args| NIL)))))
+     (VECTOR |vars| |types| |pred|)))))) 
+
+@
+\subsection{mkAtreeValueOf}
+<<*>>=
+;mkAtreeValueOf l ==
+;  -- scans for ['valueOf,atom]
+;  not CONTAINED('valueOf,l) => l
+;  mkAtreeValueOf1 l
+
+(DEFUN |mkAtreeValueOf| (|l|)
+ (COND
+  ((NULL (CONTAINED (QUOTE |valueOf|) |l|)) |l|)
+  ((QUOTE T) (|mkAtreeValueOf1| |l|)))) 
+
+@
+\subsection{mkAtreeValueOf1}
+<<*>>=
+;mkAtreeValueOf1 l ==
+;  null l or atom l or null rest l => l
+;  l is ['valueOf,u] and IDENTP u =>
+;    v := mkAtreeNode $immediateDataSymbol
+;    putValue(v,get(u,'value,$InteractiveFrame) or
+;      objNewWrap(u,['Variable,u]))
+;    v
+;  [mkAtreeValueOf1 x for x in l]
+
+(DEFUN |mkAtreeValueOf1| (|l|)
+ (PROG (|ISTMP#1| |u| |v|)
+  (RETURN
+   (SEQ
+    (COND
+     ((OR (NULL |l|) (ATOM |l|) (NULL (CDR |l|))) |l|)
+     ((AND
+       (PAIRP |l|)
+       (EQ (QCAR |l|) (QUOTE |valueOf|))
+       (PROGN
+        (SPADLET |ISTMP#1| (QCDR |l|))
+        (AND
+         (PAIRP |ISTMP#1|)
+         (EQ (QCDR |ISTMP#1|) NIL)
+         (PROGN (SPADLET |u| (QCAR |ISTMP#1|)) (QUOTE T))))
+       (IDENTP |u|))
+      (SPADLET |v| (|mkAtreeNode| |$immediateDataSymbol|))
+      (|putValue| |v|
+       (OR
+        (|get| |u| (QUOTE |value|) |$InteractiveFrame|)
+        (|objNewWrap| |u| (CONS (QUOTE |Variable|) (CONS |u| NIL)))))
+      |v|)
+     ((QUOTE T)
+      (PROG (#0=#:G167032)
+       (SPADLET #0# NIL)
+       (RETURN
+        (DO ((#1=#:G167037 |l| (CDR #1#)) (|x| NIL))
+            ((OR (ATOM #1#) (PROGN (SETQ |x| (CAR #1#)) NIL)) (NREVERSE0 #0#))
+         (SEQ (EXIT (SETQ #0# (CONS (|mkAtreeValueOf1| |x|) #0#))))))))))))) 
+
+@
+\subsection{mkLessOrEqual}
+<<*>>=
+;mkLessOrEqual(lhs,rhs) == ['not,['_<,rhs,lhs]]
+
+(DEFUN |mkLessOrEqual| (|lhs| |rhs|)
+ (CONS (QUOTE |not|)
+  (CONS (CONS (QUOTE <) (CONS |rhs| (CONS |lhs| NIL))) NIL))) 
+
+@
+\subsection{emptyAtree}
+Remove mode, value, and misc. info from attrib tree
+<<*>>=
+;emptyAtree expr ==
+;  VECP expr =>
+;    $immediateDataSymbol = expr.0 => nil
+;    expr.1:= NIL
+;    expr.2:= NIL
+;    expr.3:= NIL
+;    -- kill proplist too?
+;  atom expr => nil
+;  for e in expr repeat emptyAtree e
+
+(DEFUN |emptyAtree| (|expr|)
+ (SEQ
+  (COND
+   ((VECP |expr|)
+    (COND
+     ((BOOT-EQUAL |$immediateDataSymbol| (ELT |expr| 0)) NIL)
+     ((QUOTE T)
+      (SETELT |expr| 1 NIL) (SETELT |expr| 2 NIL) (SETELT |expr| 3 NIL))))
+   ((ATOM |expr|) NIL)
+   ((QUOTE T)
+    (DO ((#0=#:G167058 |expr| (CDR #0#)) (|e| NIL))
+        ((OR (ATOM #0#) (PROGN (SETQ |e| (CAR #0#)) NIL)) NIL)
+     (SEQ (EXIT (|emptyAtree| |e|)))))))) 
+
+@
+\subsection{unVectorize}
+Transforms from an atree back into a tree
+<<*>>=
+;unVectorize body ==
+;  VECP body =>
+;    name := getUnname body
+;    name ^= $immediateDataSymbol => name
+;    objValUnwrap getValue body
+;  atom body => body
+;  body is [op,:argl] =>
+;    newOp:=unVectorize op
+;    if newOp = 'SUCHTHAT then newOp := '_|
+;    if newOp = 'COERCE then newOp := '_:_:
+;    if newOp = 'Dollar then newOp := "$elt"
+;    [newOp,:unVectorize argl]
+;  systemErrorHere '"unVectorize"
+
+(DEFUN |unVectorize| (|body|)
+ (PROG (|name| |op| |argl| |newOp|)
+  (RETURN
+   (COND
+    ((VECP |body|)
+     (SPADLET |name| (|getUnname| |body|))
+     (COND
+      ((NEQUAL |name| |$immediateDataSymbol|) |name|)
+      ((QUOTE T) (|objValUnwrap| (|getValue| |body|)))))
+    ((ATOM |body|) |body|)
+    ((AND
+      (PAIRP |body|)
+      (PROGN
+       (SPADLET |op| (QCAR |body|))
+       (SPADLET |argl| (QCDR |body|))
+       (QUOTE T)))
+     (SPADLET |newOp| (|unVectorize| |op|))
+     (COND
+      ((BOOT-EQUAL |newOp| (QUOTE SUCHTHAT))
+       (SPADLET |newOp| (QUOTE |\||))))
+     (COND
+      ((BOOT-EQUAL |newOp| (QUOTE COERCE))
+       (SPADLET |newOp| (QUOTE |::|))))
+     (COND 
+      ((BOOT-EQUAL |newOp| (QUOTE |Dollar|))
+       (SPADLET |newOp| (QUOTE |$elt|))))
+     (CONS |newOp| (|unVectorize| |argl|)))
+    ((QUOTE T) (|systemErrorHere| (MAKESTRING "unVectorize"))))))) 
+
+@
+\section{Stuffing and Getting Info}
+\subsection{putAtree}
+<<*>>=
+;putAtree(x,prop,val) ==
+;  x is [op,:.] =>
+;    -- only willing to add property if op is a vector
+;    -- otherwise will be pushing to deeply into calling structure
+;    if VECP op then putAtree(op,prop,val)
+;    x
+;  null VECP x => x     -- just ignore it
+;  n := QLASSQ(prop,'((mode . 1) (value . 2) (modeSet . 3)))
+;    => x.n := val
+;  x.4 := insertShortAlist(prop,val,x.4)
+;  x
+
+(DEFUN |putAtree| (|x| |prop| |val|)
+ (PROG (|op| |n|)
+  (RETURN
+   (COND
+    ((AND (PAIRP |x|) (PROGN (SPADLET |op| (QCAR |x|)) (QUOTE T)))
+     (COND ((VECP |op|) (|putAtree| |op| |prop| |val|))) |x|)
+    ((NULL (VECP |x|)) |x|)
+    ((SPADLET |n|
+      (QLASSQ |prop| (QUOTE ((|mode| . 1) (|value| . 2) (|modeSet| . 3)))))
+     (SETELT |x| |n| |val|))
+    ((QUOTE T)
+     (SETELT |x| 4 (|insertShortAlist| |prop| |val| (ELT |x| 4))) |x|))))) 
+
+@
+\subsection{getAtree}
+<<*>>=
+;getAtree(x,prop) ==
+;  x is [op,:.] =>
+;    -- only willing to get property if op is a vector
+;    -- otherwise will be pushing to deeply into calling structure
+;    VECP op => getAtree(op,prop)
+;    NIL
+;  null VECP x => NIL     -- just ignore it
+;  n:= QLASSQ(prop,'((mode . 1) (value . 2) (modeSet . 3)))
+;    => x.n
+;  QLASSQ(prop,x.4)
+
+(DEFUN |getAtree| (|x| |prop|)
+ (PROG (|op| |n|)
+  (RETURN
+   (COND
+    ((AND (PAIRP |x|) (PROGN (SPADLET |op| (QCAR |x|)) (QUOTE T)))
+     (COND ((VECP |op|) (|getAtree| |op| |prop|)) ((QUOTE T) NIL)))
+    ((NULL (VECP |x|)) NIL)
+    ((SPADLET |n|
+      (QLASSQ |prop| (QUOTE ((|mode| . 1) (|value| . 2) (|modeSet| . 3)))))
+     (ELT |x| |n|))
+    ((QUOTE T) (QLASSQ |prop| (ELT |x| 4))))))) 
+
+@
+\subsection{putTarget}
+<<*>>=
+;putTarget(x, targ) ==
+;  -- want to put nil modes perhaps to clear old target
+;  if targ = $EmptyMode then targ := nil
+;  putAtree(x,'target,targ)
+
+(DEFUN |putTarget| (|x| |targ|)
+ (PROGN
+  (COND ((BOOT-EQUAL |targ| |$EmptyMode|) (SPADLET |targ| NIL)))
+  (|putAtree| |x| (QUOTE |target|) |targ|))) 
+
+@
+\subsection{getTarget}
+<<*>>=
+;getTarget(x) == getAtree(x,'target)
+
+(DEFUN |getTarget| (|x|) (|getAtree| |x| (QUOTE |target|))) 
+
+@
+\subsection{insertShortAlist}
+<<*>>=
+;insertShortAlist(prop,val,al) ==
+;  pair := QASSQ(prop,al) =>
+;    RPLACD(pair,val)
+;    al
+;  [[prop,:val],:al]
+
+(DEFUN |insertShortAlist| (|prop| |val| |al|)
+ (PROG (|pair|)
+  (RETURN
+   (COND
+    ((SPADLET |pair| (QASSQ |prop| |al|)) (RPLACD |pair| |val|) |al|)
+    ((QUOTE T) (CONS (CONS |prop| |val|) |al|)))))) 
+
+@
+\subsection{transferPropsToNode}
+<<*>>=
+;transferPropsToNode(x,t) ==
+;  propList := getProplist(x,$env)
+;  QLASSQ('Led,propList) or QLASSQ('Nud,propList) => nil
+;  node :=
+;    VECP t => t
+;    first t
+;  for prop in '(mode localModemap value name generatedCode)
+;    repeat transfer(x,node,prop)
+;      where
+;        transfer(x,node,prop) ==
+;          u := get(x,prop,$env) => putAtree(node,prop,u)
+;          (not (x in $localVars)) and (u := get(x,prop,$e)) =>
+;            putAtree(node,prop,u)
+;  if not getMode(t) and (am := get(x,'automode,$env)) then
+;    putModeSet(t,[am])
+;    putMode(t,am)
+;  t
+
+(DEFUN |transferPropsToNode,transfer| (|x| |node| |prop|)
+ (PROG (|u|)
+  (RETURN
+   (SEQ
+    (IF (SPADLET |u| (|get| |x| |prop| |$env|))
+      (EXIT (|putAtree| |node| |prop| |u|)))
+    (EXIT
+     (IF (AND (NULL (|member| |x| |$localVars|))
+              (SPADLET |u| (|get| |x| |prop| |$e|)))
+      (EXIT (|putAtree| |node| |prop| |u|)))))))) 
+
+(DEFUN |transferPropsToNode| (|x| |t|)
+ (PROG (|propList| |node| |am|)
+  (RETURN
+   (SEQ
+    (PROGN
+     (SPADLET |propList| (|getProplist| |x| |$env|))
+     (COND
+      ((OR (QLASSQ (QUOTE |Led|) |propList|) (QLASSQ (QUOTE |Nud|) |propList|))
+       NIL)
+      ((QUOTE T)
+       (SPADLET |node| (COND ((VECP |t|) |t|) ((QUOTE T) (CAR |t|))))
+       (DO ((#0=#:G167124
+             (QUOTE (|mode| |localModemap| |value| |name| |generatedCode|))
+             (CDR #0#))
+            (|prop| NIL))
+           ((OR (ATOM #0#) (PROGN (SETQ |prop| (CAR #0#)) NIL)) NIL)
+         (SEQ (EXIT (|transferPropsToNode,transfer| |x| |node| |prop|))))
+       (COND
+        ((AND
+          (NULL (|getMode| |t|))
+          (SPADLET |am| (|get| |x| (QUOTE |automode|) |$env|)))
+         (|putModeSet| |t| (CONS |am| NIL)) (|putMode| |t| |am|))) |t|))))))) 
+
+@
+\subsection{isLeaf}
+May be a number or a vector
+<<*>>=
+; isLeaf x == atom x
+
+(DEFUN |isLeaf| (|x|) (ATOM |x|)) 
+
+@
+\subsection{getMode}
+<<*>>=
+;getMode x ==
+;  x is [op,:.] => getMode op
+;  VECP x => x.1
+;  m := getBasicMode x => m
+;  keyedSystemError("S2II0001",[x])
+
+(DEFUN |getMode| (|x|)
+ (PROG (|op| |m|)
+  (RETURN
+   (COND
+    ((AND (PAIRP |x|) (PROGN (SPADLET |op| (QCAR |x|)) (QUOTE T)))
+     (|getMode| |op|))
+    ((VECP |x|) (ELT |x| 1))
+    ((SPADLET |m| (|getBasicMode| |x|)) |m|)
+    ((QUOTE T) (|keyedSystemError| (QUOTE S2II0001) (CONS |x| NIL))))))) 
+
+@
+\subsection{putMode}
+<<*>>=
+;putMode(x,y) ==
+;  x is [op,:.] => putMode(op,y)
+;  null VECP x => keyedSystemError("S2II0001",[x])
+;  x.1 := y
+
+(DEFUN |putMode| (|x| |y|)
+ (PROG (|op|)
+  (RETURN
+   (COND
+    ((AND (PAIRP |x|) (PROGN (SPADLET |op| (QCAR |x|)) (QUOTE T)))
+     (|putMode| |op| |y|))
+    ((NULL (VECP |x|)) (|keyedSystemError| (QUOTE S2II0001) (CONS |x| NIL)))
+    ((QUOTE T) (SETELT |x| 1 |y|)))))) 
+
+@
+\subsection{getValue}
+<<*>>=
+;getValue x ==
+;  VECP x => x.2
+;  atom x =>
+;    t := getBasicObject x => t
+;    keyedSystemError("S2II0001",[x])
+;  getValue first x
+
+(DEFUN |getValue| (|x|) 
+ (PROG (|t|)
+  (RETURN
+   (COND
+    ((VECP |x|) (ELT |x| 2))
+    ((ATOM |x|)
+     (COND
+      ((SPADLET |t| (|getBasicObject| |x|)) |t|)
+      ((QUOTE T) (|keyedSystemError| (QUOTE S2II0001) (CONS |x| NIL)))))
+    ((QUOTE T) (|getValue| (CAR |x|))))))) 
+
+@
+\subsection{putValue}
+<<*>>=
+;putValue(x,y) ==
+;  x is [op,:.] => putValue(op,y)
+;  null VECP x => keyedSystemError("S2II0001",[x])
+;  x.2 := y
+
+(DEFUN |putValue| (|x| |y|)
+ (PROG (|op|)
+  (RETURN
+   (COND
+    ((AND (PAIRP |x|) (PROGN (SPADLET |op| (QCAR |x|)) (QUOTE T)))
+     (|putValue| |op| |y|))
+    ((NULL (VECP |x|)) (|keyedSystemError| (QUOTE S2II0001) (CONS |x| NIL)))
+    ((QUOTE T) (SETELT |x| 2 |y|)))))) 
+
+@
+\subsection{putValueValue}
+<<*>>=
+;putValueValue(vec,val) ==
+;  putValue(vec,val)
+;  vec
+
+(DEFUN |putValueValue| (|vec| |val|) (PROGN (|putValue| |vec| |val|) |vec|)) 
+
+@
+\subsection{getUnnameIfCan}
+<<*>>=
+;getUnnameIfCan x ==
+;  VECP x => x.0
+;  x is [op,:.] => getUnnameIfCan op
+;  atom x => x
+;  nil
+
+(DEFUN |getUnnameIfCan| (|x|)
+ (PROG (|op|)
+  (RETURN
+   (COND
+    ((VECP |x|) (ELT |x| 0))
+    ((AND (PAIRP |x|) (PROGN (SPADLET |op| (QCAR |x|)) (QUOTE T)))
+     (|getUnnameIfCan| |op|))
+    ((ATOM |x|) |x|) ((QUOTE T) NIL))))) 
+
+@
+\subsection{getUnname}
+<<*>>=
+;getUnname x ==
+;  x is [op,:.] => getUnname op
+;  getUnname1 x
+
+(DEFUN |getUnname| (|x|)
+ (PROG (|op|)
+  (RETURN
+   (COND
+    ((AND (PAIRP |x|) (PROGN (SPADLET |op| (QCAR |x|)) (QUOTE T)))
+     (|getUnname| |op|))
+    ((QUOTE T) (|getUnname1| |x|)))))) 
+
+@
+\subsection{getUnname1}
+<<*>>=
+;getUnname1 x ==
+;  VECP x => x.0
+;  null atom x => keyedSystemError("S2II0001",[x])
+;  x
+
+(DEFUN |getUnname1| (|x|)
+ (COND
+  ((VECP |x|) (ELT |x| 0))
+  ((NULL (ATOM |x|)) (|keyedSystemError| (QUOTE S2II0001) (CONS |x| NIL)))
+  ((QUOTE T) |x|))) 
+
+@
+\subsection{computedMode}
+<<*>>=
+;computedMode t ==
+;  getModeSet t is [m] => m
+;  keyedSystemError("S2GE0016",['"computedMode",'"non-singleton modeset"])
+
+(DEFUN |computedMode| (|t|)
+ (PROG (|ISTMP#1| |m|)
+  (RETURN
+   (COND
+    ((PROGN
+      (SPADLET |ISTMP#1| (|getModeSet| |t|))
+      (AND
+       (PAIRP |ISTMP#1|)
+       (EQ (QCDR |ISTMP#1|) NIL)
+       (PROGN (SPADLET |m| (QCAR |ISTMP#1|)) (QUOTE T))))
+     |m|)
+    ((QUOTE T)
+     (|keyedSystemError| (QUOTE S2GE0016)
+      (CONS "computedMode" (CONS "non-singleton modeset" NIL)))))))) 
+
+@
+\subsection{putModeSet}
+<<*>>=
+;putModeSet(x,y) ==
+;  x is [op,:.] => putModeSet(op,y)
+;  not VECP x => keyedSystemError("S2II0001",[x])
+;  x.3 := y
+;  y
+
+(DEFUN |putModeSet| (|x| |y|)
+ (PROG (|op|)
+  (RETURN
+   (COND
+    ((AND (PAIRP |x|) (PROGN (SPADLET |op| (QCAR |x|)) (QUOTE T)))
+     (|putModeSet| |op| |y|))
+    ((NULL (VECP |x|)) (|keyedSystemError| (QUOTE S2II0001) (CONS |x| NIL)))
+    ((QUOTE T) (SETELT |x| 3 |y|) |y|))))) 
+
+@
+\subsection{getModeOrFirstModeSetIfThere}
+<<*>>=
+;getModeOrFirstModeSetIfThere x ==
+;  x is [op,:.] => getModeOrFirstModeSetIfThere op
+;  VECP x =>
+;    m := x.1 => m
+;    val := x.2 => objMode val
+;    y := x.aModeSet =>
+;      (y = [$EmptyMode]) and ((m := getMode x) is ['Mapping,:.]) => m
+;      first y
+;    NIL
+;  m := getBasicMode x => m
+;  NIL
+
+(DEFUN |getModeOrFirstModeSetIfThere| (|x|)
+ (PROG (|op| |val| |y| |ISTMP#1| |m|)
+  (RETURN
+   (COND
+    ((AND (PAIRP |x|) (PROGN (SPADLET |op| (QCAR |x|)) (QUOTE T)))
+     (|getModeOrFirstModeSetIfThere| |op|))
+    ((VECP |x|)
+     (COND
+      ((SPADLET |m| (ELT |x| 1)) |m|)
+      ((SPADLET |val| (ELT |x| 2)) (|objMode| |val|))
+      ((SPADLET |y| (ELT |x| 3))
+       (COND
+        ((AND (BOOT-EQUAL |y| (CONS |$EmptyMode| NIL))
+              (PROGN
+               (SPADLET |ISTMP#1| (SPADLET |m| (|getMode| |x|)))
+               (AND (PAIRP |ISTMP#1|)
+                    (EQ (QCAR |ISTMP#1|) (QUOTE |Mapping|)))))
+         |m|)
+        ((QUOTE T) (CAR |y|))))
+      ((QUOTE T) NIL)))
+    ((SPADLET |m| (|getBasicMode| |x|)) |m|) ((QUOTE T) NIL))))) 
+
+@
+\subsection{getModeSet}
+<<*>>=
+;getModeSet x ==
+;  x and PAIRP x => getModeSet first x
+;  VECP x =>
+;    y:= x.aModeSet =>
+;      (y = [$EmptyMode]) and ((m := getMode x) is ['Mapping,:.]) =>
+;        [m]
+;      y
+;    keyedSystemError("S2GE0016",['"getModeSet",'"no mode set"])
+;  m:= getBasicMode x => [m]
+;  null atom x => getModeSet first x
+;  keyedSystemError("S2GE0016",['"getModeSet",
+;    '"not an attributed tree"])
+
+(DEFUN |getModeSet| (|x|)
+ (PROG (|y| |ISTMP#1| |m|)
+  (RETURN
+   (COND
+    ((AND |x| (PAIRP |x|)) (|getModeSet| (CAR |x|)))
+    ((VECP |x|)
+     (COND
+      ((SPADLET |y| (ELT |x| 3))
+       (COND
+        ((AND (BOOT-EQUAL |y| (CONS |$EmptyMode| NIL))
+              (PROGN
+               (SPADLET |ISTMP#1| (SPADLET |m| (|getMode| |x|)))
+               (AND
+                (PAIRP |ISTMP#1|)
+                (EQ (QCAR |ISTMP#1|) (QUOTE |Mapping|)))))
+         (CONS |m| NIL))
+        ((QUOTE T) |y|)))
+      ((QUOTE T)
+       (|keyedSystemError| (QUOTE S2GE0016)
+        (CONS "getModeSet" (CONS "no mode set" NIL))))))
+    ((SPADLET |m| (|getBasicMode| |x|)) (CONS |m| NIL))
+    ((NULL (ATOM |x|)) (|getModeSet| (CAR |x|)))
+    ((QUOTE T)
+     (|keyedSystemError| (QUOTE S2GE0016)
+      (CONS "getModeSet" (CONS "not an attributed tree" NIL)))))))) 
+
+@
+\subsection{getModeSetUseSubdomain}
+<<*>>=
+;getModeSetUseSubdomain x ==
+;  x and PAIRP x => getModeSetUseSubdomain first x
+;  VECP(x) =>
+;    -- don't play subdomain games with retracted args
+;    getAtree(x,'retracted) => getModeSet x
+;    y := x.aModeSet =>
+;      (y = [$EmptyMode]) and ((m := getMode x) is ['Mapping,:.]) =>
+;        [m]
+;      val := getValue x
+;      (x.0 = $immediateDataSymbol) and (y = [$Integer]) =>
+;        val := objValUnwrap val
+;        m := getBasicMode0(val,true)
+;        x.2 := objNewWrap(val,m)
+;        x.aModeSet := [m]
+;        [m]
+;      null val => y
+;      isEqualOrSubDomain(objMode(val),$Integer) and
+;        INTEGERP(f := objValUnwrap val) =>
+;          [getBasicMode0(f,true)]
+;      y
+;    keyedSystemError("S2GE0016",
+;      ['"getModeSetUseSubomain",'"no mode set"])
+;  m := getBasicMode0(x,true) => [m]
+;  null atom x => getModeSetUseSubdomain first x
+;  keyedSystemError("S2GE0016",
+;    ['"getModeSetUseSubomain",'"not an attributed tree"])
+
+(DEFUN |getModeSetUseSubdomain| (|x|)
+ (PROG (|y| |ISTMP#1| |val| |f| |m|)
+  (RETURN
+   (COND
+    ((AND |x| (PAIRP |x|)) (|getModeSetUseSubdomain| (CAR |x|)))
+    ((VECP |x|)
+     (COND
+      ((|getAtree| |x| (QUOTE |retracted|)) (|getModeSet| |x|))
+      ((SPADLET |y| (ELT |x| 3))
+       (COND
+        ((AND
+          (BOOT-EQUAL |y| (CONS |$EmptyMode| NIL))
+          (PROGN
+           (SPADLET |ISTMP#1| (SPADLET |m| (|getMode| |x|)))
+           (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) (QUOTE |Mapping|)))))
+         (CONS |m| NIL))
+        ((QUOTE T)
+         (SPADLET |val| (|getValue| |x|))
+         (COND
+          ((AND (BOOT-EQUAL (ELT |x| 0) |$immediateDataSymbol|)
+                (BOOT-EQUAL |y| (CONS |$Integer| NIL)))
+           (SPADLET |val| (|objValUnwrap| |val|))
+           (SPADLET |m| (|getBasicMode0| |val| (QUOTE T)))
+           (SETELT |x| 2 (|objNewWrap| |val| |m|))
+           (SETELT |x| 3 (CONS |m| NIL))
+           (CONS |m| NIL))
+          ((NULL |val|) |y|)
+          ((AND (|isEqualOrSubDomain| (|objMode| |val|) |$Integer|)
+                (INTEGERP (SPADLET |f| (|objValUnwrap| |val|))))
+           (CONS (|getBasicMode0| |f| (QUOTE T)) NIL))
+          ((QUOTE T) |y|)))))
+      ((QUOTE T)
+       (|keyedSystemError| (QUOTE S2GE0016)
+        (CONS "getModeSetUseSubomain" (CONS "no mode set" NIL))))))
+    ((SPADLET |m| (|getBasicMode0| |x| (QUOTE T))) (CONS |m| NIL))
+    ((NULL (ATOM |x|)) (|getModeSetUseSubdomain| (CAR |x|)))
+    ((QUOTE T)
+     (|keyedSystemError| (QUOTE S2GE0016)
+      (CONS "getModeSetUseSubomain" (CONS "not an attributed tree" NIL)))))))) 
+
+@
+\subsection{atree2EvaluatedTree}
+<<*>>=
+;atree2EvaluatedTree x == atree2Tree1(x,true)
+
+(DEFUN |atree2EvaluatedTree| (|x|) (|atree2Tree1| |x| (QUOTE T))) 
+
+@
+\subsection{atree2Tree1}
+<<*>>=
+;atree2Tree1(x,evalIfTrue) ==
+;  (triple := getValue x) and objMode(triple) ^= $EmptyMode =>
+;    coerceOrCroak(triple,$OutputForm,$mapName)
+;  isLeaf x =>
+;    VECP x => x.0
+;    x
+;  [atree2Tree1(y,evalIfTrue) for y in x]
+
+(DEFUN |atree2Tree1| (|x| |evalIfTrue|)
+ (PROG (|triple|)
+  (RETURN
+   (SEQ
+    (COND
+     ((AND (SPADLET |triple| (|getValue| |x|))
+           (NEQUAL (|objMode| |triple|) |$EmptyMode|))
+      (|coerceOrCroak| |triple| |$OutputForm| |$mapName|))
+     ((|isLeaf| |x|)
+      (COND ((VECP |x|) (ELT |x| 0)) ((QUOTE T) |x|)))
+     ((QUOTE T)
+      (PROG (#0=#:G167247)
+       (SPADLET #0# NIL)
+       (RETURN
+        (DO ((#1=#:G167252 |x| (CDR #1#)) (|y| NIL))
+            ((OR (ATOM #1#) (PROGN (SETQ |y| (CAR #1#)) NIL)) (NREVERSE0 #0#))
+         (SEQ
+          (EXIT
+           (SETQ #0# (CONS (|atree2Tree1| |y| |evalIfTrue|) #0#))))))))))))) 
+
+@
+\section{Environment Utilities}
+\subsection{getValueFromEnvironment}
+<<*>>=
+;getValueFromEnvironment(x,mode) ==
+;  $failure ^= (v := getValueFromSpecificEnvironment(x,mode,$env)) => v
+;  $failure ^= (v := getValueFromSpecificEnvironment(x,mode,$e))   => v
+;  null(v := coerceInt(objNew(x, ['Variable, x]), mode)) =>
+;     throwKeyedMsg("S2IE0001",[x])
+;  objValUnwrap v
+
+(DEFUN |getValueFromEnvironment| (|x| |mode|)
+ (PROG (|v|)
+  (RETURN
+   (COND
+    ((NEQUAL |$failure|
+       (SPADLET |v| (|getValueFromSpecificEnvironment| |x| |mode| |$env|)))
+      |v|)
+    ((NEQUAL |$failure|
+       (SPADLET |v| (|getValueFromSpecificEnvironment| |x| |mode| |$e|)))
+     |v|)
+    ((NULL
+      (SPADLET |v|
+       (|coerceInt|
+        (|objNew| |x| (CONS (QUOTE |Variable|) (CONS |x| NIL)))
+        |mode|)))
+      (|throwKeyedMsg| (QUOTE S2IE0001) (CONS |x| NIL)))
+     ((QUOTE T) (|objValUnwrap| |v|)))))) 
+
+@
+\subsection{getValueFromSpecificEnvironment}
+<<*>>=
+;getValueFromSpecificEnvironment(id,mode,e) ==
+;  PAIRP e =>
+;    u := get(id,'value,e) =>
+;      objMode(u) = $EmptyMode =>
+;        systemErrorHere '"getValueFromSpecificEnvironment"
+;      v := objValUnwrap u
+;      mode isnt ['Mapping,:mapSig] => v
+;      v isnt ['MAP,:.] => v
+;      v' := coerceInt(u,mode)
+;      null v' => throwKeyedMsg("S2IC0002",[objMode u,mode])
+;      objValUnwrap v'
+;
+;    m := get(id,'mode,e) =>
+;      -- See if we can make it into declared mode from symbolic form
+;      -- For example, (x : P[x] I; x + 1)
+;      if isPartialMode(m) then m' := resolveTM(['Variable,id],m)
+;      else m' := m
+;      m' and
+;        (u := coerceInteractive(objNewWrap(id,['Variable,id]),m')) =>
+;          objValUnwrap u
+;
+;      throwKeyedMsg("S2IE0002",[id,m])
+;    $failure
+;  $failure
+
+(DEFUN |getValueFromSpecificEnvironment| (|id| |mode| |e|)
+ (PROG (|v| |mapSig| |v'| |m| |m'| |u|)
+  (RETURN
+   (COND
+    ((PAIRP |e|)
+     (COND
+      ((SPADLET |u| (|get| |id| (QUOTE |value|) |e|))
+       (COND
+        ((BOOT-EQUAL (|objMode| |u|) |$EmptyMode|)
+         (|systemErrorHere| (MAKESTRING "getValueFromSpecificEnvironment")))
+        ((QUOTE T)
+         (SPADLET |v| (|objValUnwrap| |u|))
+         (COND
+          ((NULL
+            (AND
+             (PAIRP |mode|)
+             (EQ (QCAR |mode|) (QUOTE |Mapping|))
+             (PROGN (SPADLET |mapSig| (QCDR |mode|)) (QUOTE T))))
+           |v|)
+          ((NULL (AND (PAIRP |v|) (EQ (QCAR |v|) (QUOTE MAP)))) |v|)
+          ((QUOTE T)
+           (SPADLET |v'| (|coerceInt| |u| |mode|)) 
+           (COND
+            ((NULL |v'|)
+             (|throwKeyedMsg| (QUOTE S2IC0002)
+              (CONS (|objMode| |u|) (CONS |mode| NIL))))
+            ((QUOTE T) (|objValUnwrap| |v'|))))))))
+      ((SPADLET |m| (|get| |id| (QUOTE |mode|) |e|))
+       (COND
+        ((|isPartialMode| |m|)
+         (SPADLET |m'|
+          (|resolveTM| (CONS (QUOTE |Variable|) (CONS |id| NIL)) |m|)))
+        ((QUOTE T) (SPADLET |m'| |m|)))
+       (COND
+        ((AND |m'|
+              (SPADLET |u|
+               (|coerceInteractive|
+                (|objNewWrap| |id| (CONS (QUOTE |Variable|) (CONS |id| NIL)))
+                 |m'|)))
+         (|objValUnwrap| |u|))
+        ((QUOTE T)
+         (|throwKeyedMsg| (QUOTE S2IE0002) (CONS |id| (CONS |m| NIL))))))
+      ((QUOTE T) |$failure|)))
+    ((QUOTE T) |$failure|))))) 
+
+@
+\subsection{addBindingInteractive}
+<<*>>=
+;addBindingInteractive(var,proplist,e is [[curContour,:.],:.]) ==
+;  -- change proplist of var in e destructively
+;  u := ASSQ(var,curContour) =>
+;    RPLACD(u,proplist)
+;    e
+;  RPLAC(CAAR e,[[var,:proplist],:curContour])
+;  e
+
+(DEFUN |addBindingInteractive| (|var| |proplist| |e|)
+ (PROG (|curContour| |u|)
+  (RETURN
+   (PROGN
+    (SPADLET |curContour| (CAAR |e|))
+    (COND
+     ((SPADLET |u| (ASSQ |var| |curContour|)) (RPLACD |u| |proplist|) |e|)
+     ((QUOTE T)
+      (RPLAC (CAAR |e|) (CONS (CONS |var| |proplist|) |curContour|)) |e|)))))) 
+
+@
+\subsection{augProplistInteractive}
+<<*>>=
+;augProplistInteractive(proplist,prop,val) ==
+;  u := ASSQ(prop,proplist) =>
+;    RPLACD(u,val)
+;    proplist
+;  [[prop,:val],:proplist]
+
+(DEFUN |augProplistInteractive| (|proplist| |prop| |val|)
+ (PROG (|u|)
+  (RETURN
+   (COND
+    ((SPADLET |u| (ASSQ |prop| |proplist|)) (RPLACD |u| |val|) |proplist|)
+    ((QUOTE T) (CONS (CONS |prop| |val|) |proplist|)))))) 
+
+@
+\subsection{getFlag}
+<<*>>=
+;getFlag x == get("--flags--",x,$e)
+
+(DEFUN |getFlag| (|x|) (|get| (QUOTE |--flags--|) |x| |$e|)) 
+
+@
+\subsection{putFlag}
+<<*>>=
+;putFlag(flag,value) ==
+;  $e := put ("--flags--", flag, value, $e)
+
+(DEFUN |putFlag| (|flag| |value|)
+ (SPADLET |$e| (|put| (QUOTE |--flags--|) |flag| |value| |$e|))) 
+
+@
+\subsection{get}
+<<*>>=
+;get(x,prop,e) ==
+;  $InteractiveMode => get0(x,prop,e)
+;  get1(x,prop,e)
+
+(DEFUN |get| (|x| |prop| |e|)
+ (COND
+  (|$InteractiveMode| (|get0| |x| |prop| |e|))
+  ((QUOTE T) (|get1| |x| |prop| |e|)))) 
+
+@
+\subsection{get0}
+<<*>>=
+;get0(x,prop,e) ==
+;  null atom x => get(QCAR x,prop,e)
+;  u:= QLASSQ(x,CAR QCAR e) => QLASSQ(prop,u)
+;  (tail:= CDR QCAR e) and (u:= fastSearchCurrentEnv(x,tail)) =>
+;    QLASSQ(prop,u)
+;  nil
+
+(DEFUN |get0| (|x| |prop| |e|)
+ (PROG (|tail| |u|)
+  (RETURN
+   (COND
+    ((NULL (ATOM |x|)) (|get| (QCAR |x|) |prop| |e|))
+    ((SPADLET |u| (QLASSQ |x| (CAR (QCAR |e|)))) (QLASSQ |prop| |u|))
+    ((AND (SPADLET |tail| (CDR (QCAR |e|)))
+          (SPADLET |u| (|fastSearchCurrentEnv| |x| |tail|)))
+     (QLASSQ |prop| |u|))
+    ((QUOTE T) NIL))))) 
+
+@
+\subsection{get1}
+We try to avoid lookups in the environment if it is clear that
+the lookup will fail. The \verb|$envHashTable| was populated in
+addBinding (see g-util.boot.pamphlet).
+<<*>>=
+;get1(x,prop,e) ==
+;    --this is the old get
+;  negHash := nil
+;  null atom x => get(QCAR x,prop,e)
+;  if $envHashTable and _
+;     (not(EQ($CategoryFrame,e))) and _
+;     (not(EQ(prop,"modemap"))) then
+;   null (HGET($envHashTable,[x,prop])) => return nil
+;   negHash := false
+;  prop="modemap" and $insideCapsuleFunctionIfTrue=true =>
+;    ress:=LASSOC("modemap",getProplist(x,$CapsuleModemapFrame))
+;         or get2(x,prop,e)
+;    ress
+;  ress:=LASSOC(prop,getProplist(x,e)) or get2(x,prop,e)
+;  if ress and negHash then
+;   SAY ["get1",x,prop,ress and true]
+;  ress
+
+(DEFUN |get1| (|x| |prop| |e|)
+ (PROG (|negHash| |ress|)
+  (RETURN
+   (PROGN 
+    (SPADLET |negHash| NIL)
+    (COND
+     ((NULL (ATOM |x|)) (|get| (QCAR |x|) |prop| |e|))
+     ((QUOTE T)
+      (COND
+       ((AND |$envHashTable|
+             (NULL (EQ |$CategoryFrame| |e|))
+             (NULL (EQ |prop| (QUOTE |modemap|))))
+        (COND
+         ((NULL (HGET |$envHashTable| (CONS |x| (CONS |prop| NIL))))
+          (RETURN NIL))
+         ((QUOTE T)
+         (SPADLET |negHash| NIL)))))
+      (COND
+       ((AND (BOOT-EQUAL |prop| (QUOTE |modemap|))
+             (BOOT-EQUAL |$insideCapsuleFunctionIfTrue| (QUOTE T)))
+        (SPADLET |ress|
+         (OR
+          (LASSOC (QUOTE |modemap|) (|getProplist| |x| |$CapsuleModemapFrame|))
+          (|get2| |x| |prop| |e|)))
+        |ress|)
+       ((QUOTE T)
+        (SPADLET |ress|
+         (OR (LASSOC |prop| (|getProplist| |x| |e|)) (|get2| |x| |prop| |e|)))
+        (COND
+         ((AND |ress| |negHash|)
+          (SAY
+           (CONS "get1"
+            (CONS |x| (CONS |prop| (CONS (AND |ress| (QUOTE T)) NIL)))))))
+        |ress|)))))))) 
+
+@
+\subsection{get2}
+<<*>>=
+;get2(x,prop,e) ==
+;  prop="modemap" and constructor? x =>
+;    (u := getConstructorModemap(x)) => [u]
+;    nil
+;  nil
+
+(DEFUN |get2| (|x| |prop| |e|)
+ (PROG (|u|)
+  (RETURN
+   (COND
+    ((AND (BOOT-EQUAL |prop| (QUOTE |modemap|)) (|constructor?| |x|))
+     (COND
+      ((SPADLET |u| (|getConstructorModemap| |x|)) (CONS |u| NIL))
+      ((QUOTE T) NIL)))
+    ((QUOTE T) NIL))))) 
+
+@
+\subsection{getI}
+<<*>>=
+;getI(x,prop) == get(x,prop,$InteractiveFrame)
+
+(DEFUN |getI| (|x| |prop|) (|get| |x| |prop| |$InteractiveFrame|)) 
+
+@
+\subsection{putI}
+<<*>>=
+;putI(x,prop,val) == ($InteractiveFrame := put(x,prop,val,$InteractiveFrame))
+
+(DEFUN |putI| (|x| |prop| |val|)
+ (SPADLET |$InteractiveFrame| (|put| |x| |prop| |val| |$InteractiveFrame|))) 
+
+@
+\subsection{getIProplist}
+<<*>>=
+;getIProplist x == getProplist(x,$InteractiveFrame)
+
+(DEFUN |getIProplist| (|x|) (|getProplist| |x| |$InteractiveFrame|)) 
+
+@
+\subsection{removeBindingI}
+<<*>>=
+;removeBindingI x ==
+;  RPLAC(CAAR $InteractiveFrame,deleteAssocWOC(x,CAAR $InteractiveFrame))
+
+(DEFUN |removeBindingI| (|x|)
+ (RPLAC 
+  (CAAR |$InteractiveFrame|)
+  (|deleteAssocWOC| |x| (CAAR |$InteractiveFrame|)))) 
+
+@
+\subsection{rempropI}
+<<*>>=
+;rempropI(x,prop) ==
+;  id:=
+;    atom x => x
+;    first x
+;  getI(id,prop) =>
+;    recordNewValue(id,prop,NIL)
+;    recordOldValue(id,prop,getI(id,prop))
+;    $InteractiveFrame:= remprop(id,prop,$InteractiveFrame)
+
+(DEFUN |rempropI| (|x| |prop|)
+ (PROG (|id|)
+  (RETURN
+   (PROGN
+    (SPADLET |id| (COND ((ATOM |x|) |x|) ((QUOTE T) (CAR |x|))))
+    (COND
+     ((|getI| |id| |prop|)
+      (PROGN
+       (|recordNewValue| |id| |prop| NIL)
+       (|recordOldValue| |id| |prop| (|getI| |id| |prop|))
+       (SPADLET |$InteractiveFrame|
+        (|remprop| |id| |prop| |$InteractiveFrame|))))))))) 
+
+@
+\subsection{remprop}
+<<*>>=
+;remprop(x,prop,e) ==
+;  u:= ASSOC(prop,pl:= getProplist(x,e)) =>
+;    e:= addBinding(x,DELASC(first u,pl),e)
+;    e
+;  e
+
+(DEFUN |remprop| (|x| |prop| |e|)
+ (PROG (|pl| |u|)
+  (RETURN
+   (COND
+    ((SPADLET |u| (|assoc| |prop| (SPADLET |pl| (|getProplist| |x| |e|))))
+     (SPADLET |e| (|addBinding| |x| (DELASC (CAR |u|) |pl|) |e|))
+     |e|)
+    ((QUOTE T) |e|))))) 
+
+@
+\subsection{fastSearchCurrentEnv}
+<<*>>=
+;fastSearchCurrentEnv(x,currentEnv) ==
+;  u:= QLASSQ(x,CAR currentEnv) => u
+;  while (currentEnv:= QCDR currentEnv) repeat
+;    u:= QLASSQ(x,CAR currentEnv) => u
+
+(DEFUN |fastSearchCurrentEnv| (|x| |currentEnv|)
+ (PROG (|u|)
+  (RETURN
+   (SEQ
+    (COND
+     ((SPADLET |u| (QLASSQ |x| (CAR |currentEnv|))) |u|)
+     ((QUOTE T)
+      (DO () 
+          ((NULL (SPADLET |currentEnv| (QCDR |currentEnv|))) NIL)
+       (SEQ
+        (EXIT
+         (COND
+          ((SPADLET |u| (QLASSQ |x| (CAR |currentEnv|))) (EXIT |u|)))))))))))) 
+
+@
+\subsection{put}
+<<*>>=
+;put(x,prop,val,e) ==
+;  $InteractiveMode and not EQ(e,$CategoryFrame) =>
+;    putIntSymTab(x,prop,val,e)
+;  --e must never be $CapsuleModemapFrame
+;  null atom x => put(first x,prop,val,e)
+;  newProplist:= augProplistOf(x,prop,val,e)
+;  prop="modemap" and $insideCapsuleFunctionIfTrue=true =>
+;    SAY ["**** modemap PUT on CapsuleModemapFrame: ",val]
+;    $CapsuleModemapFrame:=
+;      addBinding(x,augProplistOf(x,"modemap",val,$CapsuleModemapFrame),
+;        $CapsuleModemapFrame)
+;    e
+;  addBinding(x,newProplist,e)
+
+(DEFUN |put| (|x| |prop| |val| |e|)
+ (PROG (|newProplist|)
+  (RETURN
+   (COND
+    ((AND |$InteractiveMode| (NULL (EQ |e| |$CategoryFrame|)))
+     (|putIntSymTab| |x| |prop| |val| |e|))
+    ((NULL (ATOM |x|)) (|put| (CAR |x|) |prop| |val| |e|))
+    ((QUOTE T)
+     (SPADLET |newProplist| (|augProplistOf| |x| |prop| |val| |e|))
+     (COND
+      ((AND (BOOT-EQUAL |prop| (QUOTE |modemap|))
+            (BOOT-EQUAL |$insideCapsuleFunctionIfTrue| (QUOTE T)))
+       (SAY
+        (CONS "**** modemap PUT on CapsuleModemapFrame: " (CONS |val| NIL)))
+       (SPADLET |$CapsuleModemapFrame|
+        (|addBinding| |x|
+         (|augProplistOf| |x| (QUOTE |modemap|) |val| |$CapsuleModemapFrame|)
+         |$CapsuleModemapFrame|))
+       |e|)
+      ((QUOTE T) (|addBinding| |x| |newProplist| |e|)))))))) 
+
+@
+\subsection{putIntSymTab}
+<<*>>=
+;putIntSymTab(x,prop,val,e) ==
+;  null atom x => putIntSymTab(first x,prop,val,e)
+;  pl0 := pl := search(x,e)
+;  pl :=
+;    null pl => [[prop,:val]]
+;    u := ASSQ(prop,pl) =>
+;      RPLACD(u,val)
+;      pl
+;    lp := LASTPAIR pl
+;    u := [[prop,:val]]
+;    RPLACD(lp,u)
+;    pl
+;  EQ(pl0,pl) => e
+;  addIntSymTabBinding(x,pl,e)
+
+(DEFUN |putIntSymTab| (|x| |prop| |val| |e|)
+ (PROG (|pl0| |lp| |u| |pl|)
+  (RETURN
+   (COND
+    ((NULL (ATOM |x|)) (|putIntSymTab| (CAR |x|) |prop| |val| |e|))
+    ((QUOTE T)
+     (SPADLET |pl0| (SPADLET |pl| (|search| |x| |e|)))
+     (SPADLET |pl|
+      (COND
+       ((NULL |pl|) (CONS (CONS |prop| |val|) NIL))
+       ((SPADLET |u| (ASSQ |prop| |pl|)) (RPLACD |u| |val|) |pl|)
+       ((QUOTE T)
+        (SPADLET |lp| (LASTPAIR |pl|))
+        (SPADLET |u| (CONS (CONS |prop| |val|) NIL))
+        (RPLACD |lp| |u|) |pl|)))
+     (COND
+      ((EQ |pl0| |pl|) |e|)
+      ((QUOTE T) (|addIntSymTabBinding| |x| |pl| |e|)))))))) 
+
+@
+\subsection{addIntSymTabBinding}
+<<*>>=
+;addIntSymTabBinding(var,proplist,e is [[curContour,:.],:.]) ==
+;  -- change proplist of var in e destructively
+;  u := ASSQ(var,curContour) =>
+;    RPLACD(u,proplist)
+;    e
+;  RPLAC(CAAR e,[[var,:proplist],:curContour])
+;  e
+
+(DEFUN |addIntSymTabBinding| (|var| |proplist| |e|)
+ (PROG (|curContour| |u|)
+  (RETURN
+   (PROGN
+    (SPADLET |curContour| (CAAR |e|))
+    (COND
+     ((SPADLET |u| (ASSQ |var| |curContour|)) (RPLACD |u| |proplist|) |e|)
+     ((QUOTE T)
+      (RPLAC (CAAR |e|) (CONS (CONS |var| |proplist|) |curContour|)) |e|)))))) 
+
+@
+\section{Source and position information}
+In the following, src is a string containing an original input line,
+line is the line number of the string within the source file,
+and col is the index within src of the start of the form represented
+by x. x is a VAT.
+
+\subsection{putSrcPos}
+<<*>>=
+;putSrcPos(x, file, src, line, col) ==
+;    putAtree(x, 'srcAndPos, srcPos_New(file, src, line, col))
+
+(DEFUN |putSrcPos| (|x| |file| |src| |line| |col|)
+ (|putAtree| |x| (QUOTE |srcAndPos|) (|srcPosNew| |file| |src| |line| |col|))) 
+
+@
+\subsection{getSrcPos}
+<<*>>=
+;getSrcPos(x) == getAtree(x, 'srcAndPos)
+
+(DEFUN |getSrcPos| (|x|) (|getAtree| |x| (QUOTE |srcAndPos|))) 
+
+@
+\subsection{srcPosNew}
+<<*>>=
+;srcPosNew(file, src, line, col) == LIST2VEC [file, src, line, col]
+
+(DEFUN |srcPosNew| (|file| |src| |line| |col|)
+ (LIST2VEC (CONS |file| (CONS |src| (CONS |line| (CONS |col| NIL)))))) 
+
+@
+\subsection{srcPosFile}
+<<*>>=
+;srcPosFile(sp) ==
+;    if sp then sp.0 else nil
+
+(DEFUN |srcPosFile| (|sp|) (COND (|sp| (ELT |sp| 0)) ((QUOTE T) NIL))) 
+
+@
+\subsection{srcPosSource}
+<<*>>=
+;srcPosSource(sp) ==
+;    if sp then sp.1 else nil
+
+(DEFUN |srcPosSource| (|sp|) (COND (|sp| (ELT |sp| 1)) ((QUOTE T) NIL))) 
+
+@
+\subsection{srcPosLine}
+<<*>>=
+;srcPosLine(sp) ==
+;    if sp then sp.2 else nil
+
+(DEFUN |srcPosLine| (|sp|) (COND (|sp| (ELT |sp| 2)) ((QUOTE T) NIL))) 
+
+@
+\subsection{srcPosColumn}
+<<*>>=
+;srcPosColumn(sp) ==
+;    if sp then sp.3 else nil
+
+(DEFUN |srcPosColumn| (|sp|) (COND (|sp| (ELT |sp| 3)) ((QUOTE T) NIL))) 
+
+@
+\subsection{srcPosDisplay}
+<<*>>=
+;srcPosDisplay(sp) ==
+;    null sp => nil
+;    s := STRCONC('"_"", srcPosFile sp, '"_", line ",
+;        STRINGIMAGE srcPosLine sp, '": ")
+;    sayBrightly [s, srcPosSource sp]
+;    col  := srcPosColumn sp
+;    dots :=
+;        col = 0 => '""
+;        fillerSpaces(col, '".")
+;    sayBrightly [fillerSpaces(#s, '" "), dots, '"^"]
+;    true
+
+(DEFUN |srcPosDisplay| (|sp|)
+ (PROG (|s| |col| |dots|)
+  (RETURN
+   (COND
+    ((NULL |sp|) NIL)
+    ((QUOTE T)
+     (SPADLET |s|
+      (STRCONC "\"" (|srcPosFile| |sp|) "\", line "
+       (STRINGIMAGE (|srcPosLine| |sp|)) ": "))
+     (|sayBrightly| (CONS |s| (CONS (|srcPosSource| |sp|) NIL)))
+     (SPADLET |col| (|srcPosColumn| |sp|))
+     (SPADLET |dots|
+      (COND
+       ((EQL |col| 0) (MAKESTRING ""))
+       ((QUOTE T) (|fillerSpaces| |col| (MAKESTRING ".")))))
+     (|sayBrightly|
+      (CONS (|fillerSpaces| (|#| |s|) " ") (CONS |dots| (CONS "^" NIL))))
+     (QUOTE T)))))) 
+
+@
+\section{Functions on interpreter objects}
+Interpreter objects used to be called triples because they had the
+structure [value, type, environment].  For many years, the environment
+was not used, so finally in January, 1990, the structure of objects
+was changed to be (type . value).  This was chosen because it was the
+structure of objects of type Any.  Sometimes the values are wrapped
+(see the function isWrapped to see what this means physically).
+Wrapped values are not actual values belonging to their types.  An
+unwrapped value must be evaluated to get an actual value.  A wrapped
+value must be unwrapped before being passed to a library function.
+Typically, an unwrapped value in the interpreter consists of LISP
+code, e.g., parts of a function that is being constructed.
+--  RSS 1/14/90
+
+These are the new structure functions.
+
+\subsection{mkObj}
+<<*>>=
+;mkObj(val, mode) == CONS(mode,val)              -- old names
+
+(DEFUN |mkObj| (|val| |mode|) (CONS |mode| |val|)) 
+
+@
+\subsection{mkObjWrap}
+<<*>>=
+;mkObjWrap(val, mode) == CONS(mode,wrap val)
+
+(DEFUN |mkObjWrap| (|val| |mode|) (CONS |mode| (|wrap| |val|))) 
+
+@
+\subsection{mkObjCode}
+<<*>>=
+;mkObjCode(val, mode) == ['CONS, MKQ mode,val ]
+
+(DEFUN |mkObjCode| (|val| |mode|)
+ (CONS (QUOTE CONS) (CONS (MKQ |mode|) (CONS |val| NIL)))) 
+
+@
+\subsection{objNew}
+<<*>>=
+;objNew(val, mode) == CONS(mode,val)             -- new names as of 10/14/93
+
+(DEFUN |objNew| (|val| |mode|) (CONS |mode| |val|)) 
+
+@
+\subsection{objNewWrap}
+<<*>>=
+;objNewWrap(val, mode) == CONS(mode,wrap val)
+
+(DEFUN |objNewWrap| (|val| |mode|) (CONS |mode| (|wrap| |val|))) 
+
+@
+\subsection{objNewCode}
+<<*>>=
+;objNewCode(val, mode) == ['CONS, MKQ mode,val ]
+
+(DEFUN |objNewCode| (|val| |mode|)
+ (CONS (QUOTE CONS) (CONS (MKQ |mode|) (CONS |val| NIL)))) 
+
+@
+\subsection{objSetVal}
+<<*>>=
+;objSetVal(obj,val) == RPLACD(obj,val)
+
+(DEFUN |objSetVal| (|obj| |val|) (RPLACD |obj| |val|)) 
+
+@
+\subsection{objSetMode}
+<<*>>=
+;objSetMode(obj,mode) == RPLACA(obj,mode)
+
+(DEFUN |objSetMode| (|obj| |mode|) (RPLACA |obj| |mode|)) 
+
+@
+\subsection{objVal}
+<<*>>=
+;objVal obj == CDR obj
+
+(DEFUN |objVal| (|obj|) (CDR |obj|)) 
+
+@
+\subsection{objValUnwrap}
+<<*>>=
+;objValUnwrap obj == unwrap CDR obj
+
+(DEFUN |objValUnwrap| (|obj|) (|unwrap| (CDR |obj|))) 
+
+@
+\subsection{objMode}
+<<*>>=
+;objMode obj == CAR obj
+
+(DEFUN |objMode| (|obj|) (CAR |obj|)) 
+
+@
+\subsection{objEnv}
+<<*>>=
+;objEnv obj == $NE
+
+(DEFUN |objEnv| (|obj|) $NE) 
+
+@
+\subsection{objCodeVal}
+<<*>>=
+;objCodeVal obj == CADDR obj
+
+(DEFUN |objCodeVal| (|obj|) (CADDR |obj|)) 
+
+@
+\subsection{objCodeMode}
+<<*>>=
+;objCodeMode obj == CADR obj
+
+(DEFUN |objCodeMode| (|obj|) (CADR |obj|)) 
+
+@
+\section{Library compiler structures needed by the interpreter}
+Tuples and Crosses
+\subsection{asTupleNew}
+<<*>>=
+;asTupleNew(size, listOfElts) == CONS(size, LIST2VEC listOfElts)
+
+(DEFUN |asTupleNew| (SIZE |listOfElts|) (CONS SIZE (LIST2VEC |listOfElts|))) 
+
+@
+\subsection{asTupleNew0}
+<<*>>=
+;asTupleNew0(listOfElts) == CONS(#listOfElts, LIST2VEC listOfElts)
+
+(DEFUN |asTupleNew0| (|listOfElts|)
+ (CONS (|#| |listOfElts|) (LIST2VEC |listOfElts|))) 
+
+@
+\subsection{asTupleNewCode}
+<<*>>=
+;asTupleNewCode(size, listOfElts) == ["asTupleNew", size, ['LIST, :listOfElts]]
+
+(DEFUN |asTupleNewCode| (SIZE |listOfElts|)
+ (CONS
+  (QUOTE |asTupleNew|)
+  (CONS SIZE (CONS (CONS (QUOTE LIST) |listOfElts|) NIL)))) 
+
+@
+\subsection{asTupleNewCode0}
+<<*>>=
+;asTupleNewCode0(listForm) == ["asTupleNew0", listForm]
+
+(DEFUN |asTupleNewCode0| (|listForm|)
+ (CONS (QUOTE |asTupleNew0|) (CONS |listForm| NIL))) 
+
+@
+\subsection{asTupleSize}
+<<*>>=
+;asTupleSize(at) == CAR at
+
+(DEFUN |asTupleSize| (|at|) (CAR |at|)) 
+
+@
+\subsection{asTupleAsVector}
+<<*>>=
+;asTupleAsVector(at) == CDR at
+
+(DEFUN |asTupleAsVector| (|at|) (CDR |at|)) 
+
+@
+\subsection{asTupleAsList}
+<<*>>=
+;asTupleAsList(at) == VEC2LIST asTupleAsVector at
+
+(DEFUN |asTupleAsList| (|at|) (VEC2LIST (|asTupleAsVector| |at|))) 
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}
