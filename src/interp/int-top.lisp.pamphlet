@@ -1,0 +1,539 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp int-top.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+
+(IN-PACKAGE "BOOT")
+
+;--% INTERPRETER TOP LEVEL
+
+;intloopProcess(n,interactive,s)==
+;     StreamNull s => n
+;     [lines,ptree]:=CAR s
+;     pfAbSynOp?(ptree,"command")=>
+;            if interactive then setCurrentLine tokPart ptree
+;            FUNCALL($systemCommandFunction, tokPart ptree)
+;            intloopProcess(n ,interactive ,CDR s)
+;     intloopProcess(intloopSpadProcess(n,lines,ptree,interactive)
+;                 ,interactive ,CDR s)
+
+(DEFUN |intloopProcess| (|n| |interactive| |s|)
+  (PROG (|ptree| |lines| |LETTMP#1|)
+    (DECLARE (SPECIAL |$systemCommandFunction|))
+    (RETURN
+      (COND
+        ((|StreamNull| |s|) |n|)
+        ('T
+         (PROGN
+           (SETQ |LETTMP#1| (CAR |s|))
+           (SETQ |lines| (CAR |LETTMP#1|))
+           (SETQ |ptree| (CADR |LETTMP#1|))
+           (COND
+             ((|pfAbSynOp?| |ptree| '|command|)
+              (PROGN
+                (COND
+                  (|interactive|
+                      (|setCurrentLine| (|tokPart| |ptree|))))
+                (FUNCALL |$systemCommandFunction| (|tokPart| |ptree|))
+                (|intloopProcess| |n| |interactive| (CDR |s|))))
+             ('T
+              (|intloopProcess|
+                  (|intloopSpadProcess| |n| |lines| |ptree|
+                      |interactive|)
+                  |interactive| (CDR |s|))))))))))
+
+;intloopEchoParse s==
+;         [dq,stream]:=CAR s
+;         [lines,rest]:=ncloopDQlines(dq,$lines)
+;         setCurrentLine(mkLineList(lines))
+;         if $EchoLines then ncloopPrintLines lines
+;         $lines:=rest
+;         cons([[lines,npParse dqToList dq]],CDR s)
+(DEFUN |intloopEchoParse| (|s|)
+  (PROG (CDR |lines| |stream| |dq| |LETTMP#1|)
+    (DECLARE (SPECIAL |$EchoLines| |$lines|))
+    (RETURN
+      (PROGN
+        (SETQ |LETTMP#1| (CAR |s|))
+        (SETQ |dq| (CAR |LETTMP#1|))
+        (SETQ |stream| (CADR |LETTMP#1|))
+        (SETQ |LETTMP#1| (|ncloopDQlines| |dq| |$lines|))
+        (SETQ |lines| (CAR |LETTMP#1|))
+        (SETQ CDR (CADR |LETTMP#1|))
+        (|setCurrentLine| (|mkLineList| |lines|))
+        (COND (|$EchoLines| (|ncloopPrintLines| |lines|)))
+        (SETQ |$lines| CDR)
+        (CONS (LIST (LIST |lines| (|npParse| (|dqToList| |dq|))))
+              (CDR |s|))))))
+
+;intloopInclude1(name,n) ==
+;          a:=ncloopIncFileName name
+;          a => intloopInclude(a,n)
+;          n
+
+(DEFUN |intloopInclude1| (|name| |n|)
+  (PROG (|a|)
+    (RETURN
+      (PROGN
+        (SETQ |a| (|ncloopIncFileName| |name|))
+        (COND (|a| (|intloopInclude| |a| |n|)) ('T |n|))))))
+
+;intloopProcessString(s,n) ==
+;     setCurrentLine s
+;     intloopProcess(n,true,
+;         next(function ncloopParse,
+;           next(function lineoftoks,incString s)))
+
+(DEFUN |intloopProcessString| (|s| |n|)
+  (PROG ()
+    (RETURN
+      (PROGN
+        (|setCurrentLine| |s|)
+        (|intloopProcess| |n| T
+            (|next| #'|ncloopParse|
+                    (|next| #'|lineoftoks| (|incString| |s|))))))))
+
+;$pfMacros := []
+
+(EVAL-WHEN (EVAL LOAD) (SETQ |$pfMacros| NIL))
+
+;intloopSpadProcess(stepNo,lines,ptree,interactive?)==
+;    $stepNo:local := stepNo
+;    $currentCarrier := cc := ['carrier]
+;    ncPutQ(cc, 'stepNumber, stepNo)
+;    ncPutQ(cc, 'messages, $ncMsgList)
+;    ncPutQ(cc, 'lines, lines)
+;    $ncMsgList := nil
+;    result := CatchAsCan(flung, Catch("SpadCompileItem",
+;     CATCH($intCoerceFailure, CATCH($intSpadReader,
+;       interp(cc, ptree, interactive?))))) where
+; 
+;        interp(cc, ptree, interactive?) ==
+;            ncConversationPhase(function phParse,            [cc, ptree])
+;            ncConversationPhase(function phMacro,            [cc])
+;            ncConversationPhase(function phIntReportMsgs,[cc, interactive?])
+;            ncConversationPhase(function phInterpret,        [cc])
+; 
+;            #ncEltQ(cc, 'messages) ^= 0 => ncError()
+; 
+;    intSetNeedToSignalSessionManager()
+;    $prevCarrier := $currentCarrier
+;    result = 'ncEnd     => stepNo
+;    result = 'ncError   => stepNo
+;    result = 'ncEndItem => stepNo
+;    stepNo+1
+
+(DEFUN |intloopSpadProcess| (|stepNo| |lines| |ptree| |interactive?|)
+  (PROG (|$stepNo| |result| |cc|)
+    (DECLARE (SPECIAL |$stepNo| |$prevCarrier| |$intSpadReader|
+                      |$intCoerceFailure| |$ncMsgList|
+                      |$currentCarrier|))
+    (RETURN
+      (PROGN
+        (SETQ |$stepNo| |stepNo|)
+        (SETQ |$currentCarrier| (SETQ |cc| (LIST '|carrier|)))
+        (|ncPutQ| |cc| '|stepNumber| |stepNo|)
+        (|ncPutQ| |cc| '|messages| |$ncMsgList|)
+        (|ncPutQ| |cc| '|lines| |lines|)
+        (SETQ |$ncMsgList| NIL)
+        (SETQ |result|
+              (|CatchAsCan| |flung|
+                  (|Catch| '|SpadCompileItem|
+                           (CATCH |$intCoerceFailure|
+                             (CATCH |$intSpadReader|
+                               (|intloopSpadProcess,interp| |cc|
+                                   |ptree| |interactive?|))))))
+        (|intSetNeedToSignalSessionManager|)
+        (SETQ |$prevCarrier| |$currentCarrier|)
+        (COND
+          ((EQ |result| '|ncEnd|) |stepNo|)
+          ((EQ |result| '|ncError|) |stepNo|)
+          ((EQ |result| '|ncEndItem|) |stepNo|)
+          ('T (+ |stepNo| 1)))))))
+
+(DEFUN |intloopSpadProcess,interp| (|cc| |ptree| |interactive?|)
+  (PROG ()
+    (RETURN
+      (PROGN
+        (|ncConversationPhase| #'|phParse| (LIST |cc| |ptree|))
+        (|ncConversationPhase| #'|phMacro| (LIST |cc|))
+        (|ncConversationPhase| #'|phIntReportMsgs|
+            (LIST |cc| |interactive?|))
+        (|ncConversationPhase| #'|phInterpret| (LIST |cc|))
+        (COND
+          ((NOT (EQL (LENGTH (|ncEltQ| |cc| '|messages|)) 0))
+           (|ncError|)))))))
+
+;phInterpret carrier ==
+;  ptree := ncEltQ(carrier, 'ptree)
+;  val := intInterpretPform(ptree)
+;  ncPutQ(carrier, 'value, val)
+
+(DEFUN |phInterpret| (|carrier|)
+  (PROG (|val| |ptree|)
+    (RETURN
+      (PROGN
+        (SETQ |ptree| (|ncEltQ| |carrier| '|ptree|))
+        (SETQ |val| (|intInterpretPform| |ptree|))
+        (|ncPutQ| |carrier| '|value| |val|)))))
+
+;--% phReportMsgs: carrier[lines,messages,..]-> carrier[lines,messages,..]
+;phIntReportMsgs(carrier, interactive?) ==
+;    $erMsgToss => 'OK
+;    lines := ncEltQ(carrier, 'lines)
+;    msgs  := ncEltQ(carrier, 'messages)
+;    nerr  := #msgs
+;    ncPutQ(carrier, 'ok?, nerr = 0)
+;    nerr = 0 => 'OK
+;    processMsgList(msgs, lines)
+;    intSayKeyedMsg ('S2CTP010,[nerr])
+;    'OK
+
+(DEFUN |phIntReportMsgs| (|carrier| |interactive?|)
+  (PROG (|nerr| |msgs| |lines|)
+    (DECLARE (SPECIAL |$erMsgToss|))
+    (RETURN
+      (COND
+        (|$erMsgToss| 'OK)
+        ('T
+         (PROGN
+           (SETQ |lines| (|ncEltQ| |carrier| '|lines|))
+           (SETQ |msgs| (|ncEltQ| |carrier| '|messages|))
+           (SETQ |nerr| (LENGTH |msgs|))
+           (|ncPutQ| |carrier| '|ok?| (EQL |nerr| 0))
+           (COND
+             ((EQL |nerr| 0) 'OK)
+             ('T
+              (PROGN
+                (|processMsgList| |msgs| |lines|)
+                (|intSayKeyedMsg| 'S2CTP010 (LIST |nerr|))
+                'OK)))))))))
+
+;mkLineList lines ==
+;  l := [CDR line for line in lines | nonBlank CDR line]
+;  #l = 1 => CAR l
+;  l
+
+(DEFUN |mkLineList| (|lines|)
+  (PROG (|l|)
+    (RETURN
+      (PROGN
+        (SETQ |l|
+              ((LAMBDA (|bfVar#2| |bfVar#1| |line|)
+                 (LOOP
+                   (COND
+                     ((OR (ATOM |bfVar#1|)
+                          (PROGN (SETQ |line| (CAR |bfVar#1|)) NIL))
+                      (RETURN (NREVERSE |bfVar#2|)))
+                     ('T
+                      (AND (|nonBlank| (CDR |line|))
+                           (SETQ |bfVar#2|
+                                 (CONS (CDR |line|) |bfVar#2|)))))
+                   (SETQ |bfVar#1| (CDR |bfVar#1|))))
+               NIL |lines| NIL))
+        (COND ((EQL (LENGTH |l|) 1) (CAR |l|)) ('T |l|))))))
+
+;nonBlank str ==
+;  value := false
+;  for i in 0..MAXINDEX str repeat
+;    str.i ^= char " " =>
+;      value := true
+;      return value
+;  value
+
+(DEFUN |nonBlank| (|str|)
+  (PROG (|value|)
+    (RETURN
+      (PROGN
+        (SETQ |value| NIL)
+        ((LAMBDA (|bfVar#3| |i|)
+           (LOOP
+             (COND
+               ((> |i| |bfVar#3|) (RETURN NIL))
+               ('T
+                (COND
+                  ((NOT (EQUAL (ELT |str| |i|) (|char| '| |)))
+                   (IDENTITY (PROGN (SETQ |value| T) (RETURN |value|)))))))
+             (SETQ |i| (+ |i| 1))))
+         (MAXINDEX |str|) 0)
+        |value|))))
+
+;ncloopDQlines (dq,stream)==
+;        StreamNull stream
+;        a:= poGlobalLinePosn tokPosn CADR dq
+;        b:= poGlobalLinePosn CAAR stream
+;        streamChop (a-b+1,stream)
+
+(DEFUN |ncloopDQlines| (|dq| |stream|)
+  (PROG (|b| |a|)
+    (RETURN
+      (PROGN
+        (|StreamNull| |stream|)
+        (SETQ |a| (|poGlobalLinePosn| (|tokPosn| (CADR |dq|))))
+        (SETQ |b| (|poGlobalLinePosn| (CAAR |stream|)))
+        (|streamChop| (+ (- |a| |b|) 1) |stream|)))))
+
+;streamChop(n,s)==
+;    if StreamNull s
+;    then [nil,nil]
+;    else if EQL(n,0)
+;         then [nil,s]
+;         else
+;            [a,b]:= streamChop(n-1,cdr s)
+;            line:=car s
+;            c:=ncloopPrefix?('")command",CDR line)
+;            d:= cons(car line,if c then c else cdr line)
+;            [cons(d,a),b]
+
+(DEFUN |streamChop| (|n| |s|)
+  (PROG (|d| |c| |line| |b| |a| |LETTMP#1|)
+    (RETURN
+      (COND
+        ((|StreamNull| |s|) (LIST NIL NIL))
+        ((EQL |n| 0) (LIST NIL |s|))
+        ('T (SETQ |LETTMP#1| (|streamChop| (- |n| 1) (CDR |s|)))
+         (SETQ |a| (CAR |LETTMP#1|)) (SETQ |b| (CADR |LETTMP#1|))
+         (SETQ |line| (CAR |s|))
+         (SETQ |c| (|ncloopPrefix?| ")command" (CDR |line|)))
+         (SETQ |d|
+               (CONS (CAR |line|) (COND (|c| |c|) ('T (CDR |line|)))))
+         (LIST (CONS |d| |a|) |b|))))))
+
+;ncloopPrintLines lines ==
+;        for line in lines repeat WRITE_-LINE CDR line
+;        WRITE_-LINE '" "
+
+(DEFUN |ncloopPrintLines| (|lines|)
+  (PROG ()
+    (RETURN
+      (PROGN
+        ((LAMBDA (|bfVar#4| |line|)
+           (LOOP
+             (COND
+               ((OR (ATOM |bfVar#4|)
+                    (PROGN (SETQ |line| (CAR |bfVar#4|)) NIL))
+                (RETURN NIL))
+               ('T (WRITE-LINE (CDR |line|))))
+             (SETQ |bfVar#4| (CDR |bfVar#4|))))
+         |lines| NIL)
+        (WRITE-LINE " ")))))
+
+;ncloopParse s==
+;         [dq,stream]:=CAR s
+;         [lines,rest]:=ncloopDQlines(dq,stream)
+;         cons([[lines,npParse dqToList dq]],CDR s)
+
+(DEFUN |ncloopParse| (|s|)
+  (PROG (CDR |lines| |stream| |dq| |LETTMP#1|)
+    (RETURN
+      (PROGN
+        (SETQ |LETTMP#1| (CAR |s|))
+        (SETQ |dq| (CAR |LETTMP#1|))
+        (SETQ |stream| (CADR |LETTMP#1|))
+        (SETQ |LETTMP#1| (|ncloopDQlines| |dq| |stream|))
+        (SETQ |lines| (CAR |LETTMP#1|))
+        (SETQ CDR (CADR |LETTMP#1|))
+        (CONS (LIST (LIST |lines| (|npParse| (|dqToList| |dq|))))
+              (CDR |s|))))))
+
+;ncloopInclude0(st, name, n) ==
+;     $lines:local := incStream(st, name)
+;     ncloopProcess(n,false,
+;         next(function ncloopEchoParse,
+;           next(function insertpile,
+;            next(function lineoftoks,$lines))))
+
+(DEFUN |ncloopInclude0| (|st| |name| |n|)
+  (PROG (|$lines|)
+    (DECLARE (SPECIAL |$lines|))
+    (RETURN
+      (PROGN
+        (SETQ |$lines| (|incStream| |st| |name|))
+        (|ncloopProcess| |n| NIL
+            (|next| #'|ncloopEchoParse|
+                    (|next| #'|insertpile|
+                            (|next| #'|lineoftoks| |$lines|))))))))
+
+;incString s== incRenumber incLude(0,[s],0,['"strings"] ,[Top])
+
+(DEFUN |incString| (|s|)
+  (PROG ()
+    (RETURN
+      (|incRenumber|
+          (|incLude| 0 (LIST |s|) 0 (LIST "strings") (LIST |Top|))))))
+
+;ncError() ==
+;    THROW("SpadCompileItem",'ncError)
+;
+;--% Compilation Carriers
+;--  This data structure is used to carry information between phases.
+
+(DEFUN |ncError| ()
+  (PROG () (RETURN (THROW '|SpadCompileItem| '|ncError|))))
+
+;--% phParse: carrier[tokens,...] -> carrier[ptree, tokens,...]
+;--)line (defun pretty (x) (boottran::reallyprettyprint x))
+;--)line (defun packagetran (x) (boot::|packageTran|))
+;phParse(carrier,ptree) ==
+;    phBegin 'Parsing
+;    if $ncmParse then
+;           nothing
+;           intSayKeyedMsg ('S2CTP003,[%pform ptree])
+;    ncPutQ(carrier, 'ptree, ptree)
+;    'OK
+
+(DEFUN |phParse| (|carrier| |ptree|)
+  (PROG ()
+    (DECLARE (SPECIAL |$ncmParse|))
+    (RETURN
+      (PROGN
+        (|phBegin| '|Parsing|)
+        (COND
+          (|$ncmParse|
+              (|intSayKeyedMsg| 'S2CTP003 (LIST (|%pform| |ptree|)))))
+        (|ncPutQ| |carrier| '|ptree| |ptree|)
+        'OK))))
+
+;--% phMacro: carrier[ptree,...] -> carrier[ptree, ptreePremacro,...]
+;phMacro carrier ==
+;    phBegin 'Macroing
+;    ptree  := ncEltQ(carrier, 'ptree)
+;    ncPutQ(carrier, 'ptreePremacro, ptree)
+; 
+;    ptree  := macroExpanded ptree
+;    if $ncmMacro then
+;        intSayKeyedMsg ('S2CTP007,[%pform ptree] )
+; 
+;    ncPutQ(carrier, 'ptree, ptree)
+;    'OK
+
+(DEFUN |phMacro| (|carrier|)
+  (PROG (|ptree|)
+    (DECLARE (SPECIAL |$ncmMacro|))
+    (RETURN
+      (PROGN
+        (|phBegin| '|Macroing|)
+        (SETQ |ptree| (|ncEltQ| |carrier| '|ptree|))
+        (|ncPutQ| |carrier| '|ptreePremacro| |ptree|)
+        (SETQ |ptree| (|macroExpanded| |ptree|))
+        (COND
+          (|$ncmMacro|
+              (|intSayKeyedMsg| 'S2CTP007 (LIST (|%pform| |ptree|)))))
+        (|ncPutQ| |carrier| '|ptree| |ptree|)
+        'OK))))
+
+;--% phReportMsgs: carrier[lines,messages,..]-> carrier[lines,messages,..]
+;phReportMsgs(carrier, interactive?) ==
+;    $erMsgToss => 'OK
+;    lines := ncEltQ(carrier, 'lines)
+;    msgs  := ncEltQ(carrier, 'messages)
+;    nerr  := #msgs
+;    ncPutQ(carrier, 'ok?, nerr = 0)
+;    interactive? and nerr = 0 => 'OK
+;    processMsgList(msgs, lines)
+;    intSayKeyedMsg ('S2CTP010,[nerr])
+;    'OK
+
+(DEFUN |phReportMsgs| (|carrier| |interactive?|)
+  (PROG (|nerr| |msgs| |lines|)
+    (DECLARE (SPECIAL |$erMsgToss|))
+    (RETURN
+      (COND
+        (|$erMsgToss| 'OK)
+        ('T
+         (PROGN
+           (SETQ |lines| (|ncEltQ| |carrier| '|lines|))
+           (SETQ |msgs| (|ncEltQ| |carrier| '|messages|))
+           (SETQ |nerr| (LENGTH |msgs|))
+           (|ncPutQ| |carrier| '|ok?| (EQL |nerr| 0))
+           (COND
+             ((AND |interactive?| (EQL |nerr| 0)) 'OK)
+             ('T
+              (PROGN
+                (|processMsgList| |msgs| |lines|)
+                (|intSayKeyedMsg| 'S2CTP010 (LIST |nerr|))
+                'OK)))))))))
+
+;ncConversationPhase(fn, args) ==
+;    carrier := first args
+; 
+;    $ncMsgList: local := []
+;    $convPhase: local := 'NoPhase
+; 
+;    UNWIND_-PROTECT( APPLY(fn, args), wrapup(carrier) ) where
+;        wrapup(carrier) ==
+;            for m in $ncMsgList repeat
+;                ncPutQ(carrier, 'messages, [m, :ncEltQ(carrier, 'messages)])
+
+(DEFUN |ncConversationPhase| (|fn| |args|)
+  (PROG (|$convPhase| |$ncMsgList| |carrier|)
+    (DECLARE (SPECIAL |$convPhase| |$ncMsgList|))
+    (RETURN
+      (PROGN
+        (SETQ |carrier| (CAR |args|))
+        (SETQ |$ncMsgList| NIL)
+        (SETQ |$convPhase| '|NoPhase|)
+        (UNWIND-PROTECT
+          (APPLY |fn| |args|)
+          (|ncConversationPhase,wrapup| |carrier|))))))
+
+(DEFUN |ncConversationPhase,wrapup| (|carrier|)
+  (PROG ()
+    (DECLARE (SPECIAL |$ncMsgList|))
+    (RETURN
+      ((LAMBDA (|bfVar#5| |m|)
+         (LOOP
+           (COND
+             ((OR (ATOM |bfVar#5|)
+                  (PROGN (SETQ |m| (CAR |bfVar#5|)) NIL))
+              (RETURN NIL))
+             ('T
+              (|ncPutQ| |carrier| '|messages|
+                  (CONS |m| (|ncEltQ| |carrier| '|messages|)))))
+           (SETQ |bfVar#5| (CDR |bfVar#5|))))
+       |$ncMsgList| NIL))))
+
+;phBegin id ==
+;    $convPhase := id
+;    if $ncmPhase then intSayKeyedMsg('S2CTP021,[id])
+
+(DEFUN |phBegin| (|id|)
+  (PROG ()
+    (DECLARE (SPECIAL |$ncmPhase| |$convPhase|))
+    (RETURN
+      (PROGN
+        (SETQ |$convPhase| |id|)
+        (COND (|$ncmPhase| (|intSayKeyedMsg| 'S2CTP021 (LIST |id|))))))))
+
+;PullAndExecuteSpadSystemCommand stream ==
+;    ExecuteSpadSystemCommand CAR stream
+;    CDR stream
+
+(DEFUN |PullAndExecuteSpadSystemCommand| (|stream|)
+  (PROG ()
+    (RETURN
+      (PROGN
+        (|ExecuteSpadSystemCommand| (CAR |stream|))
+        (CDR |stream|)))))
+
+;ExecuteSpadSystemCommand string ==
+;  FUNCALL($systemCommandFunction, string)
+
+(DEFUN |ExecuteSpadSystemCommand| (|string|)
+  (PROG ()
+    (DECLARE (SPECIAL |$systemCommandFunction|))
+    (RETURN (FUNCALL |$systemCommandFunction| |string|))))
+
+@
+\eject
+\begin{thebibliography}{99}
+\end{thebibliography}
+\end{document}
