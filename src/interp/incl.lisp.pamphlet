@@ -1,0 +1,683 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp incl.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+
+(IN-PACKAGE "BOOT")
+
+;incStringStream s==
+;   incRenumber incLude(0,incRgen s,0,['"strings"] ,[Top])
+
+(DEFUN |incStringStream| (|s|)
+  (PROG ()
+    (RETURN
+      (|incRenumber|
+          (|incLude| 0 (|incRgen| |s|) 0 (LIST "strings") (LIST |Top|))))))
+
+;incFile fn==
+;   incRenumber incLude(0,incRgen OPEN fn,0,[fn],[Top])
+
+(DEFUN |incFile| (|fn|)
+  (PROG ()
+    (RETURN
+      (|incRenumber|
+          (|incLude| 0 (|incRgen| (OPEN |fn|)) 0 (LIST |fn|)
+              (LIST |Top|))))))
+
+;incFileInput    fn == incRgen  MAKE_-INSTREAM fn
+
+(DEFUN |incFileInput| (|fn|)
+  (PROG () (RETURN (|incRgen| (MAKE-INSTREAM |fn|)))))
+
+;incConsoleInput () == incRgen  MAKE_-INSTREAM 0
+(DEFUN |incConsoleInput| ()
+  (PROG () (RETURN (|incRgen| (MAKE-INSTREAM 0)))))
+
+;incLine(eb, str, gno, lno, ufo) ==
+;            ln := lnCreate(eb,str,gno,lno,ufo)
+;            CONS(CONS(ln,1), str)
+
+(DEFUN |incLine| (|eb| |str| |gno| |lno| |ufo|)
+  (PROG (|ln|)
+    (RETURN
+      (PROGN
+        (SETQ |ln| (|lnCreate| |eb| |str| |gno| |lno| |ufo|))
+        (CONS (CONS |ln| 1) |str|)))))
+
+;incPos f == CAR f
+
+(DEFUN |incPos| (|f|) (PROG () (RETURN (CAR |f|))))
+
+;incRenumberItem(f, i) ==
+;            l := CAAR f
+;            lnSetGlobalNum(l, i)
+;            f
+
+(DEFUN |incRenumberItem| (|f| |i|)
+  (PROG (|l|)
+    (RETURN
+      (PROGN (SETQ |l| (CAAR |f|)) (|lnSetGlobalNum| |l| |i|) |f|))))
+
+;incRenumberLine(xl, gno) ==
+;            l := incRenumberItem(xl.0, gno)
+;            incHandleMessage xl
+;            l
+
+(DEFUN |incRenumberLine| (|xl| |gno|)
+  (PROG (|l|)
+    (RETURN
+      (PROGN
+        (SETQ |l| (|incRenumberItem| (ELT |xl| 0) |gno|))
+        (|incHandleMessage| |xl|)
+        |l|))))
+
+;incRenumber ssx == incZip (function incRenumberLine, ssx, incIgen 0)
+
+(DEFUN |incRenumber| (|ssx|)
+  (PROG ()
+    (RETURN (|incZip| #'|incRenumberLine| |ssx| (|incIgen| 0)))))
+
+;incPrefix?(prefix, start, whole) ==
+;            #prefix > #whole-start => false
+;            good:=true
+;            for i in 0..#prefix-1 for j in start.. while good repeat
+;                good:= prefix.i = whole.j
+;            good
+
+(DEFUN |incPrefix?| (|prefix| |start| |whole|)
+  (PROG (|good|)
+    (RETURN
+      (COND
+        ((< (- (LENGTH |whole|) |start|) (LENGTH |prefix|)) NIL)
+        ('T
+         (PROGN
+           (SETQ |good| T)
+           ((LAMBDA (|bfVar#1| |i| |j|)
+              (LOOP
+                (COND
+                  ((OR (> |i| |bfVar#1|) (NOT |good|)) (RETURN NIL))
+                  ('T
+                   (SETQ |good|
+                         (EQUAL (ELT |prefix| |i|) (ELT |whole| |j|)))))
+                (SETQ |i| (+ |i| 1))
+                (SETQ |j| (+ |j| 1))))
+            (- (LENGTH |prefix|) 1) 0 |start|)
+           |good|))))))
+
+;incCommand?(s) == #s > 0 and s.0 = char ")"
+
+(DEFUN |incCommand?| (|s|)
+  (PROG ()
+    (RETURN
+      (AND (< 0 (LENGTH |s|)) (EQUAL (ELT |s| 0) (|char| '|)|))))))
+
+;incCommands :=
+;            ['"say"    , _
+;             '"include", _
+;             '"console", _
+;             '"fin"    , _
+;             '"assert" , _
+;             '"if"     , _
+;             '"elseif" , _
+;             '"else"   , _
+;             '"endif" ]
+
+(EVAL-WHEN (EVAL LOAD)
+  (SETQ |incCommands|
+        (LIST "say" "include" "console" "fin" "assert" "if" "elseif"
+              "else" "endif")))
+
+;incClassify(s) ==
+;            not incCommand? s => [false,0, '""]
+;            i := 1; n := #s
+;            while i < n and s.i = char " " repeat i := i + 1
+;            i >= n => [true,0,'"other"]
+;            eb := (i = 1 => 0; i)
+;            bad:=true
+;            for p in incCommands while bad repeat
+;                incPrefix?(p, i, s) =>
+;                    bad:=false
+;                    p1 :=p
+;            if bad then [true,0,'"other"] else [true,eb,p1]
+
+(DEFUN |incClassify| (|s|)
+  (PROG (|p1| |bad| |eb| |n| |i|)
+    (RETURN
+      (COND
+        ((NULL (|incCommand?| |s|)) (LIST NIL 0 ""))
+        ('T
+         (PROGN
+           (SETQ |i| 1)
+           (SETQ |n| (LENGTH |s|))
+           ((LAMBDA ()
+              (LOOP
+                (COND
+                  ((NOT (AND (< |i| |n|)
+                             (EQUAL (ELT |s| |i|) (|char| '| |))))
+                   (RETURN NIL))
+                  ('T (SETQ |i| (+ |i| 1)))))))
+           (COND
+             ((NOT (< |i| |n|)) (LIST T 0 "other"))
+             ('T
+              (PROGN
+                (SETQ |eb| (COND ((EQL |i| 1) 0) ('T |i|)))
+                (SETQ |bad| T)
+                ((LAMBDA (|bfVar#2| |p|)
+                   (LOOP
+                     (COND
+                       ((OR (ATOM |bfVar#2|)
+                            (PROGN (SETQ |p| (CAR |bfVar#2|)) NIL)
+                            (NOT |bad|))
+                        (RETURN NIL))
+                       ('T
+                        (COND
+                          ((|incPrefix?| |p| |i| |s|)
+                           (IDENTITY
+                               (PROGN
+                                 (SETQ |bad| NIL)
+                                 (SETQ |p1| |p|)))))))
+                     (SETQ |bfVar#2| (CDR |bfVar#2|))))
+                 |incCommands| NIL)
+                (COND
+                  (|bad| (LIST T 0 "other"))
+                  ('T (LIST T |eb| |p1|))))))))))))
+
+;incCommandTail(s, info) ==
+;            start := (info.1 = 0 => 1; info.1)
+;            incDrop(start+#info.2+1, s)
+
+(DEFUN |incCommandTail| (|s| |info|)
+  (PROG (|start|)
+    (RETURN
+      (PROGN
+        (SETQ |start|
+              (COND ((EQL (ELT |info| 1) 0) 1) ('T (ELT |info| 1))))
+        (|incDrop| (+ (+ |start| (LENGTH (ELT |info| 2))) 1) |s|)))))
+
+;incDrop(n, b) ==
+;            n >= #b => ""
+;            SUBSTRING(b,n,nil)
+
+(DEFUN |incDrop| (|n| |b|)
+  (PROG ()
+    (RETURN
+      (COND
+        ((NOT (< |n| (LENGTH |b|))) '||)
+        ('T (SUBSTRING |b| |n| NIL))))))
+
+;inclFname(s, info) == incFileName incCommandTail(s, info)
+
+(DEFUN |inclFname| (|s| |info|)
+  (PROG () (RETURN (|incFileName| (|incCommandTail| |s| |info|)))))
+
+;incTrunc (n,x)==
+;     if #x>n
+;     then SUBSTRING(x,0,n)
+;     else x
+
+(DEFUN |incTrunc| (|n| |x|)
+  (PROG ()
+    (RETURN
+      (COND ((< |n| (LENGTH |x|)) (SUBSTRING |x| 0 |n|)) ('T |x|)))))
+
+;incFileName x == first incBiteOff x
+
+(DEFUN |incFileName| (|x|)
+  (PROG () (RETURN (CAR (|incBiteOff| |x|)))))
+
+;fileNameStrings fn==[PNAME(fn.0),PNAME(fn.1),PNAME(fn.2)]
+
+(DEFUN |fileNameStrings| (|fn|)
+  (PROG ()
+    (RETURN
+      (LIST (PNAME (ELT |fn| 0)) (PNAME (ELT |fn| 1))
+            (PNAME (ELT |fn| 2))))))
+
+;ifCond(s, info) ==
+;    word := MakeSymbol StringTrim(incCommandTail(s, info), WhiteSpaceCset)
+;    ListMemberQ?(word, $inclAssertions)
+
+(DEFUN |ifCond| (|s| |info|)
+  (PROG (|word|)
+    (DECLARE (SPECIAL |$inclAssertions|))
+    (RETURN
+      (PROGN
+        (SETQ |word|
+              (|MakeSymbol|
+                  (|StringTrim| (|incCommandTail| |s| |info|)
+                      |WhiteSpaceCset|)))
+        (|ListMemberQ?| |word| |$inclAssertions|)))))
+
+;assertCond(s, info) ==
+;    word := MakeSymbol StringTrim(incCommandTail(s, info), WhiteSpaceCset)
+;    if not ListMemberQ?(word, $inclAssertions) then
+;        $inclAssertions := [word, :$inclAssertions]
+
+(DEFUN |assertCond| (|s| |info|)
+  (PROG (|word|)
+    (DECLARE (SPECIAL |$inclAssertions|))
+    (RETURN
+      (PROGN
+        (SETQ |word|
+              (|MakeSymbol|
+                  (|StringTrim| (|incCommandTail| |s| |info|)
+                      |WhiteSpaceCset|)))
+        (COND
+          ((NULL (|ListMemberQ?| |word| |$inclAssertions|))
+           (SETQ |$inclAssertions| (CONS |word| |$inclAssertions|))))))))
+
+;incActive?(fn,ufos)==MEMBER(fn,ufos)
+
+(DEFUN |incActive?| (|fn| |ufos|)
+  (PROG () (RETURN (MEMBER |fn| |ufos|))))
+
+;incNConsoles ufos==
+;        a:=MEMBER('"console",ufos)
+;        if a then 1+incNConsoles CDR a else 0
+
+(DEFUN |incNConsoles| (|ufos|)
+  (PROG (|a|)
+    (RETURN
+      (PROGN
+        (SETQ |a| (MEMBER "console" |ufos|))
+        (COND (|a| (+ 1 (|incNConsoles| (CDR |a|)))) ('T 0))))))
+
+;        --% Message Handling
+;incHandleMessage(xl) ==
+;          xl.1.1 = "none" =>
+;              0
+;          xl.1.1 = "error" =>
+;              inclHandleError(incPos xl.0, xl.1.0)
+;          xl.1.1 = "warning" =>
+;              inclHandleWarning(incPos xl.0, xl.1.0)
+;          xl.1.1 = "say" =>
+;              inclHandleSay(incPos xl.0, xl.1.0)
+;          inclHandleBug(incPos xl.0, xl.1.0)
+
+(DEFUN |incHandleMessage| (|xl|)
+  (PROG ()
+    (RETURN
+      (COND
+        ((EQ (ELT (ELT |xl| 1) 1) '|none|) 0)
+        ((EQ (ELT (ELT |xl| 1) 1) '|error|)
+         (|inclHandleError| (|incPos| (ELT |xl| 0))
+             (ELT (ELT |xl| 1) 0)))
+        ((EQ (ELT (ELT |xl| 1) 1) '|warning|)
+         (|inclHandleWarning| (|incPos| (ELT |xl| 0))
+             (ELT (ELT |xl| 1) 0)))
+        ((EQ (ELT (ELT |xl| 1) 1) '|say|)
+         (|inclHandleSay| (|incPos| (ELT |xl| 0)) (ELT (ELT |xl| 1) 0)))
+        ('T
+         (|inclHandleBug| (|incPos| (ELT |xl| 0)) (ELT (ELT |xl| 1) 0)))))))
+
+;xlOK(eb, str, lno, ufo)  ==
+;                [incLine(eb, str, -1, lno, ufo), [NIL, "none"]]
+
+(DEFUN |xlOK| (|eb| |str| |lno| |ufo|)
+  (PROG ()
+    (RETURN
+      (LIST (|incLine| |eb| |str| (- 1) |lno| |ufo|)
+            (LIST NIL '|none|)))))
+
+;xlOK1(eb, str,str1, lno, ufo)  ==
+;                [incLine1(eb, str,str1, -1, lno, ufo), [NIL, "none"]]
+
+(DEFUN |xlOK1| (|eb| |str| |str1| |lno| |ufo|)
+  (PROG ()
+    (RETURN
+      (LIST (|incLine1| |eb| |str| |str1| (- 1) |lno| |ufo|)
+            (LIST NIL '|none|)))))
+
+;incLine1(eb, str,str1, gno, lno, ufo) ==
+;            ln := lnCreate(eb,str,gno,lno,ufo)
+;            CONS(CONS(ln,1), str1)
+
+(DEFUN |incLine1| (|eb| |str| |str1| |gno| |lno| |ufo|)
+  (PROG (|ln|)
+    (RETURN
+      (PROGN
+        (SETQ |ln| (|lnCreate| |eb| |str| |gno| |lno| |ufo|))
+        (CONS (CONS |ln| 1) |str1|)))))
+
+;xlSkip(eb, str, lno, ufo) ==
+;        str := CONCAT('"-- Omitting:", str)
+;        [incLine(eb, str, -1, lno, ufo), [NIL, "none"]]
+
+(DEFUN |xlSkip| (|eb| |str| |lno| |ufo|)
+  (PROG ()
+    (RETURN
+      (PROGN
+        (SETQ |str| (CONCAT "-- Omitting:" |str|))
+        (LIST (|incLine| |eb| |str| (- 1) |lno| |ufo|)
+              (LIST NIL '|none|))))))
+
+;xlMsg(eb, str, lno, ufo, mess) ==
+;                [incLine(eb, str, -1, lno, ufo), mess]
+
+(DEFUN |xlMsg| (|eb| |str| |lno| |ufo| |mess|)
+  (PROG ()
+    (RETURN (LIST (|incLine| |eb| |str| (- 1) |lno| |ufo|) |mess|))))
+
+;xlPrematureEOF(eb, str, lno, ufos) ==
+;          xlMsg(eb, str, lno,ufos.0,
+;              [inclmsgPrematureEOF(ufos.0),"error"])
+
+(DEFUN |xlPrematureEOF| (|eb| |str| |lno| |ufos|)
+  (PROG ()
+    (RETURN
+      (|xlMsg| |eb| |str| |lno| (ELT |ufos| 0)
+               (LIST (|inclmsgPrematureEOF| (ELT |ufos| 0)) '|error|)))))
+
+;xlPrematureFin(eb, str, lno, ufos) ==
+;          xlMsg(eb, str, lno,ufos.0,
+;              [inclmsgPrematureFin(ufos.0),"error"])
+
+(DEFUN |xlPrematureFin| (|eb| |str| |lno| |ufos|)
+  (PROG ()
+    (RETURN
+      (|xlMsg| |eb| |str| |lno| (ELT |ufos| 0)
+               (LIST (|inclmsgPrematureFin| (ELT |ufos| 0)) '|error|)))))
+
+;xlFileCycle(eb, str, lno, ufos, fn) ==
+;          xlMsg(eb, str, lno,ufos.0,
+;              [inclmsgFileCycle(ufos,fn),"error"])
+
+(DEFUN |xlFileCycle| (|eb| |str| |lno| |ufos| |fn|)
+  (PROG ()
+    (RETURN
+      (|xlMsg| |eb| |str| |lno| (ELT |ufos| 0)
+               (LIST (|inclmsgFileCycle| |ufos| |fn|) '|error|)))))
+
+;xlNoSuchFile(eb, str, lno, ufos, fn) ==
+;          xlMsg(eb, str, lno,ufos.0,
+;              [inclmsgNoSuchFile(fn), "error"])
+
+(DEFUN |xlNoSuchFile| (|eb| |str| |lno| |ufos| |fn|)
+  (PROG ()
+    (RETURN
+      (|xlMsg| |eb| |str| |lno| (ELT |ufos| 0)
+               (LIST (|inclmsgNoSuchFile| |fn|) '|error|)))))
+
+;xlCannotRead(eb, str, lno, ufos, fn) ==
+;          xlMsg(eb, str, lno,ufos.0,
+;              [inclmsgCannotRead(fn), "error"])
+
+(DEFUN |xlCannotRead| (|eb| |str| |lno| |ufos| |fn|)
+  (PROG ()
+    (RETURN
+      (|xlMsg| |eb| |str| |lno| (ELT |ufos| 0)
+               (LIST (|inclmsgCannotRead| |fn|) '|error|)))))
+
+;xlConsole(eb, str, lno, ufos)  ==
+;          xlMsg(eb, str, lno,ufos.0,
+;              [inclmsgConsole(),"say"])
+
+(DEFUN |xlConsole| (|eb| |str| |lno| |ufos|)
+  (PROG ()
+    (RETURN
+      (|xlMsg| |eb| |str| |lno| (ELT |ufos| 0)
+               (LIST (|inclmsgConsole|) '|say|)))))
+
+;xlConActive(eb, str, lno, ufos, n) ==
+;          xlMsg(eb, str, lno,ufos.0,
+;              [inclmsgConActive(n),"warning"])
+
+(DEFUN |xlConActive| (|eb| |str| |lno| |ufos| |n|)
+  (PROG ()
+    (RETURN
+      (|xlMsg| |eb| |str| |lno| (ELT |ufos| 0)
+               (LIST (|inclmsgConActive| |n|) '|warning|)))))
+
+;xlConStill(eb, str, lno, ufos, n) ==
+;          xlMsg(eb, str, lno,ufos.0,
+;              [inclmsgConStill(n), "say"])
+
+(DEFUN |xlConStill| (|eb| |str| |lno| |ufos| |n|)
+  (PROG ()
+    (RETURN
+      (|xlMsg| |eb| |str| |lno| (ELT |ufos| 0)
+               (LIST (|inclmsgConStill| |n|) '|say|)))))
+
+;xlSkippingFin(eb, str, lno, ufos) ==
+;          xlMsg(eb, str, lno,ufos.0,
+;              [inclmsgFinSkipped(),"warning"])
+
+(DEFUN |xlSkippingFin| (|eb| |str| |lno| |ufos|)
+  (PROG ()
+    (RETURN
+      (|xlMsg| |eb| |str| |lno| (ELT |ufos| 0)
+               (LIST (|inclmsgFinSkipped|) '|warning|)))))
+
+;xlIfBug(eb, str, lno, ufos) ==
+;          xlMsg(eb, str, lno,ufos.0,
+;              [inclmsgIfBug(), "bug"])
+
+(DEFUN |xlIfBug| (|eb| |str| |lno| |ufos|)
+  (PROG ()
+    (RETURN
+      (|xlMsg| |eb| |str| |lno| (ELT |ufos| 0)
+               (LIST (|inclmsgIfBug|) '|bug|)))))
+
+;xlCmdBug(eb, str, lno, ufos) ==
+;          xlMsg(eb, str, lno,ufos.0,
+;              [inclmsgCmdBug(), "bug"])
+
+(DEFUN |xlCmdBug| (|eb| |str| |lno| |ufos|)
+  (PROG ()
+    (RETURN
+      (|xlMsg| |eb| |str| |lno| (ELT |ufos| 0)
+               (LIST (|inclmsgCmdBug|) '|bug|)))))
+
+;xlSay(eb, str, lno, ufos, x) ==
+;          xlMsg(eb, str, lno,ufos.0,
+;              [inclmsgSay(x), "say"])
+
+(DEFUN |xlSay| (|eb| |str| |lno| |ufos| |x|)
+  (PROG ()
+    (RETURN
+      (|xlMsg| |eb| |str| |lno| (ELT |ufos| 0)
+               (LIST (|inclmsgSay| |x|) '|say|)))))
+
+;xlIfSyntax(eb, str, lno,ufos,info,sts) ==
+;          st := sts.0
+;          found := info.2
+;          context :=
+;              Top? st  => "not in an )if...)endif"
+;              Else? st => "after an )else"
+;              "but can't figure out where"
+;          xlMsg(eb, str, lno, ufos.0,
+;               [inclmsgIfSyntax(ufos.0,found,context), "error"])
+(DEFUN |xlIfSyntax| (|eb| |str| |lno| |ufos| |info| |sts|)
+  (PROG (|context| |found| |st|)
+    (RETURN
+      (PROGN
+        (SETQ |st| (ELT |sts| 0))
+        (SETQ |found| (ELT |info| 2))
+        (SETQ |context|
+              (COND
+                ((|Top?| |st|) '|not in an )if...)endif|)
+                ((|Else?| |st|) '|after an )else|)
+                ('T '|but can't figure out where|)))
+        (|xlMsg| |eb| |str| |lno| (ELT |ufos| 0)
+                 (LIST (|inclmsgIfSyntax| (ELT |ufos| 0) |found|
+                           |context|)
+                       '|error|))))))
+
+;        --% This is it
+; 
+; --% Message handling for the source includer
+;--  SMW June 88
+; 
+;inclHandleError(pos, [key, args]) ==
+;    ncSoftError(pos, key, args)
+
+(DEFUN |inclHandleError| (|pos| |bfVar#3|)
+  (PROG (|args| |key|)
+    (RETURN
+      (PROGN
+        (SETQ |key| (CAR |bfVar#3|))
+        (SETQ |args| (CADR |bfVar#3|))
+        (|ncSoftError| |pos| |key| |args|)))))
+
+;inclHandleWarning(pos, [key, args]) ==
+;    ncSoftError(pos, key,args)
+
+(DEFUN |inclHandleWarning| (|pos| |bfVar#4|)
+  (PROG (|args| |key|)
+    (RETURN
+      (PROGN
+        (SETQ |key| (CAR |bfVar#4|))
+        (SETQ |args| (CADR |bfVar#4|))
+        (|ncSoftError| |pos| |key| |args|)))))
+
+;inclHandleBug(pos, [key, args]) ==
+;    ncBug(key, args)
+
+(DEFUN |inclHandleBug| (|pos| |bfVar#5|)
+  (PROG (|args| |key|)
+    (RETURN
+      (PROGN
+        (SETQ |key| (CAR |bfVar#5|))
+        (SETQ |args| (CADR |bfVar#5|))
+        (|ncBug| |key| |args|)))))
+
+;inclHandleSay(pos, [key, args]) ==
+;    ncSoftError(pos, key, args)
+
+(DEFUN |inclHandleSay| (|pos| |bfVar#6|)
+  (PROG (|args| |key|)
+    (RETURN
+      (PROGN
+        (SETQ |key| (CAR |bfVar#6|))
+        (SETQ |args| (CADR |bfVar#6|))
+        (|ncSoftError| |pos| |key| |args|)))))
+
+;inclmsgSay str  ==
+;    ['S2CI0001, [%id str]]
+
+(DEFUN |inclmsgSay| (|str|)
+  (PROG () (RETURN (LIST 'S2CI0001 (LIST (|%id| |str|))))))
+
+;inclmsgPrematureEOF ufo  ==
+;    ['S2CI0002, [%origin ufo]]
+
+(DEFUN |inclmsgPrematureEOF| (|ufo|)
+  (PROG () (RETURN (LIST 'S2CI0002 (LIST (|%origin| |ufo|))))))
+
+;inclmsgPrematureFin ufo  ==
+;    ['S2CI0003, [%origin ufo]]
+
+(DEFUN |inclmsgPrematureFin| (|ufo|)
+  (PROG () (RETURN (LIST 'S2CI0003 (LIST (|%origin| |ufo|))))))
+
+;inclmsgFileCycle(ufos,fn) ==
+;    flist := [porigin n for n in reverse ufos]
+;    f1    := porigin fn
+;    cycle := [:[:[n,'"==>"] for n in flist], f1]
+;    ['S2CI0004, [%id cycle, %id f1]]
+
+(DEFUN |inclmsgFileCycle| (|ufos| |fn|)
+  (PROG (|cycle| |f1| |flist|)
+    (RETURN
+      (PROGN
+        (SETQ |flist|
+              ((LAMBDA (|bfVar#8| |bfVar#7| |n|)
+                 (LOOP
+                   (COND
+                     ((OR (ATOM |bfVar#7|)
+                          (PROGN (SETQ |n| (CAR |bfVar#7|)) NIL))
+                      (RETURN (NREVERSE |bfVar#8|)))
+                     ('T
+                      (SETQ |bfVar#8| (CONS (|porigin| |n|) |bfVar#8|))))
+                   (SETQ |bfVar#7| (CDR |bfVar#7|))))
+               NIL (REVERSE |ufos|) NIL))
+        (SETQ |f1| (|porigin| |fn|))
+        (SETQ |cycle|
+              (APPEND ((LAMBDA (|bfVar#10| |bfVar#9| |n|)
+                         (LOOP
+                           (COND
+                             ((OR (ATOM |bfVar#9|)
+                                  (PROGN
+                                    (SETQ |n| (CAR |bfVar#9|))
+                                    NIL))
+                              (RETURN (NREVERSE |bfVar#10|)))
+                             ('T
+                              (SETQ |bfVar#10|
+                                    (APPEND (REVERSE (LIST |n| "==>"))
+                                     |bfVar#10|))))
+                           (SETQ |bfVar#9| (CDR |bfVar#9|))))
+                       NIL |flist| NIL)
+                      (CONS |f1| NIL)))
+        (LIST 'S2CI0004 (LIST (|%id| |cycle|) (|%id| |f1|)))))))
+
+;inclmsgConsole   () ==
+;    ['S2CI0005, []]
+
+(DEFUN |inclmsgConsole| () (PROG () (RETURN (LIST 'S2CI0005 NIL))))
+
+;inclmsgConActive n  ==
+;    ['S2CI0006, [%id n]]
+
+(DEFUN |inclmsgConActive| (|n|)
+  (PROG () (RETURN (LIST 'S2CI0006 (LIST (|%id| |n|))))))
+
+;inclmsgConStill  n  ==
+;    ['S2CI0007, [%id n]]
+
+(DEFUN |inclmsgConStill| (|n|)
+  (PROG () (RETURN (LIST 'S2CI0007 (LIST (|%id| |n|))))))
+
+;inclmsgFinSkipped() ==
+;    ['S2CI0008, []]
+
+(DEFUN |inclmsgFinSkipped| () (PROG () (RETURN (LIST 'S2CI0008 NIL))))
+
+;inclmsgIfSyntax(ufo,found,context) ==
+;    found := CONCAT('")", found)
+;    ['S2CI0009, [%id found, %id context, %origin ufo]]
+
+(DEFUN |inclmsgIfSyntax| (|ufo| |found| |context|)
+  (PROG ()
+    (RETURN
+      (PROGN
+        (SETQ |found| (CONCAT ")" |found|))
+        (LIST 'S2CI0009
+              (LIST (|%id| |found|) (|%id| |context|)
+                    (|%origin| |ufo|)))))))
+
+;inclmsgNoSuchFile fn ==
+;    ['S2CI0010, [%fname fn]]
+
+(DEFUN |inclmsgNoSuchFile| (|fn|)
+  (PROG () (RETURN (LIST 'S2CI0010 (LIST (|%fname| |fn|))))))
+
+;inclmsgCannotRead fn ==
+;    ['S2CI0011, [%fname fn]]
+
+(DEFUN |inclmsgCannotRead| (|fn|)
+  (PROG () (RETURN (LIST 'S2CI0011 (LIST (|%fname| |fn|))))))
+
+;inclmsgIfBug() ==
+;    ['S2CB0002, []]
+
+(DEFUN |inclmsgIfBug| () (PROG () (RETURN (LIST 'S2CB0002 NIL))))
+
+;inclmsgCmdBug() ==
+;    ['S2CB0003, []]
+
+(DEFUN |inclmsgCmdBug| () (PROG () (RETURN (LIST 'S2CB0003 NIL))))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}
