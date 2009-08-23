@@ -1,0 +1,2714 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp i-resolv.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\begin{verbatim}
+new resolution: types and modes
+
+a type is any term (structure) which can be regarded as a
+  functor call
+a basic type is the call of a nullary functor (e.g. (Integer)),
+  otherwise it is a structured type (e.g. (Polynomial (Integer)))
+a functor together with its non-type arguments is called a
+  type constructor
+
+a mode is a type which can be partially specified, i.e. a term
+  containing term variables
+a term variable (denoted by control-L) stands for any nullary or unary function
+  which was build from type constructors
+this means, a term variable can be:
+  a function LAMBDA ().T, where T is a type
+  a function LAMBDA (X).T(X), where X is a variable for a type and
+    T a type containing this variable
+  a function LAMBDA X.X ("control-L can be disregarded")
+examples:
+  P(control-L) can stand for (Polynomial (RationalFunction (Integer)))
+  G(control-L(I)) can stand for (Gaussian (Polynomial (Integer))), but also
+    for (Gaussian (Integer))
+
+
+Resolution of Two Types
+
+this symmetric resolution is done the following way:
+1. if the same type constructor occurs in both terms, then the
+   type tower is built around this constructor (resolveTTEq)
+2. the next step is to look for two constructors which have an
+   "algebraic relationship", this means, a rewrite rule is
+   applicable (e.g. UP(x,I) and MP([x,y],I))
+   this is done by resolveTTRed
+3. if none of this is true, then a tower of types is built
+   e.g. resolve P I and G I to P G I
+
+\end{verbatim}
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;resolveTypeList u ==
+;  u is [a,:tail] =>
+;    -- if the list consists entirely of variables then keep it explicit
+;    allVars :=
+;      a is ['Variable,v] => [v]
+;      nil
+;    while allVars for b in tail repeat
+;        allVars :=
+;            b is ['Variable,v] => insert(v, allVars)
+;            nil
+;    allVars =>
+;        null rest allVars => ['Variable, first allVars]
+;        ['OrderedVariableList,nreverse allVars]
+;    for md in tail repeat
+;      a := resolveTT(md,a)
+;      null a => return nil
+;    a
+;  throwKeyedMsg("S2IR0002",NIL)
+
+(DEFUN |resolveTypeList| (|u|)
+  (PROG (|tail| |ISTMP#1| |v| |allVars| |a|)
+    (RETURN
+      (SEQ (COND
+             ((AND (PAIRP |u|)
+                   (PROGN
+                     (SPADLET |a| (QCAR |u|))
+                     (SPADLET |tail| (QCDR |u|))
+                     'T))
+              (SPADLET |allVars|
+                       (COND
+                         ((AND (PAIRP |a|) (EQ (QCAR |a|) '|Variable|)
+                               (PROGN
+                                 (SPADLET |ISTMP#1| (QCDR |a|))
+                                 (AND (PAIRP |ISTMP#1|)
+                                      (EQ (QCDR |ISTMP#1|) NIL)
+                                      (PROGN
+                                        (SPADLET |v| (QCAR |ISTMP#1|))
+                                        'T))))
+                          (CONS |v| NIL))
+                         ('T NIL)))
+              (DO ((G166082 |tail| (CDR G166082)) (|b| NIL))
+                  ((OR (NULL |allVars|) (ATOM G166082)
+                       (PROGN (SETQ |b| (CAR G166082)) NIL))
+                   NIL)
+                (SEQ (EXIT (SPADLET |allVars|
+                                    (COND
+                                      ((AND (PAIRP |b|)
+                                        (EQ (QCAR |b|) '|Variable|)
+                                        (PROGN
+                                          (SPADLET |ISTMP#1|
+                                           (QCDR |b|))
+                                          (AND (PAIRP |ISTMP#1|)
+                                           (EQ (QCDR |ISTMP#1|) NIL)
+                                           (PROGN
+                                             (SPADLET |v|
+                                              (QCAR |ISTMP#1|))
+                                             'T))))
+                                       (|insert| |v| |allVars|))
+                                      ('T NIL))))))
+              (COND
+                (|allVars|
+                    (COND
+                      ((NULL (CDR |allVars|))
+                       (CONS '|Variable| (CONS (CAR |allVars|) NIL)))
+                      ('T
+                       (CONS '|OrderedVariableList|
+                             (CONS (NREVERSE |allVars|) NIL)))))
+                ('T
+                 (DO ((G166094 |tail| (CDR G166094)) (|md| NIL))
+                     ((OR (ATOM G166094)
+                          (PROGN (SETQ |md| (CAR G166094)) NIL))
+                      NIL)
+                   (SEQ (EXIT (PROGN
+                                (SPADLET |a| (|resolveTT| |md| |a|))
+                                (COND ((NULL |a|) (RETURN NIL)))))))
+                 |a|)))
+             ('T (|throwKeyedMsg| 'S2IR0002 NIL)))))))
+
+;-- resolveTT is in CLAMMED BOOT
+;resolveTypeListAny tl ==
+;  rt := resolveTypeList tl
+;  null rt => $Any
+;  rt
+
+(DEFUN |resolveTypeListAny| (|tl|)
+  (PROG (|rt|)
+    (RETURN
+      (PROGN
+        (SPADLET |rt| (|resolveTypeList| |tl|))
+        (COND ((NULL |rt|) |$Any|) ('T |rt|))))))
+
+;resolveTTAny(t1,t2) ==
+;  (t3 := resolveTT(t1, t2)) => t3
+;  $Any
+
+(DEFUN |resolveTTAny| (|t1| |t2|)
+  (PROG (|t3|)
+    (RETURN
+      (COND ((SPADLET |t3| (|resolveTT| |t1| |t2|)) |t3|) ('T |$Any|)))))
+
+;resolveTT1(t1,t2) ==
+;  -- this is the main symmetric resolve
+;  -- first it looks for equal constructors on both sides
+;  -- then it tries to use a rewrite rule
+;  -- and finally it builds up a tower
+;  t1=t2 => t1
+;  (t1 = '$NoValueMode) or (t2 = '$NoValueMode) => NIL
+;  (t1 = $Void) or (t2 = $Void) => $Void
+;  (t1 = $Any) or (t2 = $Any) => $Any
+;  t1 = '(Exit) => t2
+;  t2 = '(Exit) => t1
+;  t1 is ['Union,:.] => resolveTTUnion(t1,t2)
+;  t2 is ['Union,:.] => resolveTTUnion(t2,t1)
+;  STRINGP(t1) =>
+;    t2 = $String => t2
+;    NIL
+;  STRINGP(t2) =>
+;    t1 = $String => t1
+;    NIL
+;  null acceptableTypesToResolve(t1,t2) => NIL
+;  if compareTT(t1,t2) then
+;     t := t1
+;     t1 := t2
+;     t2 := t
+;  (t := resolveTTSpecial(t1,t2)) and isValidType t => t
+;  (t := resolveTTSpecial(t2,t1)) and isValidType t => t
+;  isSubTowerOf(t1,t2) and canCoerceFrom(t1,t2) => t2
+;  isSubTowerOf(t2,t1) and canCoerceFrom(t2,t1) => t1
+;  t := resolveTTRed(t1,t2) => t
+;  t := resolveTTCC(t1,t2) => t
+;  (t := resolveTTEq(t1,t2)) and isValidType t => t
+;  [c1,:arg1] := deconstructT t1
+;  arg1 and
+;    [c2,:arg2] := deconstructT t2
+;    arg2 and
+;      t := resolveTT1(last arg1,last arg2)
+;      t and ( resolveTT2(c1,c2,arg1,arg2,t) or
+;        resolveTT2(c2,c1,arg2,arg1,t) )
+
+(DEFUN |resolveTT1| (|t1| |t2|)
+  (PROG (|c1| |arg1| |LETTMP#1| |c2| |arg2| |t|)
+    (RETURN
+      (COND
+        ((BOOT-EQUAL |t1| |t2|) |t1|)
+        ((OR (BOOT-EQUAL |t1| '|$NoValueMode|)
+             (BOOT-EQUAL |t2| '|$NoValueMode|))
+         NIL)
+        ((OR (BOOT-EQUAL |t1| |$Void|) (BOOT-EQUAL |t2| |$Void|))
+         |$Void|)
+        ((OR (BOOT-EQUAL |t1| |$Any|) (BOOT-EQUAL |t2| |$Any|)) |$Any|)
+        ((BOOT-EQUAL |t1| '(|Exit|)) |t2|)
+        ((BOOT-EQUAL |t2| '(|Exit|)) |t1|)
+        ((AND (PAIRP |t1|) (EQ (QCAR |t1|) '|Union|))
+         (|resolveTTUnion| |t1| |t2|))
+        ((AND (PAIRP |t2|) (EQ (QCAR |t2|) '|Union|))
+         (|resolveTTUnion| |t2| |t1|))
+        ((STRINGP |t1|)
+         (COND ((BOOT-EQUAL |t2| |$String|) |t2|) ('T NIL)))
+        ((STRINGP |t2|)
+         (COND ((BOOT-EQUAL |t1| |$String|) |t1|) ('T NIL)))
+        ((NULL (|acceptableTypesToResolve| |t1| |t2|)) NIL)
+        ('T
+         (COND
+           ((|compareTT| |t1| |t2|) (SPADLET |t| |t1|)
+            (SPADLET |t1| |t2|) (SPADLET |t2| |t|)))
+         (COND
+           ((AND (SPADLET |t| (|resolveTTSpecial| |t1| |t2|))
+                 (|isValidType| |t|))
+            |t|)
+           ((AND (SPADLET |t| (|resolveTTSpecial| |t2| |t1|))
+                 (|isValidType| |t|))
+            |t|)
+           ((AND (|isSubTowerOf| |t1| |t2|)
+                 (|canCoerceFrom| |t1| |t2|))
+            |t2|)
+           ((AND (|isSubTowerOf| |t2| |t1|)
+                 (|canCoerceFrom| |t2| |t1|))
+            |t1|)
+           ((SPADLET |t| (|resolveTTRed| |t1| |t2|)) |t|)
+           ((SPADLET |t| (|resolveTTCC| |t1| |t2|)) |t|)
+           ((AND (SPADLET |t| (|resolveTTEq| |t1| |t2|))
+                 (|isValidType| |t|))
+            |t|)
+           ('T (SPADLET |LETTMP#1| (|deconstructT| |t1|))
+            (SPADLET |c1| (CAR |LETTMP#1|))
+            (SPADLET |arg1| (CDR |LETTMP#1|))
+            (AND |arg1|
+                 (PROGN
+                   (SPADLET |LETTMP#1| (|deconstructT| |t2|))
+                   (SPADLET |c2| (CAR |LETTMP#1|))
+                   (SPADLET |arg2| (CDR |LETTMP#1|))
+                   (AND |arg2|
+                        (PROGN
+                          (SPADLET |t|
+                                   (|resolveTT1| (|last| |arg1|)
+                                    (|last| |arg2|)))
+                          (AND |t|
+                               (OR (|resolveTT2| |c1| |c2| |arg1|
+                                    |arg2| |t|)
+                                   (|resolveTT2| |c2| |c1| |arg2|
+                                    |arg1| |t|))))))))))))))
+
+;acceptableTypesToResolve(t1,t2) ==
+;  -- this is temporary. It ensures that two types that have coerces
+;  -- that really should be converts don't automatically resolve.
+;  -- when the coerces go away, so will this.
+;  acceptableTypesToResolve1(t1,t2) and
+;    acceptableTypesToResolve1(t2,t1)
+
+(DEFUN |acceptableTypesToResolve| (|t1| |t2|)
+  (AND (|acceptableTypesToResolve1| |t1| |t2|)
+       (|acceptableTypesToResolve1| |t2| |t1|)))
+
+;acceptableTypesToResolve1(t1,t2) ==
+;  t1 = $Integer =>
+;    t2 = $String => NIL
+;    true
+;  t1 = $DoubleFloat or t1 = $Float =>
+;    t2 = $String => NIL
+;    t2 = '(RationalNumber) => NIL
+;    t2 = [$QuotientField, $Integer] => NIL
+;    true
+;  true
+
+(DEFUN |acceptableTypesToResolve1| (|t1| |t2|)
+  (COND
+    ((BOOT-EQUAL |t1| |$Integer|)
+     (COND ((BOOT-EQUAL |t2| |$String|) NIL) ('T 'T)))
+    ((OR (BOOT-EQUAL |t1| |$DoubleFloat|) (BOOT-EQUAL |t1| |$Float|))
+     (COND
+       ((BOOT-EQUAL |t2| |$String|) NIL)
+       ((BOOT-EQUAL |t2| '(|RationalNumber|)) NIL)
+       ((BOOT-EQUAL |t2| (CONS |$QuotientField| (CONS |$Integer| NIL)))
+        NIL)
+       ('T 'T)))
+    ('T 'T)))
+
+;resolveTT2(c1,c2,arg1,arg2,t) ==
+;  -- builds a tower and tests for all the necessary coercions
+;  t0 := constructM(c2,replaceLast(arg2,t))
+;  canCoerceFrom(t,t0) and
+;    t1 := constructM(c1,replaceLast(arg1,t0))
+;    canCoerceFrom(t0,t1) and t1
+
+(DEFUN |resolveTT2| (|c1| |c2| |arg1| |arg2| |t|)
+  (PROG (|t0| |t1|)
+    (RETURN
+      (PROGN
+        (SPADLET |t0| (|constructM| |c2| (|replaceLast| |arg2| |t|)))
+        (AND (|canCoerceFrom| |t| |t0|)
+             (PROGN
+               (SPADLET |t1|
+                        (|constructM| |c1| (|replaceLast| |arg1| |t0|)))
+               (AND (|canCoerceFrom| |t0| |t1|) |t1|)))))))
+
+;resolveTTUnion(t1 is ['Union,:doms],t2) ==
+;  unionDoms1 :=
+;    doms and first doms is [":",:.] =>
+;      tagged := true
+;      [t for [.,.,t] in doms]
+;    tagged := false
+;    doms
+;  MEMBER(t2,unionDoms1) => t1
+;  tagged => NIL
+;  t2 isnt ['Union,:doms2] =>
+;    ud := nil
+;    bad := nil
+;    for d in doms while ^bad repeat
+;      d = '"failed" => ud := [d,:ud]
+;      null (d' := resolveTT(d,t2)) => bad := true
+;      ud := [d',:ud]
+;    bad => NIL
+;    ['Union,:REMDUP reverse ud]
+;  ud := nil
+;  bad := nil
+;  for d in doms2 while ^bad repeat
+;    d = '"failed" => ud := append(ud,[d])
+;    null (d' := resolveTTUnion(t1,d)) => bad := true
+;    ud := append(ud,CDR d')
+;  bad => NIL
+;  ['Union,:REMDUP ud]
+
+(DEFUN |resolveTTUnion| (|t1| |t2|)
+  (PROG (|doms| |ISTMP#1| |t| |tagged| |unionDoms1| |doms2| |d'| |bad|
+                |ud|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |doms| (CDR |t1|))
+             (SPADLET |unionDoms1|
+                      (COND
+                        ((AND |doms|
+                              (PROGN
+                                (SPADLET |ISTMP#1| (CAR |doms|))
+                                (AND (PAIRP |ISTMP#1|)
+                                     (EQ (QCAR |ISTMP#1|) '|:|))))
+                         (SPADLET |tagged| 'T)
+                         (PROG (G166204)
+                           (SPADLET G166204 NIL)
+                           (RETURN
+                             (DO ((G166210 |doms| (CDR G166210))
+                                  (G166178 NIL))
+                                 ((OR (ATOM G166210)
+                                      (PROGN
+                                        (SETQ G166178
+                                         (CAR G166210))
+                                        NIL)
+                                      (PROGN
+                                        (PROGN
+                                          (SPADLET |t|
+                                           (CADDR G166178))
+                                          G166178)
+                                        NIL))
+                                  (NREVERSE0 G166204))
+                               (SEQ (EXIT
+                                     (SETQ G166204
+                                      (CONS |t| G166204))))))))
+                        ('T (SPADLET |tagged| NIL) |doms|)))
+             (COND
+               ((|member| |t2| |unionDoms1|) |t1|)
+               (|tagged| NIL)
+               ((NULL (AND (PAIRP |t2|) (EQ (QCAR |t2|) '|Union|)
+                           (PROGN (SPADLET |doms2| (QCDR |t2|)) 'T)))
+                (SPADLET |ud| NIL) (SPADLET |bad| NIL)
+                (DO ((G166221 |doms| (CDR G166221)) (|d| NIL))
+                    ((OR (ATOM G166221)
+                         (PROGN (SETQ |d| (CAR G166221)) NIL)
+                         (NULL (NULL |bad|)))
+                     NIL)
+                  (SEQ (EXIT (COND
+                               ((BOOT-EQUAL |d| (MAKESTRING "failed"))
+                                (SPADLET |ud| (CONS |d| |ud|)))
+                               ((NULL (SPADLET |d'|
+                                       (|resolveTT| |d| |t2|)))
+                                (SPADLET |bad| 'T))
+                               ('T (SPADLET |ud| (CONS |d'| |ud|)))))))
+                (COND
+                  (|bad| NIL)
+                  ('T (CONS '|Union| (REMDUP (REVERSE |ud|))))))
+               ('T (SPADLET |ud| NIL) (SPADLET |bad| NIL)
+                (DO ((G166232 |doms2| (CDR G166232)) (|d| NIL))
+                    ((OR (ATOM G166232)
+                         (PROGN (SETQ |d| (CAR G166232)) NIL)
+                         (NULL (NULL |bad|)))
+                     NIL)
+                  (SEQ (EXIT (COND
+                               ((BOOT-EQUAL |d| (MAKESTRING "failed"))
+                                (SPADLET |ud|
+                                         (APPEND |ud| (CONS |d| NIL))))
+                               ((NULL (SPADLET |d'|
+                                       (|resolveTTUnion| |t1| |d|)))
+                                (SPADLET |bad| 'T))
+                               ('T
+                                (SPADLET |ud| (APPEND |ud| (CDR |d'|))))))))
+                (COND (|bad| NIL) ('T (CONS '|Union| (REMDUP |ud|)))))))))))
+
+;resolveTTSpecial(t1,t2) ==
+;  -- tries to resolve things that would otherwise get mangled in the
+;  -- rest of the resolve world. I'll leave it for Albi to fix those
+;  -- things. (RSS 1/-86)
+;  -- following is just an efficiency hack
+;  (t1 = '(Symbol) or t1 is ['OrderedVariableList,.]) and PAIRP(t2) and
+;    CAR(t2) in '(Polynomial RationalFunction) => t2
+;  (t1 = '(Symbol)) and ofCategory(t2, '(IntegerNumberSystem)) =>
+;    resolveTT1(['Polynomial, t2], t2)
+;  t1 = '(AlgebraicNumber) and (t2 = $Float or t2 = $DoubleFloat) =>
+;    ['Expression, t2]
+;  t1 = '(AlgebraicNumber) and (t2 = ['Complex, $Float] or t2 = ['Complex, $DoubleFloat]) =>
+;    ['Expression, CADR t2]
+;  t1 = '(AlgebraicNumber) and t2 is ['Complex,.] =>
+;    resolveTT1('(Expression (Integer)), t2)
+;  t1 is ['SimpleAlgebraicExtension,F,Rep,poly] =>
+;    t2 = Rep => t1
+;    t2 is ['UnivariatePolynomial,x,R] and (t3 := resolveTT(t1, R)) =>
+;      ['UnivariatePolynomial,x,t3]
+;    t2 is ['Variable,x] and (t3 := resolveTT(t1, F)) =>
+;      ['UnivariatePolynomial,x,t3]
+;    t2 is ['Polynomial,R] and (R' := resolveTT(Rep, t2)) =>
+;      R' = Rep => t1
+;      ['Polynomial,t1]
+;    canCoerceFrom(t2,F) => t1
+;    nil
+;  t1 = $PositiveInteger and ofCategory(t2,'(Ring)) =>
+;    resolveTT1($Integer,t2)
+;  t1 = $NonNegativeInteger and ofCategory(t2,'(Ring)) =>
+;    resolveTT1($Integer,t2)
+;  t1 is ['OrderedVariableList,[x]] => resolveTTSpecial(['Variable, x], t2)
+;  t1 is ['OrderedVariableList,vl] =>
+;    ofCategory(t2,'(Ring)) => resolveTT(['Polynomial,'(Integer)],t2)
+;    resolveTT($Symbol,t2)
+;  t1 is ['Variable,x] =>
+;    EQCAR(t2,'SimpleAlgebraicExtension) => resolveTTSpecial(t2,t1)
+;    t2 is ['UnivariatePolynomial,y,S] =>
+;      x = y => t2
+;      resolveTT1(['UnivariatePolynomial,x,'(Integer)],t2)
+;    t2 is ['Variable,y] =>
+;      x = y => t1
+;--    ['OrderedVariableList, MSORT [x,y]]
+;      $Symbol
+;    t2 = '(Symbol) => t2
+;    t2 is ['Polynomial,.] => t2
+;    t2 is ['OrderedVariableList, vl] and member(x,vl) => t2
+;    isPolynomialMode t2 => nil
+;    ofCategory(t2, '(IntegerNumberSystem)) => resolveTT(['Polynomial, t2], t2)
+;    resolveTT(['Polynomial,'(Integer)],t2)
+;  t1 is ['FunctionCalled,f] and t2 is ['FunctionCalled,g] =>
+;    null (mf := get(f,'mode,$e)) => NIL
+;    null (mg := get(g,'mode,$e)) => NIL
+;    mf ^= mg => NIL
+;    mf
+;  t1 is ['UnivariatePolynomial,x,S] =>
+;    EQCAR(t2,'Variable) =>
+;      resolveTTSpecial(t2,t1)
+;    EQCAR(t2,'SimpleAlgebraicExtension) =>
+;      resolveTTSpecial(t2,t1)
+;    t2 is ['UnivariatePolynomial,y,T] =>
+;      (x = y) and (U := resolveTT1(S,T)) and ['UnivariatePolynomial,x,U]
+;    nil
+;  t1 = '(Pi) =>
+;    t2 is ['Complex,d] => defaultTargetFE t2
+;    t2 is ['AlgebraicNumber] => defaultTargetFE t2
+;    EQCAR(t2, 'Variable) or t2 = $Symbol =>
+;      defaultTargetFE($Symbol)
+;    t2 is ['Polynomial, .] or t2 is ['Fraction, ['Polynomial, .]] =>
+;      defaultTargetFE(t2)
+;    nil
+;  t1 is ['Polynomial,['Complex,u1]] and t2 is ['Complex,u2] =>
+;    resolveTT1(t1,u2)
+;  t1 is ['Polynomial,R] and t2 is ['Complex,S] =>
+;    containsPolynomial(S) => resolveTT1(['Polynomial,['Complex,R]],t2)
+;    ['Polynomial,['Complex,resolveTT1(R,S)]]
+;  t1 is ['Expression, R] and t2 is ['Complex,S] =>
+;    dom' := resolveTT(R, t2)
+;    null dom' => nil
+;    ['Expression, dom']
+;  t1 is ['Segment, dom] and t2 isnt ['Segment,.] =>
+;    dom' := resolveTT(dom, t2)
+;    null dom' => nil
+;    ['Segment, dom']
+;  nil
+
+(DEFUN |resolveTTSpecial| (|t1| |t2|)
+  (PROG (F |Rep| |poly| |t3| |R'| |vl| |f| |g| |mf| |mg| |x| |y| T$ U
+           |d| |ISTMP#2| |ISTMP#3| |u1| |u2| R S |dom| |ISTMP#1|
+           |dom'|)
+    (RETURN
+      (COND
+        ((AND (OR (BOOT-EQUAL |t1| '(|Symbol|))
+                  (AND (PAIRP |t1|)
+                       (EQ (QCAR |t1|) '|OrderedVariableList|)
+                       (PROGN
+                         (SPADLET |ISTMP#1| (QCDR |t1|))
+                         (AND (PAIRP |ISTMP#1|)
+                              (EQ (QCDR |ISTMP#1|) NIL)))))
+              (PAIRP |t2|)
+              (|member| (CAR |t2|) '(|Polynomial| |RationalFunction|)))
+         |t2|)
+        ((AND (BOOT-EQUAL |t1| '(|Symbol|))
+              (|ofCategory| |t2| '(|IntegerNumberSystem|)))
+         (|resolveTT1| (CONS '|Polynomial| (CONS |t2| NIL)) |t2|))
+        ((AND (BOOT-EQUAL |t1| '(|AlgebraicNumber|))
+              (OR (BOOT-EQUAL |t2| |$Float|)
+                  (BOOT-EQUAL |t2| |$DoubleFloat|)))
+         (CONS '|Expression| (CONS |t2| NIL)))
+        ((AND (BOOT-EQUAL |t1| '(|AlgebraicNumber|))
+              (OR (BOOT-EQUAL |t2|
+                      (CONS '|Complex| (CONS |$Float| NIL)))
+                  (BOOT-EQUAL |t2|
+                      (CONS '|Complex| (CONS |$DoubleFloat| NIL)))))
+         (CONS '|Expression| (CONS (CADR |t2|) NIL)))
+        ((AND (BOOT-EQUAL |t1| '(|AlgebraicNumber|)) (PAIRP |t2|)
+              (EQ (QCAR |t2|) '|Complex|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t2|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL))))
+         (|resolveTT1| '(|Expression| (|Integer|)) |t2|))
+        ((AND (PAIRP |t1|) (EQ (QCAR |t1|) '|SimpleAlgebraicExtension|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t1|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN
+                       (SPADLET F (QCAR |ISTMP#1|))
+                       (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                       (AND (PAIRP |ISTMP#2|)
+                            (PROGN
+                              (SPADLET |Rep| (QCAR |ISTMP#2|))
+                              (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                              (AND (PAIRP |ISTMP#3|)
+                                   (EQ (QCDR |ISTMP#3|) NIL)
+                                   (PROGN
+                                     (SPADLET |poly| (QCAR |ISTMP#3|))
+                                     'T))))))))
+         (COND
+           ((BOOT-EQUAL |t2| |Rep|) |t1|)
+           ((AND (PAIRP |t2|) (EQ (QCAR |t2|) '|UnivariatePolynomial|)
+                 (PROGN
+                   (SPADLET |ISTMP#1| (QCDR |t2|))
+                   (AND (PAIRP |ISTMP#1|)
+                        (PROGN
+                          (SPADLET |x| (QCAR |ISTMP#1|))
+                          (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                          (AND (PAIRP |ISTMP#2|)
+                               (EQ (QCDR |ISTMP#2|) NIL)
+                               (PROGN (SPADLET R (QCAR |ISTMP#2|)) 'T)))))
+                 (SPADLET |t3| (|resolveTT| |t1| R)))
+            (CONS '|UnivariatePolynomial| (CONS |x| (CONS |t3| NIL))))
+           ((AND (PAIRP |t2|) (EQ (QCAR |t2|) '|Variable|)
+                 (PROGN
+                   (SPADLET |ISTMP#1| (QCDR |t2|))
+                   (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                        (PROGN (SPADLET |x| (QCAR |ISTMP#1|)) 'T)))
+                 (SPADLET |t3| (|resolveTT| |t1| F)))
+            (CONS '|UnivariatePolynomial| (CONS |x| (CONS |t3| NIL))))
+           ((AND (PAIRP |t2|) (EQ (QCAR |t2|) '|Polynomial|)
+                 (PROGN
+                   (SPADLET |ISTMP#1| (QCDR |t2|))
+                   (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                        (PROGN (SPADLET R (QCAR |ISTMP#1|)) 'T)))
+                 (SPADLET |R'| (|resolveTT| |Rep| |t2|)))
+            (COND
+              ((BOOT-EQUAL |R'| |Rep|) |t1|)
+              ('T (CONS '|Polynomial| (CONS |t1| NIL)))))
+           ((|canCoerceFrom| |t2| F) |t1|)
+           ('T NIL)))
+        ((AND (BOOT-EQUAL |t1| |$PositiveInteger|)
+              (|ofCategory| |t2| '(|Ring|)))
+         (|resolveTT1| |$Integer| |t2|))
+        ((AND (BOOT-EQUAL |t1| |$NonNegativeInteger|)
+              (|ofCategory| |t2| '(|Ring|)))
+         (|resolveTT1| |$Integer| |t2|))
+        ((AND (PAIRP |t1|) (EQ (QCAR |t1|) '|OrderedVariableList|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t1|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN
+                       (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                       (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL)
+                            (PROGN (SPADLET |x| (QCAR |ISTMP#2|)) 'T))))))
+         (|resolveTTSpecial| (CONS '|Variable| (CONS |x| NIL)) |t2|))
+        ((AND (PAIRP |t1|) (EQ (QCAR |t1|) '|OrderedVariableList|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t1|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET |vl| (QCAR |ISTMP#1|)) 'T))))
+         (COND
+           ((|ofCategory| |t2| '(|Ring|))
+            (|resolveTT| (CONS '|Polynomial| (CONS '(|Integer|) NIL))
+                |t2|))
+           ('T (|resolveTT| |$Symbol| |t2|))))
+        ((AND (PAIRP |t1|) (EQ (QCAR |t1|) '|Variable|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t1|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET |x| (QCAR |ISTMP#1|)) 'T))))
+         (COND
+           ((EQCAR |t2| '|SimpleAlgebraicExtension|)
+            (|resolveTTSpecial| |t2| |t1|))
+           ((AND (PAIRP |t2|) (EQ (QCAR |t2|) '|UnivariatePolynomial|)
+                 (PROGN
+                   (SPADLET |ISTMP#1| (QCDR |t2|))
+                   (AND (PAIRP |ISTMP#1|)
+                        (PROGN
+                          (SPADLET |y| (QCAR |ISTMP#1|))
+                          (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                          (AND (PAIRP |ISTMP#2|)
+                               (EQ (QCDR |ISTMP#2|) NIL)
+                               (PROGN (SPADLET S (QCAR |ISTMP#2|)) 'T))))))
+            (COND
+              ((BOOT-EQUAL |x| |y|) |t2|)
+              ('T
+               (|resolveTT1|
+                   (CONS '|UnivariatePolynomial|
+                         (CONS |x| (CONS '(|Integer|) NIL)))
+                   |t2|))))
+           ((AND (PAIRP |t2|) (EQ (QCAR |t2|) '|Variable|)
+                 (PROGN
+                   (SPADLET |ISTMP#1| (QCDR |t2|))
+                   (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                        (PROGN (SPADLET |y| (QCAR |ISTMP#1|)) 'T))))
+            (COND ((BOOT-EQUAL |x| |y|) |t1|) ('T |$Symbol|)))
+           ((BOOT-EQUAL |t2| '(|Symbol|)) |t2|)
+           ((AND (PAIRP |t2|) (EQ (QCAR |t2|) '|Polynomial|)
+                 (PROGN
+                   (SPADLET |ISTMP#1| (QCDR |t2|))
+                   (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL))))
+            |t2|)
+           ((AND (PAIRP |t2|) (EQ (QCAR |t2|) '|OrderedVariableList|)
+                 (PROGN
+                   (SPADLET |ISTMP#1| (QCDR |t2|))
+                   (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                        (PROGN (SPADLET |vl| (QCAR |ISTMP#1|)) 'T)))
+                 (|member| |x| |vl|))
+            |t2|)
+           ((|isPolynomialMode| |t2|) NIL)
+           ((|ofCategory| |t2| '(|IntegerNumberSystem|))
+            (|resolveTT| (CONS '|Polynomial| (CONS |t2| NIL)) |t2|))
+           ('T
+            (|resolveTT| (CONS '|Polynomial| (CONS '(|Integer|) NIL))
+                |t2|))))
+        ((AND (PAIRP |t1|) (EQ (QCAR |t1|) '|FunctionCalled|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t1|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET |f| (QCAR |ISTMP#1|)) 'T)))
+              (PAIRP |t2|) (EQ (QCAR |t2|) '|FunctionCalled|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t2|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET |g| (QCAR |ISTMP#1|)) 'T))))
+         (COND
+           ((NULL (SPADLET |mf| (|get| |f| '|mode| |$e|))) NIL)
+           ((NULL (SPADLET |mg| (|get| |g| '|mode| |$e|))) NIL)
+           ((NEQUAL |mf| |mg|) NIL)
+           ('T |mf|)))
+        ((AND (PAIRP |t1|) (EQ (QCAR |t1|) '|UnivariatePolynomial|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t1|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN
+                       (SPADLET |x| (QCAR |ISTMP#1|))
+                       (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                       (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL)
+                            (PROGN (SPADLET S (QCAR |ISTMP#2|)) 'T))))))
+         (COND
+           ((EQCAR |t2| '|Variable|) (|resolveTTSpecial| |t2| |t1|))
+           ((EQCAR |t2| '|SimpleAlgebraicExtension|)
+            (|resolveTTSpecial| |t2| |t1|))
+           ((AND (PAIRP |t2|) (EQ (QCAR |t2|) '|UnivariatePolynomial|)
+                 (PROGN
+                   (SPADLET |ISTMP#1| (QCDR |t2|))
+                   (AND (PAIRP |ISTMP#1|)
+                        (PROGN
+                          (SPADLET |y| (QCAR |ISTMP#1|))
+                          (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                          (AND (PAIRP |ISTMP#2|)
+                               (EQ (QCDR |ISTMP#2|) NIL)
+                               (PROGN
+                                 (SPADLET T$ (QCAR |ISTMP#2|))
+                                 'T))))))
+            (AND (BOOT-EQUAL |x| |y|) (SPADLET U (|resolveTT1| S T$))
+                 (CONS '|UnivariatePolynomial| (CONS |x| (CONS U NIL)))))
+           ('T NIL)))
+        ((BOOT-EQUAL |t1| '(|Pi|))
+         (COND
+           ((AND (PAIRP |t2|) (EQ (QCAR |t2|) '|Complex|)
+                 (PROGN
+                   (SPADLET |ISTMP#1| (QCDR |t2|))
+                   (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                        (PROGN (SPADLET |d| (QCAR |ISTMP#1|)) 'T))))
+            (|defaultTargetFE| |t2|))
+           ((AND (PAIRP |t2|) (EQ (QCDR |t2|) NIL)
+                 (EQ (QCAR |t2|) '|AlgebraicNumber|))
+            (|defaultTargetFE| |t2|))
+           ((OR (EQCAR |t2| '|Variable|) (BOOT-EQUAL |t2| |$Symbol|))
+            (|defaultTargetFE| |$Symbol|))
+           ((OR (AND (PAIRP |t2|) (EQ (QCAR |t2|) '|Polynomial|)
+                     (PROGN
+                       (SPADLET |ISTMP#1| (QCDR |t2|))
+                       (AND (PAIRP |ISTMP#1|)
+                            (EQ (QCDR |ISTMP#1|) NIL))))
+                (AND (PAIRP |t2|) (EQ (QCAR |t2|) '|Fraction|)
+                     (PROGN
+                       (SPADLET |ISTMP#1| (QCDR |t2|))
+                       (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                            (PROGN
+                              (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                              (AND (PAIRP |ISTMP#2|)
+                                   (EQ (QCAR |ISTMP#2|) '|Polynomial|)
+                                   (PROGN
+                                     (SPADLET |ISTMP#3|
+                                      (QCDR |ISTMP#2|))
+                                     (AND (PAIRP |ISTMP#3|)
+                                      (EQ (QCDR |ISTMP#3|) NIL)))))))))
+            (|defaultTargetFE| |t2|))
+           ('T NIL)))
+        ((AND (PAIRP |t1|) (EQ (QCAR |t1|) '|Polynomial|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t1|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN
+                       (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                       (AND (PAIRP |ISTMP#2|)
+                            (EQ (QCAR |ISTMP#2|) '|Complex|)
+                            (PROGN
+                              (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                              (AND (PAIRP |ISTMP#3|)
+                                   (EQ (QCDR |ISTMP#3|) NIL)
+                                   (PROGN
+                                     (SPADLET |u1| (QCAR |ISTMP#3|))
+                                     'T)))))))
+              (PAIRP |t2|) (EQ (QCAR |t2|) '|Complex|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t2|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET |u2| (QCAR |ISTMP#1|)) 'T))))
+         (|resolveTT1| |t1| |u2|))
+        ((AND (PAIRP |t1|) (EQ (QCAR |t1|) '|Polynomial|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t1|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET R (QCAR |ISTMP#1|)) 'T)))
+              (PAIRP |t2|) (EQ (QCAR |t2|) '|Complex|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t2|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET S (QCAR |ISTMP#1|)) 'T))))
+         (COND
+           ((|containsPolynomial| S)
+            (|resolveTT1|
+                (CONS '|Polynomial|
+                      (CONS (CONS '|Complex| (CONS R NIL)) NIL))
+                |t2|))
+           ('T
+            (CONS '|Polynomial|
+                  (CONS (CONS '|Complex| (CONS (|resolveTT1| R S) NIL))
+                        NIL)))))
+        ((AND (PAIRP |t1|) (EQ (QCAR |t1|) '|Expression|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t1|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET R (QCAR |ISTMP#1|)) 'T)))
+              (PAIRP |t2|) (EQ (QCAR |t2|) '|Complex|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t2|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET S (QCAR |ISTMP#1|)) 'T))))
+         (SPADLET |dom'| (|resolveTT| R |t2|))
+         (COND
+           ((NULL |dom'|) NIL)
+           ('T (CONS '|Expression| (CONS |dom'| NIL)))))
+        ((AND (PAIRP |t1|) (EQ (QCAR |t1|) '|Segment|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t1|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET |dom| (QCAR |ISTMP#1|)) 'T)))
+              (NULL (AND (PAIRP |t2|) (EQ (QCAR |t2|) '|Segment|)
+                         (PROGN
+                           (SPADLET |ISTMP#1| (QCDR |t2|))
+                           (AND (PAIRP |ISTMP#1|)
+                                (EQ (QCDR |ISTMP#1|) NIL))))))
+         (SPADLET |dom'| (|resolveTT| |dom| |t2|))
+         (COND
+           ((NULL |dom'|) NIL)
+           ('T (CONS '|Segment| (CONS |dom'| NIL)))))
+        ('T NIL)))))
+
+;resolveTTCC(t1,t2) ==
+;  -- tries to use canCoerceFrom information to see if types can be
+;  -- coerced to one another
+;  gt21 := GGREATERP(t2,t1)
+;  (c12 := canCoerceFrom(t1,t2)) and gt21 => t2
+;  c21 := canCoerceFrom(t2,t1)
+;  null (c12 or c21) => NIL
+;  c12 and not c21 => t2
+;  c21 and not c12 => t1
+;  -- both are coerceable to each other
+;  if gt21 then t1 else t2
+
+(DEFUN |resolveTTCC| (|t1| |t2|)
+  (PROG (|gt21| |c12| |c21|)
+    (RETURN
+      (PROGN
+        (SPADLET |gt21| (GGREATERP |t2| |t1|))
+        (COND
+          ((AND (SPADLET |c12| (|canCoerceFrom| |t1| |t2|)) |gt21|)
+           |t2|)
+          ('T (SPADLET |c21| (|canCoerceFrom| |t2| |t1|))
+           (COND
+             ((NULL (OR |c12| |c21|)) NIL)
+             ((AND |c12| (NULL |c21|)) |t2|)
+             ((AND |c21| (NULL |c12|)) |t1|)
+             (|gt21| |t1|)
+             ('T |t2|))))))))
+
+;resolveTTEq(t1,t2) ==
+;  -- tries to find the constructor of t1 somewhere in t2 (or vice versa)
+;  -- and move the other guy to the top
+;  [c1,:arg1] := deconstructT t1
+;  [c2,:arg2] := deconstructT t2
+;  t := resolveTTEq1(c1,arg1,[c2,arg2]) => t
+;  t := ( arg1 and resolveTTEq2(c2,arg2,[c1,arg1]) ) => t
+;  arg2 and resolveTTEq2(c1,arg1,[c2,arg2])
+
+(DEFUN |resolveTTEq| (|t1| |t2|)
+  (PROG (|c1| |arg1| |LETTMP#1| |c2| |arg2| |t|)
+    (RETURN
+      (PROGN
+        (SPADLET |LETTMP#1| (|deconstructT| |t1|))
+        (SPADLET |c1| (CAR |LETTMP#1|))
+        (SPADLET |arg1| (CDR |LETTMP#1|))
+        (SPADLET |LETTMP#1| (|deconstructT| |t2|))
+        (SPADLET |c2| (CAR |LETTMP#1|))
+        (SPADLET |arg2| (CDR |LETTMP#1|))
+        (COND
+          ((SPADLET |t|
+                    (|resolveTTEq1| |c1| |arg1|
+                        (CONS |c2| (CONS |arg2| NIL))))
+           |t|)
+          ((SPADLET |t|
+                    (AND |arg1|
+                         (|resolveTTEq2| |c2| |arg2|
+                             (CONS |c1| (CONS |arg1| NIL)))))
+           |t|)
+          ('T
+           (AND |arg2|
+                (|resolveTTEq2| |c1| |arg1|
+                    (CONS |c2| (CONS |arg2| NIL))))))))))
+
+;resolveTTEq1(c1,arg1,TL is [c2,arg2,:.]) ==
+;  -- takes care of basic types and of types with the same constructor
+;  -- calls resolveTT1 on the arguments in the second case
+;  null arg1 and null arg2 =>
+;    canCoerceFrom(c1,c2) => constructTowerT(c2,CDDR TL)
+;    canCoerceFrom(c2,c1) and constructTowerT(c1,CDDR TL)
+;  c1=c2 and
+;    [c2,arg2,:TL] := bubbleType TL
+;    until null arg1 or null arg2 or not t repeat
+;      t := resolveTT1(CAR arg1,CAR arg2) =>
+;        arg := CONS(t,arg)
+;        arg1 := CDR arg1
+;        arg2 := CDR arg2
+;    t and null arg1 and null arg2 and
+;      t0 := constructM(c1,nreverse arg)
+;      constructTowerT(t0,TL)
+
+(DEFUN |resolveTTEq1| (|c1| |arg1| TL)
+  (PROG (|LETTMP#1| |c2| |t| |arg| |arg2| |t0|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |c2| (CAR TL))
+             (SPADLET |arg2| (CADR TL))
+             (COND
+               ((AND (NULL |arg1|) (NULL |arg2|))
+                (COND
+                  ((|canCoerceFrom| |c1| |c2|)
+                   (|constructTowerT| |c2| (CDDR TL)))
+                  ('T
+                   (AND (|canCoerceFrom| |c2| |c1|)
+                        (|constructTowerT| |c1| (CDDR TL))))))
+               ('T
+                (AND (BOOT-EQUAL |c1| |c2|)
+                     (PROGN
+                       (SPADLET |LETTMP#1| (|bubbleType| TL))
+                       (SPADLET |c2| (CAR |LETTMP#1|))
+                       (SPADLET |arg2| (CADR |LETTMP#1|))
+                       (SPADLET TL (CDDR |LETTMP#1|))
+                       (SEQ (DO ((G166627 NIL
+                                     (OR (NULL |arg1|) (NULL |arg2|)
+                                      (NULL |t|))))
+                                (G166627 NIL)
+                              (SEQ (EXIT
+                                    (COND
+                                      ((SPADLET |t|
+                                        (|resolveTT1| (CAR |arg1|)
+                                         (CAR |arg2|)))
+                                       (EXIT
+                                        (PROGN
+                                          (SPADLET |arg|
+                                           (CONS |t| |arg|))
+                                          (SPADLET |arg1| (CDR |arg1|))
+                                          (SPADLET |arg2| (CDR |arg2|)))))))))
+                            (AND |t| (NULL |arg1|) (NULL |arg2|)
+                                 (PROGN
+                                   (SPADLET |t0|
+                                    (|constructM| |c1|
+                                     (NREVERSE |arg|)))
+                                   (|constructTowerT| |t0| TL)))))))))))))
+
+;resolveTTEq2(c1,arg1,TL is [c,arg,:.]) ==
+;  -- tries to resolveTTEq the type [c1,arg1] with the last argument
+;  -- of the type represented by TL
+;  [c2,:arg2] := deconstructT last arg
+;  TL := [c2,arg2,:TL]
+;  t := resolveTTEq1(c1,arg1,TL) => t
+;  arg2 and resolveTTEq2(c1,arg1,TL)
+
+(DEFUN |resolveTTEq2| (|c1| |arg1| TL)
+  (PROG (|c| |arg| |LETTMP#1| |c2| |arg2| |t|)
+    (RETURN
+      (PROGN
+        (SPADLET |c| (CAR TL))
+        (SPADLET |arg| (CADR TL))
+        (SPADLET |LETTMP#1| (|deconstructT| (|last| |arg|)))
+        (SPADLET |c2| (CAR |LETTMP#1|))
+        (SPADLET |arg2| (CDR |LETTMP#1|))
+        (SPADLET TL (CONS |c2| (CONS |arg2| TL)))
+        (COND
+          ((SPADLET |t| (|resolveTTEq1| |c1| |arg1| TL)) |t|)
+          ('T (AND |arg2| (|resolveTTEq2| |c1| |arg1| TL))))))))
+
+;resolveTTRed(t1,t2) ==
+;  -- the same function as resolveTTEq, but instead of testing for
+;  -- constructor equality, it looks whether a rewrite rule can be applied
+;  t := resolveTTRed1(t1,t2,NIL) => t
+;  [c1,:arg1] := deconstructT t1
+;  t := arg1 and resolveTTRed2(t2,last arg1,[c1,arg1]) => t
+;  [c2,:arg2] := deconstructT t2
+;  arg2 and resolveTTRed2(t1,last arg2,[c2,arg2])
+
+(DEFUN |resolveTTRed| (|t1| |t2|)
+  (PROG (|c1| |arg1| |t| |LETTMP#1| |c2| |arg2|)
+    (RETURN
+      (COND
+        ((SPADLET |t| (|resolveTTRed1| |t1| |t2| NIL)) |t|)
+        ('T (SPADLET |LETTMP#1| (|deconstructT| |t1|))
+         (SPADLET |c1| (CAR |LETTMP#1|))
+         (SPADLET |arg1| (CDR |LETTMP#1|))
+         (COND
+           ((SPADLET |t|
+                     (AND |arg1|
+                          (|resolveTTRed2| |t2| (|last| |arg1|)
+                              (CONS |c1| (CONS |arg1| NIL)))))
+            |t|)
+           ('T (SPADLET |LETTMP#1| (|deconstructT| |t2|))
+            (SPADLET |c2| (CAR |LETTMP#1|))
+            (SPADLET |arg2| (CDR |LETTMP#1|))
+            (AND |arg2|
+                 (|resolveTTRed2| |t1| (|last| |arg2|)
+                     (CONS |c2| (CONS |arg2| NIL)))))))))))
+
+;resolveTTRed1(t1,t2,TL) ==
+;  -- tries to apply a reduction rule on (Resolve t1 t2)
+;  -- then it creates a type using the result and TL
+;  EQ(t,term1RW(t := ['Resolve,t1,t2],$Res)) and
+;    EQ(t,term1RW(t := ['Resolve,t2,t1],$Res)) => NIL
+;  [c2,:arg2] := deconstructT t2
+;  [c2,arg2,:TL] := bubbleType [c2,arg2,:TL]
+;  t2 := constructM(c2,arg2)
+;  l := term1RWall(['Resolve,t1,t2],$Res)
+;  for t0 in l until t repeat t := resolveTTRed3 t0
+;  l and t => constructTowerT(t,TL)
+;  l := term1RWall(['Resolve,t2,t1],$Res)
+;  for t0 in l until t repeat t := resolveTTRed3 t0
+;  l and t and constructTowerT(t,TL)
+
+(DEFUN |resolveTTRed1| (|t1| |t2| TL)
+  (PROG (|LETTMP#1| |c2| |arg2| |l| |t|)
+    (RETURN
+      (SEQ (COND
+             ((AND (EQ |t|
+                       (|term1RW|
+                           (SPADLET |t|
+                                    (CONS '|Resolve|
+                                     (CONS |t1| (CONS |t2| NIL))))
+                           |$Res|))
+                   (EQ |t|
+                       (|term1RW|
+                           (SPADLET |t|
+                                    (CONS '|Resolve|
+                                     (CONS |t2| (CONS |t1| NIL))))
+                           |$Res|)))
+              NIL)
+             ('T (SPADLET |LETTMP#1| (|deconstructT| |t2|))
+              (SPADLET |c2| (CAR |LETTMP#1|))
+              (SPADLET |arg2| (CDR |LETTMP#1|))
+              (SPADLET |LETTMP#1|
+                       (|bubbleType| (CONS |c2| (CONS |arg2| TL))))
+              (SPADLET |c2| (CAR |LETTMP#1|))
+              (SPADLET |arg2| (CADR |LETTMP#1|))
+              (SPADLET TL (CDDR |LETTMP#1|))
+              (SPADLET |t2| (|constructM| |c2| |arg2|))
+              (SPADLET |l|
+                       (|term1RWall|
+                           (CONS '|Resolve|
+                                 (CONS |t1| (CONS |t2| NIL)))
+                           |$Res|))
+              (DO ((G166722 |l| (CDR G166722)) (|t0| NIL)
+                   (G166723 NIL |t|))
+                  ((OR (ATOM G166722)
+                       (PROGN (SETQ |t0| (CAR G166722)) NIL)
+                       G166723)
+                   NIL)
+                (SEQ (EXIT (SPADLET |t| (|resolveTTRed3| |t0|)))))
+              (COND
+                ((AND |l| |t|) (|constructTowerT| |t| TL))
+                ('T
+                 (SPADLET |l|
+                          (|term1RWall|
+                              (CONS '|Resolve|
+                                    (CONS |t2| (CONS |t1| NIL)))
+                              |$Res|))
+                 (DO ((G166734 |l| (CDR G166734)) (|t0| NIL)
+                      (G166735 NIL |t|))
+                     ((OR (ATOM G166734)
+                          (PROGN (SETQ |t0| (CAR G166734)) NIL)
+                          G166735)
+                      NIL)
+                   (SEQ (EXIT (SPADLET |t| (|resolveTTRed3| |t0|)))))
+                 (AND |l| |t| (|constructTowerT| |t| TL))))))))))
+
+;resolveTTRed2(t1,t2,TL) ==
+;  -- tries to resolveTTRed t1 and t2 and build a type using TL
+;  t := resolveTTRed1(t1,t2,TL) => t
+;  [c2,:arg2] := deconstructT t2
+;  arg2 and resolveTTRed2(t1,last arg2,[c2,arg2,:TL])
+
+(DEFUN |resolveTTRed2| (|t1| |t2| TL)
+  (PROG (|t| |LETTMP#1| |c2| |arg2|)
+    (RETURN
+      (COND
+        ((SPADLET |t| (|resolveTTRed1| |t1| |t2| TL)) |t|)
+        ('T (SPADLET |LETTMP#1| (|deconstructT| |t2|))
+         (SPADLET |c2| (CAR |LETTMP#1|))
+         (SPADLET |arg2| (CDR |LETTMP#1|))
+         (AND |arg2|
+              (|resolveTTRed2| |t1| (|last| |arg2|)
+                  (CONS |c2| (CONS |arg2| TL)))))))))
+
+;resolveTTRed3(t) ==
+;  -- recursive resolveTTRed which handles all subterms of the form
+;  -- (Resolve t1 t2) or subterms which have to be interpreted
+;  atom t => t
+;  t is ['Resolve,a,b] =>
+;    ( t1 := resolveTTRed3 a ) and ( t2 := resolveTTRed3 b ) and
+;      resolveTT1(t1,t2)
+;  t is ['Incl,a,b] => MEMBER(a,b) and b
+;  t is ['SetDiff,a,b] => INTERSECTION(a,b) and SETDIFFERENCE(a,b)
+;  t is ['SetComp,a,b] =>
+;    and/[MEMBER(x,a) for x in b] and SETDIFFERENCE(a,b)
+;  t is ['SetInter,a,b] => INTERSECTION(a,b)
+;  t is ['SetUnion,a,b] => UNION(a,b)
+;  t is ['VarEqual,a,b] => (a = b) and a
+;  t is ['SetEqual,a,b] =>
+;    (and/[MEMBER(x,a) for x in b] and and/[MEMBER(x,b) for x in a]) and a
+;  [( atom x and x ) or ((not cs and x and not interpOp? x and x)
+;    or resolveTTRed3 x) or return NIL
+;      for x in t for cs in GETDATABASE(CAR t, 'COSIG) ]
+
+(DEFUN |resolveTTRed3| (|t|)
+  (PROG (|t1| |t2| |ISTMP#1| |a| |ISTMP#2| |b|)
+    (RETURN
+      (SEQ (COND
+             ((ATOM |t|) |t|)
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|Resolve|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (AND (SPADLET |t1| (|resolveTTRed3| |a|))
+                   (SPADLET |t2| (|resolveTTRed3| |b|))
+                   (|resolveTT1| |t1| |t2|)))
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|Incl|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (AND (|member| |a| |b|) |b|))
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|SetDiff|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (AND (|intersection| |a| |b|) (SETDIFFERENCE |a| |b|)))
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|SetComp|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (AND (PROG (G166903)
+                     (SPADLET G166903 'T)
+                     (RETURN
+                       (DO ((G166909 NIL (NULL G166903))
+                            (G166910 |b| (CDR G166910)) (|x| NIL))
+                           ((OR G166909 (ATOM G166910)
+                                (PROGN (SETQ |x| (CAR G166910)) NIL))
+                            G166903)
+                         (SEQ (EXIT (SETQ G166903
+                                     (AND G166903 (|member| |x| |a|))))))))
+                   (SETDIFFERENCE |a| |b|)))
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|SetInter|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (|intersection| |a| |b|))
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|SetUnion|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (|union| |a| |b|))
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|VarEqual|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (AND (BOOT-EQUAL |a| |b|) |a|))
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|SetEqual|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (AND (PROG (G166917)
+                     (SPADLET G166917 'T)
+                     (RETURN
+                       (DO ((G166923 NIL (NULL G166917))
+                            (G166924 |b| (CDR G166924)) (|x| NIL))
+                           ((OR G166923 (ATOM G166924)
+                                (PROGN (SETQ |x| (CAR G166924)) NIL))
+                            G166917)
+                         (SEQ (EXIT (SETQ G166917
+                                     (AND G166917 (|member| |x| |a|))))))))
+                   (PROG (G166931)
+                     (SPADLET G166931 'T)
+                     (RETURN
+                       (DO ((G166937 NIL (NULL G166931))
+                            (G166938 |a| (CDR G166938)) (|x| NIL))
+                           ((OR G166937 (ATOM G166938)
+                                (PROGN (SETQ |x| (CAR G166938)) NIL))
+                            G166931)
+                         (SEQ (EXIT (SETQ G166931
+                                     (AND G166931 (|member| |x| |b|))))))))
+                   |a|))
+             ('T
+              (PROG (G166950)
+                (SPADLET G166950 NIL)
+                (RETURN
+                  (DO ((G166956 |t| (CDR G166956)) (|x| NIL)
+                       (G166957 (GETDATABASE (CAR |t|) 'COSIG)
+                           (CDR G166957))
+                       (|cs| NIL))
+                      ((OR (ATOM G166956)
+                           (PROGN (SETQ |x| (CAR G166956)) NIL)
+                           (ATOM G166957)
+                           (PROGN (SETQ |cs| (CAR G166957)) NIL))
+                       (NREVERSE0 G166950))
+                    (SEQ (EXIT (SETQ G166950
+                                     (CONS
+                                      (OR (AND (ATOM |x|) |x|)
+                                       (AND (NULL |cs|) |x|
+                                        (NULL (|interpOp?| |x|)) |x|)
+                                       (|resolveTTRed3| |x|)
+                                       (RETURN NIL))
+                                      G166950)))))))))))))
+
+;interpOp?(op) ==
+;  PAIRP(op) and
+;    CAR(op) in '(Incl SetDiff SetComp SetInter SetUnion VarEqual SetEqual)
+
+(DEFUN |interpOp?| (|op|)
+  (AND (PAIRP |op|)
+       (|member| (CAR |op|)
+           '(|Incl| |SetDiff| |SetComp| |SetInter| |SetUnion|
+                    |VarEqual| |SetEqual|))))
+
+;--% Resolve Type with Category
+;resolveTCat(t,c) ==
+;  -- this function attempts to find a type tc of category c such that
+;  -- t can be coerced to tc. NIL returned for failure.
+;  -- Example:  t = Integer, c = Field ==> tc = RationalNumber
+;  -- first check whether t already belongs to c
+;  ofCategory(t,c) => t
+;  -- if t is built by a parametrized constructor and there is a
+;  -- condition on the parameter that matches the category, try to
+;  -- recurse. An example of this is (G I, Field) -> G RN
+;  rest(t) and (tc := resolveTCat1(t,c)) => tc
+;  -- now check some specific niladic categories
+;  c in '((Field) (EuclideanDomain)) and ofCategory(t,'(IntegralDomain))=>
+;    eqType [$QuotientField, t]
+;  c = '(Field) and t = $Symbol => ['RationalFunction,$Integer]
+;  c = '(Ring) and t is ['FactoredForm,t0] => ['FactoredRing,t0]
+;  (t is [t0]) and (sd := getImmediateSuperDomain(t0)) and sd ^= t0 =>
+;    resolveTCat(sd,c)
+;  SIZE(td := deconstructT t) ^= 2=> NIL
+;  SIZE(tc := deconstructT c) ^= 2 => NIL
+;  ut := underDomainOf t
+;  null isValidType(uc := last tc) => NIL
+;  null canCoerceFrom(ut,uc) => NIL
+;  nt := constructT(first td,[uc])
+;  ofCategory(nt,c) => nt
+;  NIL
+
+(DEFUN |resolveTCat| (|t| |c|)
+  (PROG (|ISTMP#1| |t0| |sd| |td| |tc| |ut| |uc| |nt|)
+    (RETURN
+      (COND
+        ((|ofCategory| |t| |c|) |t|)
+        ((AND (CDR |t|) (SPADLET |tc| (|resolveTCat1| |t| |c|))) |tc|)
+        ((AND (|member| |c| '((|Field|) (|EuclideanDomain|)))
+              (|ofCategory| |t| '(|IntegralDomain|)))
+         (|eqType| (CONS |$QuotientField| (CONS |t| NIL))))
+        ((AND (BOOT-EQUAL |c| '(|Field|)) (BOOT-EQUAL |t| |$Symbol|))
+         (CONS '|RationalFunction| (CONS |$Integer| NIL)))
+        ((AND (BOOT-EQUAL |c| '(|Ring|)) (PAIRP |t|)
+              (EQ (QCAR |t|) '|FactoredForm|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET |t0| (QCAR |ISTMP#1|)) 'T))))
+         (CONS '|FactoredRing| (CONS |t0| NIL)))
+        ((AND (PAIRP |t|) (EQ (QCDR |t|) NIL)
+              (PROGN (SPADLET |t0| (QCAR |t|)) 'T)
+              (SPADLET |sd| (|getImmediateSuperDomain| |t0|))
+              (NEQUAL |sd| |t0|))
+         (|resolveTCat| |sd| |c|))
+        ((NEQUAL (SIZE (SPADLET |td| (|deconstructT| |t|))) 2) NIL)
+        ((NEQUAL (SIZE (SPADLET |tc| (|deconstructT| |c|))) 2) NIL)
+        ('T (SPADLET |ut| (|underDomainOf| |t|))
+         (COND
+           ((NULL (|isValidType| (SPADLET |uc| (|last| |tc|)))) NIL)
+           ((NULL (|canCoerceFrom| |ut| |uc|)) NIL)
+           ('T (SPADLET |nt| (|constructT| (CAR |td|) (CONS |uc| NIL)))
+            (COND ((|ofCategory| |nt| |c|) |nt|) ('T NIL)))))))))
+
+;resolveTCat1(t,c) ==
+;  -- does the hard work of looking at conditions on under domains
+;  -- if null (ut := getUnderModeOf(t)) then ut := last dt
+;  null (conds := getConditionsForCategoryOnType(t,c)) => NIL
+;--rest(conds) => NIL   -- will handle later
+;  cond := first conds
+;  cond isnt [.,['has, pat, c1],:.] => NIL
+;  rest(c1) => NIL      -- make it simple
+;  argN := 0
+;  t1 := nil
+;  for ut in rest t for i in 1.. while (argN = 0) repeat
+;    sharp := INTERNL('"#",STRINGIMAGE i)
+;    sharp = pat =>
+;      argN := i
+;      t1 := ut
+;  null t1 => NIL
+;  null (t1' := resolveTCat(t1,c1)) => NIL
+;  t' := copy t
+;  t'.argN := t1'
+;  t'
+
+(DEFUN |resolveTCat1| (|t| |c|)
+  (PROG (|conds| |cond| |ISTMP#1| |ISTMP#2| |ISTMP#3| |pat| |ISTMP#4|
+                 |c1| |sharp| |argN| |t1| |t1'| |t'|)
+    (RETURN
+      (SEQ (COND
+             ((NULL (SPADLET |conds|
+                             (|getConditionsForCategoryOnType| |t| |c|)))
+              NIL)
+             ('T (SPADLET |cond| (CAR |conds|))
+              (COND
+                ((NULL (AND (PAIRP |cond|)
+                            (PROGN
+                              (SPADLET |ISTMP#1| (QCDR |cond|))
+                              (AND (PAIRP |ISTMP#1|)
+                                   (PROGN
+                                     (SPADLET |ISTMP#2|
+                                      (QCAR |ISTMP#1|))
+                                     (AND (PAIRP |ISTMP#2|)
+                                      (EQ (QCAR |ISTMP#2|) '|has|)
+                                      (PROGN
+                                        (SPADLET |ISTMP#3|
+                                         (QCDR |ISTMP#2|))
+                                        (AND (PAIRP |ISTMP#3|)
+                                         (PROGN
+                                           (SPADLET |pat|
+                                            (QCAR |ISTMP#3|))
+                                           (SPADLET |ISTMP#4|
+                                            (QCDR |ISTMP#3|))
+                                           (AND (PAIRP |ISTMP#4|)
+                                            (EQ (QCDR |ISTMP#4|) NIL)
+                                            (PROGN
+                                              (SPADLET |c1|
+                                               (QCAR |ISTMP#4|))
+                                              'T)))))))))))
+                 NIL)
+                ((CDR |c1|) NIL)
+                ('T (SPADLET |argN| 0) (SPADLET |t1| NIL)
+                 (DO ((G167076 (CDR |t|) (CDR G167076)) (|ut| NIL)
+                      (|i| 1 (QSADD1 |i|)))
+                     ((OR (ATOM G167076)
+                          (PROGN (SETQ |ut| (CAR G167076)) NIL)
+                          (NULL (EQL |argN| 0)))
+                      NIL)
+                   (SEQ (EXIT (PROGN
+                                (SPADLET |sharp|
+                                         (INTERNL (MAKESTRING "#")
+                                          (STRINGIMAGE |i|)))
+                                (COND
+                                  ((BOOT-EQUAL |sharp| |pat|)
+                                   (PROGN
+                                     (SPADLET |argN| |i|)
+                                     (SPADLET |t1| |ut|))))))))
+                 (COND
+                   ((NULL |t1|) NIL)
+                   ((NULL (SPADLET |t1'| (|resolveTCat| |t1| |c1|)))
+                    NIL)
+                   ('T (SPADLET |t'| (COPY |t|))
+                    (SETELT |t'| |argN| |t1'|) |t'|))))))))))
+
+;getConditionsForCategoryOnType(t,cat) ==
+;  getConditionalCategoryOfType(t,[NIL],['ATTRIBUTE,cat])
+
+(DEFUN |getConditionsForCategoryOnType| (|t| |cat|)
+  (|getConditionalCategoryOfType| |t| (CONS NIL NIL)
+      (CONS 'ATTRIBUTE (CONS |cat| NIL))))
+
+;getConditionalCategoryOfType(t,conditions,match) ==
+;  if PAIRP t then t := first t
+;  t in '(Union Mapping Record) => NIL
+;  conCat := GETDATABASE(t,'CONSTRUCTORCATEGORY)
+;  REMDUP CDR getConditionalCategoryOfType1(conCat,conditions,match,[NIL])
+
+(DEFUN |getConditionalCategoryOfType| (|t| |conditions| |match|)
+  (PROG (|conCat|)
+    (RETURN
+      (PROGN
+        (COND ((PAIRP |t|) (SPADLET |t| (CAR |t|))))
+        (COND
+          ((|member| |t| '(|Union| |Mapping| |Record|)) NIL)
+          ('T (SPADLET |conCat| (GETDATABASE |t| 'CONSTRUCTORCATEGORY))
+           (REMDUP (CDR (|getConditionalCategoryOfType1| |conCat|
+                            |conditions| |match| (CONS NIL NIL))))))))))
+
+;getConditionalCategoryOfType1(cat,conditions,match,seen) ==
+;  cat is ['Join,:cs] or cat is ['CATEGORY,:cs] =>
+;    null cs => conditions
+;    getConditionalCategoryOfType1([first cat,:rest cs],
+;     getConditionalCategoryOfType1(first cs,conditions,match,seen),
+;       match,seen)
+;  cat is ['IF,., cond,.] =>
+;    matchUpToPatternVars(cond,match,NIL) =>
+;      RPLACD(conditions,CONS(cat,CDR conditions))
+;      conditions
+;    conditions
+;  cat is [catName,:.] and (GETDATABASE(catName,'CONSTRUCTORKIND) = 'category) =>
+;    cat in CDR seen => conditions
+;    RPLACD(seen,[cat,:CDR seen])
+;    subCat := GETDATABASE(catName,'CONSTRUCTORCATEGORY)
+;    -- substitute vars of cat into category
+;    for v in rest cat for vv in $TriangleVariableList repeat
+;      subCat := SUBST(v,vv,subCat)
+;    getConditionalCategoryOfType1(subCat,conditions,match,seen)
+;  conditions
+
+(DEFUN |getConditionalCategoryOfType1|
+       (|cat| |conditions| |match| |seen|)
+  (PROG (|cs| |ISTMP#1| |ISTMP#2| |cond| |ISTMP#3| |catName| |subCat|)
+    (RETURN
+      (SEQ (COND
+             ((OR (AND (PAIRP |cat|) (EQ (QCAR |cat|) '|Join|)
+                       (PROGN (SPADLET |cs| (QCDR |cat|)) 'T))
+                  (AND (PAIRP |cat|) (EQ (QCAR |cat|) 'CATEGORY)
+                       (PROGN (SPADLET |cs| (QCDR |cat|)) 'T)))
+              (COND
+                ((NULL |cs|) |conditions|)
+                ('T
+                 (|getConditionalCategoryOfType1|
+                     (CONS (CAR |cat|) (CDR |cs|))
+                     (|getConditionalCategoryOfType1| (CAR |cs|)
+                         |conditions| |match| |seen|)
+                     |match| |seen|))))
+             ((AND (PAIRP |cat|) (EQ (QCAR |cat|) 'IF)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |cat|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (PROGN
+                                   (SPADLET |cond| (QCAR |ISTMP#2|))
+                                   (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                                   (AND (PAIRP |ISTMP#3|)
+                                    (EQ (QCDR |ISTMP#3|) NIL))))))))
+              (COND
+                ((|matchUpToPatternVars| |cond| |match| NIL)
+                 (RPLACD |conditions| (CONS |cat| (CDR |conditions|)))
+                 |conditions|)
+                ('T |conditions|)))
+             ((AND (PAIRP |cat|)
+                   (PROGN (SPADLET |catName| (QCAR |cat|)) 'T)
+                   (BOOT-EQUAL (GETDATABASE |catName| 'CONSTRUCTORKIND)
+                       '|category|))
+              (COND
+                ((|member| |cat| (CDR |seen|)) |conditions|)
+                ('T (RPLACD |seen| (CONS |cat| (CDR |seen|)))
+                 (SPADLET |subCat|
+                          (GETDATABASE |catName| 'CONSTRUCTORCATEGORY))
+                 (DO ((G167136 (CDR |cat|) (CDR G167136)) (|v| NIL)
+                      (G167137 |$TriangleVariableList|
+                          (CDR G167137))
+                      (|vv| NIL))
+                     ((OR (ATOM G167136)
+                          (PROGN (SETQ |v| (CAR G167136)) NIL)
+                          (ATOM G167137)
+                          (PROGN (SETQ |vv| (CAR G167137)) NIL))
+                      NIL)
+                   (SEQ (EXIT (SPADLET |subCat|
+                                       (MSUBST |v| |vv| |subCat|)))))
+                 (|getConditionalCategoryOfType1| |subCat| |conditions|
+                     |match| |seen|))))
+             ('T |conditions|))))))
+
+;matchUpToPatternVars(pat,form,patAlist) ==
+;  -- tries to match pattern variables (of the # form) in pat
+;  -- against expressions in form. If one is found, it is checked
+;  -- against the patAlist to make sure we are using the same expression
+;  -- each time.
+;  EQUAL(pat,form) => true
+;  isSharpVarWithNum(pat) =>
+;    -- see is pattern variable is in alist
+;    (p := ASSOC(pat,patAlist)) => EQUAL(form,CDR p)
+;    patAlist := [[pat,:form],:patAlist]
+;    true
+;  PAIRP(pat) =>
+;    not (PAIRP form) => NIL
+;    matchUpToPatternVars(CAR pat, CAR form,patAlist) and
+;      matchUpToPatternVars(CDR pat, CDR form,patAlist)
+;  NIL
+
+(DEFUN |matchUpToPatternVars| (|pat| |form| |patAlist|)
+  (PROG (|p|)
+    (RETURN
+      (COND
+        ((BOOT-EQUAL |pat| |form|) 'T)
+        ((|isSharpVarWithNum| |pat|)
+         (COND
+           ((SPADLET |p| (|assoc| |pat| |patAlist|))
+            (BOOT-EQUAL |form| (CDR |p|)))
+           ('T
+            (SPADLET |patAlist| (CONS (CONS |pat| |form|) |patAlist|))
+            'T)))
+        ((PAIRP |pat|)
+         (COND
+           ((NULL (PAIRP |form|)) NIL)
+           ('T
+            (AND (|matchUpToPatternVars| (CAR |pat|) (CAR |form|)
+                     |patAlist|)
+                 (|matchUpToPatternVars| (CDR |pat|) (CDR |form|)
+                     |patAlist|)))))
+        ('T NIL)))))
+
+;--% Resolve Type with Mode
+;-- only implemented for nullary control-L's (which stand for types)
+;resolveTMOrCroak(t,m) ==
+;  resolveTM(t,m) or throwKeyedMsg("S2IR0004",[t,m])
+
+(DEFUN |resolveTMOrCroak| (|t| |m|)
+  (OR (|resolveTM| |t| |m|)
+      (|throwKeyedMsg| 'S2IR0004 (CONS |t| (CONS |m| NIL)))))
+
+;resolveTM(t,m) ==
+;  -- resolves a type with a mode which may be partially specified
+;  startTimingProcess 'resolve
+;  $Subst : local := NIL
+;  $Coerce : local := 'T
+;  t := eqType t
+;  m := eqType SUBSTQ("**",$EmptyMode,m)
+;  tt := resolveTM1(t,m)
+;  result := tt and isValidType tt and eqType tt
+;  stopTimingProcess 'resolve
+;  result
+
+(DEFUN |resolveTM| (|t| |m|)
+  (PROG (|$Subst| |$Coerce| |tt| |result|)
+    (DECLARE (SPECIAL |$Subst| |$Coerce|))
+    (RETURN
+      (PROGN
+        (|startTimingProcess| '|resolve|)
+        (SPADLET |$Subst| NIL)
+        (SPADLET |$Coerce| 'T)
+        (SPADLET |t| (|eqType| |t|))
+        (SPADLET |m| (|eqType| (SUBSTQ '** |$EmptyMode| |m|)))
+        (SPADLET |tt| (|resolveTM1| |t| |m|))
+        (SPADLET |result|
+                 (AND |tt| (|isValidType| |tt|) (|eqType| |tt|)))
+        (|stopTimingProcess| '|resolve|)
+        |result|))))
+
+;resolveTM1(t,m) ==
+;  -- general resolveTM, which looks for a term variable
+;  -- otherwise it looks whether the type has the same top level
+;  -- constructor as the mode, looks for a rewrite rule, or builds up
+;  -- a tower
+;  t=m => t
+;  m is ['Union,:.] => resolveTMUnion(t,m)
+;  m = '(Void) => m
+;  m = '(Any) => m
+;  m = '(Exit) => t
+;  containsVars m =>
+;    isPatternVar m =>
+;      p := ASSQ(m,$Subst) =>
+;        $Coerce =>
+;          tt := resolveTT1(t,CDR p) => RPLACD(p,tt) and tt
+;          NIL
+;        t=CDR p and t
+;      $Subst := CONS(CONS(m,t),$Subst)
+;      t
+;    atom(t) or atom(m) => NIL
+;    (t is ['Record,:tr]) and (m is ['Record,:mr]) and
+;      (tt := resolveTMRecord(tr,mr)) => tt
+;    t is ['Record,:.] or m is ['Record,:.] => NIL
+;    t is ['Variable, .] and m is ['Mapping, :.] => m
+;    t is ['FunctionCalled, .] and m is ['Mapping, :.] => m
+;    if isEqualOrSubDomain(t, $Integer) then
+;      t := $Integer
+;    tt := resolveTMEq(t,m) => tt
+;    $Coerce and
+;      tt := resolveTMRed(t,m) => tt
+;      resolveTM2(t,m)
+;  $Coerce and canCoerceFrom(t,m) and m
+
+(DEFUN |resolveTM1| (|t| |m|)
+  (PROG (|p| |tr| |mr| |ISTMP#1| |tt|)
+    (RETURN
+      (COND
+        ((BOOT-EQUAL |t| |m|) |t|)
+        ((AND (PAIRP |m|) (EQ (QCAR |m|) '|Union|))
+         (|resolveTMUnion| |t| |m|))
+        ((BOOT-EQUAL |m| '(|Void|)) |m|)
+        ((BOOT-EQUAL |m| '(|Any|)) |m|)
+        ((BOOT-EQUAL |m| '(|Exit|)) |t|)
+        ((|containsVars| |m|)
+         (COND
+           ((|isPatternVar| |m|)
+            (COND
+              ((SPADLET |p| (ASSQ |m| |$Subst|))
+               (COND
+                 (|$Coerce|
+                     (COND
+                       ((SPADLET |tt| (|resolveTT1| |t| (CDR |p|)))
+                        (AND (RPLACD |p| |tt|) |tt|))
+                       ('T NIL)))
+                 ('T (AND (BOOT-EQUAL |t| (CDR |p|)) |t|))))
+              ('T (SPADLET |$Subst| (CONS (CONS |m| |t|) |$Subst|))
+               |t|)))
+           ((OR (ATOM |t|) (ATOM |m|)) NIL)
+           ((AND (PAIRP |t|) (EQ (QCAR |t|) '|Record|)
+                 (PROGN (SPADLET |tr| (QCDR |t|)) 'T) (PAIRP |m|)
+                 (EQ (QCAR |m|) '|Record|)
+                 (PROGN (SPADLET |mr| (QCDR |m|)) 'T)
+                 (SPADLET |tt| (|resolveTMRecord| |tr| |mr|)))
+            |tt|)
+           ((OR (AND (PAIRP |t|) (EQ (QCAR |t|) '|Record|))
+                (AND (PAIRP |m|) (EQ (QCAR |m|) '|Record|)))
+            NIL)
+           ((AND (PAIRP |t|) (EQ (QCAR |t|) '|Variable|)
+                 (PROGN
+                   (SPADLET |ISTMP#1| (QCDR |t|))
+                   (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)))
+                 (PAIRP |m|) (EQ (QCAR |m|) '|Mapping|))
+            |m|)
+           ((AND (PAIRP |t|) (EQ (QCAR |t|) '|FunctionCalled|)
+                 (PROGN
+                   (SPADLET |ISTMP#1| (QCDR |t|))
+                   (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)))
+                 (PAIRP |m|) (EQ (QCAR |m|) '|Mapping|))
+            |m|)
+           ('T
+            (COND
+              ((|isEqualOrSubDomain| |t| |$Integer|)
+               (SPADLET |t| |$Integer|)))
+            (COND
+              ((SPADLET |tt| (|resolveTMEq| |t| |m|)) |tt|)
+              ('T
+               (AND |$Coerce|
+                    (COND
+                      ((SPADLET |tt| (|resolveTMRed| |t| |m|)) |tt|)
+                      ('T (|resolveTM2| |t| |m|)))))))))
+        ('T (AND |$Coerce| (|canCoerceFrom| |t| |m|) |m|))))))
+
+;resolveTMRecord(tr,mr) ==
+;  #tr ^= #mr => NIL
+;  ok := true
+;  tt := NIL
+;  for ta in tr for ma in mr while ok repeat
+;    -- element is [':,tag,mode]
+;    CADR(ta) ^= CADR(ma) => ok := NIL      -- match tags
+;    ra := resolveTM1(CADDR ta, CADDR ma)   -- resolve modes
+;    null ra => ok := NIL
+;    tt := CONS([CAR ta,CADR ta,ra],tt)
+;  null ok => NIL
+;  ['Record,nreverse tt]
+
+(DEFUN |resolveTMRecord| (|tr| |mr|)
+  (PROG (|ra| |ok| |tt|)
+    (RETURN
+      (SEQ (COND
+             ((NEQUAL (|#| |tr|) (|#| |mr|)) NIL)
+             ('T (SPADLET |ok| 'T) (SPADLET |tt| NIL)
+              (DO ((G167214 |tr| (CDR G167214)) (|ta| NIL)
+                   (G167215 |mr| (CDR G167215)) (|ma| NIL))
+                  ((OR (ATOM G167214)
+                       (PROGN (SETQ |ta| (CAR G167214)) NIL)
+                       (ATOM G167215)
+                       (PROGN (SETQ |ma| (CAR G167215)) NIL)
+                       (NULL |ok|))
+                   NIL)
+                (SEQ (EXIT (COND
+                             ((NEQUAL (CADR |ta|) (CADR |ma|))
+                              (SPADLET |ok| NIL))
+                             ('T
+                              (SPADLET |ra|
+                                       (|resolveTM1| (CADDR |ta|)
+                                        (CADDR |ma|)))
+                              (COND
+                                ((NULL |ra|) (SPADLET |ok| NIL))
+                                ('T
+                                 (SPADLET |tt|
+                                          (CONS
+                                           (CONS (CAR |ta|)
+                                            (CONS (CADR |ta|)
+                                             (CONS |ra| NIL)))
+                                           |tt|)))))))))
+              (COND
+                ((NULL |ok|) NIL)
+                ('T (CONS '|Record| (CONS (NREVERSE |tt|) NIL))))))))))
+
+;resolveTMUnion(t, m is ['Union,:ums]) ==
+;  isTaggedUnion m => resolveTMTaggedUnion(t,m)
+;  -- resolves t with a Union type
+;  t isnt ['Union,:uts] =>
+;    ums := REMDUP spliceTypeListForEmptyMode([t],ums)
+;    ums' := nil
+;    success := nil
+;    for um in ums repeat
+;      (um' := resolveTM1(t,um)) =>
+;        success := true
+;        um' in '(T TRUE) => ums' := [um,:ums']
+;        ums' := [um',:ums']
+;      ums' := [um,:ums']
+;    -- remove any duplicate domains that might have been created
+;    m' := ['Union,:REMDUP reverse ums']
+;    success =>
+;      null CONTAINED('_*_*,m') => m'
+;      t = $Integer => NIL
+;      resolveTM1($Integer,m')
+;    NIL
+;  -- t is actually a Union if we got here
+;  ums := REMDUP spliceTypeListForEmptyMode(uts,ums)
+;  bad := nil
+;  doms := nil
+;  for ut in uts while ^bad repeat
+;    (m' := resolveTMUnion(ut,['Union,:ums])) =>
+;      doms := append(CDR m',doms)
+;    bad := true
+;  bad => NIL
+;  ['Union,:REMDUP doms]
+
+(DEFUN |resolveTMUnion| (|t| |m|)
+  (PROG (|uts| |um'| |success| |ums'| |ums| |m'| |doms| |bad|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |ums| (CDR |m|))
+             (COND
+               ((|isTaggedUnion| |m|) (|resolveTMTaggedUnion| |t| |m|))
+               ((NULL (AND (PAIRP |t|) (EQ (QCAR |t|) '|Union|)
+                           (PROGN (SPADLET |uts| (QCDR |t|)) 'T)))
+                (SPADLET |ums|
+                         (REMDUP (|spliceTypeListForEmptyMode|
+                                     (CONS |t| NIL) |ums|)))
+                (SPADLET |ums'| NIL) (SPADLET |success| NIL)
+                (DO ((G167251 |ums| (CDR G167251)) (|um| NIL))
+                    ((OR (ATOM G167251)
+                         (PROGN (SETQ |um| (CAR G167251)) NIL))
+                     NIL)
+                  (SEQ (EXIT (COND
+                               ((SPADLET |um'| (|resolveTM1| |t| |um|))
+                                (SPADLET |success| 'T)
+                                (COND
+                                  ((|member| |um'| '(T TRUE))
+                                   (SPADLET |ums'| (CONS |um| |ums'|)))
+                                  ('T
+                                   (SPADLET |ums'| (CONS |um'| |ums'|)))))
+                               ('T (SPADLET |ums'| (CONS |um| |ums'|)))))))
+                (SPADLET |m'|
+                         (CONS '|Union| (REMDUP (REVERSE |ums'|))))
+                (COND
+                  (|success|
+                      (COND
+                        ((NULL (CONTAINED '** |m'|)) |m'|)
+                        ((BOOT-EQUAL |t| |$Integer|) NIL)
+                        ('T (|resolveTM1| |$Integer| |m'|))))
+                  ('T NIL)))
+               ('T
+                (SPADLET |ums|
+                         (REMDUP (|spliceTypeListForEmptyMode| |uts|
+                                     |ums|)))
+                (SPADLET |bad| NIL) (SPADLET |doms| NIL)
+                (DO ((G167261 |uts| (CDR G167261)) (|ut| NIL))
+                    ((OR (ATOM G167261)
+                         (PROGN (SETQ |ut| (CAR G167261)) NIL)
+                         (NULL (NULL |bad|)))
+                     NIL)
+                  (SEQ (EXIT (COND
+                               ((SPADLET |m'|
+                                         (|resolveTMUnion| |ut|
+                                          (CONS '|Union| |ums|)))
+                                (SPADLET |doms|
+                                         (APPEND (CDR |m'|) |doms|)))
+                               ('T (SPADLET |bad| 'T))))))
+                (COND
+                  (|bad| NIL)
+                  ('T (CONS '|Union| (REMDUP |doms|)))))))))))
+
+;resolveTMTaggedUnion(t, m is ['Union,:ums]) ==
+;  NIL
+
+(DEFUN |resolveTMTaggedUnion| (|t| |m|)
+  (PROG (|ums|) (RETURN (PROGN (SPADLET |ums| (CDR |m|)) |m|))))
+
+;spliceTypeListForEmptyMode(tl,ml) ==
+;  -- splice in tl for occurrence of ** in ml
+;  null ml => nil
+;  ml is [m,:ml'] =>
+;    m = "**" => append(tl,spliceTypeListForEmptyMode(tl,ml'))
+;    [m,:spliceTypeListForEmptyMode(tl,ml')]
+
+(DEFUN |spliceTypeListForEmptyMode| (|tl| |ml|)
+  (PROG (|m| |ml'|)
+    (RETURN
+      (COND
+        ((NULL |ml|) NIL)
+        ((AND (PAIRP |ml|)
+              (PROGN
+                (SPADLET |m| (QCAR |ml|))
+                (SPADLET |ml'| (QCDR |ml|))
+                'T))
+         (COND
+           ((BOOT-EQUAL |m| '**)
+            (APPEND |tl| (|spliceTypeListForEmptyMode| |tl| |ml'|)))
+           ('T (CONS |m| (|spliceTypeListForEmptyMode| |tl| |ml'|)))))))))
+
+;resolveTM2(t,m) ==
+;  -- resolves t with the last argument of m and builds up a tower
+;  [cm,:argm] := deconstructT m
+;  argm and
+;    tt := resolveTM1(t,last argm)
+;    tt and
+;      ttt := constructM(cm,replaceLast(argm,tt))
+;      ttt and canCoerceFrom(tt,ttt) and ttt
+
+(DEFUN |resolveTM2| (|t| |m|)
+  (PROG (|LETTMP#1| |cm| |argm| |tt| |ttt|)
+    (RETURN
+      (PROGN
+        (SPADLET |LETTMP#1| (|deconstructT| |m|))
+        (SPADLET |cm| (CAR |LETTMP#1|))
+        (SPADLET |argm| (CDR |LETTMP#1|))
+        (AND |argm|
+             (PROGN
+               (SPADLET |tt| (|resolveTM1| |t| (|last| |argm|)))
+               (AND |tt|
+                    (PROGN
+                      (SPADLET |ttt|
+                               (|constructM| |cm|
+                                   (|replaceLast| |argm| |tt|)))
+                      (AND |ttt| (|canCoerceFrom| |tt| |ttt|) |ttt|)))))))))
+
+;resolveTMEq(t,m) ==
+;  -- tests whether t and m have the same top level constructor, which,
+;  -- in the case of t, could be bubbled up
+;  (res := resolveTMSpecial(t,m)) => res
+;  [cm,:argm] := deconstructT m
+;  c := containsVars cm
+;  TL := NIL
+;  until b or not t repeat
+;    [ct,:argt] := deconstructT t
+;    b :=
+;      c =>
+;        SL := resolveTMEq1(ct,cm)
+;        not EQ(SL,'failed)
+;      ct=cm
+;    not b =>
+;      TL := [ct,argt,:TL]
+;      t := argt and last argt
+;  b and
+;    t := resolveTMEq2(cm,argm,[ct,argt,:TL])
+;    if t then for p in SL repeat $Subst := augmentSub(CAR p,CDR p,$Subst)
+;    t
+
+(DEFUN |resolveTMEq| (|t| |m|)
+  (PROG (|res| |cm| |argm| |c| |LETTMP#1| |ct| |argt| SL |b| TL)
+    (RETURN
+      (SEQ (COND
+             ((SPADLET |res| (|resolveTMSpecial| |t| |m|)) |res|)
+             ('T (SPADLET |LETTMP#1| (|deconstructT| |m|))
+              (SPADLET |cm| (CAR |LETTMP#1|))
+              (SPADLET |argm| (CDR |LETTMP#1|))
+              (SPADLET |c| (|containsVars| |cm|)) (SPADLET TL NIL)
+              (DO ((G167356 NIL (OR |b| (NULL |t|)))) (G167356 NIL)
+                (SEQ (EXIT (PROGN
+                             (SPADLET |LETTMP#1| (|deconstructT| |t|))
+                             (SPADLET |ct| (CAR |LETTMP#1|))
+                             (SPADLET |argt| (CDR |LETTMP#1|))
+                             (SPADLET |b|
+                                      (COND
+                                        (|c|
+                                         (SPADLET SL
+                                          (|resolveTMEq1| |ct| |cm|))
+                                         (NULL (EQ SL '|failed|)))
+                                        ('T (BOOT-EQUAL |ct| |cm|))))
+                             (COND
+                               ((NULL |b|)
+                                (PROGN
+                                  (SPADLET TL
+                                           (CONS |ct| (CONS |argt| TL)))
+                                  (SPADLET |t|
+                                           (AND |argt| (|last| |argt|))))))))))
+              (AND |b|
+                   (PROGN
+                     (SPADLET |t|
+                              (|resolveTMEq2| |cm| |argm|
+                                  (CONS |ct| (CONS |argt| TL))))
+                     (COND
+                       (|t| (DO ((G167363 SL (CDR G167363))
+                                 (|p| NIL))
+                                ((OR (ATOM G167363)
+                                     (PROGN
+                                       (SETQ |p| (CAR G167363))
+                                       NIL))
+                                 NIL)
+                              (SEQ (EXIT
+                                    (SPADLET |$Subst|
+                                     (|augmentSub| (CAR |p|) (CDR |p|)
+                                      |$Subst|)))))))
+                     |t|))))))))
+
+;resolveTMSpecial(t,m) ==
+;  -- a few special cases
+;  t = $AnonymousFunction and m is ['Mapping,:.] => m
+;  t is ['Variable,x] and m is ['OrderedVariableList,le] =>
+;    isPatternVar le => ['OrderedVariableList,[x]]
+;    PAIRP(le) and MEMBER(x,le) => le
+;    NIL
+;  t is ['Fraction, ['Complex, t1]] and m is ['Complex, m1] =>
+;    resolveTM1(['Complex, ['Fraction, t1]], m)
+;  t is ['Fraction, ['Polynomial, ['Complex, t1]]] and m is ['Complex, m1] =>
+;    resolveTM1(['Complex, ['Fraction, ['Polynomial, t1]]], m)
+;  t is ['Mapping,:lt] and m is ['Mapping,:lm] =>
+;    #lt ^= #lm => NIL
+;    l := NIL
+;    ok := true
+;    for at in lt for am in lm while ok repeat
+;      (ok := resolveTM1(at,am)) => l := [ok,:l]
+;    ok and ['Mapping,:reverse l]
+;  t is ['Segment,u] and m is ['UniversalSegment,.] =>
+;    resolveTM1(['UniversalSegment, u], m)
+;  NIL
+
+(DEFUN |resolveTMSpecial| (|t| |m|)
+  (PROG (|x| |le| |ISTMP#2| |ISTMP#3| |ISTMP#4| |ISTMP#5| |t1| |m1|
+             |lt| |lm| |ok| |l| |u| |ISTMP#1|)
+    (RETURN
+      (SEQ (COND
+             ((AND (BOOT-EQUAL |t| |$AnonymousFunction|) (PAIRP |m|)
+                   (EQ (QCAR |m|) '|Mapping|))
+              |m|)
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|Variable|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                          (PROGN (SPADLET |x| (QCAR |ISTMP#1|)) 'T)))
+                   (PAIRP |m|) (EQ (QCAR |m|) '|OrderedVariableList|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |m|))
+                     (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                          (PROGN (SPADLET |le| (QCAR |ISTMP#1|)) 'T))))
+              (COND
+                ((|isPatternVar| |le|)
+                 (CONS '|OrderedVariableList|
+                       (CONS (CONS |x| NIL) NIL)))
+                ((AND (PAIRP |le|) (|member| |x| |le|)) |le|)
+                ('T NIL)))
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|Fraction|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                          (PROGN
+                            (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCAR |ISTMP#2|) '|Complex|)
+                                 (PROGN
+                                   (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                                   (AND (PAIRP |ISTMP#3|)
+                                    (EQ (QCDR |ISTMP#3|) NIL)
+                                    (PROGN
+                                      (SPADLET |t1| (QCAR |ISTMP#3|))
+                                      'T)))))))
+                   (PAIRP |m|) (EQ (QCAR |m|) '|Complex|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |m|))
+                     (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                          (PROGN (SPADLET |m1| (QCAR |ISTMP#1|)) 'T))))
+              (|resolveTM1|
+                  (CONS '|Complex|
+                        (CONS (CONS '|Fraction| (CONS |t1| NIL)) NIL))
+                  |m|))
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|Fraction|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                          (PROGN
+                            (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCAR |ISTMP#2|) '|Polynomial|)
+                                 (PROGN
+                                   (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                                   (AND (PAIRP |ISTMP#3|)
+                                    (EQ (QCDR |ISTMP#3|) NIL)
+                                    (PROGN
+                                      (SPADLET |ISTMP#4|
+                                       (QCAR |ISTMP#3|))
+                                      (AND (PAIRP |ISTMP#4|)
+                                       (EQ (QCAR |ISTMP#4|) '|Complex|)
+                                       (PROGN
+                                         (SPADLET |ISTMP#5|
+                                          (QCDR |ISTMP#4|))
+                                         (AND (PAIRP |ISTMP#5|)
+                                          (EQ (QCDR |ISTMP#5|) NIL)
+                                          (PROGN
+                                            (SPADLET |t1|
+                                             (QCAR |ISTMP#5|))
+                                            'T)))))))))))
+                   (PAIRP |m|) (EQ (QCAR |m|) '|Complex|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |m|))
+                     (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                          (PROGN (SPADLET |m1| (QCAR |ISTMP#1|)) 'T))))
+              (|resolveTM1|
+                  (CONS '|Complex|
+                        (CONS (CONS '|Fraction|
+                                    (CONS
+                                     (CONS '|Polynomial|
+                                      (CONS |t1| NIL))
+                                     NIL))
+                              NIL))
+                  |m|))
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|Mapping|)
+                   (PROGN (SPADLET |lt| (QCDR |t|)) 'T) (PAIRP |m|)
+                   (EQ (QCAR |m|) '|Mapping|)
+                   (PROGN (SPADLET |lm| (QCDR |m|)) 'T))
+              (COND
+                ((NEQUAL (|#| |lt|) (|#| |lm|)) NIL)
+                ('T (SPADLET |l| NIL) (SPADLET |ok| 'T)
+                 (SEQ (DO ((G167475 |lt| (CDR G167475)) (|at| NIL)
+                           (G167476 |lm| (CDR G167476)) (|am| NIL))
+                          ((OR (ATOM G167475)
+                               (PROGN (SETQ |at| (CAR G167475)) NIL)
+                               (ATOM G167476)
+                               (PROGN (SETQ |am| (CAR G167476)) NIL)
+                               (NULL |ok|))
+                           NIL)
+                        (SEQ (EXIT (COND
+                                     ((SPADLET |ok|
+                                       (|resolveTM1| |at| |am|))
+                                      (EXIT
+                                       (SPADLET |l| (CONS |ok| |l|))))))))
+                      (AND |ok| (CONS '|Mapping| (REVERSE |l|)))))))
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|Segment|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                          (PROGN (SPADLET |u| (QCAR |ISTMP#1|)) 'T)))
+                   (PAIRP |m|) (EQ (QCAR |m|) '|UniversalSegment|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |m|))
+                     (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL))))
+              (|resolveTM1| (CONS '|UniversalSegment| (CONS |u| NIL))
+                  |m|))
+             ('T NIL))))))
+
+;resolveTMEq1(ct,cm) ==
+;  -- ct and cm are type constructors
+;  -- tests for a match from cm to ct
+;  -- the result is a substitution or 'failed
+;  not (CAR ct=CAR cm) => 'failed
+;  SL := NIL
+;  ct := CDR ct
+;  cm := CDR cm
+;  b := 'T
+;  while ct and cm and b repeat
+;    xt := CAR ct
+;    ct := CDR ct
+;    xm := CAR cm
+;    cm := CDR cm
+;    if not (atom xm) and CAR xm = ":"  --  i.e. Record
+;      and CAR xt = ":" and CADR xm = CADR xt then
+;        xm := CADDR xm
+;        xt := CADDR xt
+;    b :=
+;      xt=xm => 'T
+;      isPatternVar(xm) and
+;        p := ASSQ(xm,$Subst) => xt=CDR p
+;        p := ASSQ(xm,SL) => xt=CDR p
+;        SL := augmentSub(xm,xt,SL)
+;  b => SL
+;  'failed
+
+(DEFUN |resolveTMEq1| (|ct| |cm|)
+  (PROG (|xm| |xt| |p| SL |b|)
+    (RETURN
+      (SEQ (COND
+             ((NULL (BOOT-EQUAL (CAR |ct|) (CAR |cm|))) '|failed|)
+             ('T (SPADLET SL NIL) (SPADLET |ct| (CDR |ct|))
+              (SPADLET |cm| (CDR |cm|)) (SPADLET |b| 'T)
+              (DO () ((NULL (AND |ct| |cm| |b|)) NIL)
+                (SEQ (EXIT (PROGN
+                             (SPADLET |xt| (CAR |ct|))
+                             (SPADLET |ct| (CDR |ct|))
+                             (SPADLET |xm| (CAR |cm|))
+                             (SPADLET |cm| (CDR |cm|))
+                             (COND
+                               ((AND (NULL (ATOM |xm|))
+                                     (BOOT-EQUAL (CAR |xm|) '|:|)
+                                     (BOOT-EQUAL (CAR |xt|) '|:|)
+                                     (BOOT-EQUAL (CADR |xm|)
+                                      (CADR |xt|)))
+                                (SPADLET |xm| (CADDR |xm|))
+                                (SPADLET |xt| (CADDR |xt|))))
+                             (SPADLET |b|
+                                      (COND
+                                        ((BOOT-EQUAL |xt| |xm|) 'T)
+                                        ('T
+                                         (AND (|isPatternVar| |xm|)
+                                          (COND
+                                            ((SPADLET |p|
+                                              (ASSQ |xm| |$Subst|))
+                                             (BOOT-EQUAL |xt|
+                                              (CDR |p|)))
+                                            ((SPADLET |p|
+                                              (ASSQ |xm| SL))
+                                             (BOOT-EQUAL |xt|
+                                              (CDR |p|)))
+                                            ('T
+                                             (SPADLET SL
+                                              (|augmentSub| |xm| |xt|
+                                               SL))))))))))))
+              (COND (|b| SL) ('T '|failed|))))))))
+
+;resolveTMEq2(cm,argm,TL) ==
+;  -- [cm,argm] is a deconstructed mode,
+;  -- TL is a deconstructed type t
+;  [ct,argt,:TL] :=
+;    $Coerce => bubbleType TL
+;    TL
+;  null TL and
+;    null argm => constructM(ct,argt)
+;--  null argm => NIL
+;    arg := NIL
+;    while argt and argm until not tt repeat
+;      x1 := CAR argt
+;      argt := CDR argt
+;      x2 := CAR argm
+;      argm := CDR argm
+;      tt := resolveTM1(x1,x2) =>
+;        arg := CONS(tt,arg)
+;    null argt and null argm and tt and constructM(ct,nreverse arg)
+
+(DEFUN |resolveTMEq2| (|cm| |argm| TL)
+  (PROG (|LETTMP#1| |ct| |x1| |argt| |x2| |tt| |arg|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |LETTMP#1|
+                      (COND (|$Coerce| (|bubbleType| TL)) ('T TL)))
+             (SPADLET |ct| (CAR |LETTMP#1|))
+             (SPADLET |argt| (CADR |LETTMP#1|))
+             (SPADLET TL (CDDR |LETTMP#1|))
+             (AND (NULL TL)
+                  (COND
+                    ((NULL |argm|) (|constructM| |ct| |argt|))
+                    ('T (SPADLET |arg| NIL)
+                     (DO ((G167572 NIL (NULL |tt|)))
+                         ((OR (NULL (AND |argt| |argm|)) G167572)
+                          NIL)
+                       (SEQ (EXIT (PROGN
+                                    (SPADLET |x1| (CAR |argt|))
+                                    (SPADLET |argt| (CDR |argt|))
+                                    (SPADLET |x2| (CAR |argm|))
+                                    (SPADLET |argm| (CDR |argm|))
+                                    (COND
+                                      ((SPADLET |tt|
+                                        (|resolveTM1| |x1| |x2|))
+                                       (SPADLET |arg|
+                                        (CONS |tt| |arg|))))))))
+                     (AND (NULL |argt|) (NULL |argm|) |tt|
+                          (|constructM| |ct| (NREVERSE |arg|)))))))))))
+
+;resolveTMRed(t,m) ==
+;  -- looks for an applicable rewrite rule at any level of t and tries
+;  --   to bubble this constructor up to the top to t
+;  TL := NIL
+;  until b or not t repeat
+;    [ct,:argt] := deconstructT t
+;    b := not EQ(t,term1RW(['Resolve,t,m],$ResMode)) and
+;      [c0,arg0,:TL0] := bubbleType [ct,argt,:TL]
+;      null TL0 and
+;        l := term1RWall(['Resolve,constructM(c0,arg0),m],$ResMode)
+;        for t0 in l until t repeat t := resolveTMRed1 t0
+;        l and t
+;    b or
+;      TL := [ct,argt,:TL]
+;      t := argt and last argt
+;  b and t
+
+(DEFUN |resolveTMRed| (|t| |m|)
+  (PROG (|ct| |argt| |LETTMP#1| |c0| |arg0| TL0 |l| |b| TL)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET TL NIL)
+             (DO ((G167630 NIL (OR |b| (NULL |t|)))) (G167630 NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |LETTMP#1| (|deconstructT| |t|))
+                            (SPADLET |ct| (CAR |LETTMP#1|))
+                            (SPADLET |argt| (CDR |LETTMP#1|))
+                            (SPADLET |b|
+                                     (AND
+                                      (NULL
+                                       (EQ |t|
+                                        (|term1RW|
+                                         (CONS '|Resolve|
+                                          (CONS |t| (CONS |m| NIL)))
+                                         |$ResMode|)))
+                                      (PROGN
+                                        (SPADLET |LETTMP#1|
+                                         (|bubbleType|
+                                          (CONS |ct| (CONS |argt| TL))))
+                                        (SPADLET |c0| (CAR |LETTMP#1|))
+                                        (SPADLET |arg0|
+                                         (CADR |LETTMP#1|))
+                                        (SPADLET TL0 (CDDR |LETTMP#1|))
+                                        (AND (NULL TL0)
+                                         (PROGN
+                                           (SPADLET |l|
+                                            (|term1RWall|
+                                             (CONS '|Resolve|
+                                              (CONS
+                                               (|constructM| |c0|
+                                                |arg0|)
+                                               (CONS |m| NIL)))
+                                             |$ResMode|))
+                                           (DO
+                                            ((G167638 |l|
+                                              (CDR G167638))
+                                             (|t0| NIL)
+                                             (G167639 NIL |t|))
+                                            ((OR (ATOM G167638)
+                                              (PROGN
+                                                (SETQ |t0|
+                                                 (CAR G167638))
+                                                NIL)
+                                              G167639)
+                                             NIL)
+                                             (SEQ
+                                              (EXIT
+                                               (SPADLET |t|
+                                                (|resolveTMRed1| |t0|)))))
+                                           (AND |l| |t|))))))
+                            (OR |b|
+                                (PROGN
+                                  (SPADLET TL
+                                           (CONS |ct| (CONS |argt| TL)))
+                                  (SPADLET |t|
+                                           (AND |argt| (|last| |argt|)))))))))
+             (AND |b| |t|))))))
+
+;resolveTMRed1(t) ==
+;  -- recursive resolveTMRed which handles all subterms of the form
+;  -- (Resolve a b)
+;  atom t => t
+;  t is ['Resolve,a,b] =>
+;    ( a := resolveTMRed1 a ) and ( b := resolveTMRed1 b ) and
+;      resolveTM1(a,b)
+;  t is ['Incl,a,b] => PAIRP b and MEMBER(a,b) and b
+;  t is ['Diff,a,b] => PAIRP a and MEMBER(b,a) and SETDIFFERENCE(a,[b])
+;  t is ['SetIncl,a,b] => PAIRP b and and/[MEMBER(x,b) for x in a] and b
+;  t is ['SetDiff,a,b] => PAIRP b and PAIRP b and
+;                         INTERSECTION(a,b) and SETDIFFERENCE(a,b)
+;  t is ['VarEqual,a,b] => (a = b) and b
+;  t is ['SetComp,a,b] => PAIRP a and PAIRP b and
+;    and/[MEMBER(x,a) for x in b] and SETDIFFERENCE(a,b)
+;  t is ['SimpleAlgebraicExtension,a,b,p] =>  -- this is a hack. RSS
+;    ['SimpleAlgebraicExtension, resolveTMRed1 a, resolveTMRed1 b,p]
+;  [( atom x and x ) or resolveTMRed1 x or return NIL for x in t]
+
+(DEFUN |resolveTMRed1| (|t|)
+  (PROG (|ISTMP#1| |a| |ISTMP#2| |b| |ISTMP#3| |p|)
+    (RETURN
+      (SEQ (COND
+             ((ATOM |t|) |t|)
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|Resolve|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (AND (SPADLET |a| (|resolveTMRed1| |a|))
+                   (SPADLET |b| (|resolveTMRed1| |b|))
+                   (|resolveTM1| |a| |b|)))
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|Incl|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (AND (PAIRP |b|) (|member| |a| |b|) |b|))
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|Diff|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (AND (PAIRP |a|) (|member| |b| |a|)
+                   (SETDIFFERENCE |a| (CONS |b| NIL))))
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|SetIncl|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (AND (PAIRP |b|)
+                   (PROG (G167809)
+                     (SPADLET G167809 'T)
+                     (RETURN
+                       (DO ((G167815 NIL (NULL G167809))
+                            (G167816 |a| (CDR G167816)) (|x| NIL))
+                           ((OR G167815 (ATOM G167816)
+                                (PROGN (SETQ |x| (CAR G167816)) NIL))
+                            G167809)
+                         (SEQ (EXIT (SETQ G167809
+                                     (AND G167809 (|member| |x| |b|))))))))
+                   |b|))
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|SetDiff|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (AND (PAIRP |b|) (PAIRP |b|) (|intersection| |a| |b|)
+                   (SETDIFFERENCE |a| |b|)))
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|VarEqual|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (AND (BOOT-EQUAL |a| |b|) |b|))
+             ((AND (PAIRP |t|) (EQ (QCAR |t|) '|SetComp|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (AND (PAIRP |a|) (PAIRP |b|)
+                   (PROG (G167823)
+                     (SPADLET G167823 'T)
+                     (RETURN
+                       (DO ((G167829 NIL (NULL G167823))
+                            (G167830 |b| (CDR G167830)) (|x| NIL))
+                           ((OR G167829 (ATOM G167830)
+                                (PROGN (SETQ |x| (CAR G167830)) NIL))
+                            G167823)
+                         (SEQ (EXIT (SETQ G167823
+                                     (AND G167823 (|member| |x| |a|))))))))
+                   (SETDIFFERENCE |a| |b|)))
+             ((AND (PAIRP |t|)
+                   (EQ (QCAR |t|) '|SimpleAlgebraicExtension|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |t|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                                   (AND (PAIRP |ISTMP#3|)
+                                    (EQ (QCDR |ISTMP#3|) NIL)
+                                    (PROGN
+                                      (SPADLET |p| (QCAR |ISTMP#3|))
+                                      'T))))))))
+              (CONS '|SimpleAlgebraicExtension|
+                    (CONS (|resolveTMRed1| |a|)
+                          (CONS (|resolveTMRed1| |b|) (CONS |p| NIL)))))
+             ('T
+              (PROG (G167841)
+                (SPADLET G167841 NIL)
+                (RETURN
+                  (DO ((G167846 |t| (CDR G167846)) (|x| NIL))
+                      ((OR (ATOM G167846)
+                           (PROGN (SETQ |x| (CAR G167846)) NIL))
+                       (NREVERSE0 G167841))
+                    (SEQ (EXIT (SETQ G167841
+                                     (CONS
+                                      (OR (AND (ATOM |x|) |x|)
+                                       (|resolveTMRed1| |x|)
+                                       (RETURN NIL))
+                                      G167841)))))))))))))
+
+;--% Type and Mode Representation
+;eqType(t) ==
+;  -- looks for an equivalent but more simple type
+;  -- eg, eqType QF I = RN
+;  -- the new algebra orginization no longer uses these sorts of types
+;--  termRW(t,$TypeEQ)
+;  t
+
+(DEFUN |eqType| (|t|) |t|) 
+
+;equiType(t) ==
+;  -- looks for an equivalent but expanded type
+;  -- eg, equiType RN == QF I
+;  -- the new algebra orginization no longer uses these sorts of types
+;--  termRW(t,$TypeEqui)
+;  t
+
+(DEFUN |equiType| (|t|) |t|) 
+
+;getUnderModeOf d ==
+;  not PAIRP d => NIL
+;--  n := LASSOC(first d,$underDomainAlist) => d.n ----> $underDomainAlist NOW always NIL
+;  for a in rest d for m in rest destructT d repeat
+;    if m then return a
+
+(DEFUN |getUnderModeOf| (|d|)
+  (PROG ()
+    (RETURN
+      (SEQ (COND
+             ((NULL (PAIRP |d|)) NIL)
+             ('T
+              (DO ((G167905 (CDR |d|) (CDR G167905)) (|a| NIL)
+                   (G167906 (CDR (|destructT| |d|)) (CDR G167906))
+                   (|m| NIL))
+                  ((OR (ATOM G167905)
+                       (PROGN (SETQ |a| (CAR G167905)) NIL)
+                       (ATOM G167906)
+                       (PROGN (SETQ |m| (CAR G167906)) NIL))
+                   NIL)
+                (SEQ (EXIT (COND (|m| (RETURN |a|)) ('T NIL)))))))))))
+
+;--deconstructM(t) ==
+;--  -- M is a type, which may contain type variables
+;--  -- results in a pair (type constructor . mode arguments)
+;--  CDR t and constructor? CAR t =>
+;--    dt := destructT CAR t
+;--    args := [ x for d in dt for y in t | ( x := d and y ) ]
+;--    c := [ x for d in dt for y in t | ( x := not d and y ) ]
+;--    CONS(c,args)
+;--  CONS(t,NIL)
+;deconstructT(t) ==
+;  -- M is a type, which may contain type variables
+;  -- results in a pair (type constructor . mode arguments)
+;  KDR t and constructor? CAR t =>
+;    dt := destructT CAR t
+;    args := [ x for d in dt for y in t | ( x := d and y ) ]
+;    c := [ x for d in dt for y in t | ( x := not d and y ) ]
+;    CONS(c,args)
+;  CONS(t,NIL)
+
+(DEFUN |deconstructT| (|t|)
+  (PROG (|dt| |args| |x| |c|)
+    (RETURN
+      (SEQ (COND
+             ((AND (KDR |t|) (|constructor?| (CAR |t|)))
+              (SPADLET |dt| (|destructT| (CAR |t|)))
+              (SPADLET |args|
+                       (PROG (G167926)
+                         (SPADLET G167926 NIL)
+                         (RETURN
+                           (DO ((G167933 |dt| (CDR G167933))
+                                (|d| NIL)
+                                (G167934 |t| (CDR G167934))
+                                (|y| NIL))
+                               ((OR (ATOM G167933)
+                                    (PROGN
+                                      (SETQ |d| (CAR G167933))
+                                      NIL)
+                                    (ATOM G167934)
+                                    (PROGN
+                                      (SETQ |y| (CAR G167934))
+                                      NIL))
+                                (NREVERSE0 G167926))
+                             (SEQ (EXIT (COND
+                                          ((SPADLET |x| (AND |d| |y|))
+                                           (SETQ G167926
+                                            (CONS |x| G167926))))))))))
+              (SPADLET |c|
+                       (PROG (G167949)
+                         (SPADLET G167949 NIL)
+                         (RETURN
+                           (DO ((G167956 |dt| (CDR G167956))
+                                (|d| NIL)
+                                (G167957 |t| (CDR G167957))
+                                (|y| NIL))
+                               ((OR (ATOM G167956)
+                                    (PROGN
+                                      (SETQ |d| (CAR G167956))
+                                      NIL)
+                                    (ATOM G167957)
+                                    (PROGN
+                                      (SETQ |y| (CAR G167957))
+                                      NIL))
+                                (NREVERSE0 G167949))
+                             (SEQ (EXIT (COND
+                                          ((SPADLET |x|
+                                            (AND (NULL |d|) |y|))
+                                           (SETQ G167949
+                                            (CONS |x| G167949))))))))))
+              (CONS |c| |args|))
+             ('T (CONS |t| NIL)))))))
+
+;constructT(c,A) ==
+;  -- c is a type constructor, A a list of argument types
+;  A => [if d then POP A else POP c for d in destructT CAR c]
+;  c
+
+(DEFUN |constructT| (|c| A)
+  (PROG ()
+    (RETURN
+      (SEQ (COND
+             (A (PROG (G167981)
+                  (SPADLET G167981 NIL)
+                  (RETURN
+                    (DO ((G167986 (|destructT| (CAR |c|))
+                             (CDR G167986))
+                         (|d| NIL))
+                        ((OR (ATOM G167986)
+                             (PROGN (SETQ |d| (CAR G167986)) NIL))
+                         (NREVERSE0 G167981))
+                      (SEQ (EXIT (SETQ G167981
+                                       (CONS
+                                        (COND
+                                          (|d| (POP A))
+                                          ('T (POP |c|)))
+                                        G167981))))))))
+             ('T |c|))))))
+
+;constructM(c,A) ==
+;  -- replaces top level RE's or QF's by equivalent types, if possible
+;  containsVars(c) or containsVars(A) => NIL
+;  -- collapses illegal FE's
+;  CAR(c) = $FunctionalExpression => eqType defaultTargetFE CAR A
+;  eqType constructT(c,A)
+
+(DEFUN |constructM| (|c| A)
+  (COND
+    ((OR (|containsVars| |c|) (|containsVars| A)) NIL)
+    ((BOOT-EQUAL (CAR |c|) |$FunctionalExpression|)
+     (|eqType| (|defaultTargetFE| (CAR A))))
+    ('T (|eqType| (|constructT| |c| A)))))
+
+;replaceLast(A,t) ==
+;  -- replaces the last element of the nonempty list A by t (constructively
+;  nreverse RPLACA(reverse A,t)
+
+(DEFUN |replaceLast| (A |t|) (NREVERSE (RPLACA (REVERSE A) |t|))) 
+
+;destructT(functor)==
+;  -- provides a list of booleans, which indicate whether the arguments
+;  -- to the functor are category forms or not
+;  GETDATABASE(opOf functor,'COSIG)
+
+(DEFUN |destructT| (|functor|) (GETDATABASE (|opOf| |functor|) (QUOTE COSIG))) 
+
+;constructTowerT(t,TL) ==
+;  -- t is a type, TL a list of constructors and argument lists
+;  -- t is embedded into TL
+;  while TL and t repeat
+;    [c,arg,:TL] := TL
+;    t0 := constructM(c,replaceLast(arg,t))
+;    t := canCoerceFrom(t,t0) and t0
+;  t
+
+(DEFUN |constructTowerT| (|t| TL)
+  (PROG (|LETTMP#1| |c| |arg| |t0|)
+    (RETURN
+      (SEQ (PROGN
+             (DO () ((NULL (AND TL |t|)) NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |LETTMP#1| TL)
+                            (SPADLET |c| (CAR |LETTMP#1|))
+                            (SPADLET |arg| (CADR |LETTMP#1|))
+                            (SPADLET TL (CDDR |LETTMP#1|))
+                            (SPADLET |t0|
+                                     (|constructM| |c|
+                                      (|replaceLast| |arg| |t|)))
+                            (SPADLET |t|
+                                     (AND (|canCoerceFrom| |t| |t0|)
+                                      |t0|))))))
+             |t|)))))
+
+;bubbleType(TL) ==
+;  -- tries to move the last constructor in TL upwards
+;  -- uses canCoerceFrom to test whether two constructors can be bubbled
+;  [c1,arg1,:T1] := TL
+;  null T1 or null arg1 => TL
+;  [c2,arg2,:T2] := T1
+;  t := last arg1
+;  t2 := constructM(c2,replaceLast(arg2,t))
+;  arg1 := replaceLast(arg1,t2)
+;  newCanCoerceCommute(c2,c1) or canCoerceCommute(c2, c1) =>
+;    bubbleType [c1,arg1,:T2]
+;  TL
+
+(DEFUN |bubbleType| (TL)
+  (PROG (|c1| T1 |c2| |arg2| T2 |t| |t2| |arg1|)
+    (RETURN
+      (PROGN
+        (SPADLET |c1| (CAR TL))
+        (SPADLET |arg1| (CADR TL))
+        (SPADLET T1 (CDDR TL))
+        (COND
+          ((OR (NULL T1) (NULL |arg1|)) TL)
+          ('T (SPADLET |c2| (CAR T1)) (SPADLET |arg2| (CADR T1))
+           (SPADLET T2 (CDDR T1)) (SPADLET |t| (|last| |arg1|))
+           (SPADLET |t2|
+                    (|constructM| |c2| (|replaceLast| |arg2| |t|)))
+           (SPADLET |arg1| (|replaceLast| |arg1| |t2|))
+           (COND
+             ((OR (|newCanCoerceCommute| |c2| |c1|)
+                  (|canCoerceCommute| |c2| |c1|))
+              (|bubbleType| (CONS |c1| (CONS |arg1| T2))))
+             ('T TL))))))))
+
+;bubbleConstructor(TL) ==
+;  -- TL is a nonempty list of type constructors and nonempty argument
+;  -- lists representing a deconstructed type
+;  -- then the lowest constructor is bubbled to the top
+;  [c,arg,:T1] := TL
+;  t := last arg
+;  until null T1 repeat
+;    [c1,arg1,:T1] := T1
+;    arg1 := replaceLast(arg1,t)
+;    t := constructT(c1,arg1)
+;  constructT(c,replaceLast(arg,t))
+
+(DEFUN |bubbleConstructor| (TL)
+  (PROG (|c| |arg| |LETTMP#1| |c1| T1 |arg1| |t|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |c| (CAR TL))
+             (SPADLET |arg| (CADR TL))
+             (SPADLET T1 (CDDR TL))
+             (SPADLET |t| (|last| |arg|))
+             (DO ((G168083 NIL (NULL T1))) (G168083 NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |LETTMP#1| T1)
+                            (SPADLET |c1| (CAR |LETTMP#1|))
+                            (SPADLET |arg1| (CADR |LETTMP#1|))
+                            (SPADLET T1 (CDDR |LETTMP#1|))
+                            (SPADLET |arg1| (|replaceLast| |arg1| |t|))
+                            (SPADLET |t| (|constructT| |c1| |arg1|))))))
+             (|constructT| |c| (|replaceLast| |arg| |t|)))))))
+
+;compareTT(t1,t2) ==
+;  -- 'T if type t1 is more nested than t2
+;  -- otherwise 'T if t1 is lexicographically greater than t2
+;  EQCAR(t1,$QuotientField) or
+;    MEMQ(opOf t2,[$QuotientField, 'SimpleAlgebraicExtension]) => NIL
+;    CGREATERP(PRIN2CVEC opOf t1,PRIN2CVEC opOf t2)
+
+(DEFUN |compareTT| (|t1| |t2|)
+  (OR (EQCAR |t1| |$QuotientField|)
+      (COND
+        ((MEMQ (|opOf| |t2|)
+               (CONS |$QuotientField|
+                     (CONS '|SimpleAlgebraicExtension| NIL)))
+         NIL)
+        ('T
+         (CGREATERP (PRIN2CVEC (|opOf| |t1|))
+             (PRIN2CVEC (|opOf| |t2|)))))))
+
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}
