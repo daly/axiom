@@ -1,0 +1,2931 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp newfort.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;--% Translation of Expression to FORTRAN
+;assignment2Fortran1(name,e) ==
+;  $fortError : fluid := nil
+;  checkLines fortran2Lines statement2Fortran ["=",name,e]
+
+(DEFUN |assignment2Fortran1| (|name| |e|)
+  (PROG (|$fortError|)
+    (DECLARE (SPECIAL |$fortError|))
+    (RETURN
+      (PROGN
+        (SPADLET |$fortError| NIL)
+        (|checkLines|
+            (|fortran2Lines|
+                (|statement2Fortran|
+                    (CONS '= (CONS |name| (CONS |e| NIL))))))))))
+
+;integerAssignment2Fortran1(name,e) ==
+;  $fortError : fluid := nil
+;  $fortInts2Floats : fluid := nil
+;  checkLines fortran2Lines statement2Fortran ["=",name,e]
+
+(DEFUN |integerAssignment2Fortran1| (|name| |e|)
+  (PROG (|$fortError| |$fortInts2Floats|)
+    (DECLARE (SPECIAL |$fortError| |$fortInts2Floats|))
+    (RETURN
+      (PROGN
+        (SPADLET |$fortError| NIL)
+        (SPADLET |$fortInts2Floats| NIL)
+        (|checkLines|
+            (|fortran2Lines|
+                (|statement2Fortran|
+                    (CONS '= (CONS |name| (CONS |e| NIL))))))))))
+
+;statement2Fortran e ==
+;  -- takes an object of type Expression and returns a list of
+;  -- strings. Any part of the expression which is a list starting
+;  -- with 'FORTRAN is merely passed on in the list of strings. The
+;  -- list of strings may contain '"%l".
+;  -- This is used when formatting e.g. a DO loop from Lisp
+;  $exp2FortTempVarIndex : local := 0
+;  $fortName : fluid := "DUMMY"
+;  $fortInts2Floats : fluid := nil
+;  fortranCleanUp exp2Fort1 segment fortPre exp2FortOptimize outputTran e
+
+(DEFUN |statement2Fortran| (|e|)
+  (PROG (|$exp2FortTempVarIndex| |$fortName| |$fortInts2Floats|)
+    (DECLARE (SPECIAL |$exp2FortTempVarIndex| |$fortName|
+                      |$fortInts2Floats|))
+    (RETURN
+      (PROGN
+        (SPADLET |$exp2FortTempVarIndex| 0)
+        (SPADLET |$fortName| 'DUMMY)
+        (SPADLET |$fortInts2Floats| NIL)
+        (|fortranCleanUp|
+            (|exp2Fort1|
+                (|segment|
+                    (|fortPre| (|exp2FortOptimize| (|outputTran| |e|))))))))))
+
+;expression2Fortran e ==
+;  -- takes an object of type Expression and returns a list of
+;  -- strings. Any part of the expression which is a list starting
+;  -- with 'FORTRAN is merely passed on in the list of strings. The
+;  -- list of strings may contain '"%l".
+;  $exp2FortTempVarIndex : local := 0
+;  $fortName : fluid := newFortranTempVar()
+;  $fortInts2Floats : fluid := nil
+;  fortranCleanUp exp2Fort1 segment fortPre exp2FortOptimize outputTran e
+
+(DEFUN |expression2Fortran| (|e|)
+  (PROG (|$exp2FortTempVarIndex| |$fortName| |$fortInts2Floats|)
+    (DECLARE (SPECIAL |$exp2FortTempVarIndex| |$fortName|
+                      |$fortInts2Floats|))
+    (RETURN
+      (PROGN
+        (SPADLET |$exp2FortTempVarIndex| 0)
+        (SPADLET |$fortName| (|newFortranTempVar|))
+        (SPADLET |$fortInts2Floats| NIL)
+        (|fortranCleanUp|
+            (|exp2Fort1|
+                (|segment|
+                    (|fortPre| (|exp2FortOptimize| (|outputTran| |e|))))))))))
+
+;expression2Fortran1(name,e) ==
+;  -- takes an object of type Expression and returns a list of
+;  -- strings. Any part of the expression which is a list starting
+;  -- with 'FORTRAN is merely passed on in the list of strings. The
+;  -- list of strings may contain '"%l".
+;  $exp2FortTempVarIndex : local := 0
+;  $fortName : fluid := name
+;  fortranCleanUp exp2Fort1 segment fortPre exp2FortOptimize outputTran e
+
+(DEFUN |expression2Fortran1| (|name| |e|)
+  (PROG (|$exp2FortTempVarIndex| |$fortName|)
+    (DECLARE (SPECIAL |$exp2FortTempVarIndex| |$fortName|))
+    (RETURN
+      (PROGN
+        (SPADLET |$exp2FortTempVarIndex| 0)
+        (SPADLET |$fortName| |name|)
+        (|fortranCleanUp|
+            (|exp2Fort1|
+                (|segment|
+                    (|fortPre| (|exp2FortOptimize| (|outputTran| |e|))))))))))
+
+;newFortranTempVar() ==
+;  $exp2FortTempVarIndex := 1 + $exp2FortTempVarIndex
+;  newVar := INTERN STRCONC('"T",STRINGIMAGE $exp2FortTempVarIndex)
+;  updateSymbolTable(newVar,$defaultFortranType)
+;  newVar
+
+(DEFUN |newFortranTempVar| ()
+  (PROG (|newVar|)
+    (RETURN
+      (PROGN
+        (SPADLET |$exp2FortTempVarIndex|
+                 (PLUS 1 |$exp2FortTempVarIndex|))
+        (SPADLET |newVar|
+                 (INTERN (STRCONC (MAKESTRING "T")
+                                  (STRINGIMAGE |$exp2FortTempVarIndex|))))
+        (|updateSymbolTable| |newVar| |$defaultFortranType|)
+        |newVar|))))
+
+;fortranCleanUp l ==
+;  -- takes reversed list and cleans up a bit, putting it in
+;  -- correct order
+;  oldTok := NIL
+;  m := NIL
+;  for e in l repeat
+;    if not (oldTok = '"-" and e = '"+") then m := [e,:m]
+;    oldTok := e
+;  m
+
+(DEFUN |fortranCleanUp| (|l|)
+  (PROG (|m| |oldTok|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |oldTok| NIL)
+             (SPADLET |m| NIL)
+             (DO ((G166123 |l| (CDR G166123)) (|e| NIL))
+                 ((OR (ATOM G166123)
+                      (PROGN (SETQ |e| (CAR G166123)) NIL))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (COND
+                              ((NULL (AND
+                                      (BOOT-EQUAL |oldTok|
+                                       (MAKESTRING "-"))
+                                      (BOOT-EQUAL |e| (MAKESTRING "+"))))
+                               (SPADLET |m| (CONS |e| |m|))))
+                            (SPADLET |oldTok| |e|)))))
+             |m|)))))
+
+;exp2Fort1 l ==
+;  s := nil
+;  for e in l repeat s := [:exp2Fort2(e,0,nil),:s]
+;  s
+
+(DEFUN |exp2Fort1| (|l|)
+  (PROG (|s|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |s| NIL)
+             (DO ((G166140 |l| (CDR G166140)) (|e| NIL))
+                 ((OR (ATOM G166140)
+                      (PROGN (SETQ |e| (CAR G166140)) NIL))
+                  NIL)
+               (SEQ (EXIT (SPADLET |s|
+                                   (APPEND (|exp2Fort2| |e| 0 NIL) |s|)))))
+             |s|)))))
+
+;exp2Fort2(e,prec,oldOp) ==
+;  null e    => nil
+;  atom e    => [object2String e]
+;  e is [ "=",lhs,rhs] or e is [ '"=",lhs,rhs] =>
+;    ['"%l",:exp2Fort2(rhs,prec,'"="),'"=",:exp2Fort2(lhs,prec,'"=")]
+;
+;  unaryOps    := ['"-",'"^",'"~"]
+;  unaryPrecs  := [700,260,50]
+;  binaryOps   := ['"|",'"**",'"/",'".LT.",'".GT.",'".EQ.",'".LE.",'".GE.", _
+;                  '"OVER",'".AND.",'".OR."]
+;  binaryPrecs := [0, 900, 800, 400, 400, 400, 400, 400, 800, 70, 90]
+;  naryOps     := ['"-",'"+",'"*",'",",'" ",'"ROW",'""]
+;  naryPrecs   := [700,  700, 800,  110,   0,     0,  0]
+;  nonUnaryOps := append(binaryOps,naryOps)
+;  [op,:args] := e
+;  op := object2String op
+;  nargs := #args
+;  nargs = 0 => exp2FortFn(op,args,0)
+;  nargs = 1 =>
+;    (p := position(op,unaryOps)) > -1 =>
+;      nprec := unaryPrecs.p
+;      s := [:exp2Fort2(first args,nprec,op),op]
+;      op = '"-" and atom first args => s
+;      op = oldOp and op in ['"*",'"+"] => s
+;      nprec <= prec => ['")",:s,'"("]
+;      s
+;    exp2FortFn(op,args,nargs)
+;  op = '"CMPLX" =>
+;    ['")",:exp2Fort2(SECOND args, prec, op),'",",:exp2Fort2(first args,prec,op),'"("]
+;  member(op,nonUnaryOps) =>
+;    if nargs > 0 then arg1 := first args
+;    nargs = 1 and op in '("+" "*") => exp2Fort2(arg1,prec,op)
+;    if nargs > 1 then arg2 := first rest args
+;    p := position(op,binaryOps)
+;    if p = -1
+;      then
+;        p := position(op,naryOps)
+;        nprec := naryPrecs.p
+;      else nprec := binaryPrecs.p
+;    s := nil
+;    for arg in args repeat
+;      op = '"+" and (arg is [m,a]) and m in '(_- "=") =>
+;        if not s then s := ['junk]
+;        s:= [op,:exp2Fort2(a,nprec,op),'"-",:rest s]
+;      s := [op,:exp2Fort2(arg,nprec,op),:s]
+;    s := rest s
+;    op = oldOp and op in ['"*",'"+"] => s
+;    nprec <= prec => ['")",:s,'"("]
+;    s
+;  exp2FortFn(op,args,nargs)
+
+(DEFUN |exp2Fort2| (|e| |prec| |oldOp|)
+  (PROG (|lhs| |ISTMP#2| |rhs| |unaryOps| |unaryPrecs| |binaryOps|
+               |binaryPrecs| |naryOps| |naryPrecs| |nonUnaryOps| |args|
+               |op| |nargs| |arg1| |arg2| |p| |nprec| |m| |ISTMP#1| |a|
+               |s|)
+    (RETURN
+      (SEQ (COND
+             ((NULL |e|) NIL)
+             ((ATOM |e|) (CONS (|object2String| |e|) NIL))
+             ((OR (AND (PAIRP |e|) (EQ (QCAR |e|) '=)
+                       (PROGN
+                         (SPADLET |ISTMP#1| (QCDR |e|))
+                         (AND (PAIRP |ISTMP#1|)
+                              (PROGN
+                                (SPADLET |lhs| (QCAR |ISTMP#1|))
+                                (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                                (AND (PAIRP |ISTMP#2|)
+                                     (EQ (QCDR |ISTMP#2|) NIL)
+                                     (PROGN
+                                       (SPADLET |rhs| (QCAR |ISTMP#2|))
+                                       'T))))))
+                  (AND (PAIRP |e|) (EQUAL (QCAR |e|) '"=")
+                       (PROGN
+                         (SPADLET |ISTMP#1| (QCDR |e|))
+                         (AND (PAIRP |ISTMP#1|)
+                              (PROGN
+                                (SPADLET |lhs| (QCAR |ISTMP#1|))
+                                (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                                (AND (PAIRP |ISTMP#2|)
+                                     (EQ (QCDR |ISTMP#2|) NIL)
+                                     (PROGN
+                                       (SPADLET |rhs| (QCAR |ISTMP#2|))
+                                       'T)))))))
+              (CONS (MAKESTRING "%l")
+                    (APPEND (|exp2Fort2| |rhs| |prec| (MAKESTRING "="))
+                            (CONS (MAKESTRING "=")
+                                  (|exp2Fort2| |lhs| |prec|
+                                      (MAKESTRING "="))))))
+             ('T
+              (SPADLET |unaryOps|
+                       (CONS (MAKESTRING "-")
+                             (CONS (MAKESTRING "^")
+                                   (CONS (MAKESTRING "~") NIL))))
+              (SPADLET |unaryPrecs|
+                       (CONS 700 (CONS 260 (CONS 50 NIL))))
+              (SPADLET |binaryOps|
+                       (CONS (MAKESTRING "|")
+                             (CONS (MAKESTRING "**")
+                                   (CONS (MAKESTRING "/")
+                                    (CONS (MAKESTRING ".LT.")
+                                     (CONS (MAKESTRING ".GT.")
+                                      (CONS (MAKESTRING ".EQ.")
+                                       (CONS (MAKESTRING ".LE.")
+                                        (CONS (MAKESTRING ".GE.")
+                                         (CONS (MAKESTRING "OVER")
+                                          (CONS (MAKESTRING ".AND.")
+                                           (CONS (MAKESTRING ".OR.")
+                                            NIL))))))))))))
+              (SPADLET |binaryPrecs|
+                       (CONS 0
+                             (CONS 900
+                                   (CONS 800
+                                    (CONS 400
+                                     (CONS 400
+                                      (CONS 400
+                                       (CONS 400
+                                        (CONS 400
+                                         (CONS 800
+                                          (CONS 70 (CONS 90 NIL))))))))))))
+              (SPADLET |naryOps|
+                       (CONS (MAKESTRING "-")
+                             (CONS (MAKESTRING "+")
+                                   (CONS (MAKESTRING "*")
+                                    (CONS (MAKESTRING ",")
+                                     (CONS (MAKESTRING " ")
+                                      (CONS (MAKESTRING "ROW")
+                                       (CONS (MAKESTRING "") NIL))))))))
+              (SPADLET |naryPrecs|
+                       (CONS 700
+                             (CONS 700
+                                   (CONS 800
+                                    (CONS 110
+                                     (CONS 0 (CONS 0 (CONS 0 NIL))))))))
+              (SPADLET |nonUnaryOps| (APPEND |binaryOps| |naryOps|))
+              (SPADLET |op| (CAR |e|)) (SPADLET |args| (CDR |e|))
+              (SPADLET |op| (|object2String| |op|))
+              (SPADLET |nargs| (|#| |args|))
+              (COND
+                ((EQL |nargs| 0) (|exp2FortFn| |op| |args| 0))
+                ((EQL |nargs| 1)
+                 (COND
+                   ((> (SPADLET |p| (|position| |op| |unaryOps|))
+                       (SPADDIFFERENCE 1))
+                    (SPADLET |nprec| (ELT |unaryPrecs| |p|))
+                    (SPADLET |s|
+                             (APPEND (|exp2Fort2| (CAR |args|) |nprec|
+                                      |op|)
+                                     (CONS |op| NIL)))
+                    (COND
+                      ((AND (BOOT-EQUAL |op| (MAKESTRING "-"))
+                            (ATOM (CAR |args|)))
+                       |s|)
+                      ((AND (BOOT-EQUAL |op| |oldOp|)
+                            (|member| |op|
+                                (CONS (MAKESTRING "*")
+                                      (CONS (MAKESTRING "+") NIL))))
+                       |s|)
+                      ((<= |nprec| |prec|)
+                       (CONS (MAKESTRING ")")
+                             (APPEND |s| (CONS (MAKESTRING "(") NIL))))
+                      ('T |s|)))
+                   ('T (|exp2FortFn| |op| |args| |nargs|))))
+                ((BOOT-EQUAL |op| (MAKESTRING "CMPLX"))
+                 (CONS (MAKESTRING ")")
+                       (APPEND (|exp2Fort2| (SECOND |args|) |prec|
+                                   |op|)
+                               (CONS (MAKESTRING ",")
+                                     (APPEND
+                                      (|exp2Fort2| (CAR |args|) |prec|
+                                       |op|)
+                                      (CONS (MAKESTRING "(") NIL))))))
+                ((|member| |op| |nonUnaryOps|)
+                 (COND ((> |nargs| 0) (SPADLET |arg1| (CAR |args|))))
+                 (COND
+                   ((AND (EQL |nargs| 1) (|member| |op| '("+" "*")))
+                    (|exp2Fort2| |arg1| |prec| |op|))
+                   ('T
+                    (COND
+                      ((> |nargs| 1)
+                       (SPADLET |arg2| (CAR (CDR |args|)))))
+                    (SPADLET |p| (|position| |op| |binaryOps|))
+                    (COND
+                      ((BOOT-EQUAL |p| (SPADDIFFERENCE 1))
+                       (SPADLET |p| (|position| |op| |naryOps|))
+                       (SPADLET |nprec| (ELT |naryPrecs| |p|)))
+                      ('T (SPADLET |nprec| (ELT |binaryPrecs| |p|))))
+                    (SPADLET |s| NIL)
+                    (DO ((G166210 |args| (CDR G166210))
+                         (|arg| NIL))
+                        ((OR (ATOM G166210)
+                             (PROGN (SETQ |arg| (CAR G166210)) NIL))
+                         NIL)
+                      (SEQ (EXIT (COND
+                                   ((AND
+                                     (BOOT-EQUAL |op| (MAKESTRING "+"))
+                                     (PAIRP |arg|)
+                                     (PROGN
+                                       (SPADLET |m| (QCAR |arg|))
+                                       (SPADLET |ISTMP#1| (QCDR |arg|))
+                                       (AND (PAIRP |ISTMP#1|)
+                                        (EQ (QCDR |ISTMP#1|) NIL)
+                                        (PROGN
+                                          (SPADLET |a|
+                                           (QCAR |ISTMP#1|))
+                                          'T)))
+                                     (|member| |m| '(- "=")))
+                                    (COND
+                                      ((NULL |s|)
+                                       (SPADLET |s| (CONS '|junk| NIL))))
+                                    (SPADLET |s|
+                                     (CONS |op|
+                                      (APPEND
+                                       (|exp2Fort2| |a| |nprec| |op|)
+                                       (CONS (MAKESTRING "-")
+                                        (CDR |s|))))))
+                                   ('T
+                                    (SPADLET |s|
+                                     (CONS |op|
+                                      (APPEND
+                                       (|exp2Fort2| |arg| |nprec| |op|)
+                                       |s|))))))))
+                    (SPADLET |s| (CDR |s|))
+                    (COND
+                      ((AND (BOOT-EQUAL |op| |oldOp|)
+                            (|member| |op|
+                                (CONS (MAKESTRING "*")
+                                      (CONS (MAKESTRING "+") NIL))))
+                       |s|)
+                      ((<= |nprec| |prec|)
+                       (CONS (MAKESTRING ")")
+                             (APPEND |s| (CONS (MAKESTRING "(") NIL))))
+                      ('T |s|)))))
+                ('T (|exp2FortFn| |op| |args| |nargs|)))))))))
+
+;exp2FortFn(op,args,nargs) ==
+;  s := ['"(",op]
+;  while args repeat
+;    s := ['",",:exp2Fort2(first args,0,op),:s]
+;    args := rest args
+;  if nargs > 0 then ['")",:rest s]
+;  else ['")",:s]
+
+(DEFUN |exp2FortFn| (|op| |args| |nargs|)
+  (PROG (|s|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |s| (CONS (MAKESTRING "(") (CONS |op| NIL)))
+             (DO () ((NULL |args|) NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |s|
+                                     (CONS (MAKESTRING ",")
+                                      (APPEND
+                                       (|exp2Fort2| (CAR |args|) 0
+                                        |op|)
+                                       |s|)))
+                            (SPADLET |args| (CDR |args|))))))
+             (COND
+               ((> |nargs| 0) (CONS (MAKESTRING ")") (CDR |s|)))
+               ('T (CONS (MAKESTRING ")") |s|))))))))
+
+;--% Optimization of Expression
+;
+;exp2FortOptimize e ==
+;  -- $fortranOptimizationLevel means:
+;  --   0         just extract arrays
+;  --   1         extract common subexpressions
+;  --   2         try to optimize computing of powers
+;  $exprStack : local := NIL
+;  atom e => [e]
+;  $fortranOptimizationLevel = 0 =>
+;    e1 := exp2FortOptimizeArray e
+;    NREVERSE [e1,:$exprStack]
+;  e := minimalise e
+;  for e1 in exp2FortOptimizeCS  e repeat
+;    e2 := exp2FortOptimizeArray e1
+;    $exprStack := [e2,:$exprStack]
+;  NREVERSE $exprStack
+
+(DEFUN |exp2FortOptimize| (|e|)
+  (PROG (|$exprStack| |e1| |e2|)
+    (DECLARE (SPECIAL |$exprStack|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$exprStack| NIL)
+             (COND
+               ((ATOM |e|) (CONS |e| NIL))
+               ((EQL |$fortranOptimizationLevel| 0)
+                (SPADLET |e1| (|exp2FortOptimizeArray| |e|))
+                (NREVERSE (CONS |e1| |$exprStack|)))
+               ('T (SPADLET |e| (|minimalise| |e|))
+                (DO ((G166279 (|exp2FortOptimizeCS| |e|)
+                         (CDR G166279))
+                     (|e1| NIL))
+                    ((OR (ATOM G166279)
+                         (PROGN (SETQ |e1| (CAR G166279)) NIL))
+                     NIL)
+                  (SEQ (EXIT (PROGN
+                               (SPADLET |e2|
+                                        (|exp2FortOptimizeArray| |e1|))
+                               (SPADLET |$exprStack|
+                                        (CONS |e2| |$exprStack|))))))
+                (NREVERSE |$exprStack|))))))))
+
+;exp2FortOptimizeCS e ==
+;  $fortCsList : local := NIL
+;  $fortCsHash : local := MAKE_-HASHTABLE 'EQ
+;  $fortCsExprStack : local := NIL
+;  $fortCsFuncStack : local := NIL
+;  f := exp2FortOptimizeCS1 e
+;  NREVERSE [f,:$fortCsList]
+
+(DEFUN |exp2FortOptimizeCS| (|e|)
+  (PROG (|$fortCsList| |$fortCsHash| |$fortCsExprStack|
+            |$fortCsFuncStack| |f|)
+    (DECLARE (SPECIAL |$fortCsList| |$fortCsHash| |$fortCsExprStack|
+                      |$fortCsFuncStack|))
+    (RETURN
+      (PROGN
+        (SPADLET |$fortCsList| NIL)
+        (SPADLET |$fortCsHash| (MAKE-HASHTABLE 'EQ))
+        (SPADLET |$fortCsExprStack| NIL)
+        (SPADLET |$fortCsFuncStack| NIL)
+        (SPADLET |f| (|exp2FortOptimizeCS1| |e|))
+        (NREVERSE (CONS |f| |$fortCsList|))))))
+
+;-- bug fix to beenHere
+;-- Thu Nov 05 12:01:46 CUT 1992 , Author: TTT
+;-- Used in exp2FortOprtimizeCS
+;-- Original file : newfort.boot
+;beenHere(e,n) ==
+;  n.0 := n.0 + 1                      -- increase count (initially 1)
+;  n.0 = 2 =>                          -- first time back again
+;    var := n.1 := newFortranTempVar() -- stuff n.1 with new var
+;    exprStk := n.2                    -- get expression
+;    if exprStk then
+;-- using COPY-TREE : RPLAC does not smash $fortCsList
+;-- which led to inconsistencies in assignment of temp. vars.
+;      $fortCsList := COPY_-TREE [['"=",var,e],:$fortCsList]
+;      loc := CAR exprStk
+;      fun := CAR n.3
+;      fun = 'CAR =>
+;        RPLACA(loc,var)
+;      fun = 'CDR =>
+;        if PAIRP QCDR loc
+;          then RPLACD(loc,[var])
+;          else RPLACD(loc,var)
+;      SAY '"whoops"
+;    var
+;  n.1                     -- been here before, so just get variable
+
+(DEFUN |beenHere| (|e| |n|)
+  (PROG (|var| |exprStk| |loc| |fun|)
+    (RETURN
+      (PROGN
+        (SETELT |n| 0 (PLUS (ELT |n| 0) 1))
+        (COND
+          ((EQL (ELT |n| 0) 2)
+           (SPADLET |var| (SETELT |n| 1 (|newFortranTempVar|)))
+           (SPADLET |exprStk| (ELT |n| 2))
+           (COND
+             (|exprStk|
+                 (SPADLET |$fortCsList|
+                          (COPY-TREE
+                              (CONS (CONS (MAKESTRING "=")
+                                     (CONS |var| (CONS |e| NIL)))
+                                    |$fortCsList|)))
+                 (SPADLET |loc| (CAR |exprStk|))
+                 (SPADLET |fun| (CAR (ELT |n| 3)))
+                 (COND
+                   ((BOOT-EQUAL |fun| 'CAR) (RPLACA |loc| |var|))
+                   ((BOOT-EQUAL |fun| 'CDR)
+                    (COND
+                      ((PAIRP (QCDR |loc|))
+                       (RPLACD |loc| (CONS |var| NIL)))
+                      ('T (RPLACD |loc| |var|))))
+                   ('T (SAY (MAKESTRING "whoops"))))))
+           |var|)
+          ('T (ELT |n| 1)))))))
+
+;exp2FortOptimizeCS1 e ==
+;  -- we do nothing with atoms or simple lists containing atoms
+;  atom(e) or (atom first e and null rest e) => e
+;  e is [op,arg] and object2Identifier op = "-" and atom arg => e
+;  -- see if we have been here before
+;  not (object2Identifier QCAR e in '(ROW AGGLST)) and
+;    (n := HGET($fortCsHash,e)) => beenHere(e,n) -- where
+;  -- descend sucessive CARs of CDRs of e
+;  f := e
+;  while f repeat
+;    pushCsStacks(f,'CAR) where pushCsStacks(x,y) ==
+;      $fortCsExprStack := [x,:$fortCsExprStack]
+;      $fortCsFuncStack := [y,:$fortCsFuncStack]
+;    RPLACA(f,exp2FortOptimizeCS1 QCAR f)
+;    popCsStacks(0) where popCsStacks(x) ==
+;      $fortCsFuncStack := QCDR $fortCsFuncStack
+;      $fortCsExprStack := QCDR $fortCsExprStack
+;    g := QCDR f
+;    -- check to see of we have an non-NIL atomic CDR
+;    g and atom g =>
+;      pushCsStacks(f,'CDR)
+;      RPLACD(f,exp2FortOptimizeCS1 g)
+;      popCsStacks(0)
+;      f := NIL
+;    f := g
+;  MEMQ(object2Identifier QCAR e,'(ROW AGGLST)) => e
+;  -- see if we have already seen this expression
+;  n := HGET($fortCsHash,e)
+;  null n =>
+;    n := VECTOR(1,NIL,$fortCsExprStack,$fortCsFuncStack)
+;    HPUT($fortCsHash,e,n)
+;    e
+;  beenHere(e,n)
+
+(DEFUN |exp2FortOptimizeCS1,pushCsStacks| (|x| |y|)
+  (SEQ (SPADLET |$fortCsExprStack| (CONS |x| |$fortCsExprStack|))
+       (EXIT (SPADLET |$fortCsFuncStack| (CONS |y| |$fortCsFuncStack|)))))
+
+(DEFUN |exp2FortOptimizeCS1,popCsStacks| (|x|)
+  (SEQ (SPADLET |$fortCsFuncStack| (QCDR |$fortCsFuncStack|))
+       (EXIT (SPADLET |$fortCsExprStack| (QCDR |$fortCsExprStack|)))))
+
+(DEFUN |exp2FortOptimizeCS1| (|e|)
+  (PROG (|op| |ISTMP#1| |arg| |g| |f| |n|)
+    (RETURN
+      (SEQ (COND
+             ((OR (ATOM |e|) (AND (ATOM (CAR |e|)) (NULL (CDR |e|))))
+              |e|)
+             ((AND (PAIRP |e|)
+                   (PROGN
+                     (SPADLET |op| (QCAR |e|))
+                     (SPADLET |ISTMP#1| (QCDR |e|))
+                     (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                          (PROGN (SPADLET |arg| (QCAR |ISTMP#1|)) 'T)))
+                   (BOOT-EQUAL (|object2Identifier| |op|) '-)
+                   (ATOM |arg|))
+              |e|)
+             ((AND (NULL (|member| (|object2Identifier| (QCAR |e|))
+                             '(ROW AGGLST)))
+                   (SPADLET |n| (HGET |$fortCsHash| |e|)))
+              (|beenHere| |e| |n|))
+             ('T (SPADLET |f| |e|)
+              (DO () ((NULL |f|) NIL)
+                (SEQ (EXIT (PROGN
+                             (|exp2FortOptimizeCS1,pushCsStacks| |f|
+                                 'CAR)
+                             (RPLACA |f|
+                                     (|exp2FortOptimizeCS1| (QCAR |f|)))
+                             (|exp2FortOptimizeCS1,popCsStacks| 0)
+                             (SPADLET |g| (QCDR |f|))
+                             (COND
+                               ((AND |g| (ATOM |g|))
+                                (|exp2FortOptimizeCS1,pushCsStacks| |f|
+                                    'CDR)
+                                (RPLACD |f|
+                                        (|exp2FortOptimizeCS1| |g|))
+                                (|exp2FortOptimizeCS1,popCsStacks| 0)
+                                (SPADLET |f| NIL))
+                               ('T (SPADLET |f| |g|)))))))
+              (COND
+                ((MEMQ (|object2Identifier| (QCAR |e|)) '(ROW AGGLST))
+                 |e|)
+                ('T (SPADLET |n| (HGET |$fortCsHash| |e|))
+                 (COND
+                   ((NULL |n|)
+                    (SPADLET |n|
+                             (VECTOR 1 NIL |$fortCsExprStack|
+                                     |$fortCsFuncStack|))
+                    (HPUT |$fortCsHash| |e| |n|) |e|)
+                   ('T (|beenHere| |e| |n|)))))))))))
+
+;exp2FortOptimizeArray e ==
+;  -- this handles arrays
+;  atom e => e
+;  [op,:args] := e
+;  op1 := object2Identifier op
+;  op1 in '(BRACE BRACKET) =>
+;    args is [['AGGLST,:elts]] =>
+;      LISTP first elts and first first elts in '(BRACE BRACKET) => fortError1 e
+;      -- var := newFortranTempVar()
+;      var := $fortName
+;      $exprStack := [[op,var,['AGGLST,:exp2FortOptimizeArray elts]],
+;        :$exprStack]
+;      var
+;  EQ(op1,'MATRIX) =>
+;    -- var := newFortranTempVar()
+;    var := $fortName
+;    -- args looks like [NIL,[ROW,...],[ROW,...]]
+;    $exprStack := [[op,var,:exp2FortOptimizeArray args],:$exprStack]
+;    var
+;  [exp2FortOptimizeArray op,:exp2FortOptimizeArray args]
+
+(DEFUN |exp2FortOptimizeArray| (|e|)
+  (PROG (|op| |args| |op1| |ISTMP#1| |elts| |var|)
+    (RETURN
+      (SEQ (COND
+             ((ATOM |e|) |e|)
+             ('T (SPADLET |op| (CAR |e|)) (SPADLET |args| (CDR |e|))
+              (SPADLET |op1| (|object2Identifier| |op|))
+              (SEQ (COND
+                     ((|member| |op1| '(BRACE BRACKET))
+                      (COND
+                        ((AND (PAIRP |args|) (EQ (QCDR |args|) NIL)
+                              (PROGN
+                                (SPADLET |ISTMP#1| (QCAR |args|))
+                                (AND (PAIRP |ISTMP#1|)
+                                     (EQ (QCAR |ISTMP#1|) 'AGGLST)
+                                     (PROGN
+                                       (SPADLET |elts|
+                                        (QCDR |ISTMP#1|))
+                                       'T))))
+                         (EXIT (COND
+                                 ((AND (LISTP (CAR |elts|))
+                                       (|member| (CAR (CAR |elts|))
+                                        '(BRACE BRACKET)))
+                                  (|fortError1| |e|))
+                                 ('T (SPADLET |var| |$fortName|)
+                                  (SPADLET |$exprStack|
+                                           (CONS
+                                            (CONS |op|
+                                             (CONS |var|
+                                              (CONS
+                                               (CONS 'AGGLST
+                                                (|exp2FortOptimizeArray|
+                                                 |elts|))
+                                               NIL)))
+                                            |$exprStack|))
+                                  |var|))))))
+                     ((EQ |op1| 'MATRIX)
+                      (PROGN
+                        (SPADLET |var| |$fortName|)
+                        (SPADLET |$exprStack|
+                                 (CONS (CONS |op|
+                                        (CONS |var|
+                                         (|exp2FortOptimizeArray|
+                                          |args|)))
+                                       |$exprStack|))
+                        |var|))
+                     ('T
+                      (CONS (|exp2FortOptimizeArray| |op|)
+                            (|exp2FortOptimizeArray| |args|)))))))))))
+
+;--% FORTRAN Line Breaking
+;
+;fortran2Lines f ==
+;  -- f is a list of strings
+;  -- returns: a list of strings where each string is a valid
+;  -- FORTRAN line in fixed form
+;
+;  -- collect strings up to first %l or end of list. Then feed to
+;  -- fortran2Lines1.
+;  fs := NIL
+;  lines := NIL
+;  while f repeat
+;    while f and (ff := first(f)) ^= '"%l" repeat
+;      fs := [ff,:fs]
+;      f := rest f
+;    if f and first(f) = '"%l" then f := rest f
+;    lines := append(fortran2Lines1 nreverse fs,lines)
+;    fs := nil
+;  nreverse lines
+
+(DEFUN |fortran2Lines| (|f|)
+  (PROG (|ff| |lines| |fs|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |fs| NIL)
+             (SPADLET |lines| NIL)
+             (DO () ((NULL |f|) NIL)
+               (SEQ (EXIT (PROGN
+                            (DO ()
+                                ((NULL (AND |f|
+                                        (NEQUAL
+                                         (SPADLET |ff| (CAR |f|))
+                                         (MAKESTRING "%l"))))
+                                 NIL)
+                              (SEQ (EXIT
+                                    (PROGN
+                                      (SPADLET |fs| (CONS |ff| |fs|))
+                                      (SPADLET |f| (CDR |f|))))))
+                            (COND
+                              ((AND |f|
+                                    (BOOT-EQUAL (CAR |f|)
+                                     (MAKESTRING "%l")))
+                               (SPADLET |f| (CDR |f|))))
+                            (SPADLET |lines|
+                                     (APPEND
+                                      (|fortran2Lines1|
+                                       (NREVERSE |fs|))
+                                      |lines|))
+                            (SPADLET |fs| NIL)))))
+             (NREVERSE |lines|))))))
+
+;fortran2Lines1 f ==
+;  -- f is a list of strings making up 1 FORTRAN statement
+;  -- return: a reverse list of FORTRAN lines
+;  normPref := MAKE_-STRING($fortIndent)
+;  --contPref := STRCONC(MAKE_-STRING($fortIndent-1),"&")
+;  contPref := STRCONC("     &",MAKE_-STRING($fortIndent-6))
+;  lines := NIL
+;  ll := $fortIndent
+;  while f repeat
+;    ok := true
+;    line := normPref
+;    ff := first f
+;    while ok repeat
+;      (ll + (sff := SIZE ff)) <= $fortLength =>
+;        ll := ll + sff
+;        line := STRCONC(line,ff)
+;        f := rest f
+;        if f then ff := first f
+;        else ok := nil
+;      -- fill the line out to exactly $fortLength spaces if possible by splitting
+;      -- up symbols.  This is helpful when doing the segmentation
+;      -- calculations, and also means that very long strings (e.g. numbers
+;      -- with more than $fortLength-$fortIndent digits) are printed in a
+;      -- legal format. MCD
+;      if (ll < $fortLength) and (ll + sff) > $fortLength then
+;        spaceLeft := $fortLength - ll
+;        line := STRCONC(line,SUBSEQ(ff,0,spaceLeft))
+;        ff := SUBSEQ(ff,spaceLeft)
+;      lines := [line,:lines]
+;      ll := $fortIndent
+;      line := contPref
+;    if ll > $fortIndent then lines := [line,:lines]
+;  lines
+
+(DEFUN |fortran2Lines1| (|f|)
+  (PROG (|normPref| |contPref| |sff| |ok| |spaceLeft| |ff| |ll| |line|
+            |lines|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |normPref| (MAKE-STRING |$fortIndent|))
+             (SPADLET |contPref|
+                      (STRCONC '|     &|
+                               (MAKE-STRING
+                                   (SPADDIFFERENCE |$fortIndent| 6))))
+             (SPADLET |lines| NIL)
+             (SPADLET |ll| |$fortIndent|)
+             (DO () ((NULL |f|) NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |ok| 'T)
+                            (SPADLET |line| |normPref|)
+                            (SPADLET |ff| (CAR |f|))
+                            (DO () ((NULL |ok|) NIL)
+                              (SEQ (EXIT
+                                    (COND
+                                      ((<=
+                                        (PLUS |ll|
+                                         (SPADLET |sff| (SIZE |ff|)))
+                                        |$fortLength|)
+                                       (SPADLET |ll| (PLUS |ll| |sff|))
+                                       (SPADLET |line|
+                                        (STRCONC |line| |ff|))
+                                       (SPADLET |f| (CDR |f|))
+                                       (COND
+                                         (|f| (SPADLET |ff| (CAR |f|)))
+                                         ('T (SPADLET |ok| NIL))))
+                                      ('T
+                                       (COND
+                                         ((AND (> |$fortLength| |ll|)
+                                           (> (PLUS |ll| |sff|)
+                                            |$fortLength|))
+                                          (SPADLET |spaceLeft|
+                                           (SPADDIFFERENCE
+                                            |$fortLength| |ll|))
+                                          (SPADLET |line|
+                                           (STRCONC |line|
+                                            (SUBSEQ |ff| 0 |spaceLeft|)))
+                                          (SPADLET |ff|
+                                           (SUBSEQ |ff| |spaceLeft|))))
+                                       (SPADLET |lines|
+                                        (CONS |line| |lines|))
+                                       (SPADLET |ll| |$fortIndent|)
+                                       (SPADLET |line| |contPref|))))))
+                            (COND
+                              ((> |ll| |$fortIndent|)
+                               (SPADLET |lines| (CONS |line| |lines|)))
+                              ('T NIL))))))
+             |lines|)))))
+
+;-- The Fortran error functions
+;fortError1 u ==
+;  $fortError := "t"
+;  sayErrorly("Fortran translation error",
+;             "   No corresponding Fortran structure for:")
+;  mathPrint u
+
+(DEFUN |fortError1| (|u|)
+  (PROGN
+    (SPADLET |$fortError| '|t|)
+    (|sayErrorly| '|Fortran translation error|
+        '|   No corresponding Fortran structure for:|)
+    (|mathPrint| |u|)))
+
+;fortError(u,v) ==
+;  $fortError := "t"
+;  msg := STRCONC("   ",STRINGIMAGE u);
+;  sayErrorly("Fortran translation error",msg)
+;  mathPrint v
+
+(DEFUN |fortError| (|u| |v|)
+  (PROG (|msg|)
+    (RETURN
+      (PROGN
+        (SPADLET |$fortError| '|t|)
+        (SPADLET |msg| (STRCONC '|   | (STRINGIMAGE |u|)))
+        (|sayErrorly| '|Fortran translation error| |msg|)
+        (|mathPrint| |v|)))))
+
+;--% Top Level Things to Call
+;-- The names are the same as those used in the old fortran code
+;dispStatement x ==
+;  $fortError : fluid := nil
+;  displayLines fortran2Lines statement2Fortran x
+
+(DEFUN |dispStatement| (|x|)
+  (PROG (|$fortError|)
+    (DECLARE (SPECIAL |$fortError|))
+    (RETURN
+      (PROGN
+        (SPADLET |$fortError| NIL)
+        (|displayLines| (|fortran2Lines| (|statement2Fortran| |x|)))))))
+
+;getStatement(x,ints2Floats?) ==
+;  $fortInts2Floats : fluid := ints2Floats?
+;  $fortError : fluid := nil
+;  checkLines fortran2Lines statement2Fortran x
+
+(DEFUN |getStatement| (|x| |ints2Floats?|)
+  (PROG (|$fortInts2Floats| |$fortError|)
+    (DECLARE (SPECIAL |$fortInts2Floats| |$fortError|))
+    (RETURN
+      (PROGN
+        (SPADLET |$fortInts2Floats| |ints2Floats?|)
+        (SPADLET |$fortError| NIL)
+        (|checkLines| (|fortran2Lines| (|statement2Fortran| |x|)))))))
+
+;fortexp0 x ==
+;  f := expression2Fortran x
+;  p := position('"%l",f)
+;  p < 0 => f
+;  l := NIL
+;  while p < 0 repeat
+;    [t,:f] := f
+;    l := [t,:l]
+;  NREVERSE ['"...",:l]
+
+(DEFUN |fortexp0| (|x|)
+  (PROG (|p| |LETTMP#1| |t| |f| |l|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |f| (|expression2Fortran| |x|))
+             (SPADLET |p| (|position| (MAKESTRING "%l") |f|))
+             (COND
+               ((MINUSP |p|) |f|)
+               ('T (SPADLET |l| NIL)
+                (DO () ((NULL (MINUSP |p|)) NIL)
+                  (SEQ (EXIT (PROGN
+                               (SPADLET |LETTMP#1| |f|)
+                               (SPADLET |t| (CAR |LETTMP#1|))
+                               (SPADLET |f| (CDR |LETTMP#1|))
+                               (SPADLET |l| (CONS |t| |l|))))))
+                (NREVERSE (CONS (MAKESTRING "...") |l|)))))))))
+
+;dispfortexp x ==
+;  if atom(x) or x is [op,:.] and not object2Identifier op in
+;    '(_= MATRIX construct ) then
+;      var := INTERN STRCONC('"R",object2String $IOindex)
+;      x := ['"=",var,x]
+;  dispfortexp1 x
+
+(DEFUN |dispfortexp| (|x|)
+  (PROG (|op| |var|)
+    (RETURN
+      (PROGN
+        (COND
+          ((OR (ATOM |x|)
+               (AND (PAIRP |x|) (PROGN (SPADLET |op| (QCAR |x|)) 'T)
+                    (NULL (|member| (|object2Identifier| |op|)
+                              '(= MATRIX |construct|)))))
+           (SPADLET |var|
+                    (INTERN (STRCONC (MAKESTRING "R")
+                                     (|object2String| |$IOindex|))))
+           (SPADLET |x|
+                    (CONS (MAKESTRING "=") (CONS |var| (CONS |x| NIL))))))
+        (|dispfortexp1| |x|)))))
+
+;dispfortexpf (xf, fortranName) ==
+;  $fortError : fluid := nil
+;  linef := fortran2Lines BUTLAST(expression2Fortran1(fortranName,xf),2)
+;  displayLines linef
+
+(DEFUN |dispfortexpf| (|xf| |fortranName|)
+  (PROG (|$fortError| |linef|)
+    (DECLARE (SPECIAL |$fortError|))
+    (RETURN
+      (PROGN
+        (SPADLET |$fortError| NIL)
+        (SPADLET |linef|
+                 (|fortran2Lines|
+                     (BUTLAST (|expression2Fortran1| |fortranName|
+                                  |xf|)
+                              2)))
+        (|displayLines| |linef|)))))
+
+;dispfortexpj (xj, fortranName) ==
+;  $fortName : fluid := fortranName
+;  $fortError : fluid := nil
+;  linej := fortran2Lines BUTLAST(expression2Fortran1(fortranName,xj),2)
+;  displayLines linej
+
+(DEFUN |dispfortexpj| (|xj| |fortranName|)
+  (PROG (|$fortName| |$fortError| |linej|)
+    (DECLARE (SPECIAL |$fortName| |$fortError|))
+    (RETURN
+      (PROGN
+        (SPADLET |$fortName| |fortranName|)
+        (SPADLET |$fortError| NIL)
+        (SPADLET |linej|
+                 (|fortran2Lines|
+                     (BUTLAST (|expression2Fortran1| |fortranName|
+                                  |xj|)
+                              2)))
+        (|displayLines| |linej|)))))
+
+;dispfortexp1 x ==
+;  $fortError : fluid := nil
+;  displayLines fortran2Lines expression2Fortran x
+
+(DEFUN |dispfortexp1| (|x|)
+  (PROG (|$fortError|)
+    (DECLARE (SPECIAL |$fortError|))
+    (RETURN
+      (PROGN
+        (SPADLET |$fortError| NIL)
+        (|displayLines| (|fortran2Lines| (|expression2Fortran| |x|)))))))
+
+;getfortexp1 x ==
+;  $fortError : fluid := nil
+;  checkLines fortran2Lines expression2Fortran x
+
+(DEFUN |getfortexp1| (|x|)
+  (PROG (|$fortError|)
+    (DECLARE (SPECIAL |$fortError|))
+    (RETURN
+      (PROGN
+        (SPADLET |$fortError| NIL)
+        (|checkLines| (|fortran2Lines| (|expression2Fortran| |x|)))))))
+
+;displayLines1 lines ==
+;  for l in lines repeat
+;    PRINTEXP(l,$fortranOutputStream)
+;    TERPRI($fortranOutputStream)
+
+(DEFUN |displayLines1| (|lines|)
+  (SEQ (DO ((G166579 |lines| (CDR G166579)) (|l| NIL))
+           ((OR (ATOM G166579)
+                (PROGN (SETQ |l| (CAR G166579)) NIL))
+            NIL)
+         (SEQ (EXIT (PROGN
+                      (PRINTEXP |l| |$fortranOutputStream|)
+                      (TERPRI |$fortranOutputStream|)))))))
+
+;displayLines lines ==
+;  if not $fortError then displayLines1 lines
+
+(DEFUN |displayLines| (|lines|)
+  (COND ((NULL |$fortError|) (|displayLines1| |lines|)) ('T NIL)))
+
+;checkLines lines ==
+;  $fortError => []
+;  lines
+
+(DEFUN |checkLines| (|lines|) (COND (|$fortError| NIL) ('T |lines|)))
+
+;dispfortarrayexp (fortranName,m) ==
+;  $fortError : fluid := nil
+;  displayLines fortran2Lines BUTLAST(expression2Fortran1(fortranName,m),2)
+
+(DEFUN |dispfortarrayexp| (|fortranName| |m|)
+  (PROG (|$fortError|)
+    (DECLARE (SPECIAL |$fortError|))
+    (RETURN
+      (PROGN
+        (SPADLET |$fortError| NIL)
+        (|displayLines|
+            (|fortran2Lines|
+                (BUTLAST (|expression2Fortran1| |fortranName| |m|) 2)))))))
+
+;getfortarrayexp(fortranName,m,ints2floats?) ==
+;  $fortInts2Floats : fluid := ints2floats?
+;  $fortError : fluid := nil
+;  checkLines fortran2Lines BUTLAST(expression2Fortran1(fortranName,m),2)
+
+(DEFUN |getfortarrayexp| (|fortranName| |m| |ints2floats?|)
+  (PROG (|$fortInts2Floats| |$fortError|)
+    (DECLARE (SPECIAL |$fortInts2Floats| |$fortError|))
+    (RETURN
+      (PROGN
+        (SPADLET |$fortInts2Floats| |ints2floats?|)
+        (SPADLET |$fortError| NIL)
+        (|checkLines|
+            (|fortran2Lines|
+                (BUTLAST (|expression2Fortran1| |fortranName| |m|) 2)))))))
+
+;-- Globals
+;$currentSubprogram := nil
+
+(SPADLET |$currentSubprogram| NIL) 
+
+;$symbolTable := nil
+
+(SPADLET |$symbolTable| NIL) 
+
+;--fix [x,exp x]
+;
+;------------ exp2FortSpecial.boot --------------------
+;
+;exp2FortSpecial(op,args,nargs) ==
+;  op = "CONCAT" and first args in ["<",">","<=",">=","~","and","or"] =>
+;    mkFortFn(first args,CDADAR rest args,#(CDADAR rest args))
+;  op = "CONCAT" and CADR(args)="EQ" =>
+;    mkFortFn("EQ",[first args, CADDR args],2)
+;  --the next line is NEVER used by FORTRAN code but is needed when
+;  --  called to get a linearized form for the browser
+;  op = "QUOTE" =>
+;    atom (arg := first args) => STRINGIMAGE arg
+;    tailPart := "STRCONC"/[STRCONC('",",x) for x in rest arg]
+;    STRCONC('"[",first arg,tailPart,'"]")
+;  op = "PAREN" =>
+;    args := first args
+;    not(first(args)="CONCATB") => fortError1 [op,:args]
+;    -- Have a matrix element
+;    mkMat(args)
+;  op = "SUB" =>
+;    $fortInts2Floats : fluid := nil
+;    mkFortFn(first args,rest args,#(rest args))
+;  op in ["BRACE","BRACKET"] =>
+;    args is [var,['AGGLST,:elts]] =>
+;      var := object2String var
+;      si := $fortranArrayStartingIndex
+;      hidim := #elts - 1 + si
+;      if LISTP first elts and #elts=1 and first elts is [sOp,:sArgs] then
+;        sOp in ['"SEGMENT","SEGMENT"] =>
+;          #sArgs=1 => fortError1 first elts
+;          not(NUMBERP(first sArgs) and NUMBERP(SECOND sArgs)) =>
+;            fortError("Cannot expand segment: ",first elts)
+;          first sArgs > SECOND sArgs => fortError1
+;            '"Lower bound of segment exceeds upper bound."
+;          for e in first sArgs .. SECOND sArgs for i in si.. repeat
+;            $exprStack := [["=",[var,object2String i],fortPre1(e)],:$exprStack]
+;      for e in elts for i in si.. repeat
+;        $exprStack := [["=",[var,object2String i],fortPre1(e)],:$exprStack]
+;    fortError1 [op,:args]
+;  op in ["CONCAT","CONCATB"] =>
+;    nargs = 0 => NIL
+;    nargs = 1 => fortPre1 first args
+;    nargs = 2 and first rest args in ["!",'"!"] =>
+;      mkFortFn("FACTORIAL",[first args],1)
+;    fortError1 [op,:args]
+;  op in ['"MATRIX","MATRIX"] =>
+;    args is [var, =NIL,:rows] =>
+;      var := object2String var
+;      nrows := #rows - 1
+;      ncols := #(rest first rows) - 1
+;      si := $fortranArrayStartingIndex
+;      for r in rows for rx in si.. repeat
+;        for c in rest r for cx in si.. repeat
+;          $exprStack := [["=",[var,object2String rx,object2String cx],
+;                          fortPre1(c)],:$exprStack]
+;    fortError1 [op,:args]
+;  fortError1 [op,:args]
+
+(DEFUN |exp2FortSpecial| (|op| |args| |nargs|)
+  (PROG (|$fortInts2Floats| |arg| |tailPart| |ISTMP#2| |elts| |hidim|
+            |sOp| |sArgs| |ISTMP#1| |rows| |var| |nrows| |ncols| |si|)
+    (DECLARE (SPECIAL |$fortInts2Floats|))
+    (RETURN
+      (SEQ (COND
+             ((AND (BOOT-EQUAL |op| 'CONCAT)
+                   (|member| (CAR |args|)
+                       (CONS '<
+                             (CONS '>
+                                   (CONS '<=
+                                    (CONS '>=
+                                     (CONS '~
+                                      (CONS '|and| (CONS '|or| NIL)))))))))
+              (|mkFortFn| (CAR |args|) (CDADAR (CDR |args|))
+                  (|#| (CDADAR (CDR |args|)))))
+             ((AND (BOOT-EQUAL |op| 'CONCAT)
+                   (BOOT-EQUAL (CADR |args|) 'EQ))
+              (|mkFortFn| 'EQ
+                  (CONS (CAR |args|) (CONS (CADDR |args|) NIL)) 2))
+             ((BOOT-EQUAL |op| 'QUOTE)
+              (COND
+                ((ATOM (SPADLET |arg| (CAR |args|)))
+                 (STRINGIMAGE |arg|))
+                ('T
+                 (SPADLET |tailPart|
+                          (PROG (G166656)
+                            (SPADLET G166656 "")
+                            (RETURN
+                              (DO ((G166661 (CDR |arg|)
+                                    (CDR G166661))
+                                   (|x| NIL))
+                                  ((OR (ATOM G166661)
+                                    (PROGN
+                                      (SETQ |x| (CAR G166661))
+                                      NIL))
+                                   G166656)
+                                (SEQ (EXIT
+                                      (SETQ G166656
+                                       (STRCONC G166656
+                                        (STRCONC (MAKESTRING ",") |x|)))))))))
+                 (STRCONC (MAKESTRING "[") (CAR |arg|) |tailPart|
+                          (MAKESTRING "]")))))
+             ((BOOT-EQUAL |op| 'PAREN) (SPADLET |args| (CAR |args|))
+              (COND
+                ((NULL (BOOT-EQUAL (CAR |args|) 'CONCATB))
+                 (|fortError1| (CONS |op| |args|)))
+                ('T (|mkMat| |args|))))
+             ((BOOT-EQUAL |op| 'SUB) (SPADLET |$fortInts2Floats| NIL)
+              (|mkFortFn| (CAR |args|) (CDR |args|) (|#| (CDR |args|))))
+             ((|member| |op| (CONS 'BRACE (CONS 'BRACKET NIL)))
+              (COND
+                ((AND (PAIRP |args|)
+                      (PROGN
+                        (SPADLET |var| (QCAR |args|))
+                        (SPADLET |ISTMP#1| (QCDR |args|))
+                        (AND (PAIRP |ISTMP#1|)
+                             (EQ (QCDR |ISTMP#1|) NIL)
+                             (PROGN
+                               (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                               (AND (PAIRP |ISTMP#2|)
+                                    (EQ (QCAR |ISTMP#2|) 'AGGLST)
+                                    (PROGN
+                                      (SPADLET |elts| (QCDR |ISTMP#2|))
+                                      'T))))))
+                 (SPADLET |var| (|object2String| |var|))
+                 (SPADLET |si| |$fortranArrayStartingIndex|)
+                 (SPADLET |hidim|
+                          (PLUS (SPADDIFFERENCE (|#| |elts|) 1) |si|))
+                 (SEQ (COND
+                        ((AND (LISTP (CAR |elts|)) (EQL (|#| |elts|) 1)
+                              (PROGN
+                                (SPADLET |ISTMP#1| (CAR |elts|))
+                                (AND (PAIRP |ISTMP#1|)
+                                     (PROGN
+                                       (SPADLET |sOp| (QCAR |ISTMP#1|))
+                                       (SPADLET |sArgs|
+                                        (QCDR |ISTMP#1|))
+                                       'T))))
+                         (COND
+                           ((|member| |sOp|
+                                (CONS (MAKESTRING "SEGMENT")
+                                      (CONS 'SEGMENT NIL)))
+                            (EXIT (COND
+                                    ((EQL (|#| |sArgs|) 1)
+                                     (|fortError1| (CAR |elts|)))
+                                    ((NULL
+                                      (AND (NUMBERP (CAR |sArgs|))
+                                       (NUMBERP (SECOND |sArgs|))))
+                                     (|fortError|
+                                      '|Cannot expand segment: |
+                                      (CAR |elts|)))
+                                    ((> (CAR |sArgs|) (SECOND |sArgs|))
+                                     (|fortError1|
+                                      (MAKESTRING
+                                       "Lower bound of segment exceeds upper bound.")))
+                                    ('T
+                                     (DO
+                                      ((G166671 (SECOND |sArgs|))
+                                       (|e| (CAR |sArgs|) (+ |e| 1))
+                                       (|i| |si| (+ |i| 1)))
+                                      ((> |e| G166671) NIL)
+                                       (SEQ
+                                        (EXIT
+                                         (SPADLET |$exprStack|
+                                          (CONS
+                                           (CONS '=
+                                            (CONS
+                                             (CONS |var|
+                                              (CONS
+                                               (|object2String| |i|)
+                                               NIL))
+                                             (CONS (|fortPre1| |e|)
+                                              NIL)))
+                                           |$exprStack|))))))))))))
+                      (DO ((G166679 |elts| (CDR G166679)) (|e| NIL)
+                           (|i| |si| (+ |i| 1)))
+                          ((OR (ATOM G166679)
+                               (PROGN (SETQ |e| (CAR G166679)) NIL))
+                           NIL)
+                        (SEQ (EXIT (SPADLET |$exprStack|
+                                    (CONS
+                                     (CONS '=
+                                      (CONS
+                                       (CONS |var|
+                                        (CONS (|object2String| |i|)
+                                         NIL))
+                                       (CONS (|fortPre1| |e|) NIL)))
+                                     |$exprStack|)))))))
+                ('T (|fortError1| (CONS |op| |args|)))))
+             ((|member| |op| (CONS 'CONCAT (CONS 'CONCATB NIL)))
+              (COND
+                ((EQL |nargs| 0) NIL)
+                ((EQL |nargs| 1) (|fortPre1| (CAR |args|)))
+                ((AND (EQL |nargs| 2)
+                      (|member| (CAR (CDR |args|))
+                          (CONS '! (CONS (MAKESTRING "!") NIL))))
+                 (|mkFortFn| 'FACTORIAL (CONS (CAR |args|) NIL) 1))
+                ('T (|fortError1| (CONS |op| |args|)))))
+             ((|member| |op|
+                  (CONS (MAKESTRING "MATRIX") (CONS 'MATRIX NIL)))
+              (COND
+                ((AND (PAIRP |args|)
+                      (PROGN
+                        (SPADLET |var| (QCAR |args|))
+                        (SPADLET |ISTMP#1| (QCDR |args|))
+                        (AND (PAIRP |ISTMP#1|)
+                             (EQUAL (QCAR |ISTMP#1|) NIL)
+                             (PROGN
+                               (SPADLET |rows| (QCDR |ISTMP#1|))
+                               'T))))
+                 (SPADLET |var| (|object2String| |var|))
+                 (SPADLET |nrows| (SPADDIFFERENCE (|#| |rows|) 1))
+                 (SPADLET |ncols|
+                          (SPADDIFFERENCE (|#| (CDR (CAR |rows|))) 1))
+                 (SPADLET |si| |$fortranArrayStartingIndex|)
+                 (DO ((G166689 |rows| (CDR G166689)) (|r| NIL)
+                      (|rx| |si| (+ |rx| 1)))
+                     ((OR (ATOM G166689)
+                          (PROGN (SETQ |r| (CAR G166689)) NIL))
+                      NIL)
+                   (SEQ (EXIT (DO ((G166699 (CDR |r|)
+                                    (CDR G166699))
+                                   (|c| NIL) (|cx| |si| (+ |cx| 1)))
+                                  ((OR (ATOM G166699)
+                                    (PROGN
+                                      (SETQ |c| (CAR G166699))
+                                      NIL))
+                                   NIL)
+                                (SEQ (EXIT
+                                      (SPADLET |$exprStack|
+                                       (CONS
+                                        (CONS '=
+                                         (CONS
+                                          (CONS |var|
+                                           (CONS (|object2String| |rx|)
+                                            (CONS
+                                             (|object2String| |cx|)
+                                             NIL)))
+                                          (CONS (|fortPre1| |c|) NIL)))
+                                        |$exprStack|)))))))))
+                ('T (|fortError1| (CONS |op| |args|)))))
+             ('T (|fortError1| (CONS |op| |args|))))))))
+
+;mkMat(args) ==
+;  $fortInts2Floats : fluid := nil
+;  mkFortFn(first rest args,rest rest args,#(rest rest args))
+
+(DEFUN |mkMat| (|args|)
+  (PROG (|$fortInts2Floats|)
+    (DECLARE (SPECIAL |$fortInts2Floats|))
+    (RETURN
+      (PROGN
+        (SPADLET |$fortInts2Floats| NIL)
+        (|mkFortFn| (CAR (CDR |args|)) (CDR (CDR |args|))
+            (|#| (CDR (CDR |args|))))))))
+
+;mkFortFn(op,args,nargs) ==
+;  [fortranifyFunctionName(STRINGIMAGE op,nargs),
+;   :MAPCAR(function fortPre1 , args) ]
+
+(DEFUN |mkFortFn| (|op| |args| |nargs|)
+  (CONS (|fortranifyFunctionName| (STRINGIMAGE |op|) |nargs|)
+        (MAPCAR (|function| |fortPre1|) |args|)))
+
+;fortranifyFunctionName(op,nargs) ==
+;  op = '"<" => '".LT."
+;  op = '">" => '".GT."
+;  op = '"<=" => '".LE."
+;  op = '">=" => '".GE."
+;  op = '"EQ" => '".EQ."
+;  op = '"and" => '".AND."
+;  op = '"or" => '".OR."
+;  op = '"~" => '".NOT."
+;  fortranifyIntrinsicFunctionName(op,nargs)
+
+(DEFUN |fortranifyFunctionName| (|op| |nargs|)
+  (COND
+    ((BOOT-EQUAL |op| (MAKESTRING "<")) (MAKESTRING ".LT."))
+    ((BOOT-EQUAL |op| (MAKESTRING ">")) (MAKESTRING ".GT."))
+    ((BOOT-EQUAL |op| (MAKESTRING "<=")) (MAKESTRING ".LE."))
+    ((BOOT-EQUAL |op| (MAKESTRING ">=")) (MAKESTRING ".GE."))
+    ((BOOT-EQUAL |op| (MAKESTRING "EQ")) (MAKESTRING ".EQ."))
+    ((BOOT-EQUAL |op| (MAKESTRING "and")) (MAKESTRING ".AND."))
+    ((BOOT-EQUAL |op| (MAKESTRING "or")) (MAKESTRING ".OR."))
+    ((BOOT-EQUAL |op| (MAKESTRING "~")) (MAKESTRING ".NOT."))
+    ('T (|fortranifyIntrinsicFunctionName| |op| |nargs|))))
+
+;fortranifyIntrinsicFunctionName(op,nargs) ==
+;  $useIntrinsicFunctions =>
+;    intrinsic := if op = '"acos" then '"ACOS"
+;    else if op = '"asin" then '"ASIN"
+;    else if op = '"atan" then
+;      nargs = 2 => '"ATAN2"
+;      '"ATAN"
+;    else if op = '"cos" then '"COS"
+;    else if op = '"cosh" then '"COSH"
+;    else if op = '"cot" then '"COTAN"
+;    else if op = '"erf" then '"ERF"
+;    else if op = '"exp" then '"EXP"
+;    else if op = '"log" then '"LOG"
+;    else if op = '"log10" then '"LOG10"
+;    else if op = '"sin" then '"SIN"
+;    else if op = '"sinh" then '"SINH"
+;    else if op = '"sqrt" then '"SQRT"
+;    else if op = '"tan" then '"TAN"
+;    else if op = '"tanh" then '"TANH"
+;    intrinsic =>
+;      $intrinsics := ADJOIN(intrinsic,$intrinsics)
+;      intrinsic
+;    op
+;  $fortranPrecision = 'double =>
+;    op = '"acos" => '"DACOS"
+;    op = '"asin" => '"DASIN"
+;    op = '"atan" =>
+;      nargs = 2 => '"DATAN2"
+;      '"DATAN"
+;    op = '"cos" => '"DCOS"
+;    op = '"cosh" => '"DCOSH"
+;    op = '"cot" => '"DCOTAN"
+;    op = '"erf" => '"DERF"
+;    op = '"exp" => '"DEXP"
+;    op = '"log" => '"DLOG"
+;    op = '"log10" => '"DLOG10"
+;    op = '"sin" => '"DSIN"
+;    op = '"sinh" => '"DSINH"
+;    op = '"sqrt" => '"DSQRT"
+;    op = '"tan" => '"DTAN"
+;    op = '"tanh" => '"DTANH"
+;    op = '"abs" => '"DABS"
+;    op
+;  op = '"acos" => '"ACOS"
+;  op = '"asin" => '"ASIN"
+;  op = '"atan" =>
+;    nargs = 2 => '"ATAN2"
+;    '"ATAN"
+;  op = '"cos" => '"COS"
+;  op = '"cosh" => '"COSH"
+;  op = '"cot" => '"COTAN"
+;  op = '"erf" => '"ERF"
+;  op = '"exp" => '"EXP"
+;  op = '"log" => '"ALOG"
+;  op = '"log10" => '"ALOG10"
+;  op = '"sin" => '"SIN"
+;  op = '"sinh" => '"SINH"
+;  op = '"sqrt" => '"SQRT"
+;  op = '"tan" => '"TAN"
+;  op = '"tanh" => '"TANH"
+;  op = '"abs" => '"ABS"
+;  op
+
+(DEFUN |fortranifyIntrinsicFunctionName| (|op| |nargs|)
+  (PROG (|intrinsic|)
+    (RETURN
+      (COND
+        (|$useIntrinsicFunctions|
+            (SPADLET |intrinsic|
+                     (COND
+                       ((BOOT-EQUAL |op| (MAKESTRING "acos"))
+                        (MAKESTRING "ACOS"))
+                       ((BOOT-EQUAL |op| (MAKESTRING "asin"))
+                        (MAKESTRING "ASIN"))
+                       ((BOOT-EQUAL |op| (MAKESTRING "atan"))
+                        (COND
+                          ((EQL |nargs| 2) (MAKESTRING "ATAN2"))
+                          ('T (MAKESTRING "ATAN"))))
+                       ((BOOT-EQUAL |op| (MAKESTRING "cos"))
+                        (MAKESTRING "COS"))
+                       ((BOOT-EQUAL |op| (MAKESTRING "cosh"))
+                        (MAKESTRING "COSH"))
+                       ((BOOT-EQUAL |op| (MAKESTRING "cot"))
+                        (MAKESTRING "COTAN"))
+                       ((BOOT-EQUAL |op| (MAKESTRING "erf"))
+                        (MAKESTRING "ERF"))
+                       ((BOOT-EQUAL |op| (MAKESTRING "exp"))
+                        (MAKESTRING "EXP"))
+                       ((BOOT-EQUAL |op| (MAKESTRING "log"))
+                        (MAKESTRING "LOG"))
+                       ((BOOT-EQUAL |op| (MAKESTRING "log10"))
+                        (MAKESTRING "LOG10"))
+                       ((BOOT-EQUAL |op| (MAKESTRING "sin"))
+                        (MAKESTRING "SIN"))
+                       ((BOOT-EQUAL |op| (MAKESTRING "sinh"))
+                        (MAKESTRING "SINH"))
+                       ((BOOT-EQUAL |op| (MAKESTRING "sqrt"))
+                        (MAKESTRING "SQRT"))
+                       ((BOOT-EQUAL |op| (MAKESTRING "tan"))
+                        (MAKESTRING "TAN"))
+                       ((BOOT-EQUAL |op| (MAKESTRING "tanh"))
+                        (MAKESTRING "TANH"))
+                       ('T NIL)))
+            (COND
+              (|intrinsic|
+                  (SPADLET |$intrinsics|
+                           (ADJOIN |intrinsic| |$intrinsics|))
+                  |intrinsic|)
+              ('T |op|)))
+        ((BOOT-EQUAL |$fortranPrecision| '|double|)
+         (COND
+           ((BOOT-EQUAL |op| (MAKESTRING "acos")) (MAKESTRING "DACOS"))
+           ((BOOT-EQUAL |op| (MAKESTRING "asin")) (MAKESTRING "DASIN"))
+           ((BOOT-EQUAL |op| (MAKESTRING "atan"))
+            (COND
+              ((EQL |nargs| 2) (MAKESTRING "DATAN2"))
+              ('T (MAKESTRING "DATAN"))))
+           ((BOOT-EQUAL |op| (MAKESTRING "cos")) (MAKESTRING "DCOS"))
+           ((BOOT-EQUAL |op| (MAKESTRING "cosh")) (MAKESTRING "DCOSH"))
+           ((BOOT-EQUAL |op| (MAKESTRING "cot")) (MAKESTRING "DCOTAN"))
+           ((BOOT-EQUAL |op| (MAKESTRING "erf")) (MAKESTRING "DERF"))
+           ((BOOT-EQUAL |op| (MAKESTRING "exp")) (MAKESTRING "DEXP"))
+           ((BOOT-EQUAL |op| (MAKESTRING "log")) (MAKESTRING "DLOG"))
+           ((BOOT-EQUAL |op| (MAKESTRING "log10"))
+            (MAKESTRING "DLOG10"))
+           ((BOOT-EQUAL |op| (MAKESTRING "sin")) (MAKESTRING "DSIN"))
+           ((BOOT-EQUAL |op| (MAKESTRING "sinh")) (MAKESTRING "DSINH"))
+           ((BOOT-EQUAL |op| (MAKESTRING "sqrt")) (MAKESTRING "DSQRT"))
+           ((BOOT-EQUAL |op| (MAKESTRING "tan")) (MAKESTRING "DTAN"))
+           ((BOOT-EQUAL |op| (MAKESTRING "tanh")) (MAKESTRING "DTANH"))
+           ((BOOT-EQUAL |op| (MAKESTRING "abs")) (MAKESTRING "DABS"))
+           ('T |op|)))
+        ((BOOT-EQUAL |op| (MAKESTRING "acos")) (MAKESTRING "ACOS"))
+        ((BOOT-EQUAL |op| (MAKESTRING "asin")) (MAKESTRING "ASIN"))
+        ((BOOT-EQUAL |op| (MAKESTRING "atan"))
+         (COND
+           ((EQL |nargs| 2) (MAKESTRING "ATAN2"))
+           ('T (MAKESTRING "ATAN"))))
+        ((BOOT-EQUAL |op| (MAKESTRING "cos")) (MAKESTRING "COS"))
+        ((BOOT-EQUAL |op| (MAKESTRING "cosh")) (MAKESTRING "COSH"))
+        ((BOOT-EQUAL |op| (MAKESTRING "cot")) (MAKESTRING "COTAN"))
+        ((BOOT-EQUAL |op| (MAKESTRING "erf")) (MAKESTRING "ERF"))
+        ((BOOT-EQUAL |op| (MAKESTRING "exp")) (MAKESTRING "EXP"))
+        ((BOOT-EQUAL |op| (MAKESTRING "log")) (MAKESTRING "ALOG"))
+        ((BOOT-EQUAL |op| (MAKESTRING "log10")) (MAKESTRING "ALOG10"))
+        ((BOOT-EQUAL |op| (MAKESTRING "sin")) (MAKESTRING "SIN"))
+        ((BOOT-EQUAL |op| (MAKESTRING "sinh")) (MAKESTRING "SINH"))
+        ((BOOT-EQUAL |op| (MAKESTRING "sqrt")) (MAKESTRING "SQRT"))
+        ((BOOT-EQUAL |op| (MAKESTRING "tan")) (MAKESTRING "TAN"))
+        ((BOOT-EQUAL |op| (MAKESTRING "tanh")) (MAKESTRING "TANH"))
+        ((BOOT-EQUAL |op| (MAKESTRING "abs")) (MAKESTRING "ABS"))
+        ('T |op|)))))
+
+;--------------------------format.boot------------------------------------------
+;-- These functions are all used by FortranCode and FortranProgram.
+;-- Those used by FortranCode have been changed to return a list of
+;-- lines rather than print them directly, thus allowing us to catch
+;-- and display type declarations for temporary variables.
+;--  MCD 25/3/93
+;indentFortLevel(i) ==
+;  $maximumFortranExpressionLength := $maximumFortranExpressionLength -2*i
+;  $fortIndent := $fortIndent + 2*i
+
+(DEFUN |indentFortLevel| (|i|)
+  (PROGN
+    (SPADLET |$maximumFortranExpressionLength|
+             (SPADDIFFERENCE |$maximumFortranExpressionLength|
+                 (TIMES 2 |i|)))
+    (SPADLET |$fortIndent| (PLUS |$fortIndent| (TIMES 2 |i|)))))
+
+;changeExprLength(i) ==>
+;  $maximumFortranExpressionLength := $maximumFortranExpressionLength + i
+
+(DEFMACRO |changeExprLength|
+    (&WHOLE G166771 &REST G166772 &AUX G166767)
+  (DSETQ (NIL G166767) G166771)
+  (SUBLISLIS (LIST G166767) '(G166767)
+      '(SPADLET |$maximumFortranExpressionLength|
+                (PLUS |$maximumFortranExpressionLength| G166767))))
+
+;fortFormatDo(var,lo,hi,incr,lab) ==
+;  $fortError : fluid := nil
+;  $fortInts2Floats : fluid := nil
+;  incr=1 =>
+;    checkLines fortran2Lines
+;      ['"DO ",STRINGIMAGE lab,'" ",STRINGIMAGE var,'"=",:statement2Fortran lo,_
+;       '",", :statement2Fortran hi]
+;  checkLines fortran2Lines
+;    ['"DO ",STRINGIMAGE lab,'" ",STRINGIMAGE var,'"=",:statement2Fortran lo,_
+;     '",", :statement2Fortran hi,'",",:statement2Fortran incr]
+
+(DEFUN |fortFormatDo| (|var| |lo| |hi| |incr| |lab|)
+  (PROG (|$fortError| |$fortInts2Floats|)
+    (DECLARE (SPECIAL |$fortError| |$fortInts2Floats|))
+    (RETURN
+      (PROGN
+        (SPADLET |$fortError| NIL)
+        (SPADLET |$fortInts2Floats| NIL)
+        (COND
+          ((EQL |incr| 1)
+           (|checkLines|
+               (|fortran2Lines|
+                   (CONS (MAKESTRING "DO ")
+                         (CONS (STRINGIMAGE |lab|)
+                               (CONS (MAKESTRING " ")
+                                     (CONS (STRINGIMAGE |var|)
+                                      (CONS (MAKESTRING "=")
+                                       (APPEND
+                                        (|statement2Fortran| |lo|)
+                                        (CONS (MAKESTRING ",")
+                                         (|statement2Fortran| |hi|)))))))))))
+          ('T
+           (|checkLines|
+               (|fortran2Lines|
+                   (CONS (MAKESTRING "DO ")
+                         (CONS (STRINGIMAGE |lab|)
+                               (CONS (MAKESTRING " ")
+                                     (CONS (STRINGIMAGE |var|)
+                                      (CONS (MAKESTRING "=")
+                                       (APPEND
+                                        (|statement2Fortran| |lo|)
+                                        (CONS (MAKESTRING ",")
+                                         (APPEND
+                                          (|statement2Fortran| |hi|)
+                                          (CONS (MAKESTRING ",")
+                                           (|statement2Fortran| |incr|)
+                                                            )))))))))))))))))
+
+;fortFormatIfGoto(switch,label) ==
+;  changeExprLength(-8) -- Leave room for IF( ... )GOTO
+;  $fortError : fluid := nil
+;  if first(switch) = "NULL" then switch := first rest switch
+;  r := nreverse statement2Fortran switch
+;  changeExprLength(8)
+;  l := ['")GOTO ",STRINGIMAGE label]
+;  while r and not(first(r) = '"%l") repeat
+;    l := [first(r),:l]
+;    r := rest(r)
+;  checkLines fortran2Lines nreverse [:nreverse l,'"IF(",:r]
+
+(DEFUN |fortFormatIfGoto| (|switch| |label|)
+  (PROG (|$fortError| |l| |r|)
+    (DECLARE (SPECIAL |$fortError|))
+    (RETURN
+      (SEQ (PROGN
+             (|changeExprLength| (SPADDIFFERENCE 8))
+             (SPADLET |$fortError| NIL)
+             (COND
+               ((BOOT-EQUAL (CAR |switch|) 'NULL)
+                (SPADLET |switch| (CAR (CDR |switch|)))))
+             (SPADLET |r| (NREVERSE (|statement2Fortran| |switch|)))
+             (|changeExprLength| 8)
+             (SPADLET |l|
+                      (CONS (MAKESTRING ")GOTO ")
+                            (CONS (STRINGIMAGE |label|) NIL)))
+             (DO ()
+                 ((NULL (AND |r|
+                             (NULL (BOOT-EQUAL (CAR |r|)
+                                    (MAKESTRING "%l")))))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |l| (CONS (CAR |r|) |l|))
+                            (SPADLET |r| (CDR |r|))))))
+             (|checkLines|
+                 (|fortran2Lines|
+                     (NREVERSE
+                         (APPEND (NREVERSE |l|)
+                                 (CONS (MAKESTRING "IF(") |r|))))))))))
+
+;fortFormatLabelledIfGoto(switch,label1,label2) ==
+;  changeExprLength(-8) -- Leave room for IF( ... )GOTO
+;  $fortError : fluid := nil
+;  if LISTP(switch) and first(switch) = "NULL" then switch := first rest switch
+;  r := nreverse statement2Fortran switch
+;  changeExprLength(8)
+;  l := ['")GOTO ",STRINGIMAGE label2]
+;  while r and not(first(r) = '"%l") repeat
+;    l := [first(r),:l]
+;    r := rest(r)
+;  labString := STRINGIMAGE label1
+;  for i in #(labString)..5 repeat labString := STRCONC(labString,'" ")
+;  lines := fortran2Lines nreverse [:nreverse l,'"IF(",:r]
+;  lines := [STRCONC(labString,SUBSEQ(first lines,6)),:rest lines]
+;  checkLines lines
+
+(DEFUN |fortFormatLabelledIfGoto| (|switch| |label1| |label2|)
+  (PROG (|$fortError| |l| |r| |labString| |lines|)
+    (DECLARE (SPECIAL |$fortError|))
+    (RETURN
+      (SEQ (PROGN
+             (|changeExprLength| (SPADDIFFERENCE 8))
+             (SPADLET |$fortError| NIL)
+             (COND
+               ((AND (LISTP |switch|)
+                     (BOOT-EQUAL (CAR |switch|) 'NULL))
+                (SPADLET |switch| (CAR (CDR |switch|)))))
+             (SPADLET |r| (NREVERSE (|statement2Fortran| |switch|)))
+             (|changeExprLength| 8)
+             (SPADLET |l|
+                      (CONS (MAKESTRING ")GOTO ")
+                            (CONS (STRINGIMAGE |label2|) NIL)))
+             (DO ()
+                 ((NULL (AND |r|
+                             (NULL (BOOT-EQUAL (CAR |r|)
+                                    (MAKESTRING "%l")))))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |l| (CONS (CAR |r|) |l|))
+                            (SPADLET |r| (CDR |r|))))))
+             (SPADLET |labString| (STRINGIMAGE |label1|))
+             (DO ((|i| (|#| |labString|) (+ |i| 1))) ((> |i| 5) NIL)
+               (SEQ (EXIT (SPADLET |labString|
+                                   (STRCONC |labString|
+                                    (MAKESTRING " "))))))
+             (SPADLET |lines|
+                      (|fortran2Lines|
+                          (NREVERSE
+                              (APPEND (NREVERSE |l|)
+                                      (CONS (MAKESTRING "IF(") |r|)))))
+             (SPADLET |lines|
+                      (CONS (STRCONC |labString|
+                                     (SUBSEQ (CAR |lines|) 6))
+                            (CDR |lines|)))
+             (|checkLines| |lines|))))))
+
+;fortFormatIf(switch) ==
+;  changeExprLength(-8) -- Leave room for IF( ... )THEN
+;  $fortError : fluid := nil
+;  if LISTP(switch) and first(switch) = "NULL" then switch := first rest switch
+;  r := nreverse statement2Fortran switch
+;  changeExprLength(8)
+;  l := ['")THEN"]
+;  while r and not(first(r) = '"%l") repeat
+;    l := [first(r),:l]
+;    r := rest(r)
+;  checkLines fortran2Lines nreverse [:nreverse l,'"IF(",:r]
+
+(DEFUN |fortFormatIf| (|switch|)
+  (PROG (|$fortError| |l| |r|)
+    (DECLARE (SPECIAL |$fortError|))
+    (RETURN
+      (SEQ (PROGN
+             (|changeExprLength| (SPADDIFFERENCE 8))
+             (SPADLET |$fortError| NIL)
+             (COND
+               ((AND (LISTP |switch|)
+                     (BOOT-EQUAL (CAR |switch|) 'NULL))
+                (SPADLET |switch| (CAR (CDR |switch|)))))
+             (SPADLET |r| (NREVERSE (|statement2Fortran| |switch|)))
+             (|changeExprLength| 8)
+             (SPADLET |l| (CONS (MAKESTRING ")THEN") NIL))
+             (DO ()
+                 ((NULL (AND |r|
+                             (NULL (BOOT-EQUAL (CAR |r|)
+                                    (MAKESTRING "%l")))))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |l| (CONS (CAR |r|) |l|))
+                            (SPADLET |r| (CDR |r|))))))
+             (|checkLines|
+                 (|fortran2Lines|
+                     (NREVERSE
+                         (APPEND (NREVERSE |l|)
+                                 (CONS (MAKESTRING "IF(") |r|))))))))))
+
+;fortFormatElseIf(switch) ==
+;  -- Leave room for IF( ... )THEN
+;  changeExprLength(-12)
+;  $fortError : fluid := nil
+;  if LISTP(switch) and first(switch) = "NULL" then switch := first rest switch
+;  r := nreverse statement2Fortran switch
+;  changeExprLength(12)
+;  l := ['")THEN"]
+;  while r and not(first(r) = '"%l") repeat
+;    l := [first(r),:l]
+;    r := rest(r)
+;  checkLines fortran2Lines nreverse [:nreverse l,'"ELSEIF(",:r]
+
+(DEFUN |fortFormatElseIf| (|switch|)
+  (PROG (|$fortError| |l| |r|)
+    (DECLARE (SPECIAL |$fortError|))
+    (RETURN
+      (SEQ (PROGN
+             (|changeExprLength| (SPADDIFFERENCE 12))
+             (SPADLET |$fortError| NIL)
+             (COND
+               ((AND (LISTP |switch|)
+                     (BOOT-EQUAL (CAR |switch|) 'NULL))
+                (SPADLET |switch| (CAR (CDR |switch|)))))
+             (SPADLET |r| (NREVERSE (|statement2Fortran| |switch|)))
+             (|changeExprLength| 12)
+             (SPADLET |l| (CONS (MAKESTRING ")THEN") NIL))
+             (DO ()
+                 ((NULL (AND |r|
+                             (NULL (BOOT-EQUAL (CAR |r|)
+                                    (MAKESTRING "%l")))))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |l| (CONS (CAR |r|) |l|))
+                            (SPADLET |r| (CDR |r|))))))
+             (|checkLines|
+                 (|fortran2Lines|
+                     (NREVERSE
+                         (APPEND (NREVERSE |l|)
+                                 (CONS (MAKESTRING "ELSEIF(") |r|))))))))))
+
+;fortFormatHead(returnType,name,args) ==
+;  $fortError : fluid := nil
+;  $fortranSegment : fluid := nil
+;  -- if returnType = '"_"_(_)_"" then
+;  if returnType = '"void" then
+;    asp := ['"SUBROUTINE "]
+;    changeExprLength(l := -11)
+;  else
+;    asp := [s := checkType STRINGIMAGE returnType,'" FUNCTION "]
+;    changeExprLength(l := -10-LENGTH(s))
+;  displayLines fortran2Lines [:asp,:statement2Fortran [name,:CDADR args] ]
+;  changeExprLength(-l)
+
+(DEFUN |fortFormatHead| (|returnType| |name| |args|)
+  (PROG (|$fortError| |$fortranSegment| |s| |asp| |l|)
+    (DECLARE (SPECIAL |$fortError| |$fortranSegment|))
+    (RETURN
+      (PROGN
+        (SPADLET |$fortError| NIL)
+        (SPADLET |$fortranSegment| NIL)
+        (COND
+          ((BOOT-EQUAL |returnType| (MAKESTRING "void"))
+           (SPADLET |asp| (CONS (MAKESTRING "SUBROUTINE ") NIL))
+           (|changeExprLength| (SPADLET |l| (SPADDIFFERENCE 11))))
+          ('T
+           (SPADLET |asp|
+                    (CONS (SPADLET |s|
+                                   (|checkType|
+                                    (STRINGIMAGE |returnType|)))
+                          (CONS (MAKESTRING " FUNCTION ") NIL)))
+           (|changeExprLength|
+               (SPADLET |l|
+                        (SPADDIFFERENCE (SPADDIFFERENCE 10)
+                            (LENGTH |s|))))))
+        (|displayLines|
+            (|fortran2Lines|
+                (APPEND |asp|
+                        (|statement2Fortran|
+                            (CONS |name| (CDADR |args|))))))
+        (|changeExprLength| (SPADDIFFERENCE |l|))))))
+
+;checkType ty ==
+;  ty := STRING_-UPCASE STRINGIMAGE ty
+;  $fortranPrecision = "double" =>
+;    ty = '"REAL" => '"DOUBLE PRECISION"
+;    ty = '"COMPLEX" => '"DOUBLE COMPLEX"
+;    ty
+;  ty
+
+(DEFUN |checkType| (|ty|)
+  (PROGN
+    (SPADLET |ty| (STRING-UPCASE (STRINGIMAGE |ty|)))
+    (COND
+      ((BOOT-EQUAL |$fortranPrecision| '|double|)
+       (COND
+         ((BOOT-EQUAL |ty| (MAKESTRING "REAL"))
+          (MAKESTRING "DOUBLE PRECISION"))
+         ((BOOT-EQUAL |ty| (MAKESTRING "COMPLEX"))
+          (MAKESTRING "DOUBLE COMPLEX"))
+         ('T |ty|)))
+      ('T |ty|))))
+
+
+;mkParameterList l ==
+;  [par2string(u) for u in l] where par2string u ==
+;      atom(u) => STRINGIMAGE u
+;      u := rest first rest u
+;      apply('STRCONC,[STRINGIMAGE(first u),'"(",_
+;               :rest [:['",",:statement2Fortran(v)] for v in rest u],'")"])
+
+(DEFUN |mkParameterList,par2string| (|u|)
+  (PROG ()
+    (RETURN
+      (SEQ (IF (ATOM |u|) (EXIT (STRINGIMAGE |u|)))
+           (SPADLET |u| (CDR (CAR (CDR |u|))))
+           (EXIT (APPLY 'STRCONC
+                        (CONS (STRINGIMAGE (CAR |u|))
+                              (CONS (MAKESTRING "(")
+                                    (APPEND
+                                     (CDR
+                                      (PROG (G166901)
+                                        (SPADLET G166901 NIL)
+                                        (RETURN
+                                          (DO
+                                           ((G166906 (CDR |u|)
+                                             (CDR G166906))
+                                            (|v| NIL))
+                                           ((OR (ATOM G166906)
+                                             (PROGN
+                                               (SETQ |v|
+                                                (CAR G166906))
+                                               NIL))
+                                            G166901)
+                                            (SEQ
+                                             (EXIT
+                                              (SETQ G166901
+                                               (APPEND G166901
+                                                (CONS (MAKESTRING ",")
+                                                 (|statement2Fortran|
+                                                  |v|))))))))))
+                                     (CONS (MAKESTRING ")") NIL))))))))))
+
+(DEFUN |mkParameterList| (|l|)
+  (PROG ()
+    (RETURN
+      (SEQ (PROG (G166922)
+             (SPADLET G166922 NIL)
+             (RETURN
+               (DO ((G166927 |l| (CDR G166927)) (|u| NIL))
+                   ((OR (ATOM G166927)
+                        (PROGN (SETQ |u| (CAR G166927)) NIL))
+                    (NREVERSE0 G166922))
+                 (SEQ (EXIT (SETQ G166922
+                                  (CONS (|mkParameterList,par2string|
+                                         |u|)
+                                        G166922)))))))))))
+
+;nameLen n ==>
+; +/[1+LENGTH(u) for u in n]
+
+(DEFMACRO |nameLen| (&WHOLE G166941 &REST G166942 &AUX G166937)
+  (DSETQ (NIL G166937) G166941)
+  (SUBLISLIS (LIST G166937) '(G166937)
+      '(SPADREDUCE PLUS 0
+           (COLLECT (IN |u| G166937) (PLUS 1 (LENGTH |u|))))))
+
+;fortFormatTypes(typeName,names) ==
+;  null names => return()
+;  $fortError : fluid := nil
+;  $fortranSegment : fluid := nil
+;  $fortInts2Floats : fluid := nil
+;  typeName := checkType typeName
+;  typeName = '"CHARACTER" =>
+;    fortFormatCharacterTypes([unravel(u) for u in names])
+;      where unravel u ==
+;              atom u => u
+;              CDADR u
+;  fortFormatTypes1(typeName,mkParameterList names)
+
+(DEFUN |fortFormatTypes,unravel| (|u|)
+  (SEQ (IF (ATOM |u|) (EXIT |u|)) (EXIT (CDADR |u|))))
+
+(DEFUN |fortFormatTypes| (|typeName| |names|)
+  (PROG (|$fortError| |$fortranSegment| |$fortInts2Floats|)
+    (DECLARE (SPECIAL |$fortError| |$fortranSegment|
+                      |$fortInts2Floats|))
+    (RETURN
+      (SEQ (COND
+             ((NULL |names|) (RETURN))
+             ('T (SPADLET |$fortError| NIL)
+              (SPADLET |$fortranSegment| NIL)
+              (SPADLET |$fortInts2Floats| NIL)
+              (SPADLET |typeName| (|checkType| |typeName|))
+              (COND
+                ((BOOT-EQUAL |typeName| (MAKESTRING "CHARACTER"))
+                 (|fortFormatCharacterTypes|
+                     (PROG (G166953)
+                       (SPADLET G166953 NIL)
+                       (RETURN
+                         (DO ((G166958 |names| (CDR G166958))
+                              (|u| NIL))
+                             ((OR (ATOM G166958)
+                                  (PROGN
+                                    (SETQ |u| (CAR G166958))
+                                    NIL))
+                              (NREVERSE0 G166953))
+                           (SEQ (EXIT (SETQ G166953
+                                       (CONS
+                                        (|fortFormatTypes,unravel| |u|)
+                                        G166953)))))))))
+                ('T
+                 (|fortFormatTypes1| |typeName|
+                     (|mkParameterList| |names|))))))))))
+
+;fortFormatTypes1(typeName,names) ==
+;  l := $maximumFortranExpressionLength-1-LENGTH(typeName)
+;  while nameLen(names) > l repeat
+;    n := []
+;    ln := 0
+;    while (ln := ln + LENGTH(first names) + 1) < l repeat
+;      n := [first names,:n]
+;      names := rest names
+;    displayLines fortran2Lines [typeName,'" ",:addCommas n]
+;  displayLines fortran2Lines [typeName,'" ",:addCommas names]
+
+(DEFUN |fortFormatTypes1| (|typeName| |names|)
+  (PROG (|l| |ln| |n|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |l|
+                      (SPADDIFFERENCE
+                          (SPADDIFFERENCE
+                              |$maximumFortranExpressionLength| 1)
+                          (LENGTH |typeName|)))
+             (DO () ((NULL (> (|nameLen| |names|) |l|)) NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |n| NIL)
+                            (SPADLET |ln| 0)
+                            (DO ()
+                                ((NULL (> |l|
+                                        (SPADLET |ln|
+                                         (PLUS
+                                          (PLUS |ln|
+                                           (LENGTH (CAR |names|)))
+                                          1))))
+                                 NIL)
+                              (SEQ (EXIT
+                                    (PROGN
+                                      (SPADLET |n|
+                                       (CONS (CAR |names|) |n|))
+                                      (SPADLET |names| (CDR |names|))))))
+                            (|displayLines|
+                                (|fortran2Lines|
+                                    (CONS |typeName|
+                                     (CONS (MAKESTRING " ")
+                                      (|addCommas| |n|)))))))))
+             (|displayLines|
+                 (|fortran2Lines|
+                     (CONS |typeName|
+                           (CONS (MAKESTRING " ")
+                                 (|addCommas| |names|))))))))))
+
+;insertEntry(size,el,aList) ==
+;  entry := assoc(size,aList)
+;  null entry => CONS(CONS(size,LIST el),aList)
+;  RPLACD(entry,CONS(el,CDR entry))
+;  aList
+
+(DEFUN |insertEntry| (SIZE |el| |aList|)
+  (PROG (|entry|)
+    (RETURN
+      (PROGN
+        (SPADLET |entry| (|assoc| SIZE |aList|))
+        (COND
+          ((NULL |entry|) (CONS (CONS SIZE (LIST |el|)) |aList|))
+          ('T (RPLACD |entry| (CONS |el| (CDR |entry|))) |aList|))))))
+
+;fortFormatCharacterTypes(names) ==
+;  sortedByLength := []
+;  genuineArrays  := []
+;  for u in names repeat
+;    ATOM u => sortedByLength := insertEntry(0,u,sortedByLength)
+;    #u=2 => sortedByLength := insertEntry(CADR u,CAR u,sortedByLength)
+;    genuineArrays := [u,:genuineArrays]
+;  for u in sortedByLength repeat
+;    fortFormatTypes1(mkCharName car u, [STRINGIMAGE(s) for s in cdr(u)]) where
+;       mkCharName v == CONCAT("CHARACTER*(",STRINGIMAGE v,")")
+;  if (not null genuineArrays) then
+;    fortFormatTypes1('"CHARACTER",mkParameterList2 genuineArrays) where
+;       mkParameterList2 l ==
+;         [par2string(u) for u in l] where par2string u ==
+;             apply('STRCONC,[STRINGIMAGE(first u),'"(",_
+;                      :rest [:['",",:statement2Fortran(v)] for v in rest u],'")"])
+
+(DEFUN |fortFormatCharacterTypes,mkCharName| (|v|)
+  (CONCAT '|CHARACTER*(| (STRINGIMAGE |v|) '|)|))
+
+(DEFUN |fortFormatCharacterTypes,par2string| (|u|)
+  (PROG ()
+    (RETURN
+      (SEQ (APPLY 'STRCONC
+                  (CONS (STRINGIMAGE (CAR |u|))
+                        (CONS (MAKESTRING "(")
+                              (APPEND (CDR
+                                       (PROG (G167020)
+                                         (SPADLET G167020 NIL)
+                                         (RETURN
+                                           (DO
+                                            ((G167025 (CDR |u|)
+                                              (CDR G167025))
+                                             (|v| NIL))
+                                            ((OR (ATOM G167025)
+                                              (PROGN
+                                                (SETQ |v|
+                                                 (CAR G167025))
+                                                NIL))
+                                             G167020)
+                                             (SEQ
+                                              (EXIT
+                                               (SETQ G167020
+                                                (APPEND G167020
+                                                 (CONS (MAKESTRING ",")
+                                                  (|statement2Fortran|
+                                                   |v|))))))))))
+                                      (CONS (MAKESTRING ")") NIL)))))))))
+
+
+(DEFUN |fortFormatCharacterTypes,mkParameterList2| (|l|)
+  (PROG ()
+    (RETURN
+      (SEQ (PROG (G167040)
+             (SPADLET G167040 NIL)
+             (RETURN
+               (DO ((G167045 |l| (CDR G167045)) (|u| NIL))
+                   ((OR (ATOM G167045)
+                        (PROGN (SETQ |u| (CAR G167045)) NIL))
+                    (NREVERSE0 G167040))
+                 (SEQ (EXIT (SETQ G167040
+                                  (CONS (|fortFormatCharacterTypes,par2string|
+                                         |u|)
+                                        G167040)))))))))))
+
+(DEFUN |fortFormatCharacterTypes| (|names|)
+  (PROG (|sortedByLength| |genuineArrays|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |sortedByLength| NIL)
+             (SPADLET |genuineArrays| NIL)
+             (DO ((G167060 |names| (CDR G167060)) (|u| NIL))
+                 ((OR (ATOM G167060)
+                      (PROGN (SETQ |u| (CAR G167060)) NIL))
+                  NIL)
+               (SEQ (EXIT (COND
+                            ((ATOM |u|)
+                             (SPADLET |sortedByLength|
+                                      (|insertEntry| 0 |u|
+                                       |sortedByLength|)))
+                            ((EQL (|#| |u|) 2)
+                             (SPADLET |sortedByLength|
+                                      (|insertEntry| (CADR |u|)
+                                       (CAR |u|) |sortedByLength|)))
+                            ('T
+                             (SPADLET |genuineArrays|
+                                      (CONS |u| |genuineArrays|)))))))
+             (DO ((G167069 |sortedByLength| (CDR G167069))
+                  (|u| NIL))
+                 ((OR (ATOM G167069)
+                      (PROGN (SETQ |u| (CAR G167069)) NIL))
+                  NIL)
+               (SEQ (EXIT (|fortFormatTypes1|
+                              (|fortFormatCharacterTypes,mkCharName|
+                                  (CAR |u|))
+                              (PROG (G167079)
+                                (SPADLET G167079 NIL)
+                                (RETURN
+                                  (DO ((G167084 (CDR |u|)
+                                        (CDR G167084))
+                                       (|s| NIL))
+                                      ((OR (ATOM G167084)
+                                        (PROGN
+                                          (SETQ |s| (CAR G167084))
+                                          NIL))
+                                       (NREVERSE0 G167079))
+                                    (SEQ
+                                     (EXIT
+                                      (SETQ G167079
+                                       (CONS (STRINGIMAGE |s|)
+                                        G167079)))))))))))
+             (COND
+               ((NULL (NULL |genuineArrays|))
+                (|fortFormatTypes1| (MAKESTRING "CHARACTER")
+                    (|fortFormatCharacterTypes,mkParameterList2|
+                        |genuineArrays|)))
+               ('T NIL)))))))
+
+;fortFormatIntrinsics(l) ==
+;  $fortError : fluid := nil
+;  null l => return()
+;  displayLines fortran2Lines ['"INTRINSIC ",:addCommas(l)]
+
+(DEFUN |fortFormatIntrinsics| (|l|)
+  (PROG (|$fortError|)
+    (DECLARE (SPECIAL |$fortError|))
+    (RETURN
+      (PROGN
+        (SPADLET |$fortError| NIL)
+        (COND
+          ((NULL |l|) (RETURN))
+          ('T
+           (|displayLines|
+               (|fortran2Lines|
+                   (CONS (MAKESTRING "INTRINSIC ") (|addCommas| |l|))))))))))
+
+;------------------ fortDec.boot --------------------
+;
+;-- This file contains the stuff for creating and updating the Fortran symbol
+;-- table.
+;
+;currentSP () ==
+;  -- Return the name of the current subprogram being generated
+;  $currentSubprogram or "MAIN"
+
+(DEFUN |currentSP| () (OR |$currentSubprogram| 'MAIN))
+
+;updateSymbolTable(name,type) ==
+;    fun := ['$elt,'SYMS,'declare_!]
+;    coercion := ['_:_:,STRING type,'FST]
+;    $insideCompileBodyIfTrue: local := false
+;    interpret([fun,["QUOTE",name],coercion])
+
+(DEFUN |updateSymbolTable| (|name| |type|)
+  (PROG (|$insideCompileBodyIfTrue| |fun| |coercion|)
+    (DECLARE (SPECIAL |$insideCompileBodyIfTrue|))
+    (RETURN
+      (PROGN
+        (SPADLET |fun|
+                 (CONS '|$elt| (CONS 'SYMS (CONS '|declare!| NIL))))
+        (SPADLET |coercion|
+                 (CONS '|::| (CONS (STRING |type|) (CONS 'FST NIL))))
+        (SPADLET |$insideCompileBodyIfTrue| NIL)
+        (|interpret|
+            (CONS |fun|
+                  (CONS (CONS 'QUOTE (CONS |name| NIL))
+                        (CONS |coercion| NIL))))))))
+
+;addCommas l ==
+;  not l => nil
+;  r := [STRINGIMAGE first l]
+;  for e in rest l repeat r := [STRINGIMAGE e,'",",:r]
+;  reverse r
+
+(DEFUN |addCommas| (|l|)
+  (PROG (|r|)
+    (RETURN
+      (SEQ (COND
+             ((NULL |l|) NIL)
+             ('T (SPADLET |r| (CONS (STRINGIMAGE (CAR |l|)) NIL))
+              (DO ((G167122 (CDR |l|) (CDR G167122)) (|e| NIL))
+                  ((OR (ATOM G167122)
+                       (PROGN (SETQ |e| (CAR G167122)) NIL))
+                   NIL)
+                (SEQ (EXIT (SPADLET |r|
+                                    (CONS (STRINGIMAGE |e|)
+                                     (CONS (MAKESTRING ",") |r|))))))
+              (REVERSE |r|)))))))
+
+;$intrinsics := []
+
+(SPADLET |$intrinsics| NIL) 
+
+;initialiseIntrinsicList() ==
+;  $intrinsics := []
+
+(DEFUN |initialiseIntrinsicList| NIL (SPADLET |$intrinsics| NIL)) 
+
+;getIntrinsicList() ==
+;  $intrinsics
+
+(DEFUN |getIntrinsicList| NIL |$intrinsics|) 
+
+;-------------------- fortPre.boot ------------------
+;
+;fortPre l ==
+;  -- Essentially, the idea is to fix things so that we know what size of
+;  -- expression we will generate, which helps segment large expressions
+;  -- and do transformations to double precision output etc..
+;  $exprStack : fluid := nil -- sometimes we will add elements to this in
+;                            -- other functions, for example when extracing
+;                            -- lists etc.
+;  for e in l repeat if new := fortPre1 e then
+;     $exprStack := [new,:$exprStack]
+;  reverse $exprStack
+
+(DEFUN |fortPre| (|l|)
+  (PROG (|$exprStack| |new|)
+    (DECLARE (SPECIAL |$exprStack|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$exprStack| NIL)
+             (DO ((G167144 |l| (CDR G167144)) (|e| NIL))
+                 ((OR (ATOM G167144)
+                      (PROGN (SETQ |e| (CAR G167144)) NIL))
+                  NIL)
+               (SEQ (EXIT (COND
+                            ((SPADLET |new| (|fortPre1| |e|))
+                             (SPADLET |$exprStack|
+                                      (CONS |new| |$exprStack|)))
+                            ('T NIL)))))
+             (REVERSE |$exprStack|))))))
+
+;fortPre1 e ==
+;  -- replace spad function names by Fortran equivalents
+;  -- where appropriate, replace integers by floats
+;  -- extract complex numbers
+;  -- replace powers of %e by calls to EXP
+;  -- replace x**2 by x*x etc.
+;  -- replace ROOT by either SQRT or **(1./ ... )
+;  -- replace N-ary by binary functions
+;  -- strip the '%' character off objects like %pi etc..
+;  null e => nil
+;  INTEGERP(e) =>
+;    $fortInts2Floats = true =>
+;      e >= 0 => fix2FortranFloat(e)
+;      ['"-", fix2FortranFloat(-e)]
+;    e
+;  isFloat(e) => checkPrecision(e)
+;  -- Keep strings as strings:
+;  -- STRINGP(e) => STRCONC(STRING(34),e,STRING(34))
+;  STRINGP(e) => e
+;  e = "%e" => fortPre1 ["exp" , 1]
+;  imags := ['"%i","%i"]
+;  e in imags => ['"CMPLX",fortPre1(0),fortPre1(1)]
+;  -- other special objects
+;  ELT(STRINGIMAGE e,0) = "%" => SUBSEQ(STRINGIMAGE e,1)
+;  atom e => e
+;  [op, :args] := e
+;  op in ["**" , '"**"] =>
+;    [rand,exponent] := args
+;    rand = "%e" => fortPre1 ["exp", exponent]
+;    (IDENTP rand or STRINGP rand) and exponent=2 => ["*", rand, rand]
+;    (FIXP exponent and ABS(exponent) < 32768) => ["**",fortPre1 rand,exponent]
+;    ["**", fortPre1 rand,fortPre1 exponent]
+;  op = "ROOT" =>
+;    #args = 1 => fortPreRoot ["sqrt", first args]
+;    [ "**" , fortPreRoot first args , [ "/" , fortPreRoot(1), fortPreRoot first rest args] ]
+;  if op in ['"OVER", "OVER"] then op := '"/"
+;  specialOps  := '(BRACKET BRACE SUB AGGLST SUPERSUB MATRIX SEGMENT ALTSUPERSUB
+;                   PAREN CONCAT CONCATB QUOTE STRING SIGMA  STEP IN SIGMA2
+;                   INTSIGN  PI PI2 INDEFINTEGRAL)
+;  op in specialOps => exp2FortSpecial(op,args,#args)
+;  op in ['"*", "*", '"+", "+", '"-", "-"] and (#args > 2) =>
+;    binaryExpr := fortPre1 [op,first args, SECOND args]
+;    for i in 3..#args repeat
+;      binaryExpr := [op,binaryExpr,fortPre1 NTH(i-1,args)]
+;    binaryExpr
+;  -- Now look for any complex objects
+;  #args = 2 =>
+;    [arg1,arg2] := args
+;    op in ["*",'"*"] and arg2 in imags => ['"CMPLX",fortPre1(0),fortPre1(arg1)]
+;    op in ["+",'"+"] and arg2 in imags => ['"CMPLX",fortPre1(arg1),fortPre1(1)]
+;    op in ["+",'"+"] and arg2 is [mop,m1,m2] and mop in ["*",'"*"] =>
+;      m2 in imags => ['"CMPLX",fortPre1(arg1),fortPre1(m1)]
+;      m1 in imags => ['"CMPLX",fortPre1(arg1),fortPre1(m2)]
+;      ["+",fortPre1 arg1,fortPre1 arg2]
+;    op in ["+",'"+"] and arg1 is [mop,m1,m2] and mop in ["*",'"*"] =>
+;      m2 in imags => ['"CMPLX",fortPre1(arg2),fortPre1(m1)]
+;      m1 in imags => ['"CMPLX",fortPre1(arg2),fortPre1(m2)]
+;      ["+",fortPre1 arg1,fortPre1 arg2]
+;    mkFortFn(op,args,2)
+;  mkFortFn(op,args,#args)
+
+(DEFUN |fortPre1| (|e|)
+  (PROG (|imags| |args| |rand| |exponent| |op| |specialOps|
+                 |binaryExpr| |arg1| |arg2| |mop| |ISTMP#1| |m1|
+                 |ISTMP#2| |m2|)
+    (RETURN
+      (SEQ (COND
+             ((NULL |e|) NIL)
+             ((INTEGERP |e|)
+              (COND
+                ((BOOT-EQUAL |$fortInts2Floats| 'T)
+                 (COND
+                   ((>= |e| 0) (|fix2FortranFloat| |e|))
+                   ('T
+                    (CONS (MAKESTRING "-")
+                          (CONS (|fix2FortranFloat|
+                                    (SPADDIFFERENCE |e|))
+                                NIL)))))
+                ('T |e|)))
+             ((|isFloat| |e|) (|checkPrecision| |e|))
+             ((STRINGP |e|) |e|)
+             ((BOOT-EQUAL |e| '|%e|)
+              (|fortPre1| (CONS '|exp| (CONS 1 NIL))))
+             ('T
+              (SPADLET |imags|
+                       (CONS (MAKESTRING "%i") (CONS '|%i| NIL)))
+              (COND
+                ((|member| |e| |imags|)
+                 (CONS (MAKESTRING "CMPLX")
+                       (CONS (|fortPre1| 0) (CONS (|fortPre1| 1) NIL))))
+                ((BOOT-EQUAL (ELT (STRINGIMAGE |e|) 0) '%)
+                 (SUBSEQ (STRINGIMAGE |e|) 1))
+                ((ATOM |e|) |e|)
+                ('T (SPADLET |op| (CAR |e|)) (SPADLET |args| (CDR |e|))
+                 (COND
+                   ((|member| |op|
+                        (CONS '** (CONS (MAKESTRING "**") NIL)))
+                    (SPADLET |rand| (CAR |args|))
+                    (SPADLET |exponent| (CADR |args|))
+                    (COND
+                      ((BOOT-EQUAL |rand| '|%e|)
+                       (|fortPre1| (CONS '|exp| (CONS |exponent| NIL))))
+                      ((AND (OR (IDENTP |rand|) (STRINGP |rand|))
+                            (EQL |exponent| 2))
+                       (CONS '* (CONS |rand| (CONS |rand| NIL))))
+                      ((AND (FIXP |exponent|)
+                            (> 32768 (ABS |exponent|)))
+                       (CONS '**
+                             (CONS (|fortPre1| |rand|)
+                                   (CONS |exponent| NIL))))
+                      ('T
+                       (CONS '**
+                             (CONS (|fortPre1| |rand|)
+                                   (CONS (|fortPre1| |exponent|) NIL))))))
+                   ((BOOT-EQUAL |op| 'ROOT)
+                    (COND
+                      ((EQL (|#| |args|) 1)
+                       (|fortPreRoot|
+                           (CONS '|sqrt| (CONS (CAR |args|) NIL))))
+                      ('T
+                       (CONS '**
+                             (CONS (|fortPreRoot| (CAR |args|))
+                                   (CONS
+                                    (CONS '/
+                                     (CONS (|fortPreRoot| 1)
+                                      (CONS
+                                       (|fortPreRoot|
+                                        (CAR (CDR |args|)))
+                                       NIL)))
+                                    NIL))))))
+                   ('T
+                    (COND
+                      ((|member| |op|
+                           (CONS (MAKESTRING "OVER") (CONS 'OVER NIL)))
+                       (SPADLET |op| (MAKESTRING "/"))))
+                    (SPADLET |specialOps|
+                             '(BRACKET BRACE SUB AGGLST SUPERSUB MATRIX
+                                       SEGMENT ALTSUPERSUB PAREN CONCAT
+                                       CONCATB QUOTE STRING SIGMA STEP
+                                       IN SIGMA2 INTSIGN PI PI2
+                                       INDEFINTEGRAL))
+                    (COND
+                      ((|member| |op| |specialOps|)
+                       (|exp2FortSpecial| |op| |args| (|#| |args|)))
+                      ((AND (|member| |op|
+                                (CONS (MAKESTRING "*")
+                                      (CONS '*
+                                       (CONS (MAKESTRING "+")
+                                        (CONS '+
+                                         (CONS (MAKESTRING "-")
+                                          (CONS '- NIL)))))))
+                            (> (|#| |args|) 2))
+                       (SPADLET |binaryExpr|
+                                (|fortPre1|
+                                    (CONS |op|
+                                     (CONS (CAR |args|)
+                                      (CONS (SECOND |args|) NIL)))))
+                       (DO ((G167227 (|#| |args|)) (|i| 3 (+ |i| 1)))
+                           ((> |i| G167227) NIL)
+                         (SEQ (EXIT (SPADLET |binaryExpr|
+                                     (CONS |op|
+                                      (CONS |binaryExpr|
+                                       (CONS
+                                        (|fortPre1|
+                                         (NTH (SPADDIFFERENCE |i| 1)
+                                          |args|))
+                                        NIL)))))))
+                       |binaryExpr|)
+                      ((EQL (|#| |args|) 2)
+                       (SPADLET |arg1| (CAR |args|))
+                       (SPADLET |arg2| (CADR |args|))
+                       (COND
+                         ((AND (|member| |op|
+                                   (CONS '*
+                                    (CONS (MAKESTRING "*") NIL)))
+                               (|member| |arg2| |imags|))
+                          (CONS (MAKESTRING "CMPLX")
+                                (CONS (|fortPre1| 0)
+                                      (CONS (|fortPre1| |arg1|) NIL))))
+                         ((AND (|member| |op|
+                                   (CONS '+
+                                    (CONS (MAKESTRING "+") NIL)))
+                               (|member| |arg2| |imags|))
+                          (CONS (MAKESTRING "CMPLX")
+                                (CONS (|fortPre1| |arg1|)
+                                      (CONS (|fortPre1| 1) NIL))))
+                         ((AND (|member| |op|
+                                   (CONS '+
+                                    (CONS (MAKESTRING "+") NIL)))
+                               (PAIRP |arg2|)
+                               (PROGN
+                                 (SPADLET |mop| (QCAR |arg2|))
+                                 (SPADLET |ISTMP#1| (QCDR |arg2|))
+                                 (AND (PAIRP |ISTMP#1|)
+                                      (PROGN
+                                        (SPADLET |m1| (QCAR |ISTMP#1|))
+                                        (SPADLET |ISTMP#2|
+                                         (QCDR |ISTMP#1|))
+                                        (AND (PAIRP |ISTMP#2|)
+                                         (EQ (QCDR |ISTMP#2|) NIL)
+                                         (PROGN
+                                           (SPADLET |m2|
+                                            (QCAR |ISTMP#2|))
+                                           'T)))))
+                               (|member| |mop|
+                                   (CONS '*
+                                    (CONS (MAKESTRING "*") NIL))))
+                          (COND
+                            ((|member| |m2| |imags|)
+                             (CONS (MAKESTRING "CMPLX")
+                                   (CONS (|fortPre1| |arg1|)
+                                    (CONS (|fortPre1| |m1|) NIL))))
+                            ((|member| |m1| |imags|)
+                             (CONS (MAKESTRING "CMPLX")
+                                   (CONS (|fortPre1| |arg1|)
+                                    (CONS (|fortPre1| |m2|) NIL))))
+                            ('T
+                             (CONS '+
+                                   (CONS (|fortPre1| |arg1|)
+                                    (CONS (|fortPre1| |arg2|) NIL))))))
+                         ((AND (|member| |op|
+                                   (CONS '+
+                                    (CONS (MAKESTRING "+") NIL)))
+                               (PAIRP |arg1|)
+                               (PROGN
+                                 (SPADLET |mop| (QCAR |arg1|))
+                                 (SPADLET |ISTMP#1| (QCDR |arg1|))
+                                 (AND (PAIRP |ISTMP#1|)
+                                      (PROGN
+                                        (SPADLET |m1| (QCAR |ISTMP#1|))
+                                        (SPADLET |ISTMP#2|
+                                         (QCDR |ISTMP#1|))
+                                        (AND (PAIRP |ISTMP#2|)
+                                         (EQ (QCDR |ISTMP#2|) NIL)
+                                         (PROGN
+                                           (SPADLET |m2|
+                                            (QCAR |ISTMP#2|))
+                                           'T)))))
+                               (|member| |mop|
+                                   (CONS '*
+                                    (CONS (MAKESTRING "*") NIL))))
+                          (COND
+                            ((|member| |m2| |imags|)
+                             (CONS (MAKESTRING "CMPLX")
+                                   (CONS (|fortPre1| |arg2|)
+                                    (CONS (|fortPre1| |m1|) NIL))))
+                            ((|member| |m1| |imags|)
+                             (CONS (MAKESTRING "CMPLX")
+                                   (CONS (|fortPre1| |arg2|)
+                                    (CONS (|fortPre1| |m2|) NIL))))
+                            ('T
+                             (CONS '+
+                                   (CONS (|fortPre1| |arg1|)
+                                    (CONS (|fortPre1| |arg2|) NIL))))))
+                         ('T (|mkFortFn| |op| |args| 2))))
+                      ('T (|mkFortFn| |op| |args| (|#| |args|))))))))))))))
+
+;fortPreRoot e ==
+;-- To set $fortInts2Floats
+;  $fortInts2Floats : fluid := true
+;  fortPre1 e
+
+(DEFUN |fortPreRoot| (|e|)
+  (PROG (|$fortInts2Floats|)
+    (DECLARE (SPECIAL |$fortInts2Floats|))
+    (RETURN (PROGN (SPADLET |$fortInts2Floats| 'T) (|fortPre1| |e|)))))
+
+;fix2FortranFloat e ==
+;  -- Return a Fortran float for a given integer.
+;  $fortranPrecision = "double" => STRCONC(STRINGIMAGE(e),".0D0")
+;  STRCONC(STRINGIMAGE(e),".")
+
+(DEFUN |fix2FortranFloat| (|e|)
+  (COND
+    ((BOOT-EQUAL |$fortranPrecision| '|double|)
+     (STRCONC (STRINGIMAGE |e|) (INTERN ".0D0" "BOOT")))
+    ('T (STRCONC (STRINGIMAGE |e|) (INTERN "." "BOOT")))))
+
+;isFloat e ==
+;  FLOATP(e) or STRINGP(e) and FIND(char ".",e)
+
+(DEFUN |isFloat| (|e|)
+  (OR (FLOATP |e|)
+      (AND (STRINGP |e|) (FIND (|char| (INTERN "." "BOOT")) |e|))))
+
+;checkPrecision e ==
+;  -- Do we have a string?
+;  STRINGP(e) and CHAR_-CODE(CHAR(e,0)) = 34 => e
+;  e := delete(char " ",STRINGIMAGE e)
+;  $fortranPrecision = "double" =>
+;    iPart := SUBSEQ(e,0,(period:=POSITION(char ".",e))+1)
+;    expt  := if ePos := POSITION(char "E",e) then SUBSEQ(e,ePos+1) else "0"
+;    rPart :=
+;      ePos => SUBSEQ(e,period+1,ePos)
+;      period+1 < LENGTH e => SUBSEQ(e,period+1)
+;      "0"
+;    STRCONC(iPart,rPart,"D",expt)
+;  e
+
+(DEFUN |checkPrecision| (|e|)
+  (PROG (|period| |iPart| |ePos| |expt| |rPart|)
+    (RETURN
+      (COND
+        ((AND (STRINGP |e|) (EQL (CHAR-CODE (CHAR |e| 0)) 34)) |e|)
+        ('T (SPADLET |e| (|delete| (|char| '| |) (STRINGIMAGE |e|)))
+         (COND
+           ((BOOT-EQUAL |$fortranPrecision| '|double|)
+            (SPADLET |iPart|
+                     (SUBSEQ |e| 0
+                             (PLUS (SPADLET |period|
+                                    (POSITION
+                                     (|char| (INTERN "." "BOOT")) |e|))
+                                   1)))
+            (SPADLET |expt|
+                     (COND
+                       ((SPADLET |ePos| (POSITION (|char| 'E) |e|))
+                        (SUBSEQ |e| (PLUS |ePos| 1)))
+                       ('T '|0|)))
+            (SPADLET |rPart|
+                     (COND
+                       (|ePos| (SUBSEQ |e| (PLUS |period| 1) |ePos|))
+                       ((> (LENGTH |e|) (PLUS |period| 1))
+                        (SUBSEQ |e| (PLUS |period| 1)))
+                       ('T '|0|)))
+            (STRCONC |iPart| |rPart| 'D |expt|))
+           ('T |e|)))))))
+
+;----------------- segment.boot -----------------------
+;
+;fortExpSize e ==
+;  -- computes a tree reflecting the number of characters of the printed
+;  -- expression.
+;  -- The first element of a list is the "total so far", while subsequent
+;  -- elements are the sizes of the components.
+;  --
+;  -- This function overestimates the size because it assumes that e.g.
+;  -- (+ x (+ y z)) will be printed as "x+(y+z)" rather than "x+y+z"
+;  -- which is the actual case.
+;  atom e => LENGTH STRINGIMAGE e
+;  #e > 3 => 2+fortSize MAPCAR(function fortExpSize, e)
+;  #e < 3 => 2+fortSize MAPCAR(function fortExpSize, e)
+;  [op,arg1,arg2] := e
+;  op := STRINGIMAGE op
+;  op = '"CMPLX" => 3+fortSize [fortExpSize arg1,fortExpSize arg2]
+;  narys := ['"+",'"*"] -- those nary ops we changed to binary
+;  op in narys =>
+;    LISTP arg1 and not(op=STRINGIMAGE first arg1) =>
+;      2+fortSize MAPCAR(function fortExpSize, e)
+;    LISTP arg2 and not(op=STRINGIMAGE first arg2) =>
+;      2+fortSize MAPCAR(function fortExpSize, e)
+;    1+fortSize [fortExpSize arg1,fortExpSize arg2]
+;  2+fortSize MAPCAR(function fortExpSize, e)
+
+(DEFUN |fortExpSize| (|e|)
+  (PROG (|arg1| |arg2| |op| |narys|)
+    (RETURN
+      (COND
+        ((ATOM |e|) (LENGTH (STRINGIMAGE |e|)))
+        ((> (|#| |e|) 3)
+         (PLUS 2 (|fortSize| (MAPCAR (|function| |fortExpSize|) |e|))))
+        ((QSLESSP (|#| |e|) 3)
+         (PLUS 2 (|fortSize| (MAPCAR (|function| |fortExpSize|) |e|))))
+        ('T (SPADLET |op| (CAR |e|)) (SPADLET |arg1| (CADR |e|))
+         (SPADLET |arg2| (CADDR |e|)) (SPADLET |op| (STRINGIMAGE |op|))
+         (COND
+           ((BOOT-EQUAL |op| (MAKESTRING "CMPLX"))
+            (PLUS 3
+                  (|fortSize|
+                      (CONS (|fortExpSize| |arg1|)
+                            (CONS (|fortExpSize| |arg2|) NIL)))))
+           ('T
+            (SPADLET |narys|
+                     (CONS (MAKESTRING "+")
+                           (CONS (MAKESTRING "*") NIL)))
+            (COND
+              ((|member| |op| |narys|)
+               (COND
+                 ((AND (LISTP |arg1|)
+                       (NULL (BOOT-EQUAL |op|
+                                 (STRINGIMAGE (CAR |arg1|)))))
+                  (PLUS 2
+                        (|fortSize|
+                            (MAPCAR (|function| |fortExpSize|) |e|))))
+                 ((AND (LISTP |arg2|)
+                       (NULL (BOOT-EQUAL |op|
+                                 (STRINGIMAGE (CAR |arg2|)))))
+                  (PLUS 2
+                        (|fortSize|
+                            (MAPCAR (|function| |fortExpSize|) |e|))))
+                 ('T
+                  (PLUS 1
+                        (|fortSize|
+                            (CONS (|fortExpSize| |arg1|)
+                                  (CONS (|fortExpSize| |arg2|) NIL)))))))
+              ('T
+               (PLUS 2
+                     (|fortSize|
+                         (MAPCAR (|function| |fortExpSize|) |e|))))))))))))
+
+;fortSize e ==
+;  +/[elen u for u in e] where
+;    elen z ==
+;      atom z => z
+;      first z
+
+(DEFUN |fortSize,elen| (|z|)
+  (SEQ (IF (ATOM |z|) (EXIT |z|)) (EXIT (CAR |z|))))
+
+(DEFUN |fortSize| (|e|)
+  (PROG ()
+    (RETURN
+      (SEQ (PROG (G167300)
+             (SPADLET G167300 0)
+             (RETURN
+               (DO ((G167305 |e| (CDR G167305)) (|u| NIL))
+                   ((OR (ATOM G167305)
+                        (PROGN (SETQ |u| (CAR G167305)) NIL))
+                    G167300)
+                 (SEQ (EXIT (SETQ G167300
+                                  (PLUS G167300
+                                        (|fortSize,elen| |u|))))))))))))
+
+;tempLen () == 1 + LENGTH STRINGIMAGE $exp2FortTempVarIndex
+
+(DEFUN |tempLen| ()
+  (PLUS 1 (LENGTH (STRINGIMAGE |$exp2FortTempVarIndex|))))
+
+;segment l ==
+;  not $fortranSegment => l
+;  s := nil
+;  for e in l repeat
+;    if LISTP(e) and first e in ["=",'"="] then
+;      var := NTH(1,e)
+;      exprs := segment1(THIRD e,
+;                        $maximumFortranExpressionLength-1-fortExpSize var)
+;      s:= [:[['"=",var,car exprs],:cdr exprs],:s]
+;    else if LISTP(e) and first e in ['"RETURN"] then
+;      exprs := segment1(SECOND e,
+;                        $maximumFortranExpressionLength-2-fortExpSize first e)
+;      s := [:[[first e,car exprs],:cdr exprs],:s]
+;    else s:= [e,:s]
+;  reverse s
+
+(DEFUN |segment| (|l|)
+  (PROG (|var| |exprs| |s|)
+    (RETURN
+      (SEQ (COND
+             ((NULL |$fortranSegment|) |l|)
+             ('T (SPADLET |s| NIL)
+              (DO ((G167324 |l| (CDR G167324)) (|e| NIL))
+                  ((OR (ATOM G167324)
+                       (PROGN (SETQ |e| (CAR G167324)) NIL))
+                   NIL)
+                (SEQ (EXIT (COND
+                             ((AND (LISTP |e|)
+                                   (|member| (CAR |e|)
+                                    (CONS '=
+                                     (CONS (MAKESTRING "=") NIL))))
+                              (SPADLET |var| (NTH 1 |e|))
+                              (SPADLET |exprs|
+                                       (|segment1| (THIRD |e|)
+                                        (SPADDIFFERENCE
+                                         (SPADDIFFERENCE
+                                          |$maximumFortranExpressionLength|
+                                          1)
+                                         (|fortExpSize| |var|))))
+                              (SPADLET |s|
+                                       (APPEND
+                                        (CONS
+                                         (CONS (MAKESTRING "=")
+                                          (CONS |var|
+                                           (CONS (CAR |exprs|) NIL)))
+                                         (CDR |exprs|))
+                                        |s|)))
+                             ((AND (LISTP |e|)
+                                   (|member| (CAR |e|)
+                                    (CONS (MAKESTRING "RETURN") NIL)))
+                              (SPADLET |exprs|
+                                       (|segment1| (SECOND |e|)
+                                        (SPADDIFFERENCE
+                                         (SPADDIFFERENCE
+                                          |$maximumFortranExpressionLength|
+                                          2)
+                                         (|fortExpSize| (CAR |e|)))))
+                              (SPADLET |s|
+                                       (APPEND
+                                        (CONS
+                                         (CONS (CAR |e|)
+                                          (CONS (CAR |exprs|) NIL))
+                                         (CDR |exprs|))
+                                        |s|)))
+                             ('T (SPADLET |s| (CONS |e| |s|)))))))
+              (REVERSE |s|)))))))
+
+;segment1(e,maxSize) ==
+;  (size := fortExpSize e) < maxSize => [e]
+;  expressions := nil;
+;  newE := [first e]
+;  -- Assume we have to replace each argument with a temporary variable, and
+;  -- that the temporary variable may be larger than we expect.
+;  safeSize := maxSize -  (#e-1)*(tempLen()+1) - fortExpSize newE
+;  for i in 2..#e repeat
+;    subSize := fortExpSize NTH(i-1,e)
+;    -- We could have a check here for symbols which are simply too big
+;    -- for Fortran (i.e. more than the maximum practical expression length)
+;    subSize <= safeSize =>
+;      safeSize := safeSize - subSize
+;      newE := [:newE,NTH(i-1,e)]
+;    -- this ones too big.
+;    exprs := segment2(NTH(i-1,e),safeSize)
+;    expressions := [:(cdr exprs),:expressions]
+;    newE := [:newE,(car exprs)]
+;    safeSize := safeSize - fortExpSize car exprs
+;  [newE,:expressions]
+
+(DEFUN |segment1| (|e| |maxSize|)
+  (PROG (SIZE |subSize| |exprs| |expressions| |newE| |safeSize|)
+    (RETURN
+      (SEQ (COND
+             ((> |maxSize| (SPADLET SIZE (|fortExpSize| |e|)))
+              (CONS |e| NIL))
+             ('T (SPADLET |expressions| NIL)
+              (SPADLET |newE| (CONS (CAR |e|) NIL))
+              (SPADLET |safeSize|
+                       (SPADDIFFERENCE
+                           (SPADDIFFERENCE |maxSize|
+                               (TIMES (SPADDIFFERENCE (|#| |e|) 1)
+                                      (PLUS (|tempLen|) 1)))
+                           (|fortExpSize| |newE|)))
+              (DO ((G167348 (|#| |e|)) (|i| 2 (QSADD1 |i|)))
+                  ((QSGREATERP |i| G167348) NIL)
+                (SEQ (EXIT (PROGN
+                             (SPADLET |subSize|
+                                      (|fortExpSize|
+                                       (NTH (SPADDIFFERENCE |i| 1) |e|)))
+                             (COND
+                               ((<= |subSize| |safeSize|)
+                                (SPADLET |safeSize|
+                                         (SPADDIFFERENCE |safeSize|
+                                          |subSize|))
+                                (SPADLET |newE|
+                                         (APPEND |newE|
+                                          (CONS
+                                           (NTH (SPADDIFFERENCE |i| 1)
+                                            |e|)
+                                           NIL))))
+                               ('T
+                                (SPADLET |exprs|
+                                         (|segment2|
+                                          (NTH (SPADDIFFERENCE |i| 1)
+                                           |e|)
+                                          |safeSize|))
+                                (SPADLET |expressions|
+                                         (APPEND (CDR |exprs|)
+                                          |expressions|))
+                                (SPADLET |newE|
+                                         (APPEND |newE|
+                                          (CONS (CAR |exprs|) NIL)))
+                                (SPADLET |safeSize|
+                                         (SPADDIFFERENCE |safeSize|
+                                          (|fortExpSize| (CAR |exprs|))))))))))
+              (CONS |newE| |expressions|)))))))
+
+;segment2(e,topSize) ==
+;  maxSize := $maximumFortranExpressionLength -tempLen()-1
+;  atom(e) => [e]
+;  exprs := nil
+;  newE  := [first e]
+;  topSize := topSize - fortExpSize newE
+;  for i in 2..#e repeat
+;    subE := NTH(i-1,e)
+;    (subSize := fortExpSize subE) > maxSize =>
+;      subE := segment2(subE,maxSize)
+;      exprs := [:(cdr subE),:exprs]
+;      if (subSize := fortExpSize first subE) <= topSize then
+;        newE := [:newE,first subE]
+;        topSize := topSize - subSize
+;      else
+;        newVar := newFortranTempVar()
+;        newE := [:newE,newVar]
+;        exprs:=[['"=",newVar,first subE],:exprs]
+;        topSize := topSize - fortExpSize newVar
+;    newE := [:newE,subE]
+;    topSize := topSize - subSize
+;  topSize > 0 => [newE,:exprs]
+;  newVar := newFortranTempVar()
+;  [newVar,['"=",newVar,newE],:exprs]
+;
+
+(DEFUN |segment2| (|e| |topSize|)
+  (PROG (|maxSize| |subE| |subSize| |exprs| |newE| |newVar|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |maxSize|
+                      (SPADDIFFERENCE
+                          (SPADDIFFERENCE
+                              |$maximumFortranExpressionLength|
+                              (|tempLen|))
+                          1))
+             (COND
+               ((ATOM |e|) (CONS |e| NIL))
+               ('T (SPADLET |exprs| NIL)
+                (SPADLET |newE| (CONS (CAR |e|) NIL))
+                (SPADLET |topSize|
+                         (SPADDIFFERENCE |topSize|
+                             (|fortExpSize| |newE|)))
+                (DO ((G167376 (|#| |e|)) (|i| 2 (QSADD1 |i|)))
+                    ((QSGREATERP |i| G167376) NIL)
+                  (SEQ (EXIT (PROGN
+                               (SPADLET |subE|
+                                        (NTH (SPADDIFFERENCE |i| 1)
+                                         |e|))
+                               (COND
+                                 ((> (SPADLET |subSize|
+                                      (|fortExpSize| |subE|))
+                                     |maxSize|)
+                                  (SPADLET |subE|
+                                           (|segment2| |subE|
+                                            |maxSize|))
+                                  (SPADLET |exprs|
+                                           (APPEND (CDR |subE|)
+                                            |exprs|))
+                                  (COND
+                                    ((<=
+                                      (SPADLET |subSize|
+                                       (|fortExpSize| (CAR |subE|)))
+                                      |topSize|)
+                                     (SPADLET |newE|
+                                      (APPEND |newE|
+                                       (CONS (CAR |subE|) NIL)))
+                                     (SPADLET |topSize|
+                                      (SPADDIFFERENCE |topSize|
+                                       |subSize|)))
+                                    ('T
+                                     (SPADLET |newVar|
+                                      (|newFortranTempVar|))
+                                     (SPADLET |newE|
+                                      (APPEND |newE|
+                                       (CONS |newVar| NIL)))
+                                     (SPADLET |exprs|
+                                      (CONS
+                                       (CONS (MAKESTRING "=")
+                                        (CONS |newVar|
+                                         (CONS (CAR |subE|) NIL)))
+                                       |exprs|))
+                                     (SPADLET |topSize|
+                                      (SPADDIFFERENCE |topSize|
+                                       (|fortExpSize| |newVar|))))))
+                                 ('T
+                                  (SPADLET |newE|
+                                           (APPEND |newE|
+                                            (CONS |subE| NIL)))
+                                  (SPADLET |topSize|
+                                           (SPADDIFFERENCE |topSize|
+                                            |subSize|))))))))
+                (COND
+                  ((> |topSize| 0) (CONS |newE| |exprs|))
+                  ('T (SPADLET |newVar| (|newFortranTempVar|))
+                   (CONS |newVar|
+                         (CONS (CONS (MAKESTRING "=")
+                                     (CONS |newVar| (CONS |newE| NIL)))
+                               |exprs|)))))))))))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}
