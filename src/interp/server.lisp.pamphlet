@@ -1,0 +1,358 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp server.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;-- Scratchpad-II server
+;-- Assoc list of interpreter frame names and unique integer identifiers
+;parseAndInterpret str ==
+;  $InteractiveMode :fluid := true
+;  $BOOT: fluid := NIL
+;  $SPAD: fluid := true
+;  $e:fluid := $InteractiveFrame
+;  $useNewParser =>
+;    ncParseAndInterpretString str
+;  oldParseAndInterpret str
+
+(DEFUN |parseAndInterpret| (|str|)
+  (PROG (|$InteractiveMode| $BOOT $SPAD |$e|)
+    (DECLARE (SPECIAL |$InteractiveMode| $BOOT $SPAD |$e|))
+    (RETURN
+      (PROGN
+        (SPADLET |$InteractiveMode| 'T)
+        (SPADLET $BOOT NIL)
+        (SPADLET $SPAD 'T)
+        (SPADLET |$e| |$InteractiveFrame|)
+        (COND
+          (|$useNewParser| (|ncParseAndInterpretString| |str|))
+          ('T (|oldParseAndInterpret| |str|)))))))
+
+;oldParseAndInterpret str ==
+;  tree := string2SpadTree str
+;  tree => processInteractive(parseTransform postTransform tree, NIL)
+;  NIL
+
+(DEFUN |oldParseAndInterpret| (|str|)
+  (PROG (|tree|)
+    (RETURN
+      (PROGN
+        (SPADLET |tree| (|string2SpadTree| |str|))
+        (COND
+          (|tree| (|processInteractive|
+                      (|parseTransform| (|postTransform| |tree|)) NIL))
+          ('T NIL))))))
+
+;executeQuietCommand() ==
+;  $QuietCommand: fluid := true
+;  stringBuf := MAKE_-STRING 512
+;  sockGetString($MenuServer, stringBuf, 512)
+;  CATCH('coerceFailure,CATCH('top__level, CATCH('SPAD__READER,
+;    parseAndInterpret stringBuf)))
+
+(DEFUN |executeQuietCommand| ()
+  (PROG (|$QuietCommand| |stringBuf|)
+    (DECLARE (SPECIAL |$QuietCommand|))
+    (RETURN
+      (PROGN
+        (SPADLET |$QuietCommand| 'T)
+        (SPADLET |stringBuf| (MAKE-STRING 512))
+        (|sockGetString| |$MenuServer| |stringBuf| 512)
+        (CATCH '|coerceFailure|
+          (CATCH '|top_level|
+            (CATCH 'SPAD_READER (|parseAndInterpret| |stringBuf|))))))))
+
+;-- Includued for compatability with old-parser systems
+;serverLoop() ==
+;  IN_-STREAM: fluid := CURINSTREAM
+;  _*EOF_*: fluid := NIL
+;  while not $EndServerSession and not _*EOF_* repeat
+;    if $Prompt then (PRINC MKPROMPT(); FINISH_-OUTPUT())
+;    $Prompt := NIL
+;    action := serverSwitch()
+;    action = $CallInterp =>
+;      CATCH('coerceFailure,CATCH('top__level, CATCH('SPAD__READER,
+;        parseAndInterpret READ_-LINE(CURINSTREAM) )))
+;      PRINC MKPROMPT()
+;      FINISH_-OUTPUT()
+;      sockSendInt($SessionManager, $EndOfOutput)
+;    action = $CreateFrame =>
+;      frameName := GENTEMP('"frame")
+;      addNewInterpreterFrame(frameName)
+;      $frameAlist := [[$frameNumber,:frameName], :$frameAlist]
+;      $currentFrameNum := $frameNumber
+;      sockSendInt($SessionManager, $frameNumber)
+;      $frameNumber := $frameNumber + 1
+;      sockSendString($SessionManager, MKPROMPT())
+;    action = $SwitchFrames =>
+;      $currentFrameNum := sockGetInt($SessionManager)
+;      currentFrame := LASSOC($currentFrameNum, $frameAlist)
+;      changeToNamedInterpreterFrame currentFrame
+;    action = $EndSession =>
+;      $EndServerSession := true
+;    action = $LispCommand =>
+;      stringBuf := MAKE_-STRING 512
+;      sockGetString($MenuServer, stringBuf, 512)
+;      form := unescapeStringsInForm READ_-FROM_-STRING stringBuf
+;      EVAL form
+;    action = $QuietSpadCommand =>
+;      executeQuietCommand()
+;    action = $SpadCommand =>
+;      stringBuf := MAKE_-STRING 512
+;      sockGetString($MenuServer, stringBuf, 512)
+;      CATCH('coerceFailure,CATCH('top__level, CATCH('SPAD__READER,
+;        parseAndInterpret stringBuf)))
+;      PRINC MKPROMPT()
+;      FINISH_-OUTPUT()
+;      sockSendInt($SessionManager, $EndOfOutput)
+;    NIL
+;  if _*EOF_* then $Prompt := true
+;  NIL
+
+(DEFUN |serverLoop| ()
+  (PROG (IN-STREAM *EOF* |action| |frameName| |currentFrame| |form|
+            |stringBuf|)
+    (DECLARE (SPECIAL IN-STREAM *EOF*))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET IN-STREAM CURINSTREAM)
+             (SPADLET *EOF* NIL)
+             (DO ()
+                 ((NULL (AND (NULL |$EndServerSession|) (NULL *EOF*)))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (COND
+                              (|$Prompt| (PRINC (MKPROMPT))
+                                  (FINISH-OUTPUT)))
+                            (SPADLET |$Prompt| NIL)
+                            (SPADLET |action| (|serverSwitch|))
+                            (COND
+                              ((BOOT-EQUAL |action| |$CallInterp|)
+                               (CATCH '|coerceFailure|
+                                 (CATCH '|top_level|
+                                   (CATCH 'SPAD_READER
+                                     (|parseAndInterpret|
+                                      (|read-line| CURINSTREAM)))))
+                               (PRINC (MKPROMPT)) (FINISH-OUTPUT)
+                               (|sockSendInt| |$SessionManager|
+                                   |$EndOfOutput|))
+                              ((BOOT-EQUAL |action| |$CreateFrame|)
+                               (SPADLET |frameName|
+                                        (GENTEMP (MAKESTRING "frame")))
+                               (|addNewInterpreterFrame| |frameName|)
+                               (SPADLET |$frameAlist|
+                                        (CONS
+                                         (CONS |$frameNumber|
+                                          |frameName|)
+                                         |$frameAlist|))
+                               (SPADLET |$currentFrameNum|
+                                        |$frameNumber|)
+                               (|sockSendInt| |$SessionManager|
+                                   |$frameNumber|)
+                               (SPADLET |$frameNumber|
+                                        (PLUS |$frameNumber| 1))
+                               (|sockSendString| |$SessionManager|
+                                   (MKPROMPT)))
+                              ((BOOT-EQUAL |action| |$SwitchFrames|)
+                               (SPADLET |$currentFrameNum|
+                                        (|sockGetInt|
+                                         |$SessionManager|))
+                               (SPADLET |currentFrame|
+                                        (LASSOC |$currentFrameNum|
+                                         |$frameAlist|))
+                               (|changeToNamedInterpreterFrame|
+                                   |currentFrame|))
+                              ((BOOT-EQUAL |action| |$EndSession|)
+                               (SPADLET |$EndServerSession| 'T))
+                              ((BOOT-EQUAL |action| |$LispCommand|)
+                               (SPADLET |stringBuf| (MAKE-STRING 512))
+                               (|sockGetString| |$MenuServer|
+                                   |stringBuf| 512)
+                               (SPADLET |form|
+                                        (|unescapeStringsInForm|
+                                         (READ-FROM-STRING |stringBuf|)))
+                               (EVAL |form|))
+                              ((BOOT-EQUAL |action|
+                                   |$QuietSpadCommand|)
+                               (|executeQuietCommand|))
+                              ((BOOT-EQUAL |action| |$SpadCommand|)
+                               (SPADLET |stringBuf| (MAKE-STRING 512))
+                               (|sockGetString| |$MenuServer|
+                                   |stringBuf| 512)
+                               (CATCH '|coerceFailure|
+                                 (CATCH '|top_level|
+                                   (CATCH 'SPAD_READER
+                                     (|parseAndInterpret| |stringBuf|))))
+                               (PRINC (MKPROMPT)) (FINISH-OUTPUT)
+                               (|sockSendInt| |$SessionManager|
+                                   |$EndOfOutput|))
+                              ('T NIL))))))
+             (COND (*EOF* (SPADLET |$Prompt| 'T)))
+             NIL)))))
+
+;parseAndEvalToHypertex str ==
+;  lines := parseAndEvalToStringForHypertex str
+;  len := LENGTH lines
+;  sockSendInt($MenuServer, len)
+;  for s in lines repeat
+;    sockSendString($MenuServer, s)
+
+(DEFUN |parseAndEvalToHypertex| (|str|)
+  (PROG (|lines| |len|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |lines|
+                      (|parseAndEvalToStringForHypertex| |str|))
+             (SPADLET |len| (LENGTH |lines|))
+             (|sockSendInt| |$MenuServer| |len|)
+             (DO ((G166130 |lines| (CDR G166130)) (|s| NIL))
+                 ((OR (ATOM G166130)
+                      (PROGN (SETQ |s| (CAR G166130)) NIL))
+                  NIL)
+               (SEQ (EXIT (|sockSendString| |$MenuServer| |s|)))))))))
+
+;parseAndEvalToString str ==
+;  $collectOutput:local := true
+;  $outputLines: local := nil
+;  $IOindex: local := nil
+;  v := CATCH('SPAD__READER, CATCH('top__level, parseAndEvalStr str))
+;  v = 'restart => ['"error"]
+;  NREVERSE $outputLines
+
+(DEFUN |parseAndEvalToString| (|str|)
+  (PROG (|$collectOutput| |$outputLines| |$IOindex| |v|)
+    (DECLARE (SPECIAL |$collectOutput| |$outputLines| |$IOindex|))
+    (RETURN
+      (PROGN
+        (SPADLET |$collectOutput| 'T)
+        (SPADLET |$outputLines| NIL)
+        (SPADLET |$IOindex| NIL)
+        (SPADLET |v|
+                 (CATCH 'SPAD_READER
+                   (CATCH '|top_level| (|parseAndEvalStr| |str|))))
+        (COND
+          ((BOOT-EQUAL |v| '|restart|) (CONS (MAKESTRING "error") NIL))
+          ('T (NREVERSE |$outputLines|)))))))
+
+;parseAndEvalToStringForHypertex str ==
+;  $collectOutput:local := true
+;  $outputLines: local := nil
+;  v := CATCH('SPAD__READER, CATCH('top__level, parseAndEvalStr str))
+;  v = 'restart => ['"error"]
+;  NREVERSE $outputLines
+
+(DEFUN |parseAndEvalToStringForHypertex| (|str|)
+  (PROG (|$collectOutput| |$outputLines| |v|)
+    (DECLARE (SPECIAL |$collectOutput| |$outputLines|))
+    (RETURN
+      (PROGN
+        (SPADLET |$collectOutput| 'T)
+        (SPADLET |$outputLines| NIL)
+        (SPADLET |v|
+                 (CATCH 'SPAD_READER
+                   (CATCH '|top_level| (|parseAndEvalStr| |str|))))
+        (COND
+          ((BOOT-EQUAL |v| '|restart|) (CONS (MAKESTRING "error") NIL))
+          ('T (NREVERSE |$outputLines|)))))))
+
+;parseAndEvalToStringEqNum str ==
+;  $collectOutput:local := true
+;  $outputLines: local := nil
+;  v := CATCH('SPAD__READER, CATCH('top__level, parseAndEvalStr str))
+;  v = 'restart => ['"error"]
+;  NREVERSE $outputLines
+
+(DEFUN |parseAndEvalToStringEqNum| (|str|)
+  (PROG (|$collectOutput| |$outputLines| |v|)
+    (DECLARE (SPECIAL |$collectOutput| |$outputLines|))
+    (RETURN
+      (PROGN
+        (SPADLET |$collectOutput| 'T)
+        (SPADLET |$outputLines| NIL)
+        (SPADLET |v|
+                 (CATCH 'SPAD_READER
+                   (CATCH '|top_level| (|parseAndEvalStr| |str|))))
+        (COND
+          ((BOOT-EQUAL |v| '|restart|) (CONS (MAKESTRING "error") NIL))
+          ('T (NREVERSE |$outputLines|)))))))
+
+;parseAndInterpToString str ==
+;  v := applyWithOutputToString('parseAndEvalStr, [str])
+;  breakIntoLines CDR v
+
+(DEFUN |parseAndInterpToString| (|str|)
+  (PROG (|v|)
+    (RETURN
+      (PROGN
+        (SPADLET |v|
+                 (|applyWithOutputToString| '|parseAndEvalStr|
+                     (CONS |str| NIL)))
+        (|breakIntoLines| (CDR |v|))))))
+
+;parseAndEvalStr string ==
+;  $InteractiveMode :fluid := true
+;  $BOOT: fluid := NIL
+;  $SPAD: fluid := true
+;  $e:fluid := $InteractiveFrame
+;  parseAndEvalStr1 string
+
+(DEFUN |parseAndEvalStr| (|string|)
+  (PROG (|$InteractiveMode| $BOOT $SPAD |$e|)
+    (DECLARE (SPECIAL |$InteractiveMode| $BOOT $SPAD |$e|))
+    (RETURN
+      (PROGN
+        (SPADLET |$InteractiveMode| 'T)
+        (SPADLET $BOOT NIL)
+        (SPADLET $SPAD 'T)
+        (SPADLET |$e| |$InteractiveFrame|)
+        (|parseAndEvalStr1| |string|)))))
+
+;parseAndEvalStr1 string ==
+;  string.0 = char '")" =>
+;    doSystemCommand SUBSEQ(string, 1)
+;  processInteractive(ncParseFromString string, NIL)
+
+(DEFUN |parseAndEvalStr1| (|string|)
+  (COND
+    ((BOOT-EQUAL (ELT |string| 0) (|char| (MAKESTRING ")")))
+     (|doSystemCommand| (SUBSEQ |string| 1)))
+    ('T (|processInteractive| (|ncParseFromString| |string|) NIL))))
+
+;protectedEVAL x ==
+;  error := true
+;  val := NIL
+;  UNWIND_-PROTECT((val := EVAL x; error := NIL),
+;                   error => (resetStackLimits(); sendHTErrorSignal()))
+;  val
+
+(DEFUN |protectedEVAL| (|x|)
+  (PROG (|val| |error|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |error| 'T)
+             (SPADLET |val| NIL)
+             (SEQ (UNWIND-PROTECT
+                    (PROGN
+                      (SPADLET |val| (EVAL |x|))
+                      (SPADLET |error| NIL))
+                    (COND
+                      (|error| (EXIT (PROGN
+                                       (|resetStackLimits|)
+                                       (|sendHTErrorSignal|))))))
+                  (EXIT |val|)))))))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}
