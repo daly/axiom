@@ -1,0 +1,775 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp record.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\begin{verbatim}
+                        Usage
+
+)bo inputFile2RecordFile('"<idir>fn.input",'"<odir>a.b")
+  converts input file "fn" to a record file stored at "<odir>fn.record".
+  If you give one argument, <idir> is used for <odir>
+
+)bo htFile2RecordFile('"<idir>fn.ht",'"<odir>a.b")
+   converts HT file "fn" to a record file stored at "<odir>fn.record".
+   If you give one argument, record file goes to "<idir>fn.record".
+   A file "<odir>fn.input" is produced as a side-effect.
+
+)bo htFile2InputFile('"<idir>fn.input",'"<odir>a.b")
+   converts input file "fn" to an input file stored at "<odir>fn.input"
+
+)bo printRecordFile('"<idir>fn.record") to display results recorded
+
+)bo verifyRecordFile('"<idir>fn.record") to verfiy that same output
+   results from running original fn.input file
+\end{verbatim}
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;--=======================================================================
+;--                      Global Variables
+;--=======================================================================
+;$backslash := char '_\
+
+(SPADLET |$backslash| (|char| '|\\|))
+
+;$testOutputLineFlag := nil   -- referenced by charyTop, prnd to stash lines
+
+(SPADLET |$testOutputLineFlag| NIL)
+
+;$testOutputLineStack := nil  -- saves lines to be printed (needed to convert
+
+(SPADLET |$testOutputLineStack| NIL)
+
+;                             -- lines for use in hypertex)
+;$runTestFlag := nil          -- referenced by maPrin to stash output
+
+(SPADLET |$runTestFlag| NIL)
+
+;                             -- by recordAndPrint to not print type/time
+;$mkTestFlag := nil           -- referenced by READLN to stash input
+
+(SPADLET |$mkTestFlag| NIL) 
+
+;                             -- by maPrin to stash output
+;                             -- by recordAndPrint to write i/o onto $testStream
+;$mkTestInputStack := nil     -- saves input for $testStream (see READLN)
+
+(SPADLET |$mkTestInputStack| NIL) 
+
+;$mkTestOutputStack := nil    -- saves output for $testStream (see maPrin)
+
+(SPADLET |$mkTestOutputStack| NIL) 
+
+;$mkTestOutputType := nil     -- saves the type for $testStream
+
+(SPADLET |$mkTestOutputType| NIL) 
+
+;
+;--=======================================================================
+;--                Function for Creating a `record' file
+;--=======================================================================
+;inputFile2RecordFile(pathname,:option) ==
+;  ifn := PATHNAME_-NAME pathname
+;  not isExistingFile pathname => throwKeyedMsg("S2IL0003",[namestring ifn])
+;  opath := KAR option or pathname
+;  odirect := pathnameDirectory opath
+;  opathname := htMkPath(odirect,ifn,'"rec")
+;  _*PRINT_-ARRAY_*: local := true
+;  $mkTestFlag: local := true
+;  $runTestFlag: local := false
+;  $mkTestInputStack: local := nil
+;  $mkTestOutputStack: local := nil
+;  $mkTestOutputType: local := nil
+;  $currentLine: local := nil
+;  if isExistingFile opathname then DELETE_-FILE opathname
+;  $testStream := MAKE_-OUTSTREAM opathname
+;  CATCH('SPAD__READER,_/READ(pathname,nil))
+;  --for trailing system commands
+;  if not null $currentLine then recordAndPrintTest '(ForSystemCommands)
+;  SHUT $testStream
+;  opathname
+
+(DEFUN |inputFile2RecordFile|
+       (&REST G166085 &AUX |option| |pathname|)
+  (DSETQ (|pathname| . |option|) G166085)
+  (PROG (|$mkTestFlag| |$runTestFlag| |$mkTestInputStack|
+            |$mkTestOutputStack| |$mkTestOutputType| |$currentLine|
+            |ifn| |opath| |odirect| |opathname| *PRINT-ARRAY*)
+    (DECLARE (SPECIAL |$mkTestFlag| |$runTestFlag| |$mkTestInputStack|
+                      |$mkTestOutputStack| |$mkTestOutputType|
+                      |$currentLine|))
+    (RETURN
+      (PROGN
+        (SPADLET |ifn| (PATHNAME-NAME |pathname|))
+        (COND
+          ((NULL (|isExistingFile| |pathname|))
+           (|throwKeyedMsg| 'S2IL0003 (CONS (|namestring| |ifn|) NIL)))
+          ('T (SPADLET |opath| (OR (KAR |option|) |pathname|))
+           (SPADLET |odirect| (|pathnameDirectory| |opath|))
+           (SPADLET |opathname|
+                    (|htMkPath| |odirect| |ifn| (MAKESTRING "rec")))
+           (SPADLET *PRINT-ARRAY* 'T) (SPADLET |$mkTestFlag| 'T)
+           (SPADLET |$runTestFlag| NIL)
+           (SPADLET |$mkTestInputStack| NIL)
+           (SPADLET |$mkTestOutputStack| NIL)
+           (SPADLET |$mkTestOutputType| NIL)
+           (SPADLET |$currentLine| NIL)
+           (COND
+             ((|isExistingFile| |opathname|) (DELETE-FILE |opathname|)))
+           (SPADLET |$testStream| (MAKE-OUTSTREAM |opathname|))
+           (CATCH 'SPAD_READER (/READ |pathname| NIL))
+           (COND
+             ((NULL (NULL |$currentLine|))
+              (|recordAndPrintTest| '(|ForSystemCommands|))))
+           (SHUT |$testStream|) |opathname|))))))
+
+;--=======================================================================
+;--                Function for Displaying a `record' file
+;--=======================================================================
+;printRecordFile(pathname,:option) ==
+;  $LINELENGTH : local := KAR option or 76
+;  $printTimeIfTrue: local := nil
+;  $printTypeIfTrue: local := true
+;  stream := DEFIOSTREAM([['FILE,:pathname], '(MODE . INPUT)],80,0)
+;  repeat
+;    NULL (PEEK_-CHAR ( true, stream , nil, nil )) => return nil
+;    [i,t,:o] := dewritify READ stream
+;    sayNewLine()
+;    for x in i repeat sayBrightly x
+;    sayNewLine()
+;    for x in o repeat maPrin x
+;    if t^= '(Void) then printTypeAndTime(nil,t)
+
+(DEFUN |printRecordFile| (&REST G166136 &AUX |option| |pathname|)
+  (DSETQ (|pathname| . |option|) G166136)
+  (PROG ($LINELENGTH |$printTimeIfTrue| |$printTypeIfTrue| |stream|
+            |LETTMP#1| |i| |t| |o|)
+    (DECLARE (SPECIAL $LINELENGTH |$printTimeIfTrue|
+                      |$printTypeIfTrue|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET $LINELENGTH (OR (KAR |option|) 76))
+             (SPADLET |$printTimeIfTrue| NIL)
+             (SPADLET |$printTypeIfTrue| 'T)
+             (SPADLET |stream|
+                      (DEFIOSTREAM
+                          (CONS (CONS 'FILE |pathname|)
+                                (CONS '(MODE . INPUT) NIL))
+                          80 0))
+             (DO () (NIL NIL)
+               (SEQ (EXIT (COND
+                            ((NULL (PEEK-CHAR 'T |stream| NIL NIL))
+                             (RETURN NIL))
+                            ('T
+                             (SPADLET |LETTMP#1|
+                                      (|dewritify| (VMREAD |stream|)))
+                             (SPADLET |i| (CAR |LETTMP#1|))
+                             (SPADLET |t| (CADR |LETTMP#1|))
+                             (SPADLET |o| (CDDR |LETTMP#1|))
+                             (|sayNewLine|)
+                             (DO ((G166104 |i| (CDR G166104))
+                                  (|x| NIL))
+                                 ((OR (ATOM G166104)
+                                      (PROGN
+                                        (SETQ |x| (CAR G166104))
+                                        NIL))
+                                  NIL)
+                               (SEQ (EXIT (|sayBrightly| |x|))))
+                             (|sayNewLine|)
+                             (DO ((G166113 |o| (CDR G166113))
+                                  (|x| NIL))
+                                 ((OR (ATOM G166113)
+                                      (PROGN
+                                        (SETQ |x| (CAR G166113))
+                                        NIL))
+                                  NIL)
+                               (SEQ (EXIT (|maPrin| |x|))))
+                             (COND
+                               ((NEQUAL |t| '(|Void|))
+                                (|printTypeAndTime| NIL |t|))
+                               ('T NIL))))))))))))
+
+;testPrin(u,w) == --same as maPrin but lines are stored in $testOutputLineList
+;                 --these lines are needed for pasting into HT files
+;  $LINELENGTH: local := w
+;  $mkTestFlag: local := nil
+;  $testOutputLineFlag: local := true
+;  $testOutputLineList: local := nil
+;  maPrin COPY u
+;  res := REVERSE $testOutputLineList
+;  for x in res repeat sayBrightly x
+;  res
+
+(DEFUN |testPrin| (|u| |w|)
+  (PROG ($LINELENGTH |$mkTestFlag| |$testOutputLineFlag|
+            |$testOutputLineList| |res|)
+    (DECLARE (SPECIAL $LINELENGTH |$mkTestFlag| |$testOutputLineFlag|
+                      |$testOutputLineList|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET $LINELENGTH |w|)
+             (SPADLET |$mkTestFlag| NIL)
+             (SPADLET |$testOutputLineFlag| 'T)
+             (SPADLET |$testOutputLineList| NIL)
+             (|maPrin| (COPY |u|))
+             (SPADLET |res| (REVERSE |$testOutputLineList|))
+             (DO ((G166141 |res| (CDR G166141)) (|x| NIL))
+                 ((OR (ATOM G166141)
+                      (PROGN (SETQ |x| (CAR G166141)) NIL))
+                  NIL)
+               (SEQ (EXIT (|sayBrightly| |x|))))
+             |res|)))))
+
+;--=======================================================================
+;--     Function for converting a maPrin expression to HyperTeX format
+;--=======================================================================
+;hyperize(u,w) ==
+;  $LINELENGTH: local := w
+;  $mkTestFlag: local := nil
+;  $testOutputLineFlag: local := true
+;  $testOutputLineList: local := nil
+;  maPrin COPY u
+;  res := REVERSE $testOutputLineList
+;  null res => '""
+;  null rest res => first res
+;  "STRCONC"/[first res,:[STRCONC("\newline ",x) for x in rest res]]
+
+(DEFUN |hyperize| (|u| |w|)
+  (PROG ($LINELENGTH |$mkTestFlag| |$testOutputLineFlag|
+            |$testOutputLineList| |res|)
+    (DECLARE (SPECIAL $LINELENGTH |$mkTestFlag| |$testOutputLineFlag|
+                      |$testOutputLineList|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET $LINELENGTH |w|)
+             (SPADLET |$mkTestFlag| NIL)
+             (SPADLET |$testOutputLineFlag| 'T)
+             (SPADLET |$testOutputLineList| NIL)
+             (|maPrin| (COPY |u|))
+             (SPADLET |res| (REVERSE |$testOutputLineList|))
+             (COND
+               ((NULL |res|) (MAKESTRING ""))
+               ((NULL (CDR |res|)) (CAR |res|))
+               ('T
+                (PROG (G166165)
+                  (SPADLET G166165 "")
+                  (RETURN
+                    (DO ((G166170
+                             (CONS (CAR |res|)
+                                   (PROG (G166180)
+                                     (SPADLET G166180 NIL)
+                                     (RETURN
+                                       (DO
+                                        ((G166185 (CDR |res|)
+                                          (CDR G166185))
+                                         (|x| NIL))
+                                        ((OR (ATOM G166185)
+                                          (PROGN
+                                            (SETQ |x| (CAR G166185))
+                                            NIL))
+                                         (NREVERSE0 G166180))
+                                         (SEQ
+                                          (EXIT
+                                           (SETQ G166180
+                                            (CONS
+                                             (STRCONC '|\\newline |
+                                              |x|)
+                                             G166180))))))))
+                             (CDR G166170))
+                         (G166163 NIL))
+                        ((OR (ATOM G166170)
+                             (PROGN
+                               (SETQ G166163 (CAR G166170))
+                               NIL))
+                         G166165)
+                      (SEQ (EXIT (SETQ G166165
+                                     (STRCONC G166165 G166163))))))))))))))
+
+;verbatimize u ==
+;  u = '"" => u
+;  STRCONC('"\begin{verbatim}",u,'"\end{verbatim}")
+
+(DEFUN |verbatimize| (|u|)
+  (COND
+    ((BOOT-EQUAL |u| (MAKESTRING "")) |u|)
+    ('T
+     (STRCONC (MAKESTRING "\\begin{verbatim}") |u|
+              (MAKESTRING "\\end{verbatim}")))))
+
+;--=======================================================================
+;--                Function for Verifying a `record' file
+;--=======================================================================
+;verifyRecordFile(pathname) ==
+;  ifn := PATHNAME_-NAME pathname
+;  sayBrightly ['"Verifying",:bright ifn]
+;  not isExistingFile pathname => throwKeyedMsg("S2IL0003",[namestring ifn])
+;  stream := MAKE_-INSTREAM pathname
+;  clearCmdAll()
+;  result := 'ok
+;  for j in 1.. repeat
+;    NULL (PEEK_-CHAR ( true, stream ,nil,nil ))=>return nil
+;    [i,t,:o] := dewritify READ stream
+;    null i => return nil
+;    t = 'ForSystemCommands =>
+;      return testInput2Output(i,nil)
+;        --read trailing system commands
+;    [typ,:output] := testInput2Output(i,j)
+;    typ = t =>
+;      output = o => 'ok
+;      result := 'error
+;      wasIs(o,output)
+;    result := 'error
+;    wasIs(o,output,t,typ)
+;  suffix := (result = 'ok => '"is ok"; '"has errors")
+;  sayBrightly [:bright ifn,suffix]
+
+(DEFUN |verifyRecordFile| (|pathname|)
+  (PROG (|ifn| |stream| |i| |t| |o| |LETTMP#1| |typ| |output| |result|
+               |suffix|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |ifn| (PATHNAME-NAME |pathname|))
+             (|sayBrightly|
+                 (CONS (MAKESTRING "Verifying") (|bright| |ifn|)))
+             (COND
+               ((NULL (|isExistingFile| |pathname|))
+                (|throwKeyedMsg| 'S2IL0003
+                    (CONS (|namestring| |ifn|) NIL)))
+               ('T (SPADLET |stream| (MAKE-INSTREAM |pathname|))
+                (|clearCmdAll|) (SPADLET |result| '|ok|)
+                (DO ((|j| 1 (QSADD1 |j|))) (NIL NIL)
+                  (SEQ (EXIT (COND
+                               ((NULL (PEEK-CHAR 'T |stream| NIL NIL))
+                                (RETURN NIL))
+                               ('T
+                                (SPADLET |LETTMP#1|
+                                         (|dewritify|
+                                          (VMREAD |stream|)))
+                                (SPADLET |i| (CAR |LETTMP#1|))
+                                (SPADLET |t| (CADR |LETTMP#1|))
+                                (SPADLET |o| (CDDR |LETTMP#1|))
+                                (COND
+                                  ((NULL |i|) (RETURN NIL))
+                                  ((BOOT-EQUAL |t|
+                                    '|ForSystemCommands|)
+                                   (RETURN
+                                     (|testInput2Output| |i| NIL)))
+                                  ('T
+                                   (SPADLET |LETTMP#1|
+                                    (|testInput2Output| |i| |j|))
+                                   (SPADLET |typ| (CAR |LETTMP#1|))
+                                   (SPADLET |output| (CDR |LETTMP#1|))
+                                   (COND
+                                     ((BOOT-EQUAL |typ| |t|)
+                                      (COND
+                                        ((BOOT-EQUAL |output| |o|)
+                                         '|ok|)
+                                        ('T (SPADLET |result| '|error|)
+                                         (|wasIs| |o| |output|))))
+                                     ('T (SPADLET |result| '|error|)
+                                      (|wasIs| |o| |output| |t| |typ|))))))))))
+                (SPADLET |suffix|
+                         (COND
+                           ((BOOT-EQUAL |result| '|ok|)
+                            (MAKESTRING "is ok"))
+                           ('T (MAKESTRING "has errors"))))
+                (|sayBrightly|
+                    (APPEND (|bright| |ifn|) (CONS |suffix| NIL))))))))))
+
+;testInput2Output(lines,n) ==
+;  $mkTestOutputStack: local := nil
+;  $mkTestOutputType: local := nil
+;  $mkTestFlag: local := nil
+;  $runTestFlag: local := true
+;  $testOutput: local := nil
+;  evaluateLines lines
+;  null n => nil     --return from reading trailing system commands
+;  typ := $mkTestOutputType
+;  output := NREVERSE $mkTestOutputStack
+;  [prefix2String typ,:output]
+
+(DEFUN |testInput2Output| (|lines| |n|)
+  (PROG (|$mkTestOutputStack| |$mkTestOutputType| |$mkTestFlag|
+            |$runTestFlag| |$testOutput| |typ| |output|)
+    (DECLARE (SPECIAL |$mkTestOutputStack| |$mkTestOutputType|
+                      |$mkTestFlag| |$runTestFlag| |$testOutput|))
+    (RETURN
+      (PROGN
+        (SPADLET |$mkTestOutputStack| NIL)
+        (SPADLET |$mkTestOutputType| NIL)
+        (SPADLET |$mkTestFlag| NIL)
+        (SPADLET |$runTestFlag| 'T)
+        (SPADLET |$testOutput| NIL)
+        (|evaluateLines| |lines|)
+        (COND
+          ((NULL |n|) NIL)
+          ('T (SPADLET |typ| |$mkTestOutputType|)
+           (SPADLET |output| (NREVERSE |$mkTestOutputStack|))
+           (CONS (|prefix2String| |typ|) |output|)))))))
+
+;evaluateLines lines ==
+;  file := MAKE_-OUTSTREAM '"/tmp/temp.input"
+;  for line in lines repeat
+;--  stringPrefix?('")read ",line) => 'skip
+;    stringPrefix?('")r",line) => 'skip
+;    stringPrefix?('")undo )redo",line) => 'skip
+;    PRINTEXP(line, file)
+;    TERPRI file
+;  SHUT file
+;  _/EDITFILE: fluid := '"/tmp/temp.input"
+;  _/RF()
+;    -- can't use _/EDITFILE since it might be reset
+;  DELETE_-FILE '"/tmp/temp.input"
+
+(DEFUN |evaluateLines| (|lines|)
+  (PROG (/EDITFILE |file|)
+    (DECLARE (SPECIAL /EDITFILE))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |file|
+                      (MAKE-OUTSTREAM (MAKESTRING "/tmp/temp.input")))
+             (DO ((G166280 |lines| (CDR G166280)) (|line| NIL))
+                 ((OR (ATOM G166280)
+                      (PROGN (SETQ |line| (CAR G166280)) NIL))
+                  NIL)
+               (SEQ (EXIT (COND
+                            ((|stringPrefix?| (MAKESTRING ")r") |line|)
+                             '|skip|)
+                            ((|stringPrefix?|
+                                 (MAKESTRING ")undo )redo") |line|)
+                             '|skip|)
+                            ('T (PRINTEXP |line| |file|)
+                             (TERPRI |file|))))))
+             (SHUT |file|)
+             (SPADLET /EDITFILE (MAKESTRING "/tmp/temp.input"))
+             (/RF)
+             (DELETE-FILE (MAKESTRING "/tmp/temp.input")))))))
+
+;wasIs(old,new,:typePart) ==
+;  sayBrightly '"*************************************************************"
+;  if old ^= new then
+;    sayBrightly '"Was ----------> "
+;    for x in old repeat maPrin x
+;    sayBrightly '"Is -----------> "
+;    for x in new repeat maPrin x
+;  typePart is [oldtype,newtype] and oldtype ^= newtype =>
+;    sayBrightlyNT ['" Type was ---> ",oldtype]
+;    pp old
+;    sayBrightlyNT ['" Type is  ---> ",newtype]
+;    pp new
+
+(DEFUN |wasIs| (&REST G166329 &AUX |typePart| |new| |old|)
+  (DSETQ (|old| |new| . |typePart|) G166329)
+  (PROG (|oldtype| |ISTMP#1| |newtype|)
+    (RETURN
+      (SEQ (PROGN
+             (|sayBrightly|
+                 (MAKESTRING
+              "*************************************************************"))
+             (COND
+               ((NEQUAL |old| |new|)
+                (|sayBrightly| (MAKESTRING "Was ----------> "))
+                (DO ((G166308 |old| (CDR G166308)) (|x| NIL))
+                    ((OR (ATOM G166308)
+                         (PROGN (SETQ |x| (CAR G166308)) NIL))
+                     NIL)
+                  (SEQ (EXIT (|maPrin| |x|))))
+                (|sayBrightly| (MAKESTRING "Is -----------> "))
+                (DO ((G166317 |new| (CDR G166317)) (|x| NIL))
+                    ((OR (ATOM G166317)
+                         (PROGN (SETQ |x| (CAR G166317)) NIL))
+                     NIL)
+                  (SEQ (EXIT (|maPrin| |x|))))))
+             (COND
+               ((AND (PAIRP |typePart|)
+                     (PROGN
+                       (SPADLET |oldtype| (QCAR |typePart|))
+                       (SPADLET |ISTMP#1| (QCDR |typePart|))
+                       (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                            (PROGN
+                              (SPADLET |newtype| (QCAR |ISTMP#1|))
+                              'T)))
+                     (NEQUAL |oldtype| |newtype|))
+                (PROGN
+                  (|sayBrightlyNT|
+                      (CONS (MAKESTRING " Type was ---> ")
+                            (CONS |oldtype| NIL)))
+                  (|pp| |old|)
+                  (|sayBrightlyNT|
+                      (CONS (MAKESTRING " Type is  ---> ")
+                            (CONS |newtype| NIL)))
+                  (|pp| |new|)))))))))
+
+;--=======================================================================
+;--              Creating Input Files from HT Files
+;--=======================================================================
+;htFile2InputFile(pathname,:option) ==
+;  ifn := pathnameName pathname
+;  not isExistingFile pathname => throwKeyedMsg("S2IL0003",[namestring ifn])
+;  opath := KAR option or pathname
+;  odirect := pathnameDirectory opath
+;  opathname := htMkPath(odirect,ifn,'"input")
+;  if isExistingFile opathname then DELETE_-FILE opathname
+;  $htStream : local := MAKE_-INSTREAM pathname
+;  alist := [[htGetPageName u,:htGetSpadCommands()]
+;              while (u := htExampleFind '"\begin{page}")]
+;  SHUT $htStream
+;  outStream := MAKE_-OUTSTREAM opathname
+;  for [pageName,:commands] in alist repeat
+;    PRINTEXP('"-- ",outStream)
+;    PRINTEXP(pageName,outStream)
+;    TERPRI outStream
+;    PRINTEXP('")cl all",outStream)
+;    TERPRI outStream
+;    for x in commands repeat
+;      PRINTEXP(htCommandToInputLine x,outStream)
+;      TERPRI outStream
+;    TERPRI outStream
+;  SHUT outStream
+;  opathname
+
+(DEFUN |htFile2InputFile| (&REST G166396 &AUX |option| |pathname|)
+  (DSETQ (|pathname| . |option|) G166396)
+  (PROG (|$htStream| |ifn| |opath| |odirect| |opathname| |u| |alist|
+            |outStream| |pageName| |commands|)
+    (DECLARE (SPECIAL |$htStream|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |ifn| (|pathnameName| |pathname|))
+             (COND
+               ((NULL (|isExistingFile| |pathname|))
+                (|throwKeyedMsg| 'S2IL0003
+                    (CONS (|namestring| |ifn|) NIL)))
+               ('T (SPADLET |opath| (OR (KAR |option|) |pathname|))
+                (SPADLET |odirect| (|pathnameDirectory| |opath|))
+                (SPADLET |opathname|
+                         (|htMkPath| |odirect| |ifn|
+                             (MAKESTRING "input")))
+                (COND
+                  ((|isExistingFile| |opathname|)
+                   (DELETE-FILE |opathname|)))
+                (SPADLET |$htStream| (MAKE-INSTREAM |pathname|))
+                (SPADLET |alist|
+                         (PROG (G166341)
+                           (SPADLET G166341 NIL)
+                           (RETURN
+                             (DO ()
+                                 ((NULL (SPADLET |u|
+                                         (|htExampleFind|
+                                          (MAKESTRING "\\begin{page}"))))
+                                  (NREVERSE0 G166341))
+                               (SEQ (EXIT
+                                     (SETQ G166341
+                                      (CONS
+                                       (CONS (|htGetPageName| |u|)
+                                        (|htGetSpadCommands|))
+                                       G166341))))))))
+                (SHUT |$htStream|)
+                (SPADLET |outStream| (MAKE-OUTSTREAM |opathname|))
+                (DO ((G166362 |alist| (CDR G166362))
+                     (G166332 NIL))
+                    ((OR (ATOM G166362)
+                         (PROGN (SETQ G166332 (CAR G166362)) NIL)
+                         (PROGN
+                           (PROGN
+                             (SPADLET |pageName| (CAR G166332))
+                             (SPADLET |commands| (CDR G166332))
+                             G166332)
+                           NIL))
+                     NIL)
+                  (SEQ (EXIT (PROGN
+                               (PRINTEXP (MAKESTRING "-- ")
+                                   |outStream|)
+                               (PRINTEXP |pageName| |outStream|)
+                               (TERPRI |outStream|)
+                               (PRINTEXP (MAKESTRING ")cl all")
+                                   |outStream|)
+                               (TERPRI |outStream|)
+                               (DO ((G166374 |commands|
+                                     (CDR G166374))
+                                    (|x| NIL))
+                                   ((OR (ATOM G166374)
+                                     (PROGN
+                                       (SETQ |x| (CAR G166374))
+                                       NIL))
+                                    NIL)
+                                 (SEQ (EXIT
+                                       (PROGN
+                                         (PRINTEXP
+                                          (|htCommandToInputLine| |x|)
+                                          |outStream|)
+                                         (TERPRI |outStream|)))))
+                               (TERPRI |outStream|)))))
+                (SHUT |outStream|) |opathname|)))))))
+
+;htCommandToInputLine s == fn(s,0) where fn(s,init) ==
+;--similar to htTrimAtBackSlash except removes all \
+;  k := or/[i for i in init..MAXINDEX s | s.i = char '_\] =>
+;    MEMBER(s.(k + 1),[char 'f,char 'b]) => SUBSTRING(s,init,k - init)
+;    STRCONC(SUBSTRING(s,init,k - init),fn(s,k + 1))
+;  SUBSTRING(s,init,nil)
+
+(DEFUN |htCommandToInputLine,fn| (|s| |init|)
+  (PROG (|k|)
+    (RETURN
+      (SEQ (IF (SPADLET |k|
+                        (PROG (G166399)
+                          (SPADLET G166399 NIL)
+                          (RETURN
+                            (DO ((G166406 NIL G166399)
+                                 (G166407 (MAXINDEX |s|))
+                                 (|i| |init| (+ |i| 1)))
+                                ((OR G166406 (> |i| G166407))
+                                 G166399)
+                              (SEQ (EXIT
+                                    (COND
+                                      ((BOOT-EQUAL (ELT |s| |i|)
+                                        (|char| '|\\|))
+                                       (SETQ G166399
+                                        (OR G166399 |i|))))))))))
+               (EXIT (SEQ (IF (|member| (ELT |s| (PLUS |k| 1))
+                                  (CONS (|char| '|f|)
+                                        (CONS (|char| '|b|) NIL)))
+                              (EXIT (SUBSTRING |s| |init|
+                                     (SPADDIFFERENCE |k| |init|))))
+                          (EXIT (STRCONC (SUBSTRING |s| |init|
+                                          (SPADDIFFERENCE |k| |init|))
+                                         (|htCommandToInputLine,fn| |s|
+                                          (PLUS |k| 1)))))))
+           (EXIT (SUBSTRING |s| |init| NIL))))))
+
+(DEFUN |htCommandToInputLine| (|s|) (|htCommandToInputLine,fn| |s| 0)) 
+
+;htTrimAtBackSlash s ==
+;  backslash := char '_\
+;  k := or/[i for i in 0..MAXINDEX s | s.i = backslash
+;          and MEMBER(s.(i + 1),[char 'f,char 'b])] => SUBSTRING(s,0,k - 1)
+;  s
+
+(DEFUN |htTrimAtBackSlash| (|s|)
+  (PROG (|backslash| |k|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |backslash| (|char| '|\\|))
+             (COND
+               ((SPADLET |k|
+                         (PROG (G166422)
+                           (SPADLET G166422 NIL)
+                           (RETURN
+                             (DO ((G166429 NIL G166422)
+                                  (G166430 (MAXINDEX |s|))
+                                  (|i| 0 (QSADD1 |i|)))
+                                 ((OR G166429
+                                      (QSGREATERP |i| G166430))
+                                  G166422)
+                               (SEQ (EXIT
+                                     (COND
+                                       ((AND
+                                         (BOOT-EQUAL (ELT |s| |i|)
+                                          |backslash|)
+                                         (|member|
+                                          (ELT |s| (PLUS |i| 1))
+                                          (CONS (|char| '|f|)
+                                           (CONS (|char| '|b|) NIL))))
+                                        (SETQ G166422
+                                         (OR G166422 |i|))))))))))
+                (SUBSTRING |s| 0 (SPADDIFFERENCE |k| 1)))
+               ('T |s|)))))))
+
+;htMkPath(directory,name,typ) ==
+;  nameType := STRCONC(name,'".",typ)
+;  null directory => nameType
+;  STRCONC(directory,nameType)
+
+(DEFUN |htMkPath| (|directory| |name| |typ|)
+  (PROG (|nameType|)
+    (RETURN
+      (PROGN
+        (SPADLET |nameType| (STRCONC |name| (MAKESTRING ".") |typ|))
+        (COND
+          ((NULL |directory|) |nameType|)
+          ('T (STRCONC |directory| |nameType|)))))))
+
+;--=======================================================================
+;--              Creating Record File from HT Files
+;--=======================================================================
+;htFile2RecordFile(pathname,:option) ==
+;  inputFile2RecordFile htFile2InputFile(pathname,KAR option)
+
+(DEFUN |htFile2RecordFile| (&REST G166449 &AUX |option| |pathname|)
+  (DSETQ (|pathname| . |option|) G166449)
+  (|inputFile2RecordFile|
+      (|htFile2InputFile| |pathname| (KAR |option|))))
+
+;--=======================================================================
+;--           Function to record and print values into $testStream
+;--=======================================================================
+;recordAndPrintTest md ==  --called by recordAndPrint
+;  input :=
+;    STRINGP $currentLine => [$currentLine]
+;    fn $currentLine where fn x ==
+;      x is [y,:r] =>
+;        y.(k := MAXINDEX y) = char '__ =>
+;          u := fn r
+;          [STRCONC(SUBSTRING(y,0,k),'" ",first u),:rest u]
+;        [y,:fn r]
+;      x
+;  output := NREVERSE $mkTestOutputStack -- set by maPrin
+;  PRINT(writify [input,prefix2String md,:output],$testStream)
+;  $mkTestInputStack := nil
+;  $mkTestOutputStack := nil
+
+(DEFUN |recordAndPrintTest,fn| (|x|)
+  (PROG (|y| |r| |k| |u|)
+    (RETURN
+      (SEQ (IF (AND (PAIRP |x|)
+                    (PROGN
+                      (SPADLET |y| (QCAR |x|))
+                      (SPADLET |r| (QCDR |x|))
+                      'T))
+               (EXIT (SEQ (IF (BOOT-EQUAL
+                                  (ELT |y|
+                                       (SPADLET |k| (MAXINDEX |y|)))
+                                  (|char| '_))
+                              (EXIT (SEQ
+                                     (SPADLET |u|
+                                      (|recordAndPrintTest,fn| |r|))
+                                     (EXIT
+                                      (CONS
+                                       (STRCONC (SUBSTRING |y| 0 |k|)
+                                        (MAKESTRING " ") (CAR |u|))
+                                       (CDR |u|))))))
+                          (EXIT (CONS |y|
+                                      (|recordAndPrintTest,fn| |r|))))))
+           (EXIT |x|)))))
+
+(DEFUN |recordAndPrintTest| (|md|)
+  (PROG (|input| |output|)
+    (RETURN
+      (PROGN
+        (SPADLET |input|
+                 (COND
+                   ((STRINGP |$currentLine|) (CONS |$currentLine| NIL))
+                   ('T (|recordAndPrintTest,fn| |$currentLine|))))
+        (SPADLET |output| (NREVERSE |$mkTestOutputStack|))
+        (PRINT (|writify|
+                   (CONS |input|
+                         (CONS (|prefix2String| |md|) |output|)))
+               |$testStream|)
+        (SPADLET |$mkTestInputStack| NIL)
+        (SPADLET |$mkTestOutputStack| NIL)))))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}
