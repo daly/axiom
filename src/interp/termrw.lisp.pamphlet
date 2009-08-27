@@ -1,0 +1,358 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp termrw.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\begin{verbatim}
+Algorithms for Term Reduction
+ 
+The following assumptions are made:
+
+a term rewrite system is represented by a pair (varlist,varRules) where
+  varlist is the list of rewrite variables (test by MEMQ) and varRules
+  is an alist (no variables may occur in varRules)
+
+the following rewrite functions are available:
+  termRW looks for a fixpoint in applying varRules, where the outermost
+    leftmost is reduced first by term1RW
+  term1RW applies the first rule
+
+subCopy uses an alist (calls of ASSQ) to substitute a list structure
+  no left side of a pair of alist may appear on a righthand side
+  this means, subCopy is an idempotent function
+
+in both cases copying is only done if necessary to avoid destruction
+this means, EQ can be used to check whether something was done
+ 
+\end{verbatim}
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;termRW(t,R) ==
+;  -- reduce t by rewrite system R
+;  until b repeat
+;    t0:= termRW1(t,R)
+;    b:= EQ(t,t0)
+;    t:= t0
+;  t
+
+(DEFUN |termRW| (|t| R)
+  (PROG (|t0| |b|)
+    (RETURN
+      (SEQ (PROGN
+             (DO ((G166065 NIL |b|)) (G166065 NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |t0| (|termRW1| |t| R))
+                            (SPADLET |b| (EQ |t| |t0|))
+                            (SPADLET |t| |t0|)))))
+             |t|)))))
+
+;
+;termRW1(t,R) ==
+;  -- tries to do one reduction on the leftmost outermost subterm of t
+;  t0:= term1RW(t,R)
+;  not EQ(t0,t) or atom t => t0
+;  [t1,:t2]:= t
+;  tt1:= termRW1(t1,R)
+;  tt2:= t2 and termRW1(t2,R)
+;  EQ(t1,tt1) and EQ(t2,tt2) => t
+;  CONS(tt1,tt2)
+
+(DEFUN |termRW1| (|t| R)
+  (PROG (|t0| |t1| |t2| |tt1| |tt2|)
+    (RETURN
+      (PROGN
+        (SPADLET |t0| (|term1RW| |t| R))
+        (COND
+          ((OR (NULL (EQ |t0| |t|)) (ATOM |t|)) |t0|)
+          ('T (SPADLET |t1| (CAR |t|)) (SPADLET |t2| (CDR |t|))
+           (SPADLET |tt1| (|termRW1| |t1| R))
+           (SPADLET |tt2| (AND |t2| (|termRW1| |t2| R)))
+           (COND
+             ((AND (EQ |t1| |tt1|) (EQ |t2| |tt2|)) |t|)
+             ('T (CONS |tt1| |tt2|)))))))))
+
+;
+;term1RW(t,R) ==
+;  -- tries to reduce t at the top node
+;  [vars,:varRules]:= R
+;  for r in varRules until not (SL='failed) repeat
+;    SL:= termMatch(CAR r,t,NIL,vars)
+;    not (SL='failed) =>
+;      t:= subCopy(copy CDR r,SL)
+;  t
+
+(DEFUN |term1RW| (|t| R)
+  (PROG (|vars| |varRules| SL)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |vars| (CAR R))
+             (SPADLET |varRules| (CDR R))
+             (DO ((G166098 |varRules| (CDR G166098)) (|r| NIL)
+                  (G166099 NIL (NULL (BOOT-EQUAL SL '|failed|))))
+                 ((OR (ATOM G166098)
+                      (PROGN (SETQ |r| (CAR G166098)) NIL) G166099)
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET SL
+                                     (|termMatch| (CAR |r|) |t| NIL
+                                      |vars|))
+                            (COND
+                              ((NULL (BOOT-EQUAL SL '|failed|))
+                               (SPADLET |t|
+                                        (|subCopy| (COPY (CDR |r|)) SL))))))))
+             |t|)))))
+
+;
+;term1RWall(t,R) ==
+;  -- same as term1RW, but returns a list
+;  [vars,:varRules]:= R
+;  [not (SL='failed) and subCopy(copy CDR r,SL) for r in varRules |
+;    not EQ(SL:= termMatch(CAR r,t,NIL,vars),'failed)]
+
+(DEFUN |term1RWall| (|t| R)
+  (PROG (|vars| |varRules| SL)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |vars| (CAR R))
+             (SPADLET |varRules| (CDR R))
+             (PROG (G166122)
+               (SPADLET G166122 NIL)
+               (RETURN
+                 (DO ((G166128 |varRules| (CDR G166128)) (|r| NIL))
+                     ((OR (ATOM G166128)
+                          (PROGN (SETQ |r| (CAR G166128)) NIL))
+                      (NREVERSE0 G166122))
+                   (SEQ (EXIT (COND
+                                ((NULL (EQ
+                                        (SPADLET SL
+                                         (|termMatch| (CAR |r|) |t| NIL
+                                          |vars|))
+                                        '|failed|))
+                                 (SETQ G166122
+                                       (CONS
+                                        (AND
+                                         (NULL
+                                          (BOOT-EQUAL SL '|failed|))
+                                         (|subCopy| (COPY (CDR |r|))
+                                          SL))
+                                        G166122))))))))))))))
+
+;
+;termMatch(tp,t,SL,vars) ==
+;  -- t is a term pattern, t a term
+;  -- then the result is the augmented substitution SL or 'failed
+;  tp=t => SL
+;  atom tp =>
+;    MEMQ(tp,vars) =>
+;      p:= ASSOC(tp,SL) => ( CDR p=t )
+;      CONS(CONS(tp,t),SL)
+;    'failed
+;  atom t => 'failed
+;  [tp1,:tp2]:= tp
+;  [t1,:t2]:= t
+;  SL:= termMatch(tp1,t1,SL,vars)
+;  SL='failed => 'failed
+;  tp2 and t2 => termMatch(tp2,t2,SL,vars)
+;  tp2 or t2 => 'failed
+;  SL
+
+(DEFUN |termMatch| (|tp| |t| SL |vars|)
+  (PROG (|p| |tp1| |tp2| |t1| |t2|)
+    (RETURN
+      (COND
+        ((BOOT-EQUAL |tp| |t|) SL)
+        ((ATOM |tp|)
+         (COND
+           ((MEMQ |tp| |vars|)
+            (COND
+              ((SPADLET |p| (|assoc| |tp| SL))
+               (BOOT-EQUAL (CDR |p|) |t|))
+              ('T (CONS (CONS |tp| |t|) SL))))
+           ('T '|failed|)))
+        ((ATOM |t|) '|failed|)
+        ('T (SPADLET |tp1| (CAR |tp|)) (SPADLET |tp2| (CDR |tp|))
+         (SPADLET |t1| (CAR |t|)) (SPADLET |t2| (CDR |t|))
+         (SPADLET SL (|termMatch| |tp1| |t1| SL |vars|))
+         (COND
+           ((BOOT-EQUAL SL '|failed|) '|failed|)
+           ((AND |tp2| |t2|) (|termMatch| |tp2| |t2| SL |vars|))
+           ((OR |tp2| |t2|) '|failed|)
+           ('T SL)))))))
+
+;
+;
+;--% substitution handling
+;
+;-- isContained(v,t) ==
+;--   -- tests (by EQ), whether v occurs in term t
+;--   -- v must not be NIL
+;--   EQ(v,t) => 'T
+;--   atom t => NIL
+;--   isContained(v,CAR t) or isContained(v,CDR t)
+;
+;augmentSub(v,t,SL) ==
+;  -- destructively adds the pair (v,t) to the substitution list SL
+;  -- t doesn't contain any of the variables of SL
+;  q:= CONS(v,t)
+;  null SL => [q]
+;--  for p in SL repeat RPLACD(p,SUBSTQ(t,v,CDR p))
+;  CONS(q,SL)
+
+(DEFUN |augmentSub| (|v| |t| SL)
+  (PROG (|q|)
+    (RETURN
+      (PROGN
+        (SPADLET |q| (CONS |v| |t|))
+        (COND ((NULL SL) (CONS |q| NIL)) ('T (CONS |q| SL)))))))
+
+;
+;mergeSubs(S1,S2) ==
+;  -- augments S2 by each pair of S1
+;  -- S1 doesn't contain any of the variables of S2
+;  null S1 => S2
+;  null S2 => S1
+;  S3 := [p for p in S2 | not ASSQ(CAR p, S1)]
+;--  for p in S1 repeat S3:= augmentSub(CAR p,CDR p,S3)
+;  APPEND(S1,S3)
+
+(DEFUN |mergeSubs| (S1 S2)
+  (PROG (S3)
+    (RETURN
+      (SEQ (COND
+             ((NULL S1) S2)
+             ((NULL S2) S1)
+             ('T
+              (SPADLET S3
+                       (PROG (G166170)
+                         (SPADLET G166170 NIL)
+                         (RETURN
+                           (DO ((G166176 S2 (CDR G166176))
+                                (|p| NIL))
+                               ((OR (ATOM G166176)
+                                    (PROGN
+                                      (SETQ |p| (CAR G166176))
+                                      NIL))
+                                (NREVERSE0 G166170))
+                             (SEQ (EXIT (COND
+                                          ((NULL (ASSQ (CAR |p|) S1))
+                                           (SETQ G166170
+                                            (CONS |p| G166170))))))))))
+              (APPEND S1 S3)))))))
+
+;
+;subCopy(t,SL) ==
+;  -- t is any LISP structure, SL a substitution list for sharp variables
+;  -- then t is substituted and copied if necessary
+;  SL=NIL => t
+;  subCopy0(t,SL)
+
+(DEFUN |subCopy| (|t| SL)
+  (COND ((NULL SL) |t|) ('T (|subCopy0| |t| SL))))
+
+;
+;subCopy0(t, SL) ==
+;  p := subCopyOrNil(t, SL) => CDR p
+;  t
+
+(DEFUN |subCopy0| (|t| SL)
+  (PROG (|p|)
+    (RETURN
+      (COND
+        ((SPADLET |p| (|subCopyOrNil| |t| SL)) (CDR |p|))
+        ('T |t|)))))
+
+;
+;subCopyOrNil(t,SL) ==
+;  -- the same as subCopy, but the result is NIL if nothing was copied
+;  p:= ASSOC(t,SL) => p
+;  atom t => NIL
+;  [t1,:t2]:= t
+;  t0:= subCopyOrNil(t1,SL) =>
+;    t2 => CONS(t, CONS(CDR t0, subCopy0(t2,SL)))
+;    CONS(t,CONS(CDR t0,t2))
+;  t2 and ( t0:= subCopyOrNil(t2,SL) ) => CONS(t, CONS(t1,CDR t0))
+;  NIL
+
+(DEFUN |subCopyOrNil| (|t| SL)
+  (PROG (|p| |t1| |t2| |t0|)
+    (RETURN
+      (COND
+        ((SPADLET |p| (|assoc| |t| SL)) |p|)
+        ((ATOM |t|) NIL)
+        ('T (SPADLET |t1| (CAR |t|)) (SPADLET |t2| (CDR |t|))
+         (COND
+           ((SPADLET |t0| (|subCopyOrNil| |t1| SL))
+            (COND
+              (|t2| (CONS |t| (CONS (CDR |t0|) (|subCopy0| |t2| SL))))
+              ('T (CONS |t| (CONS (CDR |t0|) |t2|)))))
+           ((AND |t2| (SPADLET |t0| (|subCopyOrNil| |t2| SL)))
+            (CONS |t| (CONS |t1| (CDR |t0|))))
+           ('T NIL)))))))
+
+;
+;
+;deepSubCopy(t,SL) ==
+;  -- t is any LISP structure, SL a substitution list for sharp variables
+;  -- then t is substituted and copied if necessary
+;  SL=NIL => t
+;  deepSubCopy0(t,SL)
+
+(DEFUN |deepSubCopy| (|t| SL)
+  (COND ((NULL SL) |t|) ('T (|deepSubCopy0| |t| SL))))
+
+;
+;deepSubCopy0(t, SL) ==
+;  p := deepSubCopyOrNil(t, SL) => CDR p
+;  t
+
+(DEFUN |deepSubCopy0| (|t| SL)
+  (PROG (|p|)
+    (RETURN
+      (COND
+        ((SPADLET |p| (|deepSubCopyOrNil| |t| SL)) (CDR |p|))
+        ('T |t|)))))
+
+;
+;deepSubCopyOrNil(t,SL) ==
+;  -- the same as subCopy, but the result is NIL if nothing was copied
+;  p:= ASSOC(t,SL) => CONS(t, deepSubCopy0(CDR p, SL))
+;  atom t => NIL
+;  [t1,:t2]:= t
+;  t0:= deepSubCopyOrNil(t1,SL) =>
+;    t2 => CONS(t, CONS(CDR t0, deepSubCopy0(t2,SL)))
+;    CONS(t,CONS(CDR t0,t2))
+;  t2 and ( t0:= deepSubCopyOrNil(t2,SL) ) => CONS(t, CONS(t1,CDR t0))
+;
+;
+
+(DEFUN |deepSubCopyOrNil| (|t| SL)
+  (PROG (|p| |t1| |t2| |t0|)
+    (RETURN
+      (COND
+        ((SPADLET |p| (|assoc| |t| SL))
+         (CONS |t| (|deepSubCopy0| (CDR |p|) SL)))
+        ((ATOM |t|) NIL)
+        ('T (SPADLET |t1| (CAR |t|)) (SPADLET |t2| (CDR |t|))
+         (COND
+           ((SPADLET |t0| (|deepSubCopyOrNil| |t1| SL))
+            (COND
+              (|t2| (CONS |t|
+                          (CONS (CDR |t0|) (|deepSubCopy0| |t2| SL))))
+              ('T (CONS |t| (CONS (CDR |t0|) |t2|)))))
+           ((AND |t2| (SPADLET |t0| (|deepSubCopyOrNil| |t2| SL)))
+            (CONS |t| (CONS |t1| (CDR |t0|))))))))))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}
