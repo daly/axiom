@@ -1,0 +1,1097 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp info.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\begin{verbatim}
+ADDINFORMATION CODE
+This code adds various items to the special value of $Information,
+in order to keep track of all the compiler's information about
+various categories and similar objects
+An actual piece of (unconditional) information can have one of 3 forms:
+ (ATTRIBUTE domainname attribute)
+             --These are only stored here
+ (SIGNATURE domainname operator signature)
+             --These are also stored as 'modemap' properties
+ (has domainname categoryexpression)
+             --These are also stored as 'value' properties
+Conditional attributes are of the form
+ (COND
+ (condition info info ...)
+ ... )
+where the condition looks like a 'has' clause, or the 'and' of several
+'has' clauses:
+  (has name categoryexpression)
+  (has name (ATTRIBUTE attribute))
+  (has name (SIGNATURE operator signature))
+The use of two representations is admitted to be clumsy
+
+modemap is of the form : ((op (targ arg1 arg2 ... argn)) pred (elt $ n)) 
+\end{verbatim}
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;printInfo $e ==
+;  for u in get("$Information","special",$e) repeat PRETTYPRINT u
+;  nil
+
+(DEFUN |printInfo| (|$e|)
+  (DECLARE (SPECIAL |$e|))
+  (SEQ (PROGN
+         (DO ((G166061 (|get| '|$Information| '|special| |$e|)
+                  (CDR G166061))
+              (|u| NIL))
+             ((OR (ATOM G166061)
+                  (PROGN (SETQ |u| (CAR G166061)) NIL))
+              NIL)
+           (SEQ (EXIT (PRETTYPRINT |u|))))
+         NIL)))
+
+;addInformation(m,$e) ==
+;  $Information: local := nil
+;  --$Information:= nil: done by previous statement anyway
+;  info m where
+;    info m ==
+;      --Processes information from a mode declaration in compCapsule
+;      atom m => nil
+;      m is ["CATEGORY",.,:stuff] => for u in stuff repeat addInfo u
+;      m is ["Join",:stuff] => for u in stuff repeat info u
+;      nil
+;  $e:=
+;    put("$Information","special",[:$Information,:
+;      get("$Information","special",$e)],$e)
+;  $e
+
+(DEFUN |addInformation,info| (|m|)
+  (PROG (|ISTMP#1| |stuff|)
+    (RETURN
+      (SEQ (IF (ATOM |m|) (EXIT NIL))
+           (IF (AND (PAIRP |m|) (EQ (QCAR |m|) 'CATEGORY)
+                    (PROGN
+                      (SPADLET |ISTMP#1| (QCDR |m|))
+                      (AND (PAIRP |ISTMP#1|)
+                           (PROGN
+                             (SPADLET |stuff| (QCDR |ISTMP#1|))
+                             'T))))
+               (EXIT (DO ((G166079 |stuff| (CDR G166079))
+                          (|u| NIL))
+                         ((OR (ATOM G166079)
+                              (PROGN (SETQ |u| (CAR G166079)) NIL))
+                          NIL)
+                       (SEQ (EXIT (|addInfo| |u|))))))
+           (IF (AND (PAIRP |m|) (EQ (QCAR |m|) '|Join|)
+                    (PROGN (SPADLET |stuff| (QCDR |m|)) 'T))
+               (EXIT (DO ((G166088 |stuff| (CDR G166088))
+                          (|u| NIL))
+                         ((OR (ATOM G166088)
+                              (PROGN (SETQ |u| (CAR G166088)) NIL))
+                          NIL)
+                       (SEQ (EXIT (|addInformation,info| |u|))))))
+           (EXIT NIL)))))
+
+(DEFUN |addInformation| (|m| |$e|)
+  (DECLARE (SPECIAL |$e|))
+  (PROG (|$Information|)
+    (DECLARE (SPECIAL |$Information|))
+    (RETURN
+      (PROGN
+        (SPADLET |$Information| NIL)
+        (|addInformation,info| |m|)
+        (SPADLET |$e|
+                 (|put| '|$Information| '|special|
+                        (APPEND |$Information|
+                                (|get| '|$Information| '|special| |$e|))
+                        |$e|))
+        |$e|))))
+
+;addInfo u == $Information:= [formatInfo u,:$Information]
+
+(DEFUN |addInfo| (|u|)
+  (SPADLET |$Information| (CONS (|formatInfo| |u|) |$Information|)))
+
+;formatInfo u ==
+;  atom u => u
+;  u is ["SIGNATURE",:v] => ["SIGNATURE","$",:v]
+; --u is ("CATEGORY",junk,:l) => ("PROGN",:(formatInfo v for v in l))
+;  u is ["PROGN",:l] => ["PROGN",:[formatInfo v for v in l]]
+;  u is ["ATTRIBUTE",v] =>
+;
+;    -- The parser can't tell between those attributes that really
+;    -- are attributes, and those that are category names
+;    atom v and isCategoryForm([v],$e) => ["has","$",[v]]
+;    atom v => ["ATTRIBUTE","$",v]
+;    isCategoryForm(v,$e) => ["has","$",v]
+;    ["ATTRIBUTE","$",v]
+;  u is ["IF",a,b,c] =>
+;    c="noBranch" => ["COND",:liftCond [formatPred a,formatInfo b]]
+;    b="noBranch" => ["COND",:liftCond [["not",formatPred a],formatInfo c]]
+;    ["COND",:liftCond [formatPred a,formatInfo b],:
+;      liftCond [["not",formatPred a],formatInfo c]]
+;  systemError '"formatInfo"
+
+(DEFUN |formatInfo| (|u|)
+  (PROG (|l| |v| |ISTMP#1| |a| |ISTMP#2| |b| |ISTMP#3| |c|)
+    (RETURN
+      (SEQ (COND
+             ((ATOM |u|) |u|)
+             ((AND (PAIRP |u|) (EQ (QCAR |u|) 'SIGNATURE)
+                   (PROGN (SPADLET |v| (QCDR |u|)) 'T))
+              (CONS 'SIGNATURE (CONS '$ |v|)))
+             ((AND (PAIRP |u|) (EQ (QCAR |u|) 'PROGN)
+                   (PROGN (SPADLET |l| (QCDR |u|)) 'T))
+              (CONS 'PROGN
+                    (PROG (G166159)
+                      (SPADLET G166159 NIL)
+                      (RETURN
+                        (DO ((G166164 |l| (CDR G166164)) (|v| NIL))
+                            ((OR (ATOM G166164)
+                                 (PROGN
+                                   (SETQ |v| (CAR G166164))
+                                   NIL))
+                             (NREVERSE0 G166159))
+                          (SEQ (EXIT (SETQ G166159
+                                      (CONS (|formatInfo| |v|)
+                                       G166159)))))))))
+             ((AND (PAIRP |u|) (EQ (QCAR |u|) 'ATTRIBUTE)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |u|))
+                     (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                          (PROGN (SPADLET |v| (QCAR |ISTMP#1|)) 'T))))
+              (COND
+                ((AND (ATOM |v|)
+                      (|isCategoryForm| (CONS |v| NIL) |$e|))
+                 (CONS '|has| (CONS '$ (CONS (CONS |v| NIL) NIL))))
+                ((ATOM |v|) (CONS 'ATTRIBUTE (CONS '$ (CONS |v| NIL))))
+                ((|isCategoryForm| |v| |$e|)
+                 (CONS '|has| (CONS '$ (CONS |v| NIL))))
+                ('T (CONS 'ATTRIBUTE (CONS '$ (CONS |v| NIL))))))
+             ((AND (PAIRP |u|) (EQ (QCAR |u|) 'IF)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |u|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                                   (AND (PAIRP |ISTMP#3|)
+                                    (EQ (QCDR |ISTMP#3|) NIL)
+                                    (PROGN
+                                      (SPADLET |c| (QCAR |ISTMP#3|))
+                                      'T))))))))
+              (COND
+                ((BOOT-EQUAL |c| '|noBranch|)
+                 (CONS 'COND
+                       (|liftCond|
+                           (CONS (|formatPred| |a|)
+                                 (CONS (|formatInfo| |b|) NIL)))))
+                ((BOOT-EQUAL |b| '|noBranch|)
+                 (CONS 'COND
+                       (|liftCond|
+                           (CONS (CONS '|not|
+                                       (CONS (|formatPred| |a|) NIL))
+                                 (CONS (|formatInfo| |c|) NIL)))))
+                ('T
+                 (CONS 'COND
+                       (APPEND (|liftCond|
+                                   (CONS (|formatPred| |a|)
+                                    (CONS (|formatInfo| |b|) NIL)))
+                               (|liftCond|
+                                   (CONS
+                                    (CONS '|not|
+                                     (CONS (|formatPred| |a|) NIL))
+                                    (CONS (|formatInfo| |c|) NIL))))))))
+             ('T (|systemError| (MAKESTRING "formatInfo"))))))))
+
+;liftCond (clause is [ante,conseq]) ==
+;  conseq is ["COND",:l] =>
+;    [[lcAnd(ante,a),:b] for [a,:b] in l] where
+;      lcAnd(pred,conj) ==
+;        conj is ["and",:ll] => ["and",pred,:ll]
+;        ["and",pred,conj]
+;  [clause]
+
+(DEFUN |liftCond,lcAnd| (|pred| |conj|)
+  (PROG (|ll|)
+    (RETURN
+      (SEQ (IF (AND (PAIRP |conj|) (EQ (QCAR |conj|) '|and|)
+                    (PROGN (SPADLET |ll| (QCDR |conj|)) 'T))
+               (EXIT (CONS '|and| (CONS |pred| |ll|))))
+           (EXIT (CONS '|and| (CONS |pred| (CONS |conj| NIL))))))))
+
+(DEFUN |liftCond| (|clause|)
+  (PROG (|ante| |conseq| |l| |a| |b|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |ante| (CAR |clause|))
+             (SPADLET |conseq| (CADR |clause|))
+             (COND
+               ((AND (PAIRP |conseq|) (EQ (QCAR |conseq|) 'COND)
+                     (PROGN (SPADLET |l| (QCDR |conseq|)) 'T))
+                (PROG (G166216)
+                  (SPADLET G166216 NIL)
+                  (RETURN
+                    (DO ((G166222 |l| (CDR G166222))
+                         (G166189 NIL))
+                        ((OR (ATOM G166222)
+                             (PROGN
+                               (SETQ G166189 (CAR G166222))
+                               NIL)
+                             (PROGN
+                               (PROGN
+                                 (SPADLET |a| (CAR G166189))
+                                 (SPADLET |b| (CDR G166189))
+                                 G166189)
+                               NIL))
+                         (NREVERSE0 G166216))
+                      (SEQ (EXIT (SETQ G166216
+                                       (CONS
+                                        (CONS
+                                         (|liftCond,lcAnd| |ante| |a|)
+                                         |b|)
+                                        G166216))))))))
+               ('T (CONS |clause| NIL))))))))
+
+;formatPred u ==
+;         --Assumes that $e is set up to point to an environment
+;  u is ["has",a,b] =>
+;    atom b and isCategoryForm([b],$e) => ["has",a,[b]]
+;    atom b => ["has",a,["ATTRIBUTE",b]]
+;    isCategoryForm(b,$e) => u
+;    b is ["ATTRIBUTE",.] => u
+;    b is ["SIGNATURE",:.] => u
+;    ["has",a,["ATTRIBUTE",b]]
+;  atom u => u
+;  u is ["and",:v] => ["and",:[formatPred w for w in v]]
+;  systemError '"formatPred"
+
+(DEFUN |formatPred| (|u|)
+  (PROG (|a| |ISTMP#2| |b| |ISTMP#1| |v|)
+    (RETURN
+      (SEQ (COND
+             ((AND (PAIRP |u|) (EQ (QCAR |u|) '|has|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |u|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (COND
+                ((AND (ATOM |b|)
+                      (|isCategoryForm| (CONS |b| NIL) |$e|))
+                 (CONS '|has| (CONS |a| (CONS (CONS |b| NIL) NIL))))
+                ((ATOM |b|)
+                 (CONS '|has|
+                       (CONS |a|
+                             (CONS (CONS 'ATTRIBUTE (CONS |b| NIL))
+                                   NIL))))
+                ((|isCategoryForm| |b| |$e|) |u|)
+                ((AND (PAIRP |b|) (EQ (QCAR |b|) 'ATTRIBUTE)
+                      (PROGN
+                        (SPADLET |ISTMP#1| (QCDR |b|))
+                        (AND (PAIRP |ISTMP#1|)
+                             (EQ (QCDR |ISTMP#1|) NIL))))
+                 |u|)
+                ((AND (PAIRP |b|) (EQ (QCAR |b|) 'SIGNATURE)) |u|)
+                ('T
+                 (CONS '|has|
+                       (CONS |a|
+                             (CONS (CONS 'ATTRIBUTE (CONS |b| NIL))
+                                   NIL))))))
+             ((ATOM |u|) |u|)
+             ((AND (PAIRP |u|) (EQ (QCAR |u|) '|and|)
+                   (PROGN (SPADLET |v| (QCDR |u|)) 'T))
+              (CONS '|and|
+                    (PROG (G166262)
+                      (SPADLET G166262 NIL)
+                      (RETURN
+                        (DO ((G166267 |v| (CDR G166267)) (|w| NIL))
+                            ((OR (ATOM G166267)
+                                 (PROGN
+                                   (SETQ |w| (CAR G166267))
+                                   NIL))
+                             (NREVERSE0 G166262))
+                          (SEQ (EXIT (SETQ G166262
+                                      (CONS (|formatPred| |w|)
+                                       G166262)))))))))
+             ('T (|systemError| (MAKESTRING "formatPred"))))))))
+
+;chaseInferences(pred,$e) ==
+;  foo hasToInfo pred where
+;    foo pred ==
+;      knownInfo pred => nil
+;      $e:= actOnInfo(pred,$e)
+;      pred:= infoToHas pred
+;      for u in get("$Information","special",$e) repeat
+;        u is ["COND",:l] =>
+;          for [ante,:conseq] in l repeat
+;            ante=pred => [foo w for w in conseq]
+;            ante is ["and",:ante'] and MEMBER(pred,ante') =>
+;              ante':= DELETE(pred,ante')
+;              v':=
+;                LENGTH ante'=1 => first ante'
+;                ["and",:ante']
+;              v':= ["COND",[v',:conseq]]
+;              MEMBER(v',get("$Information","special",$e)) => nil
+;              $e:=
+;                put("$Information","special",[v',:
+;                  get("$Information","special",$e)],$e)
+;            nil
+;  $e
+
+(DEFUN |chaseInferences,foo| (|pred|)
+  (PROG (|l| |ante| |conseq| |ante'| |v'|)
+    (RETURN
+      (SEQ (IF (|knownInfo| |pred|) (EXIT NIL))
+           (SPADLET |$e| (|actOnInfo| |pred| |$e|))
+           (SPADLET |pred| (|infoToHas| |pred|))
+           (EXIT (DO ((G166301
+                          (|get| '|$Information| '|special| |$e|)
+                          (CDR G166301))
+                      (|u| NIL))
+                     ((OR (ATOM G166301)
+                          (PROGN (SETQ |u| (CAR G166301)) NIL))
+                      NIL)
+                   (SEQ (EXIT (IF (AND (PAIRP |u|)
+                                       (EQ (QCAR |u|) 'COND)
+                                       (PROGN
+                                         (SPADLET |l| (QCDR |u|))
+                                         'T))
+                                  (EXIT (DO
+                                         ((G166313 |l|
+                                           (CDR G166313))
+                                          (G166286 NIL))
+                                         ((OR (ATOM G166313)
+                                           (PROGN
+                                             (SETQ G166286
+                                              (CAR G166313))
+                                             NIL)
+                                           (PROGN
+                                             (PROGN
+                                               (SPADLET |ante|
+                                                (CAR G166286))
+                                               (SPADLET |conseq|
+                                                (CDR G166286))
+                                               G166286)
+                                             NIL))
+                                          NIL)
+                                          (SEQ
+                                           (IF
+                                            (BOOT-EQUAL |ante| |pred|)
+                                            (EXIT
+                                             (PROG (G166324)
+                                               (SPADLET G166324 NIL)
+                                               (RETURN
+                                                 (DO
+                                                  ((G166329 |conseq|
+                                                    (CDR G166329))
+                                                   (|w| NIL))
+                                                  ((OR (ATOM G166329)
+                                                    (PROGN
+                                                      (SETQ |w|
+                                                       (CAR G166329))
+                                                      NIL))
+                                                   (NREVERSE0
+                                                    G166324))
+                                                   (SEQ
+                                                    (EXIT
+                                                     (SETQ G166324
+                                                      (CONS
+                                                       (|chaseInferences,foo|
+                                                        |w|)
+                                                       G166324)))))))))
+                                           (IF
+                                            (AND
+                                             (AND (PAIRP |ante|)
+                                              (EQ (QCAR |ante|) '|and|)
+                                              (PROGN
+                                                (SPADLET |ante'|
+                                                 (QCDR |ante|))
+                                                'T))
+                                             (|member| |pred| |ante'|))
+                                            (EXIT
+                                             (SEQ
+                                              (SPADLET |ante'|
+                                               (|delete| |pred|
+                                                |ante'|))
+                                              (SPADLET |v'|
+                                               (SEQ
+                                                (IF
+                                                 (EQL (LENGTH |ante'|)
+                                                  1)
+                                                 (EXIT (CAR |ante'|)))
+                                                (EXIT
+                                                 (CONS '|and| |ante'|))))
+                                              (SPADLET |v'|
+                                               (CONS 'COND
+                                                (CONS
+                                                 (CONS |v'| |conseq|)
+                                                 NIL)))
+                                              (IF
+                                               (|member| |v'|
+                                                (|get| '|$Information|
+                                                 '|special| |$e|))
+                                               (EXIT NIL))
+                                              (EXIT
+                                               (SPADLET |$e|
+                                                (|put| '|$Information|
+                                                 '|special|
+                                                 (CONS |v'|
+                                                  (|get|
+                                                   '|$Information|
+                                                   '|special| |$e|))
+                                                 |$e|))))))
+                                           (EXIT NIL)))))))))))))
+
+(DEFUN |chaseInferences| (|pred| |$e|)
+  (DECLARE (SPECIAL |$e|))
+  (PROGN (|chaseInferences,foo| (|hasToInfo| |pred|)) |$e|))
+
+;hasToInfo (pred is ["has",a,b]) ==
+;  b is ["SIGNATURE",:data] => ["SIGNATURE",a,:data]
+;  b is ["ATTRIBUTE",c] => ["ATTRIBUTE",a,c]
+;  pred
+
+(DEFUN |hasToInfo| (|pred|)
+  (PROG (|a| |b| |data| |ISTMP#1| |c|)
+    (RETURN
+      (PROGN
+        (COND ((EQ (CAR |pred|) '|has|) (CAR |pred|)))
+        (SPADLET |a| (CADR |pred|))
+        (SPADLET |b| (CADDR |pred|))
+        (COND
+          ((AND (PAIRP |b|) (EQ (QCAR |b|) 'SIGNATURE)
+                (PROGN (SPADLET |data| (QCDR |b|)) 'T))
+           (CONS 'SIGNATURE (CONS |a| |data|)))
+          ((AND (PAIRP |b|) (EQ (QCAR |b|) 'ATTRIBUTE)
+                (PROGN
+                  (SPADLET |ISTMP#1| (QCDR |b|))
+                  (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                       (PROGN (SPADLET |c| (QCAR |ISTMP#1|)) 'T))))
+           (CONS 'ATTRIBUTE (CONS |a| (CONS |c| NIL))))
+          ('T |pred|))))))
+
+;infoToHas a ==
+;  a is ["SIGNATURE",b,:data] => ["has",b,["SIGNATURE",:data]]
+;  a is ["ATTRIBUTE",b,c] => ["has",b,["ATTRIBUTE",c]]
+;  a
+
+(DEFUN |infoToHas| (|a|)
+  (PROG (|data| |ISTMP#1| |b| |ISTMP#2| |c|)
+    (RETURN
+      (COND
+        ((AND (PAIRP |a|) (EQ (QCAR |a|) 'SIGNATURE)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |a|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN
+                       (SPADLET |b| (QCAR |ISTMP#1|))
+                       (SPADLET |data| (QCDR |ISTMP#1|))
+                       'T))))
+         (CONS '|has| (CONS |b| (CONS (CONS 'SIGNATURE |data|) NIL))))
+        ((AND (PAIRP |a|) (EQ (QCAR |a|) 'ATTRIBUTE)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |a|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN
+                       (SPADLET |b| (QCAR |ISTMP#1|))
+                       (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                       (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL)
+                            (PROGN (SPADLET |c| (QCAR |ISTMP#2|)) 'T))))))
+         (CONS '|has|
+               (CONS |b| (CONS (CONS 'ATTRIBUTE (CONS |c| NIL)) NIL))))
+        ('T |a|)))))
+
+;knownInfo pred ==
+;               --true %if the information is already known
+;  pred=true => true
+;  --pred = "true" => true
+;  MEMBER(pred,get("$Information","special",$e)) => true
+;  pred is ["OR",:l] => or/[knownInfo u for u in l]
+;  pred is ["AND",:l] => and/[knownInfo u for u in l]
+;  pred is ["or",:l] => or/[knownInfo u for u in l]
+;  pred is ["and",:l] => and/[knownInfo u for u in l]
+;  pred is ["ATTRIBUTE",name,attr] =>
+;    v:= compForMode(name,$EmptyMode,$e)
+;    null v => stackSemanticError(["can't find category of ",name],nil)
+;    [vv,.,.]:= compMakeCategoryObject(CADR v,$e)
+;    null vv => stackSemanticError(["can't make category of ",name],nil)
+;    MEMBER(attr,vv.2) => true
+;    x:= ASSOC(attr,vv.2) => knownInfo CADR x
+;          --format is a list of two elements: information, predicate
+;    false
+;  pred is ["has",name,cat] =>
+;    cat is ["ATTRIBUTE",:a] => knownInfo ["ATTRIBUTE",name,:a]
+;    cat is ["SIGNATURE",:a] => knownInfo ["SIGNATURE",name,:a]
+;    name is ['Union,:.] => false
+;    v:= compForMode(name,$EmptyMode,$e)
+;    null v => stackSemanticError(["can't find category of ",name],nil)
+;    vmode := CADR v
+;    cat = vmode => true
+;    vmode is ["Join",:l] and MEMBER(cat,l) => true
+;    [vv,.,.]:= compMakeCategoryObject(vmode,$e)
+;    catlist := vv.4
+;    --catlist := SUBST(name,'$,vv.4)
+;    null vv => stackSemanticError(["can't make category of ",name],nil)
+;    MEMBER(cat,first catlist) => true  --checks princ. ancestors
+;    (u:=ASSOC(cat,CADR catlist)) and knownInfo(CADR u) => true
+;    -- previous line checks fundamental anscestors, we should check their
+;    --   principal anscestors but this requires instantiating categories
+;    -- This line caused recursion on predicates which are no use in deciding
+;    -- whether a category was present.
+;-- this is correct TPD feb, 19, 2003
+;    or/[AncestorP(cat,LIST CAR u) for u in CADR catlist | knownInfo CADR u] => true
+;-- this is wrong TPD feb, 19, 2003
+;    -- or/[AncestorP(cat,LIST CAR u) and knownInfo CADR u for u in CADR catlist] => true
+;    false
+;  pred is ["SIGNATURE",name,op,sig,:.] =>
+;    v:= get(op,"modemap",$e)
+;    for w in v repeat
+;      ww:= CDAR w
+;          --the actual signature part
+;      LENGTH ww=LENGTH sig and SourceLevelSubsume(ww,sig) =>
+;        --NULL CAADR w => return false
+;        CAADR w  = true => return true
+;        --return false
+;        --error '"knownInfo"
+;  false
+
+(DEFUN |knownInfo| (|pred|)
+  (PROG (|attr| |x| |cat| |a| |vmode| |l| |LETTMP#1| |vv| |catlist| |u|
+                |ISTMP#1| |name| |ISTMP#2| |op| |ISTMP#3| |sig| |v|
+                |ww|)
+    (RETURN
+      (SEQ (COND
+             ((BOOT-EQUAL |pred| 'T) 'T)
+             ((|member| |pred| (|get| '|$Information| '|special| |$e|))
+              'T)
+             ((AND (PAIRP |pred|) (EQ (QCAR |pred|) 'OR)
+                   (PROGN (SPADLET |l| (QCDR |pred|)) 'T))
+              (PROG (G166500)
+                (SPADLET G166500 NIL)
+                (RETURN
+                  (DO ((G166506 NIL G166500)
+                       (G166507 |l| (CDR G166507)) (|u| NIL))
+                      ((OR G166506 (ATOM G166507)
+                           (PROGN (SETQ |u| (CAR G166507)) NIL))
+                       G166500)
+                    (SEQ (EXIT (SETQ G166500
+                                     (OR G166500 (|knownInfo| |u|)))))))))
+             ((AND (PAIRP |pred|) (EQ (QCAR |pred|) 'AND)
+                   (PROGN (SPADLET |l| (QCDR |pred|)) 'T))
+              (PROG (G166514)
+                (SPADLET G166514 'T)
+                (RETURN
+                  (DO ((G166520 NIL (NULL G166514))
+                       (G166521 |l| (CDR G166521)) (|u| NIL))
+                      ((OR G166520 (ATOM G166521)
+                           (PROGN (SETQ |u| (CAR G166521)) NIL))
+                       G166514)
+                    (SEQ (EXIT (SETQ G166514
+                                     (AND G166514 (|knownInfo| |u|)))))))))
+             ((AND (PAIRP |pred|) (EQ (QCAR |pred|) '|or|)
+                   (PROGN (SPADLET |l| (QCDR |pred|)) 'T))
+              (PROG (G166528)
+                (SPADLET G166528 NIL)
+                (RETURN
+                  (DO ((G166534 NIL G166528)
+                       (G166535 |l| (CDR G166535)) (|u| NIL))
+                      ((OR G166534 (ATOM G166535)
+                           (PROGN (SETQ |u| (CAR G166535)) NIL))
+                       G166528)
+                    (SEQ (EXIT (SETQ G166528
+                                     (OR G166528 (|knownInfo| |u|)))))))))
+             ((AND (PAIRP |pred|) (EQ (QCAR |pred|) '|and|)
+                   (PROGN (SPADLET |l| (QCDR |pred|)) 'T))
+              (PROG (G166542)
+                (SPADLET G166542 'T)
+                (RETURN
+                  (DO ((G166548 NIL (NULL G166542))
+                       (G166549 |l| (CDR G166549)) (|u| NIL))
+                      ((OR G166548 (ATOM G166549)
+                           (PROGN (SETQ |u| (CAR G166549)) NIL))
+                       G166542)
+                    (SEQ (EXIT (SETQ G166542
+                                     (AND G166542 (|knownInfo| |u|)))))))))
+             ((AND (PAIRP |pred|) (EQ (QCAR |pred|) 'ATTRIBUTE)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |pred|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |name| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |attr| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (SPADLET |v| (|compForMode| |name| |$EmptyMode| |$e|))
+              (COND
+                ((NULL |v|)
+                 (|stackSemanticError|
+                     (CONS '|can't find category of |
+                           (CONS |name| NIL))
+                     NIL))
+                ('T
+                 (SPADLET |LETTMP#1|
+                          (|compMakeCategoryObject| (CADR |v|) |$e|))
+                 (SPADLET |vv| (CAR |LETTMP#1|))
+                 (COND
+                   ((NULL |vv|)
+                    (|stackSemanticError|
+                        (CONS '|can't make category of |
+                              (CONS |name| NIL))
+                        NIL))
+                   ((|member| |attr| (ELT |vv| 2)) 'T)
+                   ((SPADLET |x| (|assoc| |attr| (ELT |vv| 2)))
+                    (|knownInfo| (CADR |x|)))
+                   ('T NIL)))))
+             ((AND (PAIRP |pred|) (EQ (QCAR |pred|) '|has|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |pred|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |name| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |cat| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (COND
+                ((AND (PAIRP |cat|) (EQ (QCAR |cat|) 'ATTRIBUTE)
+                      (PROGN (SPADLET |a| (QCDR |cat|)) 'T))
+                 (|knownInfo| (CONS 'ATTRIBUTE (CONS |name| |a|))))
+                ((AND (PAIRP |cat|) (EQ (QCAR |cat|) 'SIGNATURE)
+                      (PROGN (SPADLET |a| (QCDR |cat|)) 'T))
+                 (|knownInfo| (CONS 'SIGNATURE (CONS |name| |a|))))
+                ((AND (PAIRP |name|) (EQ (QCAR |name|) '|Union|)) NIL)
+                ('T
+                 (SPADLET |v| (|compForMode| |name| |$EmptyMode| |$e|))
+                 (COND
+                   ((NULL |v|)
+                    (|stackSemanticError|
+                        (CONS '|can't find category of |
+                              (CONS |name| NIL))
+                        NIL))
+                   ('T (SPADLET |vmode| (CADR |v|))
+                    (COND
+                      ((BOOT-EQUAL |cat| |vmode|) 'T)
+                      ((AND (PAIRP |vmode|) (EQ (QCAR |vmode|) '|Join|)
+                            (PROGN (SPADLET |l| (QCDR |vmode|)) 'T)
+                            (|member| |cat| |l|))
+                       'T)
+                      ('T
+                       (SPADLET |LETTMP#1|
+                                (|compMakeCategoryObject| |vmode| |$e|))
+                       (SPADLET |vv| (CAR |LETTMP#1|))
+                       (SPADLET |catlist| (ELT |vv| 4))
+                       (COND
+                         ((NULL |vv|)
+                          (|stackSemanticError|
+                              (CONS '|can't make category of |
+                                    (CONS |name| NIL))
+                              NIL))
+                         ((|member| |cat| (CAR |catlist|)) 'T)
+                         ((AND (SPADLET |u|
+                                        (|assoc| |cat|
+                                         (CADR |catlist|)))
+                               (|knownInfo| (CADR |u|)))
+                          'T)
+                         ((PROG (G166556)
+                            (SPADLET G166556 NIL)
+                            (RETURN
+                              (DO ((G166563 NIL G166556)
+                                   (G166564 (CADR |catlist|)
+                                    (CDR G166564))
+                                   (|u| NIL))
+                                  ((OR G166563 (ATOM G166564)
+                                    (PROGN
+                                      (SETQ |u| (CAR G166564))
+                                      NIL))
+                                   G166556)
+                                (SEQ (EXIT
+                                      (COND
+                                        ((|knownInfo| (CADR |u|))
+                                         (SETQ G166556
+                                          (OR G166556
+                                           (|AncestorP| |cat|
+                                            (LIST (CAR |u|))))))))))))
+                          'T)
+                         ('T NIL)))))))))
+             ((AND (PAIRP |pred|) (EQ (QCAR |pred|) 'SIGNATURE)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |pred|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |name| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (PROGN
+                                   (SPADLET |op| (QCAR |ISTMP#2|))
+                                   (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                                   (AND (PAIRP |ISTMP#3|)
+                                    (PROGN
+                                      (SPADLET |sig| (QCAR |ISTMP#3|))
+                                      'T))))))))
+              (SPADLET |v| (|get| |op| '|modemap| |$e|))
+              (DO ((G166576 |v| (CDR G166576)) (|w| NIL))
+                  ((OR (ATOM G166576)
+                       (PROGN (SETQ |w| (CAR G166576)) NIL))
+                   NIL)
+                (SEQ (EXIT (PROGN
+                             (SPADLET |ww| (CDAR |w|))
+                             (SEQ (COND
+                                    ((AND
+                                      (BOOT-EQUAL (LENGTH |ww|)
+                                       (LENGTH |sig|))
+                                      (|SourceLevelSubsume| |ww| |sig|))
+                                     (COND
+                                       ((BOOT-EQUAL (CAADR |w|) 'T)
+                                        (EXIT (RETURN 'T))))))))))))
+             ('T NIL))))))
+
+;actOnInfo(u,$e) ==
+;  null u => $e
+;  u is ["PROGN",:l] => (for v in l repeat $e:= actOnInfo(v,$e); $e)
+;  $e:=
+;    put("$Information","special",Info:= [u,:get("$Information","special",$e)],$e
+;      )
+;  u is ["COND",:l] =>
+;      --there is nowhere %else that this sort of thing exists
+;    for [ante,:conseq] in l repeat
+;      if MEMBER(hasToInfo ante,Info) then for v in conseq repeat
+;        $e:= actOnInfo(v,$e)
+;    $e
+;  u is ["ATTRIBUTE",name,att] =>
+;    [vval,vmode,venv]:= GetValue name
+;    SAY("augmenting ",name,": ",u)
+;    key:= if CONTAINED("$",vmode) then "domain" else name
+;    cat:= ["CATEGORY",key,["ATTRIBUTE",att]]
+;    $e:= put(name,"value",[vval,mkJoin(cat,vmode),venv],$e)
+;      --there is nowhere %else that this sort of thing exists
+;  u is ["SIGNATURE",name,operator,modemap] =>
+;    implem:=
+;      (implem:=ASSOC([name,:modemap],get(operator,'modemap,$e))) =>
+;          CADADR implem
+;      name = "$" => ['ELT,name,-1]
+;      ['ELT,name,substitute('$,name,modemap)]
+;    $e:= addModemap(operator,name,modemap,true,implem,$e)
+;    [vval,vmode,venv]:= GetValue name
+;    SAY("augmenting ",name,": ",u)
+;    key:= if CONTAINED("$",vmode) then "domain" else name
+;    cat:= ["CATEGORY",key,["SIGNATURE",operator,modemap]]
+;    $e:= put(name,"value",[vval,mkJoin(cat,vmode),venv],$e)
+;  u is ["has",name,cat] =>
+;    [vval,vmode,venv]:= GetValue name
+;    cat=vmode => $e --stating the already known
+;    u:= compMakeCategoryObject(cat,$e) =>
+;         --we are adding information about a category
+;      [catvec,.,$e]:= u
+;      [ocatvec,.,$e]:= compMakeCategoryObject(vmode,$e)
+;      -- MEMBER(vmode,CAR catvec.4) =>
+;      --    JHD 82/08/08 01:40 This does not mean that we can ignore the
+;      --    extension, since this may not be compatible with the view we
+;      --    were passed
+;
+;      --we are adding a principal descendant of what was already known
+;      --    $e:= augModemapsFromCategory(name,name,nil,catvec,$e)
+;      --    SAY("augmenting ",name,": ",cat)
+;      --    put(name, "value", (vval, cat, venv), $e)
+;      MEMBER(cat,first ocatvec.4) or
+;         ASSOC(cat,CADR ocatvec.4) is [.,'T,.] => $e
+;        --SAY("Category extension error:
+;        --cat shouldn't be a join
+;                      --what was being asserted is an ancestor of what was known
+;      if name="$"
+;        then $e:= augModemapsFromCategory(name,name,name,cat,$e)
+;        else
+;          viewName:=genDomainViewName(name,cat)
+;          genDomainView(viewName,name,cat,"HasCategory")
+;          if not MEMQ(viewName,$functorLocalParameters) then
+;             $functorLocalParameters:=[:$functorLocalParameters,viewName]
+;      SAY("augmenting ",name,": ",cat)
+;      $e:= put(name,"value",[vval,mkJoin(cat,vmode),venv],$e)
+;    SAY("extension of ",vval," to ",cat," ignored")
+;    $e
+;  systemError '"knownInfo"
+
+(DEFUN |actOnInfo| (|u| |$e|)
+  (DECLARE (SPECIAL |$e|))
+  (PROG (|Info| |l| |ante| |conseq| |att| |operator| |modemap| |implem|
+                |key| |name| |cat| |vval| |vmode| |venv| |catvec|
+                |LETTMP#1| |ocatvec| |ISTMP#1| |ISTMP#2| |ISTMP#3|
+                |viewName|)
+    (RETURN
+      (SEQ (COND
+             ((NULL |u|) |$e|)
+             ((AND (PAIRP |u|) (EQ (QCAR |u|) 'PROGN)
+                   (PROGN (SPADLET |l| (QCDR |u|)) 'T))
+              (DO ((G166754 |l| (CDR G166754)) (|v| NIL))
+                  ((OR (ATOM G166754)
+                       (PROGN (SETQ |v| (CAR G166754)) NIL))
+                   NIL)
+                (SEQ (EXIT (SPADLET |$e| (|actOnInfo| |v| |$e|)))))
+              |$e|)
+             ('T
+              (SPADLET |$e|
+                       (|put| '|$Information| '|special|
+                              (SPADLET |Info|
+                                       (CONS |u|
+                                        (|get| '|$Information|
+                                         '|special| |$e|)))
+                              |$e|))
+              (COND
+                ((AND (PAIRP |u|) (EQ (QCAR |u|) 'COND)
+                      (PROGN (SPADLET |l| (QCDR |u|)) 'T))
+                 (DO ((G166764 |l| (CDR G166764)) (G166624 NIL))
+                     ((OR (ATOM G166764)
+                          (PROGN (SETQ G166624 (CAR G166764)) NIL)
+                          (PROGN
+                            (PROGN
+                              (SPADLET |ante| (CAR G166624))
+                              (SPADLET |conseq| (CDR G166624))
+                              G166624)
+                            NIL))
+                      NIL)
+                   (SEQ (EXIT (COND
+                                ((|member| (|hasToInfo| |ante|) |Info|)
+                                 (DO ((G166774 |conseq|
+                                       (CDR G166774))
+                                      (|v| NIL))
+                                     ((OR (ATOM G166774)
+                                       (PROGN
+                                         (SETQ |v| (CAR G166774))
+                                         NIL))
+                                      NIL)
+                                   (SEQ
+                                    (EXIT
+                                     (SPADLET |$e|
+                                      (|actOnInfo| |v| |$e|))))))
+                                ('T NIL)))))
+                 |$e|)
+                ((AND (PAIRP |u|) (EQ (QCAR |u|) 'ATTRIBUTE)
+                      (PROGN
+                        (SPADLET |ISTMP#1| (QCDR |u|))
+                        (AND (PAIRP |ISTMP#1|)
+                             (PROGN
+                               (SPADLET |name| (QCAR |ISTMP#1|))
+                               (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                               (AND (PAIRP |ISTMP#2|)
+                                    (EQ (QCDR |ISTMP#2|) NIL)
+                                    (PROGN
+                                      (SPADLET |att| (QCAR |ISTMP#2|))
+                                      'T))))))
+                 (SPADLET |LETTMP#1| (|GetValue| |name|))
+                 (SPADLET |vval| (CAR |LETTMP#1|))
+                 (SPADLET |vmode| (CADR |LETTMP#1|))
+                 (SPADLET |venv| (CADDR |LETTMP#1|))
+                 (SAY (MAKESTRING "augmenting ") |name|
+                      (MAKESTRING ": ") |u|)
+                 (SPADLET |key|
+                          (COND
+                            ((CONTAINED '$ |vmode|) '|domain|)
+                            ('T |name|)))
+                 (SPADLET |cat|
+                          (CONS 'CATEGORY
+                                (CONS |key|
+                                      (CONS
+                                       (CONS 'ATTRIBUTE
+                                        (CONS |att| NIL))
+                                       NIL))))
+                 (SPADLET |$e|
+                          (|put| |name| '|value|
+                                 (CONS |vval|
+                                       (CONS (|mkJoin| |cat| |vmode|)
+                                        (CONS |venv| NIL)))
+                                 |$e|)))
+                ((AND (PAIRP |u|) (EQ (QCAR |u|) 'SIGNATURE)
+                      (PROGN
+                        (SPADLET |ISTMP#1| (QCDR |u|))
+                        (AND (PAIRP |ISTMP#1|)
+                             (PROGN
+                               (SPADLET |name| (QCAR |ISTMP#1|))
+                               (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                               (AND (PAIRP |ISTMP#2|)
+                                    (PROGN
+                                      (SPADLET |operator|
+                                       (QCAR |ISTMP#2|))
+                                      (SPADLET |ISTMP#3|
+                                       (QCDR |ISTMP#2|))
+                                      (AND (PAIRP |ISTMP#3|)
+                                       (EQ (QCDR |ISTMP#3|) NIL)
+                                       (PROGN
+                                         (SPADLET |modemap|
+                                          (QCAR |ISTMP#3|))
+                                         'T))))))))
+                 (SPADLET |implem|
+                          (COND
+                            ((SPADLET |implem|
+                                      (|assoc| (CONS |name| |modemap|)
+                                       (|get| |operator| '|modemap|
+                                        |$e|)))
+                             (CADADR |implem|))
+                            ((BOOT-EQUAL |name| '$)
+                             (CONS 'ELT
+                                   (CONS |name|
+                                    (CONS (SPADDIFFERENCE 1) NIL))))
+                            ('T
+                             (CONS 'ELT
+                                   (CONS |name|
+                                    (CONS (MSUBST '$ |name| |modemap|)
+                                     NIL))))))
+                 (SPADLET |$e|
+                          (|addModemap| |operator| |name| |modemap| 'T
+                              |implem| |$e|))
+                 (SPADLET |LETTMP#1| (|GetValue| |name|))
+                 (SPADLET |vval| (CAR |LETTMP#1|))
+                 (SPADLET |vmode| (CADR |LETTMP#1|))
+                 (SPADLET |venv| (CADDR |LETTMP#1|))
+                 (SAY (MAKESTRING "augmenting ") |name|
+                      (MAKESTRING ": ") |u|)
+                 (SPADLET |key|
+                          (COND
+                            ((CONTAINED '$ |vmode|) '|domain|)
+                            ('T |name|)))
+                 (SPADLET |cat|
+                          (CONS 'CATEGORY
+                                (CONS |key|
+                                      (CONS
+                                       (CONS 'SIGNATURE
+                                        (CONS |operator|
+                                         (CONS |modemap| NIL)))
+                                       NIL))))
+                 (SPADLET |$e|
+                          (|put| |name| '|value|
+                                 (CONS |vval|
+                                       (CONS (|mkJoin| |cat| |vmode|)
+                                        (CONS |venv| NIL)))
+                                 |$e|)))
+                ((AND (PAIRP |u|) (EQ (QCAR |u|) '|has|)
+                      (PROGN
+                        (SPADLET |ISTMP#1| (QCDR |u|))
+                        (AND (PAIRP |ISTMP#1|)
+                             (PROGN
+                               (SPADLET |name| (QCAR |ISTMP#1|))
+                               (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                               (AND (PAIRP |ISTMP#2|)
+                                    (EQ (QCDR |ISTMP#2|) NIL)
+                                    (PROGN
+                                      (SPADLET |cat| (QCAR |ISTMP#2|))
+                                      'T))))))
+                 (SPADLET |LETTMP#1| (|GetValue| |name|))
+                 (SPADLET |vval| (CAR |LETTMP#1|))
+                 (SPADLET |vmode| (CADR |LETTMP#1|))
+                 (SPADLET |venv| (CADDR |LETTMP#1|))
+                 (COND
+                   ((BOOT-EQUAL |cat| |vmode|) |$e|)
+                   ((SPADLET |u| (|compMakeCategoryObject| |cat| |$e|))
+                    (SPADLET |catvec| (CAR |u|))
+                    (SPADLET |$e| (CADDR |u|))
+                    (SPADLET |LETTMP#1|
+                             (|compMakeCategoryObject| |vmode| |$e|))
+                    (SPADLET |ocatvec| (CAR |LETTMP#1|))
+                    (SPADLET |$e| (CADDR |LETTMP#1|))
+                    (COND
+                      ((OR (|member| |cat| (CAR (ELT |ocatvec| 4)))
+                           (PROGN
+                             (SPADLET |ISTMP#1|
+                                      (|assoc| |cat|
+                                       (CADR (ELT |ocatvec| 4))))
+                             (AND (PAIRP |ISTMP#1|)
+                                  (PROGN
+                                    (SPADLET |ISTMP#2|
+                                     (QCDR |ISTMP#1|))
+                                    (AND (PAIRP |ISTMP#2|)
+                                     (EQ (QCAR |ISTMP#2|) 'T)
+                                     (PROGN
+                                       (SPADLET |ISTMP#3|
+                                        (QCDR |ISTMP#2|))
+                                       (AND (PAIRP |ISTMP#3|)
+                                        (EQ (QCDR |ISTMP#3|) NIL))))))))
+                       |$e|)
+                      ('T
+                       (COND
+                         ((BOOT-EQUAL |name| '$)
+                          (SPADLET |$e|
+                                   (|augModemapsFromCategory| |name|
+                                    |name| |name| |cat| |$e|)))
+                         ('T
+                          (SPADLET |viewName|
+                                   (|genDomainViewName| |name| |cat|))
+                          (|genDomainView| |viewName| |name| |cat|
+                              '|HasCategory|)
+                          (COND
+                            ((NULL (MEMQ |viewName|
+                                    |$functorLocalParameters|))
+                             (SPADLET |$functorLocalParameters|
+                                      (APPEND |$functorLocalParameters|
+                                       (CONS |viewName| NIL))))
+                            ('T NIL))))
+                       (SAY (MAKESTRING "augmenting ") |name|
+                            (MAKESTRING ": ") |cat|)
+                       (SPADLET |$e|
+                                (|put| |name| '|value|
+                                       (CONS |vval|
+                                        (CONS (|mkJoin| |cat| |vmode|)
+                                         (CONS |venv| NIL)))
+                                       |$e|)))))
+                   ('T
+                    (SAY (MAKESTRING "extension of ") |vval|
+                         (MAKESTRING " to ") |cat|
+                         (MAKESTRING " ignored"))
+                    |$e|)))
+                ('T (|systemError| (MAKESTRING "knownInfo"))))))))))
+
+;mkJoin(cat,mode) ==
+;  mode is ['Join,:cats] => ['Join,cat,:cats]
+;  ['Join,cat,mode]
+
+(DEFUN |mkJoin| (|cat| |mode|)
+  (PROG (|cats|)
+    (RETURN
+      (COND
+        ((AND (PAIRP |mode|) (EQ (QCAR |mode|) '|Join|)
+              (PROGN (SPADLET |cats| (QCDR |mode|)) 'T))
+         (CONS '|Join| (CONS |cat| |cats|)))
+        ('T (CONS '|Join| (CONS |cat| (CONS |mode| NIL))))))))
+
+;GetValue name ==
+;  u:= get(name,"value",$e) => u
+;  u:= comp(name,$EmptyMode,$e) => u  --name may be a form
+;  systemError [name,'" is not bound in the current environment"]
+;
+
+(DEFUN |GetValue| (|name|)
+  (PROG (|u|)
+    (RETURN
+      (COND
+        ((SPADLET |u| (|get| |name| '|value| |$e|)) |u|)
+        ((SPADLET |u| (|comp| |name| |$EmptyMode| |$e|)) |u|)
+        ('T
+         (|systemError|
+             (CONS |name|
+                   (CONS (MAKESTRING
+                             " is not bound in the current environment")
+                         NIL))))))))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}
