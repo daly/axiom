@@ -1,0 +1,1022 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp interop.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+(IN-PACKAGE "BOOT" )
+
+;-- note domainObjects are now (dispatchVector hashCode . domainVector)
+;-- lazy oldAxiomDomainObjects are (dispatchVector hashCode  (Call form) . backptr),
+;-- pre oldAxiomCategory is (dispatchVector . (cat form))
+;-- oldAxiomCategory objects are (dispatchVector . ( (cat form)  hash defaultpack parentlist))
+;hashCode? x == INTEGERP x
+
+(DEFUN |hashCode?| (|x|) (INTEGERP |x|)) 
+
+;$domainTypeTokens := ['lazyOldAxiomDomain, 'oldAxiomDomain, 'oldAxiomPreCategory,
+;           'oldAxiomCategory, 0]
+
+(SPADLET |$domainTypeTokens|
+         (CONS '|lazyOldAxiomDomain|
+               (CONS '|oldAxiomDomain|
+                     (CONS '|oldAxiomPreCategory|
+                           (CONS '|oldAxiomCategory| (CONS 0 NIL))))))
+
+;-- The name game.
+;-- The compiler produces names that are of the form:
+;-- a) cons(0, <string>)
+;-- b) cons(1, type-name, arg-names...)
+;-- c) cons(2, arg-names...)
+;-- d) cons(3, value)
+;-- NB: (c) is for tuple-ish constructors,
+;--     and (d) is for dependent types.
+;DNameStringID := 0
+
+(SPADLET |DNameStringID| 0) 
+
+;DNameApplyID  := 1
+
+(SPADLET |DNameApplyID| 1) 
+
+;DNameTupleID  := 2
+
+(SPADLET |DNameTupleID| 2) 
+
+;DNameOtherID  := 3
+
+(SPADLET |DNameOtherID| 3) 
+
+;DNameToSExpr1 dname ==
+;  NULL dname => error "unexpected domain name"
+;  CAR dname = DNameStringID =>
+;    INTERN(CompStrToString CDR dname)
+;  name0 := DNameToSExpr1 CAR CDR dname
+;  args  := CDR CDR dname
+;  name0 = '_-_> =>
+;    froms := CAR args
+;    froms := MAPCAR(function DNameToSExpr, CDR froms)
+;    ret   := CAR CDR args -- a tuple
+;    ret   := DNameToSExpr CAR CDR ret -- contents
+;    CONS('Mapping, CONS(ret, froms))
+;  name0 = 'Union or name0 = 'Record =>
+;    sxs := MAPCAR(function DNameToSExpr, CDR CAR args)
+;    CONS(name0, sxs)
+;  name0 = 'Enumeration =>
+;    CONS(name0, MAPCAR(function DNameFixEnum, CDR CAR args))
+;  CONS(name0, MAPCAR(function DNameToSExpr, args))
+
+(DEFUN |DNameToSExpr1| (|dname|)
+  (PROG (|name0| |args| |froms| |ret| |sxs|)
+    (RETURN
+      (COND
+        ((NULL |dname|) (|error| '|unexpected domain name|))
+        ((BOOT-EQUAL (CAR |dname|) |DNameStringID|)
+         (INTERN (|CompStrToString| (CDR |dname|))))
+        ('T (SPADLET |name0| (|DNameToSExpr1| (CAR (CDR |dname|))))
+         (SPADLET |args| (CDR (CDR |dname|)))
+         (COND
+           ((BOOT-EQUAL |name0| '->) (SPADLET |froms| (CAR |args|))
+            (SPADLET |froms|
+                     (MAPCAR (|function| |DNameToSExpr|) (CDR |froms|)))
+            (SPADLET |ret| (CAR (CDR |args|)))
+            (SPADLET |ret| (|DNameToSExpr| (CAR (CDR |ret|))))
+            (CONS '|Mapping| (CONS |ret| |froms|)))
+           ((OR (BOOT-EQUAL |name0| '|Union|)
+                (BOOT-EQUAL |name0| '|Record|))
+            (SPADLET |sxs|
+                     (MAPCAR (|function| |DNameToSExpr|)
+                             (CDR (CAR |args|))))
+            (CONS |name0| |sxs|))
+           ((BOOT-EQUAL |name0| '|Enumeration|)
+            (CONS |name0|
+                  (MAPCAR (|function| |DNameFixEnum|)
+                          (CDR (CAR |args|)))))
+           ('T
+            (CONS |name0| (MAPCAR (|function| |DNameToSExpr|) |args|)))))))))
+
+;DNameToSExpr dname ==
+;  CAR dname = DNameOtherID  =>
+;        CDR dname
+;  sx := DNameToSExpr1 dname
+;  CONSP sx => sx
+;  LIST sx
+
+(DEFUN |DNameToSExpr| (|dname|)
+  (PROG (|sx|)
+    (RETURN
+      (COND
+        ((BOOT-EQUAL (CAR |dname|) |DNameOtherID|) (CDR |dname|))
+        ('T (SPADLET |sx| (|DNameToSExpr1| |dname|))
+         (COND ((CONSP |sx|) |sx|) ('T (LIST |sx|))))))))
+
+;DNameFixEnum arg == CompStrToString CDR arg
+
+(DEFUN |DNameFixEnum| (|arg|) (|CompStrToString| (CDR |arg|)))
+
+;SExprToDName(sexpr, cosigVal) ==
+;  -- is it a non-type valued object?
+;  NOT cosigVal => [DNameOtherID, :sexpr]
+;  if CAR sexpr = '_: then sexpr := CAR CDR CDR sexpr
+;  CAR sexpr = 'Mapping =>
+;    args := [ SExprToDName(sx, 'T) for sx in CDR sexpr]
+;    [DNameApplyID,
+;         [DNameStringID,: StringToCompStr '"->"],
+;              [DNameTupleID, : CDR args],
+;                 [DNameTupleID, CAR args]]
+;  name0 :=   [DNameStringID, : StringToCompStr SYMBOL_-NAME CAR sexpr]
+;  CAR sexpr = 'Union or CAR sexpr = 'Record =>
+;    [DNameApplyID, name0,
+;        [DNameTupleID,: [ SExprToDName(sx, 'T) for sx in CDR sexpr]]]
+;  newCosig := CDR GETDATABASE(CAR sexpr, QUOTE COSIG)
+;  [DNameApplyID, name0,
+;   : MAPCAR(function SExprToDName, CDR sexpr, newCosig)]
+
+(DEFUN |SExprToDName| (|sexpr| |cosigVal|)
+  (PROG (|args| |name0| |newCosig|)
+    (RETURN
+      (SEQ (COND
+             ((NULL |cosigVal|) (CONS |DNameOtherID| |sexpr|))
+             ('T
+              (COND
+                ((BOOT-EQUAL (CAR |sexpr|) '|:|)
+                 (SPADLET |sexpr| (CAR (CDR (CDR |sexpr|))))))
+              (COND
+                ((BOOT-EQUAL (CAR |sexpr|) '|Mapping|)
+                 (SPADLET |args|
+                          (PROG (G166087)
+                            (SPADLET G166087 NIL)
+                            (RETURN
+                              (DO ((G166092 (CDR |sexpr|)
+                                    (CDR G166092))
+                                   (|sx| NIL))
+                                  ((OR (ATOM G166092)
+                                    (PROGN
+                                      (SETQ |sx| (CAR G166092))
+                                      NIL))
+                                   (NREVERSE0 G166087))
+                                (SEQ (EXIT
+                                      (SETQ G166087
+                                       (CONS (|SExprToDName| |sx| 'T)
+                                        G166087))))))))
+                 (CONS |DNameApplyID|
+                       (CONS (CONS |DNameStringID|
+                                   (|StringToCompStr|
+                                    (MAKESTRING "->")))
+                             (CONS (CONS |DNameTupleID| (CDR |args|))
+                                   (CONS
+                                    (CONS |DNameTupleID|
+                                     (CONS (CAR |args|) NIL))
+                                    NIL)))))
+                ('T
+                 (SPADLET |name0|
+                          (CONS |DNameStringID|
+                                (|StringToCompStr|
+                                    (SYMBOL-NAME (CAR |sexpr|)))))
+                 (COND
+                   ((OR (BOOT-EQUAL (CAR |sexpr|) '|Union|)
+                        (BOOT-EQUAL (CAR |sexpr|) '|Record|))
+                    (CONS |DNameApplyID|
+                          (CONS |name0|
+                                (CONS (CONS |DNameTupleID|
+                                       (PROG (G166102)
+                                         (SPADLET G166102 NIL)
+                                         (RETURN
+                                           (DO
+                                            ((G166107 (CDR |sexpr|)
+                                              (CDR G166107))
+                                             (|sx| NIL))
+                                            ((OR (ATOM G166107)
+                                              (PROGN
+                                                (SETQ |sx|
+                                                 (CAR G166107))
+                                                NIL))
+                                             (NREVERSE0 G166102))
+                                             (SEQ
+                                              (EXIT
+                                               (SETQ G166102
+                                                (CONS
+                                                 (|SExprToDName| |sx|
+                                                  'T)
+                                                 G166102))))))))
+                                      NIL))))
+                   ('T
+                    (SPADLET |newCosig|
+                             (CDR (GETDATABASE (CAR |sexpr|) 'COSIG)))
+                    (CONS |DNameApplyID|
+                          (CONS |name0|
+                                (MAPCAR (|function| |SExprToDName|)
+                                        (CDR |sexpr|) |newCosig|)))))))))))))
+
+;-- local garbage because Compiler strings are null terminated
+;StringToCompStr(str) ==
+;   CONCATENATE(QUOTE STRING, str, STRING (CODE_-CHAR 0))
+
+(DEFUN |StringToCompStr| (|str|)
+  (CONCATENATE 'STRING |str| (STRING (CODE-CHAR 0))))
+
+;CompStrToString(str) ==
+;   SUBSTRING(str, 0, (LENGTH str - 1))
+
+(DEFUN |CompStrToString| (|str|)
+  (SUBSTRING |str| 0 (SPADDIFFERENCE (LENGTH |str|) 1)))
+
+;-- local garbage ends
+;runOldAxiomFunctor(:allArgs) ==
+;  [:args,env] := allArgs
+;  GETDATABASE(env, 'CONSTRUCTORKIND) = 'category =>
+;      [$oldAxiomPreCategoryDispatch,: [env, :args]]
+;  dom:=APPLY(env, args)
+;  makeOldAxiomDispatchDomain dom
+
+(DEFUN |runOldAxiomFunctor| (&REST G166140 &AUX |allArgs|)
+  (DSETQ |allArgs| G166140)
+  (PROG (|LETTMP#1| |env| |args| |dom|)
+  (declare (special |$oldAxiomPreCategoryDispatch|))
+    (RETURN
+      (PROGN
+        (SPADLET |LETTMP#1| (REVERSE |allArgs|))
+        (SPADLET |env| (CAR |LETTMP#1|))
+        (SPADLET |args| (NREVERSE (CDR |LETTMP#1|)))
+        (COND
+          ((BOOT-EQUAL (GETDATABASE |env| 'CONSTRUCTORKIND)
+               '|category|)
+           (CONS |$oldAxiomPreCategoryDispatch| (CONS |env| |args|)))
+          ('T (SPADLET |dom| (APPLY |env| |args|))
+           (|makeOldAxiomDispatchDomain| |dom|)))))))
+
+;makeLazyOldAxiomDispatchDomain domform ==
+;  attribute? domform =>
+;      [$attributeDispatch, domform, hashString(SYMBOL_-NAME domform)]
+;  GETDATABASE(opOf domform, 'CONSTRUCTORKIND) = 'category =>
+;      [$oldAxiomPreCategoryDispatch,: domform]
+;  dd := [$lazyOldAxiomDomainDispatch, hashTypeForm(domform,0), domform]
+;  NCONC(dd,dd) -- installs back pointer to head of domain.
+;  dd
+
+(DEFUN |makeLazyOldAxiomDispatchDomain| (|domform|)
+  (PROG (|dd|)
+  (declare (special |$lazyOldAxiomDomainDispatch| |$attributeDispatch|
+                    |$oldAxiomPreCategoryDispatch|))
+    (RETURN
+      (COND
+        ((|attribute?| |domform|)
+         (CONS |$attributeDispatch|
+               (CONS |domform|
+                     (CONS (|hashString| (SYMBOL-NAME |domform|)) NIL))))
+        ((BOOT-EQUAL (GETDATABASE (|opOf| |domform|) 'CONSTRUCTORKIND)
+             '|category|)
+         (CONS |$oldAxiomPreCategoryDispatch| |domform|))
+        ('T
+         (SPADLET |dd|
+                  (CONS |$lazyOldAxiomDomainDispatch|
+                        (CONS (|hashTypeForm| |domform| 0)
+                              (CONS |domform| NIL))))
+         (NCONC |dd| |dd|) |dd|)))))
+
+;makeOldAxiomDispatchDomain dom ==
+;  PAIRP dom => dom
+;  [$oldAxiomDomainDispatch,hashTypeForm(dom.0,0),:dom]
+
+(DEFUN |makeOldAxiomDispatchDomain| (|dom|)
+  (declare (special |$oldAxiomDomainDispatch|))
+  (COND
+    ((PAIRP |dom|) |dom|)
+    ('T
+     (CONS |$oldAxiomDomainDispatch|
+           (CONS (|hashTypeForm| (ELT |dom| 0) 0) |dom|)))))
+
+;closeOldAxiomFunctor(name) ==
+;   [function runOldAxiomFunctor,:SYMBOL_-FUNCTION name]
+
+(DEFUN |closeOldAxiomFunctor| (|name|)
+  (CONS (|function| |runOldAxiomFunctor|) (SYMBOL-FUNCTION |name|)))
+
+;lazyOldAxiomDomainLookupExport(domenv, self, op, sig, box, skipdefaults, env) ==
+;  dom := instantiate domenv
+;  SPADCALL(CDR dom, self, op, sig, box, skipdefaults, CAR(dom).3)
+
+(DEFUN |lazyOldAxiomDomainLookupExport|
+       (|domenv| |self| |op| |sig| |box| |skipdefaults| |env|)
+  (declare (ignore |env|))
+  (PROG (|dom|)
+    (RETURN
+      (PROGN
+        (SPADLET |dom| (|instantiate| |domenv|))
+        (SPADCALL (CDR |dom|) |self| |op| |sig| |box| |skipdefaults|
+            (ELT (CAR |dom|) 3))))))
+
+;lazyOldAxiomDomainHashCode(domenv, env) == CAR domenv
+
+(DEFUN |lazyOldAxiomDomainHashCode| (|domenv| |env|)
+ (declare (ignore |env|))
+ (CAR |domenv|))
+
+;lazyOldAxiomDomainDevaluate(domenv, env) ==
+;  dom := instantiate domenv
+;  SPADCALL(CDR dom, CAR(dom).1)
+
+(DEFUN |lazyOldAxiomDomainDevaluate| (|domenv| |env|)
+  (declare (ignore |env|))
+  (PROG (|dom|)
+    (RETURN
+      (PROGN
+        (SPADLET |dom| (|instantiate| |domenv|))
+        (SPADCALL (CDR |dom|) (ELT (CAR |dom|) 1))))))
+
+;lazyOldAxiomAddChild(domenv, kid, env) ==
+;  CONS($lazyOldAxiomDomainDispatch,domenv)
+
+(DEFUN |lazyOldAxiomAddChild| (|domenv| |kid| |env|)
+ (declare (ignore |kid| |env|))
+  (declare (special |$lazyOldAxiomDomainDispatch|))
+  (CONS |$lazyOldAxiomDomainDispatch| |domenv|))
+
+;$lazyOldAxiomDomainDispatch :=
+;   VECTOR('lazyOldAxiomDomain,
+;          [function lazyOldAxiomDomainDevaluate],
+;          [nil],
+;          [function lazyOldAxiomDomainLookupExport],
+;          [function lazyOldAxiomDomainHashCode],
+;          [function lazyOldAxiomAddChild])
+
+(SPADLET |$lazyOldAxiomDomainDispatch|
+         (VECTOR '|lazyOldAxiomDomain|
+                 (CONS (|function| |lazyOldAxiomDomainDevaluate|) NIL)
+                 (CONS NIL NIL)
+                 (CONS (|function| |lazyOldAxiomDomainLookupExport|)
+                       NIL)
+                 (CONS (|function| |lazyOldAxiomDomainHashCode|) NIL)
+                 (CONS (|function| |lazyOldAxiomAddChild|) NIL)))
+
+;-- old Axiom pre category objects are just (dispatch . catform)
+;-- where catform is ('categoryname,: evaluated args)
+;-- old Axiom category objects are  (dispatch . [catform, hashcode, defaulting package, parent vector, dom])
+;oldAxiomPreCategoryBuild(catform, dom, env) ==
+;   pack := oldAxiomCategoryDefaultPackage(catform, dom)
+;   CONS($oldAxiomCategoryDispatch,
+;       [catform, hashTypeForm(catform,0), pack, oldAxiomPreCategoryParents(catform,dom), dom])
+
+(DEFUN |oldAxiomPreCategoryBuild| (|catform| |dom| |env|)
+  (declare (ignore |env|))
+  (PROG (|pack|)
+  (declare (special |$oldAxiomCategoryDispatch|))
+    (RETURN
+      (PROGN
+        (SPADLET |pack|
+                 (|oldAxiomCategoryDefaultPackage| |catform| |dom|))
+        (CONS |$oldAxiomCategoryDispatch|
+              (CONS |catform|
+                    (CONS (|hashTypeForm| |catform| 0)
+                          (CONS |pack|
+                                (CONS (|oldAxiomPreCategoryParents|
+                                       |catform| |dom|)
+                                      (CONS |dom| NIL))))))))))
+
+;oldAxiomPreCategoryHashCode(catform, env) == hashTypeForm(catform,0)
+
+(DEFUN |oldAxiomPreCategoryHashCode| (|catform| |env|)
+  (declare (ignore |env|))
+  (|hashTypeForm| |catform| 0))
+
+;oldAxiomCategoryDefaultPackage(catform, dom) ==
+;    hasDefaultPackage opOf catform
+
+(DEFUN |oldAxiomCategoryDefaultPackage| (|catform| |dom|)
+  (declare (ignore |dom|))
+  (|hasDefaultPackage| (|opOf| |catform|)))
+
+;oldAxiomPreCategoryDevaluate([op,:args], env) ==
+;   SExprToDName([op,:devaluateList args], T)
+
+(DEFUN |oldAxiomPreCategoryDevaluate| (G166180 |env|)
+  (declare (ignore |env|))
+  (PROG (|op| |args| T$)
+    (RETURN
+      (PROGN
+        (SPADLET |op| (CAR G166180))
+        (SPADLET |args| (CDR G166180))
+        (|SExprToDName| (CONS |op| (|devaluateList| |args|)) T$)))))
+
+;$oldAxiomPreCategoryDispatch :=
+;   VECTOR('oldAxiomPreCategory,
+;          [function oldAxiomPreCategoryDevaluate],
+;          [nil],
+;          [nil],
+;          [function oldAxiomPreCategoryHashCode],
+;          [function oldAxiomPreCategoryBuild],
+;          [nil])
+
+(SPADLET |$oldAxiomPreCategoryDispatch|
+         (VECTOR '|oldAxiomPreCategory|
+                 (CONS (|function| |oldAxiomPreCategoryDevaluate|) NIL)
+                 (CONS NIL NIL) (CONS NIL NIL)
+                 (CONS (|function| |oldAxiomPreCategoryHashCode|) NIL)
+                 (CONS (|function| |oldAxiomPreCategoryBuild|) NIL)
+                 (CONS NIL NIL)))
+
+;oldAxiomCategoryDevaluate([[op,:args],:.], env) ==
+;   SExprToDName([op,:devaluateList args], T)
+
+(DEFUN |oldAxiomCategoryDevaluate| (G166194 |env|)
+  (declare (ignore |env|))
+  (PROG (|op| |args|)
+    (RETURN
+      (PROGN
+        (SPADLET |op| (CAAR G166194))
+        (SPADLET |args| (CDAR G166194))
+        (|SExprToDName| (CONS |op| (|devaluateList| |args|)) T$)))))
+
+;oldAxiomPreCategoryParents(catform,dom) ==
+;  vars := ["$",:rest GETDATABASE(opOf catform, 'CONSTRUCTORFORM)]
+;  vals := [dom,:rest catform]
+;  -- parents :=  GETDATABASE(opOf catform, 'PARENTS)
+;  parents := parentsOf opOf catform
+;  PROGV(vars, vals,
+;    LIST2VEC
+;      [EVAL quoteCatOp cat for [cat,:pred] in parents | EVAL pred])
+
+(DEFUN |oldAxiomPreCategoryParents| (|catform| |dom|)
+  (PROG (|vars| |vals| |parents| |cat| |pred|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |vars|
+                      (CONS '$
+                            (CDR (GETDATABASE (|opOf| |catform|)
+                                     'CONSTRUCTORFORM))))
+             (SPADLET |vals| (CONS |dom| (CDR |catform|)))
+             (SPADLET |parents| (|parentsOf| (|opOf| |catform|)))
+             (PROGV |vars| |vals|
+               (LIST2VEC
+                   (PROG (G166219)
+                     (SPADLET G166219 NIL)
+                     (RETURN
+                       (DO ((G166226 |parents| (CDR G166226))
+                            (G166208 NIL))
+                           ((OR (ATOM G166226)
+                                (PROGN
+                                  (SETQ G166208 (CAR G166226))
+                                  NIL)
+                                (PROGN
+                                  (PROGN
+                                    (SPADLET |cat| (CAR G166208))
+                                    (SPADLET |pred| (CDR G166208))
+                                    G166208)
+                                  NIL))
+                            (NREVERSE0 G166219))
+                         (SEQ (EXIT (COND
+                                      ((EVAL |pred|)
+                                       (SETQ G166219
+                                        (CONS
+                                         (EVAL (|quoteCatOp| |cat|))
+                                         G166219))))))))))))))))
+
+;quoteCatOp cat ==
+;   atom cat => MKQ cat
+;   ['LIST, MKQ CAR cat,: CDR cat]
+
+(DEFUN |quoteCatOp| (|cat|)
+  (COND
+    ((ATOM |cat|) (MKQ |cat|))
+    ('T (CONS 'LIST (CONS (MKQ (CAR |cat|)) (CDR |cat|))))))
+
+;oldAxiomCategoryLookupExport(catenv, self, op, sig, box, env) ==
+;   [catform,hash, pack,:.] := catenv
+;   opIsHasCat op => if EQL(sig, hash) then [self] else nil
+;   NULL(pack) => nil
+;   if not VECP pack then
+;       pack:=apply(pack, CONS(self, rest catform))
+;       RPLACA(CDDR catenv, pack)
+;   fun := basicLookup(op, sig, pack, self) => [fun]
+;   nil
+
+(DEFUN |oldAxiomCategoryLookupExport| (|catenv| |self| |op| |sig| |box| |env|)
+  (declare (ignore |env| |box|))
+  (PROG (|catform| |hash| |pack| |fun|)
+    (RETURN
+      (PROGN
+        (SPADLET |catform| (CAR |catenv|))
+        (SPADLET |hash| (CADR |catenv|))
+        (SPADLET |pack| (CADDR |catenv|))
+        (COND
+          ((|opIsHasCat| |op|)
+           (COND ((EQL |sig| |hash|) (CONS |self| NIL)) ('T NIL)))
+          ((NULL |pack|) NIL)
+          ('T
+           (COND
+             ((NULL (VECP |pack|))
+              (SPADLET |pack|
+                       (APPLY |pack| (CONS |self| (CDR |catform|))))
+              (RPLACA (CDDR |catenv|) |pack|)))
+           (COND
+             ((SPADLET |fun| (|basicLookup| |op| |sig| |pack| |self|))
+              (CONS |fun| NIL))
+             ('T NIL))))))))
+
+;oldAxiomCategoryParentCount([.,.,.,parents,.], env) == LENGTH parents
+
+(DEFUN |oldAxiomCategoryParentCount| (G166260 |env|)
+  (declare (ignore |env|))
+  (PROG (|parents|)
+    (RETURN
+      (PROGN
+        (SPADLET |parents| (CADDDR G166260))
+        (LENGTH |parents|)))))
+
+;oldAxiomCategoryNthParent([.,.,.,parvec,dom], n, env) ==
+;  catform := ELT(parvec, n-1)
+;  VECTORP KAR catform => catform
+;  newcat := oldAxiomPreCategoryBuild(catform,dom,nil)
+;  SETELT(parvec, n-1, newcat)
+;  newcat
+
+(DEFUN |oldAxiomCategoryNthParent| (G166272 |n| |env|)
+  (declare (ignore |env|))
+  (PROG (|parvec| |dom| |catform| |newcat|)
+    (RETURN
+      (PROGN
+        (SPADLET |parvec| (CADDDR G166272))
+        (SPADLET |dom| (CAR (CDDDDR G166272)))
+        (SPADLET |catform| (ELT |parvec| (SPADDIFFERENCE |n| 1)))
+        (COND
+          ((VECTORP (KAR |catform|)) |catform|)
+          ('T
+           (SPADLET |newcat|
+                    (|oldAxiomPreCategoryBuild| |catform| |dom| NIL))
+           (SETELT |parvec| (SPADDIFFERENCE |n| 1) |newcat|) |newcat|))))))
+
+;oldAxiomCategoryBuild([catform,:.], dom, env) ==
+;  oldAxiomPreCategoryBuild(catform,dom, env)
+
+(DEFUN |oldAxiomCategoryBuild| (G166288 |dom| |env|)
+  (PROG (|catform|)
+    (RETURN
+      (PROGN
+        (SPADLET |catform| (CAR G166288))
+        (|oldAxiomPreCategoryBuild| |catform| |dom| |env|)))))
+
+;oldAxiomCategoryHashCode([.,hash,:.], env) == hash
+
+(DEFUN |oldAxiomCategoryHashCode| (G166299 |env|)
+  (declare (ignore |env|))
+  (PROG (|hash|)
+    (RETURN (PROGN (SPADLET |hash| (CADR G166299)) |hash|))))
+
+;$oldAxiomCategoryDispatch :=
+;   VECTOR('oldAxiomCategory,
+;          [function oldAxiomCategoryDevaluate],
+;          [nil],
+;          [function oldAxiomCategoryLookupExport],
+;          [function oldAxiomCategoryHashCode],
+;          [function oldAxiomCategoryBuild], -- builder ??
+;          [function oldAxiomCategoryParentCount],
+;          [function oldAxiomCategoryNthParent]) -- 1 indexed
+
+(SPADLET |$oldAxiomCategoryDispatch|
+         (VECTOR '|oldAxiomCategory|
+                 (CONS (|function| |oldAxiomCategoryDevaluate|) NIL)
+                 (CONS NIL NIL)
+                 (CONS (|function| |oldAxiomCategoryLookupExport|) NIL)
+                 (CONS (|function| |oldAxiomCategoryHashCode|) NIL)
+                 (CONS (|function| |oldAxiomCategoryBuild|) NIL)
+                 (CONS (|function| |oldAxiomCategoryParentCount|) NIL)
+                 (CONS (|function| |oldAxiomCategoryNthParent|) NIL)))
+
+;attributeDevaluate(attrObj, env) ==
+;   [name, hash] := attrObj
+;   StringToCompStr SYMBOL_-NAME name
+
+(DEFUN |attributeDevaluate| (|attrObj| |env|)
+  (declare (ignore |env|))
+  (PROG (|name| |hash|)
+    (RETURN
+      (PROGN
+        (SPADLET |name| (CAR |attrObj|))
+        (SPADLET |hash| (CADR |attrObj|))
+        (|StringToCompStr| (SYMBOL-NAME |name|))))))
+
+;attributeLookupExport(attrObj, self, op, sig, box, env) ==
+;   [name, hash] := attrObj
+;   opIsHasCat op => if EQL(hash, sig) then [self] else nil
+
+(DEFUN |attributeLookupExport| (|attrObj| |self| |op| |sig| |box| |env|)
+  (declare (ignore |env| |box|))
+  (PROG (|name| |hash|)
+    (RETURN
+      (PROGN
+        (SPADLET |name| (CAR |attrObj|))
+        (SPADLET |hash| (CADR |attrObj|))
+        (COND
+          ((|opIsHasCat| |op|)
+           (COND ((EQL |hash| |sig|) (CONS |self| NIL)) ('T NIL))))))))
+
+;attributeHashCode(attrObj, env) ==
+;   [name, hash] := attrObj
+;   hash
+
+(DEFUN |attributeHashCode| (|attrObj| |env|)
+  (declare (ignore |env|))
+  (PROG (|name| |hash|)
+    (RETURN
+      (PROGN
+        (SPADLET |name| (CAR |attrObj|))
+        (SPADLET |hash| (CADR |attrObj|))
+        |hash|))))
+
+;attributeCategoryBuild(attrObj, dom, env) ==
+;   [name, hash] := attrObj
+;   [$attributeDispatch, name, hash]
+
+(DEFUN |attributeCategoryBuild| (|attrObj| |dom| |env|)
+  (declare (ignore |env| |dom|))
+  (PROG (|name| |hash|)
+  (declare (special |$attributeDispatch|))
+    (RETURN
+      (PROGN
+        (SPADLET |name| (CAR |attrObj|))
+        (SPADLET |hash| (CADR |attrObj|))
+        (CONS |$attributeDispatch| (CONS |name| (CONS |hash| NIL)))))))
+
+;attributeCategoryParentCount(attrObj, env) == 0
+
+(DEFUN |attributeCategoryParentCount| (|attrObj| |env|)
+ (declare (special |attrObj| |env|))
+  0)
+
+;attributeNthParent(attrObj, env) == nil
+
+(DEFUN |attributeNthParent| (|attrObj| |env|)
+ (declare (ignore |env| |attrObj|))
+ NIL) 
+
+;$attributeDispatch :=
+;   VECTOR('attribute,
+;          [function attributeDevaluate],
+;          [nil],
+;          [function attributeLookupExport],
+;          [function attributeHashCode],
+;          [function attributeCategoryBuild], -- builder ??
+;          [function attributeCategoryParentCount],
+;          [function attributeNthParent]) -- 1 indexed
+
+(SPADLET |$attributeDispatch|
+         (VECTOR '|attribute|
+                 (CONS (|function| |attributeDevaluate|) NIL)
+                 (CONS NIL NIL)
+                 (CONS (|function| |attributeLookupExport|) NIL)
+                 (CONS (|function| |attributeHashCode|) NIL)
+                 (CONS (|function| |attributeCategoryBuild|) NIL)
+                 (CONS (|function| |attributeCategoryParentCount|) NIL)
+                 (CONS (|function| |attributeNthParent|) NIL)))
+
+;orderedDefaults(conform,domform) ==
+;  $depthAssocCache : local := MAKE_-HASHTABLE 'ID
+;  conList := [x for x in orderCatAnc (op := opOf conform) | hasDefaultPackage op]
+;  acc := nil
+;  ancestors := ancestorsOf(conform,domform)
+;  for x in conList repeat
+;    for y in ancestors | x = CAAR y repeat acc := [y,:acc]
+;  NREVERSE acc
+
+(DEFUN |orderedDefaults| (|conform| |domform|)
+  (PROG (|$depthAssocCache| |op| |conList| |ancestors| |acc|)
+    (DECLARE (SPECIAL |$depthAssocCache|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$depthAssocCache| (MAKE-HASHTABLE 'ID))
+             (SPADLET |conList|
+                      (PROG (G166358)
+                        (SPADLET G166358 NIL)
+                        (RETURN
+                          (DO ((G166364
+                                   (|orderCatAnc|
+                                    (SPADLET |op| (|opOf| |conform|)))
+                                   (CDR G166364))
+                               (|x| NIL))
+                              ((OR (ATOM G166364)
+                                   (PROGN
+                                     (SETQ |x| (CAR G166364))
+                                     NIL))
+                               (NREVERSE0 G166358))
+                            (SEQ (EXIT (COND
+                                         ((|hasDefaultPackage| |op|)
+                                          (SETQ G166358
+                                           (CONS |x| G166358))))))))))
+             (SPADLET |acc| NIL)
+             (SPADLET |ancestors| (|ancestorsOf| |conform| |domform|))
+             (DO ((G166373 |conList| (CDR G166373)) (|x| NIL))
+                 ((OR (ATOM G166373)
+                      (PROGN (SETQ |x| (CAR G166373)) NIL))
+                  NIL)
+               (SEQ (EXIT (DO ((G166383 |ancestors| (CDR G166383))
+                               (|y| NIL))
+                              ((OR (ATOM G166383)
+                                   (PROGN
+                                     (SETQ |y| (CAR G166383))
+                                     NIL))
+                               NIL)
+                            (SEQ (EXIT (COND
+                                         ((BOOT-EQUAL |x| (CAAR |y|))
+                                          (SPADLET |acc|
+                                           (CONS |y| |acc|))))))))))
+             (NREVERSE |acc|))))))
+
+;instantiate domenv ==
+;   -- following is a patch for a bug in runtime.as
+;   -- has a lazy dispatch vector with an instantiated domenv
+;  VECTORP CDR domenv => [$oldAxiomDomainDispatch ,: domenv]
+;  callForm := CADR domenv
+;  oldDom := CDDR domenv
+;  [functor,:args] := callForm
+;--  if null(fn := GET(functor,'instantiate)) then
+;--     ofn := SYMBOL_-FUNCTION functor
+;--     loadFunctor functor
+;--     fn := SYMBOL_-FUNCTION functor
+;--     SETF(SYMBOL_-FUNCTION functor, ofn)
+;--     PUT(functor, 'instantiate, fn)
+;--  domvec := APPLY(fn, args)
+;  domvec := APPLY(functor, args)
+;  RPLACA(oldDom, $oldAxiomDomainDispatch)
+;  RPLACD(oldDom, [CADR oldDom,: domvec])
+;  oldDom
+
+(DEFUN |instantiate| (|domenv|)
+  (PROG (|callForm| |oldDom| |functor| |args| |domvec|)
+  (declare (special |$oldAxiomDomainDispatch|))
+    (RETURN
+      (COND
+        ((VECTORP (CDR |domenv|))
+         (CONS |$oldAxiomDomainDispatch| |domenv|))
+        ('T (SPADLET |callForm| (CADR |domenv|))
+         (SPADLET |oldDom| (CDDR |domenv|))
+         (SPADLET |functor| (CAR |callForm|))
+         (SPADLET |args| (CDR |callForm|))
+         (SPADLET |domvec| (APPLY |functor| |args|))
+         (RPLACA |oldDom| |$oldAxiomDomainDispatch|)
+         (RPLACD |oldDom| (CONS (CADR |oldDom|) |domvec|)) |oldDom|)))))
+
+;hashTypeForm([fn,: args], percentHash) ==
+;   hashType([fn,:devaluateList args], percentHash)
+
+(DEFUN |hashTypeForm| (G166413 |percentHash|)
+  (PROG (|fn| |args|)
+    (RETURN
+      (PROGN
+        (SPADLET |fn| (CAR G166413))
+        (SPADLET |args| (CDR G166413))
+        (|hashType| (CONS |fn| (|devaluateList| |args|)) |percentHash|)))))
+
+;$hashOp1 := hashString '"1"
+
+(SPADLET |$hashOp1| (|hashString| (MAKESTRING "1")))
+
+;$hashOp0 := hashString '"0"
+
+(SPADLET |$hashOp0| (|hashString| (MAKESTRING "0"))) 
+
+;$hashOpApply := hashString '"apply"
+
+(SPADLET |$hashOpApply| (|hashString| (MAKESTRING "apply"))) 
+
+;$hashOpSet := hashString '"set!"
+
+(SPADLET |$hashOpSet| (|hashString| (MAKESTRING "set!"))) 
+
+;$hashSeg := hashString '".."
+
+(SPADLET |$hashSeg| (|hashString| (MAKESTRING ".."))) 
+
+;$hashPercent := hashString '"%"
+
+(SPADLET |$hashPercent| (|hashString| (MAKESTRING "%"))) 
+
+;oldAxiomDomainLookupExport _
+;  (domenv, self, op, sig, box, skipdefaults, env) ==
+;     domainVec := CDR domenv
+;     if hashCode? op then
+;         EQL(op, $hashOp1) => op := 'One
+;         EQL(op, $hashOp0) => op := 'Zero
+;         EQL(op, $hashOpApply) => op := 'elt
+;         EQL(op, $hashOpSet) => op := 'setelt
+;         EQL(op, $hashSeg) => op := 'SEGMENT
+;     constant := nil
+;     if hashCode? sig and self and EQL(sig, getDomainHash self) then
+;       sig := '($)
+;       constant := true
+;     val :=
+;       skipdefaults =>
+;          oldCompLookupNoDefaults(op, sig, domainVec, self)
+;       oldCompLookup(op, sig, domainVec, self)
+;     null val => val
+;     if constant then val := SPADCALL val
+;     RPLACA(box, val)
+;     box
+
+(DEFUN |oldAxiomDomainLookupExport|
+       (|domenv| |self| |op| |sig| |box| |skipdefaults| |env|)
+  (declare (ignore |env|))
+  (PROG (|domainVec| |constant| |val|)
+  (declare (special |$hashOp1| |$hashOp0| |$hashOpApply| |$hashOpSet| 
+                    |$hashSeg|))
+    (RETURN
+      (PROGN
+        (SPADLET |domainVec| (CDR |domenv|))
+        (COND
+          ((|hashCode?| |op|)
+           (COND
+             ((EQL |op| |$hashOp1|) (SPADLET |op| '|One|))
+             ((EQL |op| |$hashOp0|) (SPADLET |op| '|Zero|))
+             ((EQL |op| |$hashOpApply|) (SPADLET |op| '|elt|))
+             ((EQL |op| |$hashOpSet|) (SPADLET |op| '|setelt|))
+             ((EQL |op| |$hashSeg|) (SPADLET |op| 'SEGMENT)))))
+        (SPADLET |constant| NIL)
+        (COND
+          ((AND (|hashCode?| |sig|) |self|
+                (EQL |sig| (|getDomainHash| |self|)))
+           (SPADLET |sig| '($)) (SPADLET |constant| 'T)))
+        (SPADLET |val|
+                 (COND
+                   (|skipdefaults|
+                       (|oldCompLookupNoDefaults| |op| |sig|
+                           |domainVec| |self|))
+                   ('T (|oldCompLookup| |op| |sig| |domainVec| |self|))))
+        (COND
+          ((NULL |val|) |val|)
+          ('T (COND (|constant| (SPADLET |val| (SPADCALL |val|))))
+           (RPLACA |box| |val|) |box|))))))
+
+;oldAxiomDomainHashCode(domenv, env) == CAR domenv
+
+(DEFUN |oldAxiomDomainHashCode| (|domenv| |env|)
+  (declare (ignore |env|))
+  (CAR |domenv|))
+
+;oldAxiomDomainHasCategory(domenv, cat, env) ==
+;  HasAttribute(domvec := CDR domenv, cat) or
+;    HasCategory(domvec, devaluate cat)
+
+(DEFUN |oldAxiomDomainHasCategory| (|domenv| |cat| |env|)
+  (declare (ignore |env|))
+  (PROG (|domvec|)
+    (RETURN
+      (OR (|HasAttribute| (SPADLET |domvec| (CDR |domenv|)) |cat|)
+          (|HasCategory| |domvec| (|devaluate| |cat|))))))
+
+;oldAxiomDomainDevaluate(domenv, env) ==
+;   SExprToDName(CDR(domenv).0, 'T)
+
+(DEFUN |oldAxiomDomainDevaluate| (|domenv| |env|)
+  (declare (ignore |env|))
+  (|SExprToDName| (ELT (CDR |domenv|) 0) 'T))
+
+;oldAxiomAddChild(domenv, child, env) == CONS($oldAxiomDomainDispatch, domenv)
+
+(DEFUN |oldAxiomAddChild| (|domenv| |child| |env|)
+  (declare (special |$oldAxiomDomainDispatch|) (ignore |child| |env|))
+  (CONS |$oldAxiomDomainDispatch| |domenv|))
+
+;$oldAxiomDomainDispatch :=
+;   VECTOR('oldAxiomDomain,
+;          [function oldAxiomDomainDevaluate],
+;          [nil],
+;          [function oldAxiomDomainLookupExport],
+;          [function oldAxiomDomainHashCode],
+;          [function oldAxiomAddChild])
+
+(SPADLET |$oldAxiomDomainDispatch|
+         (VECTOR '|oldAxiomDomain|
+                 (CONS (|function| |oldAxiomDomainDevaluate|) NIL)
+                 (CONS NIL NIL)
+                 (CONS (|function| |oldAxiomDomainLookupExport|) NIL)
+                 (CONS (|function| |oldAxiomDomainHashCode|) NIL)
+                 (CONS (|function| |oldAxiomAddChild|) NIL)))
+
+;coerceConvertMmSelection(funName,m1,m2) ==
+;  -- calls selectMms with $Coerce=NIL and tests for required
+;  -- target type. funName is either 'coerce or 'convert.
+;  $declaredMode : local:= NIL
+;  $reportBottomUpFlag : local:= NIL
+;  l := selectMms1(funName,m2,[m1],[m1],NIL)
+;  mmS := [[sig,[targ,arg],:pred] for x in l | x is [sig,[.,arg],:pred] and
+;    hasCorrectTarget(m2,sig) and sig is [dc,targ,oarg] and oarg = m1]
+;  mmS and CAR mmS
+
+(DEFUN |coerceConvertMmSelection| (&REST G166559 &AUX G166554)
+  (DSETQ G166554 G166559)
+  (PROG ()
+    (RETURN
+      (PROG (G166555)
+        (RETURN
+          (COND
+            ((SETQ G166555
+                   (HGET |coerceConvertMmSelection;AL| G166554))
+             (|CDRwithIncrement| G166555))
+            ('T
+             (CDR (HPUT |coerceConvertMmSelection;AL| G166554
+                        (CONS 1
+                              (APPLY (|function|
+                                      |coerceConvertMmSelection;|)
+                                     G166554)))))))))))
+
+
+(DEFUN |coerceConvertMmSelection;| (|funName| |m1| |m2|)
+  (PROG (|$declaredMode| |$reportBottomUpFlag| |l| |sig| |ISTMP#3|
+            |arg| |pred| |dc| |ISTMP#1| |targ| |ISTMP#2| |oarg| |mmS|)
+    (DECLARE (SPECIAL |$declaredMode| |$reportBottomUpFlag|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$declaredMode| NIL)
+             (SPADLET |$reportBottomUpFlag| NIL)
+             (SPADLET |l|
+                      (|selectMms1| |funName| |m2| (CONS |m1| NIL)
+                          (CONS |m1| NIL) NIL))
+             (SPADLET |mmS|
+                      (PROG (G166519)
+                        (SPADLET G166519 NIL)
+                        (RETURN
+                          (DO ((G166525 |l| (CDR G166525))
+                               (|x| NIL))
+                              ((OR (ATOM G166525)
+                                   (PROGN
+                                     (SETQ |x| (CAR G166525))
+                                     NIL))
+                               (NREVERSE0 G166519))
+                            (SEQ (EXIT (COND
+                                         ((AND (PAIRP |x|)
+                                           (PROGN
+                                             (SPADLET |sig| (QCAR |x|))
+                                             (SPADLET |ISTMP#1|
+                                              (QCDR |x|))
+                                             (AND (PAIRP |ISTMP#1|)
+                                              (PROGN
+                                                (SPADLET |ISTMP#2|
+                                                 (QCAR |ISTMP#1|))
+                                                (AND (PAIRP |ISTMP#2|)
+                                                 (PROGN
+                                                   (SPADLET |ISTMP#3|
+                                                    (QCDR |ISTMP#2|))
+                                                   (AND
+                                                    (PAIRP |ISTMP#3|)
+                                                    (EQ
+                                                     (QCDR |ISTMP#3|)
+                                                     NIL)
+                                                    (PROGN
+                                                      (SPADLET |arg|
+                                                       (QCAR |ISTMP#3|))
+                                                      'T)))))
+                                              (PROGN
+                                                (SPADLET |pred|
+                                                 (QCDR |ISTMP#1|))
+                                                'T)))
+                                           (|hasCorrectTarget| |m2|
+                                            |sig|)
+                                           (PAIRP |sig|)
+                                           (PROGN
+                                             (SPADLET |dc|
+                                              (QCAR |sig|))
+                                             (SPADLET |ISTMP#1|
+                                              (QCDR |sig|))
+                                             (AND (PAIRP |ISTMP#1|)
+                                              (PROGN
+                                                (SPADLET |targ|
+                                                 (QCAR |ISTMP#1|))
+                                                (SPADLET |ISTMP#2|
+                                                 (QCDR |ISTMP#1|))
+                                                (AND (PAIRP |ISTMP#2|)
+                                                 (EQ (QCDR |ISTMP#2|)
+                                                  NIL)
+                                                 (PROGN
+                                                   (SPADLET |oarg|
+                                                    (QCAR |ISTMP#2|))
+                                                   'T)))))
+                                           (BOOT-EQUAL |oarg| |m1|))
+                                          (SETQ G166519
+                                           (CONS
+                                            (CONS |sig|
+                                             (CONS
+                                              (CONS |targ|
+                                               (CONS |arg| NIL))
+                                              |pred|))
+                                            G166519))))))))))
+             (AND |mmS| (CAR |mmS|)))))))
+
+(PUT '|coerceConvertMmSelection| '|cacheInfo|
+     '(|coerceConvertMmSelection| |coerceConvertMmSelection;AL|
+          |hash-tableWithCounts|
+          (SETQ |coerceConvertMmSelection;AL| (MAKE-HASHTABLE 'UEQUAL))
+          (|hashCount| |coerceConvertMmSelection;AL|)))
+
+(SETQ |coerceConvertMmSelection;AL| (MAKE-HASHTABLE 'UEQUAL))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}
