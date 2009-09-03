@@ -1,0 +1,814 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp topics.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;$topicsDefaults := '(
+;  (basic elt setelt qelt qsetelt eval xRange yRange zRange map map! qsetelt!)
+;  (conversion coerce convert retract)
+;  (hidden retractIfCan Zero One)
+;  (predicate _< _=)
+;  (algebraic _+ _- _* _*_* _/ quo rem exquo)
+;  (trignometric acos acot acsc asec asin atan cos cot csc sec sin tan)
+;  (hyperbolic acosh acoth acsch asech asinh atanh cosh coth csch sech sinh tanh)
+;  (destructive setelt qsetelt)
+;  (extraction xRange yRange zRange elt qelt)
+;  (transformation map map!))
+
+(SPADLET |$topicsDefaults|
+         '((|basic| |elt| |setelt| |qelt| |qsetelt| |eval| |xRange|
+                    |yRange| |zRange| |map| |map!| |qsetelt!|)
+           (|conversion| |coerce| |convert| |retract|)
+           (|hidden| |retractIfCan| |Zero| |One|) (|predicate| < =)
+           (|algebraic| + - * ** / |quo| |rem| |exquo|)
+           (|trignometric| |acos| |acot| |acsc| |asec| |asin| |atan|
+               |cos| |cot| |csc| |sec| |sin| |tan|)
+           (|hyperbolic| |acosh| |acoth| |acsch| |asech| |asinh|
+               |atanh| |cosh| |coth| |csch| |sech| |sinh| |tanh|)
+           (|destructive| |setelt| |qsetelt|)
+           (|extraction| |xRange| |yRange| |zRange| |elt| |qelt|)
+           (|transformation| |map| |map!|)))
+
+;$topicSynonyms := '(
+;  (b . basic)
+;  (h . hidden)
+;  (e . extended)
+;  (a . algebraic)
+;  (g . algebraic)
+;  (c . construct)
+;  (d . destructive)
+;  (v . conversion)
+;  (m . miscellaneous)
+;  (x . extraction)
+;  (p . predicate)
+;  (tg . trignometric)
+;  (hy . hyperbolic)
+;  (t . transformation))
+
+(SPADLET |$topicSynonyms|
+         '((|b| . |basic|) (|h| . |hidden|) (|e| . |extended|)
+           (|a| . |algebraic|) (|g| . |algebraic|) (|c| . |construct|)
+           (|d| . |destructive|) (|v| . |conversion|)
+           (|m| . |miscellaneous|) (|x| . |extraction|)
+           (|p| . |predicate|) (|tg| . |trignometric|)
+           (|hy| . |hyperbolic|) (|t| . |transformation|)))
+
+;$groupAssoc := '((extended . 1) (basic . 2) (hidden . 4))
+
+(SPADLET |$groupAssoc|
+         '((|extended| . 1) (|basic| . 2) (|hidden| . 4)))
+
+;--=======================================================================
+;--           Create Hashtable of Operation Properties
+;--=======================================================================
+;--called at build-time before making DOCUMENTATION property
+;mkTopicHashTable() ==                         --given $groupAssoc = ((extended . 1)(basic . 2)(xx . 4)..)
+;  $defaultsHash := MAKE_-HASHTABLE 'ID        --keys are ops, value is list of topic names
+;  for [kind,:items] in $topicsDefaults repeat --$topicsDefaults is ((<topic> op ...) ..)
+;    for item in items repeat
+;      HPUT($defaultsHash,item,[kind,:HGET($defaultsHash,item)])
+;  $conTopicHash  := MAKE_-HASHTABLE 'EQL      --key is constructor name; value is
+;  instream := OPEN '"topics.data"
+;  while not EOFP instream repeat
+;    line := READLINE instream
+;    while blankLine? line repeat line := READLINE instream
+;    m := MAXINDEX line                        --file "topics.data" has form:
+;    m = -1 => 'skip                           --1   ConstructorName:
+;    line.0 = char '_- => 'skip                --2      constructorName or operation name
+;    line := trimString line                   --3-n    ...
+;    m := MAXINDEX line                        --     (blank line) ...
+;    line.m ^= (char '_:) => systemError('"wrong heading")
+;    con := INTERN SUBSTRING(line,0,m)
+;    alist := [lst while not EOFP instream and
+;       not (blankLine? (line := READLINE instream)) and
+;         line.0 ^= char '_- for i in 1..
+;           | lst := string2OpAlist line]
+;    alist => HPUT($conTopicHash,con,alist)
+;  --initialize table of topic classes
+;  $topicHash := MAKE_-HASHTABLE 'ID           --$topicHash has keys: topic and value: index
+;  for [x,:c] in $groupAssoc repeat HPUT($topicHash,x,c)
+;  $topicIndex := CDR LAST $groupAssoc
+;  --replace each property list by a topic code
+;  --store under each construct an OR of all codes
+;  for con in HKEYS $conTopicHash repeat
+;    conCode := 0
+;    for pair in HGET($conTopicHash,con) repeat
+;      RPLACD(pair,code := topicCode CDR pair)
+;      conCode := LOGIOR(conCode,code)
+;    HPUT($conTopicHash,con,
+;      [['constructor,:conCode],:HGET($conTopicHash,con)])
+;  SHUT instream
+;--reduce integers stored under names to 1 + its power of 2
+;  for key in HKEYS $topicHash repeat
+;    HPUT($topicHash,key,INTEGER_-LENGTH HGET($topicHash,key))
+;  $conTopicHash   --keys are ops or 'constructor', values are codes
+
+(DEFUN |mkTopicHashTable| ()
+  (PROG (|kind| |items| |instream| |m| |con| |line| |lst| |alist| |x|
+                |c| |code| |conCode|)
+  (declare (special |$conTopicHash| |$topicHash| |$groupAssoc| |$topicIndex|
+                    |$defaultsHash| |$topicsDefaults|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$defaultsHash| (MAKE-HASHTABLE 'ID))
+             (DO ((G166073 |$topicsDefaults| (CDR G166073))
+                  (G166057 NIL))
+                 ((OR (ATOM G166073)
+                      (PROGN (SETQ G166057 (CAR G166073)) NIL)
+                      (PROGN
+                        (PROGN
+                          (SPADLET |kind| (CAR G166057))
+                          (SPADLET |items| (CDR G166057))
+                          G166057)
+                        NIL))
+                  NIL)
+               (SEQ (EXIT (DO ((G166083 |items| (CDR G166083))
+                               (|item| NIL))
+                              ((OR (ATOM G166083)
+                                   (PROGN
+                                     (SETQ |item| (CAR G166083))
+                                     NIL))
+                               NIL)
+                            (SEQ (EXIT (HPUT |$defaultsHash| |item|
+                                        (CONS |kind|
+                                         (HGET |$defaultsHash| |item|)))))))))
+             (SPADLET |$conTopicHash| (MAKE-HASHTABLE 'EQL))
+             (SPADLET |instream| (OPEN (MAKESTRING "topics.data")))
+             (DO () ((NULL (NULL (EOFP |instream|))) NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |line| (READLINE |instream|))
+                            (DO () ((NULL (|blankLine?| |line|)) NIL)
+                              (SEQ (EXIT
+                                    (SPADLET |line|
+                                     (READLINE |instream|)))))
+                            (SPADLET |m| (MAXINDEX |line|))
+                            (COND
+                              ((BOOT-EQUAL |m| (SPADDIFFERENCE 1))
+                               '|skip|)
+                              ((BOOT-EQUAL (ELT |line| 0) (|char| '-))
+                               '|skip|)
+                              ('T
+                               (SPADLET |line| (|trimString| |line|))
+                               (SPADLET |m| (MAXINDEX |line|))
+                               (COND
+                                 ((NEQUAL (ELT |line| |m|)
+                                          (|char| '|:|))
+                                  (|systemError|
+                                      (MAKESTRING "wrong heading")))
+                                 ('T
+                                  (SPADLET |con|
+                                           (INTERN
+                                            (SUBSTRING |line| 0 |m|)))
+                                  (SPADLET |alist|
+                                           (PROG (G166111)
+                                             (SPADLET G166111 NIL)
+                                             (RETURN
+                                               (DO
+                                                ((|i| 1 (QSADD1 |i|)))
+                                                ((NULL
+                                                  (AND
+                                                   (NULL
+                                                    (EOFP |instream|))
+                                                   (NULL
+                                                    (|blankLine?|
+                                                     (SPADLET |line|
+                                                      (READLINE
+                                                       |instream|))))
+                                                   (NEQUAL
+                                                    (ELT |line| 0)
+                                                    (|char| '-))))
+                                                 (NREVERSE0 G166111))
+                                                 (SEQ
+                                                  (EXIT
+                                                   (COND
+                                                     ((SPADLET |lst|
+                                                       (|string2OpAlist|
+                                                        |line|))
+                                                      (SETQ G166111
+                                                       (CONS |lst|
+                                                        G166111))))))))))
+                                  (COND
+                                    (|alist|
+                                     (HPUT |$conTopicHash| |con|
+                                      |alist|)))))))))))
+             (SPADLET |$topicHash| (MAKE-HASHTABLE 'ID))
+             (DO ((G166125 |$groupAssoc| (CDR G166125))
+                  (G166062 NIL))
+                 ((OR (ATOM G166125)
+                      (PROGN (SETQ G166062 (CAR G166125)) NIL)
+                      (PROGN
+                        (PROGN
+                          (SPADLET |x| (CAR G166062))
+                          (SPADLET |c| (CDR G166062))
+                          G166062)
+                        NIL))
+                  NIL)
+               (SEQ (EXIT (HPUT |$topicHash| |x| |c|))))
+             (SPADLET |$topicIndex| (CDR (|last| |$groupAssoc|)))
+             (DO ((G166140 (HKEYS |$conTopicHash|) (CDR G166140))
+                  (|con| NIL))
+                 ((OR (ATOM G166140)
+                      (PROGN (SETQ |con| (CAR G166140)) NIL))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |conCode| 0)
+                            (DO ((G166151
+                                     (HGET |$conTopicHash| |con|)
+                                     (CDR G166151))
+                                 (|pair| NIL))
+                                ((OR (ATOM G166151)
+                                     (PROGN
+                                       (SETQ |pair| (CAR G166151))
+                                       NIL))
+                                 NIL)
+                              (SEQ (EXIT
+                                    (PROGN
+                                      (RPLACD |pair|
+                                       (SPADLET |code|
+                                        (|topicCode| (CDR |pair|))))
+                                      (SPADLET |conCode|
+                                       (LOGIOR |conCode| |code|))))))
+                            (HPUT |$conTopicHash| |con|
+                                  (CONS (CONS '|constructor| |conCode|)
+                                        (HGET |$conTopicHash| |con|)))))))
+             (SHUT |instream|)
+             (DO ((G166160 (HKEYS |$topicHash|) (CDR G166160))
+                  (|key| NIL))
+                 ((OR (ATOM G166160)
+                      (PROGN (SETQ |key| (CAR G166160)) NIL))
+                  NIL)
+               (SEQ (EXIT (HPUT |$topicHash| |key|
+                                (INTEGER-LENGTH
+                                    (HGET |$topicHash| |key|))))))
+             |$conTopicHash|)))))
+
+;blankLine? line ==
+;  MAXINDEX line = -1 or and/[line . j = (char '_ ) for j in 0..MAXINDEX line]
+
+(DEFUN |blankLine?| (|line|)
+  (PROG ()
+    (RETURN
+      (SEQ (OR (BOOT-EQUAL (MAXINDEX |line|) (SPADDIFFERENCE 1))
+               (PROG (G166191)
+                 (SPADLET G166191 'T)
+                 (RETURN
+                   (DO ((G166197 NIL (NULL G166191))
+                        (G166198 (MAXINDEX |line|))
+                        (|j| 0 (QSADD1 |j|)))
+                       ((OR G166197 (QSGREATERP |j| G166198))
+                        G166191)
+                     (SEQ (EXIT (SETQ G166191
+                                      (AND G166191
+                                       (BOOT-EQUAL (ELT |line| |j|)
+                                        (|char| '| |))))))))))))))
+
+;string2OpAlist s ==
+;  m := #s
+;  k := skipBlanks(s,0,m) or return nil
+;  UPPER_-CASE_-P s.k => nil       --skip constructor names
+;  k := 0
+;  while (k := skipBlanks(s,k,m)) repeat
+;    acc := [INTERN SUBSTRING(s,k,-k + (k := charPosition(char '_ ,s,k + 1))),:acc]
+;  acc := NREVERSE acc
+;  --now add defaults
+;  if u := getDefaultProps first acc then acc := [first acc,:u,:rest acc]
+;  acc
+
+(DEFUN |string2OpAlist| (|s|)
+  (PROG (|m| |k| |u| |acc|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |m| (|#| |s|))
+             (SPADLET |k| (OR (|skipBlanks| |s| 0 |m|) (RETURN NIL)))
+             (COND
+               ((UPPER-CASE-P (ELT |s| |k|)) NIL)
+               ('T (SPADLET |k| 0)
+                (DO ()
+                    ((NULL (SPADLET |k| (|skipBlanks| |s| |k| |m|)))
+                     NIL)
+                  (SEQ (EXIT (SPADLET |acc|
+                                      (CONS
+                                       (INTERN
+                                        (SUBSTRING |s| |k|
+                                         (PLUS (SPADDIFFERENCE |k|)
+                                          (SPADLET |k|
+                                           (|charPosition|
+                                            (|char| '| |) |s|
+                                            (PLUS |k| 1))))))
+                                       |acc|)))))
+                (SPADLET |acc| (NREVERSE |acc|))
+                (COND
+                  ((SPADLET |u| (|getDefaultProps| (CAR |acc|)))
+                   (SPADLET |acc|
+                            (CONS (CAR |acc|) (APPEND |u| (CDR |acc|))))))
+                |acc|)))))))
+
+;getDefaultProps name ==
+;  u := HGET($defaultsHash,name)
+;  if (s := PNAME name).(m := MAXINDEX s) = char '? then u := ['p,:u]
+;  if s.m = char '_! then u := ['destructive,:u]
+;  u
+
+(DEFUN |getDefaultProps| (|name|)
+  (PROG (|s| |m| |u|)
+  (declare (special |$defaultsHash|))
+    (RETURN
+      (PROGN
+        (SPADLET |u| (HGET |$defaultsHash| |name|))
+        (COND
+          ((BOOT-EQUAL
+               (ELT (SPADLET |s| (PNAME |name|))
+                    (SPADLET |m| (MAXINDEX |s|)))
+               (|char| '?))
+           (SPADLET |u| (CONS '|p| |u|))))
+        (COND
+          ((BOOT-EQUAL (ELT |s| |m|) (|char| '!))
+           (SPADLET |u| (CONS '|destructive| |u|))))
+        |u|))))
+
+;
+;skipBlanks(u,i,m) ==
+;  while i < m and u.i = $charBlank repeat i := i + 1
+;  i >= m => nil
+;  i
+
+(DEFUN |skipBlanks| (|u| |i| |m|)
+  (declare (special |$charBlank|))
+  (SEQ (PROGN
+         (DO ()
+             ((NULL (AND (> |m| |i|)
+                         (BOOT-EQUAL (ELT |u| |i|) |$charBlank|)))
+              NIL)
+           (SEQ (EXIT (SPADLET |i| (PLUS |i| 1)))))
+         (COND ((>= |i| |m|) NIL) ('T |i|)))))
+
+;--=======================================================================
+;--           Compute Topic Code for Operation
+;--=======================================================================
+;topicCode lst ==
+;  u := [y for x in lst] where y ==
+;    rename := LASSOC(x,$topicSynonyms) => rename
+;    x
+;  if null INTERSECTION('(basic extended hidden),u) then u := ['extended,:u]
+;  bitIndexList := nil
+;  for x in REMDUP u repeat
+;    bitIndexList := [fn x,:bitIndexList] where fn x ==
+;      k := HGET($topicHash,x) => k
+;      HPUT($topicHash,x,$topicIndex := $topicIndex * 2)
+;      $topicIndex
+;  code := +/[i for i in bitIndexList]
+
+(DEFUN |topicCode,fn| (|x|)
+  (PROG (|k|)
+  (declare (special |$topicIndex| |$topicHash|))
+    (RETURN
+      (SEQ (IF (SPADLET |k| (HGET |$topicHash| |x|)) (EXIT |k|))
+           (HPUT |$topicHash| |x|
+                 (SPADLET |$topicIndex| (TIMES |$topicIndex| 2)))
+           (EXIT |$topicIndex|)))))
+
+(DEFUN |topicCode| (|lst|)
+  (PROG (|rename| |u| |bitIndexList| |code|)
+  (declare (special |$topicSynonyms|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |u|
+                      (PROG (G166260)
+                        (SPADLET G166260 NIL)
+                        (RETURN
+                          (DO ((G166265 |lst| (CDR G166265))
+                               (|x| NIL))
+                              ((OR (ATOM G166265)
+                                   (PROGN
+                                     (SETQ |x| (CAR G166265))
+                                     NIL))
+                               (NREVERSE0 G166260))
+                            (SEQ (EXIT (SETQ G166260
+                                        (CONS
+                                         (COND
+                                           ((SPADLET |rename|
+                                             (LASSOC |x|
+                                              |$topicSynonyms|))
+                                            |rename|)
+                                           ('T |x|))
+                                         G166260))))))))
+             (COND
+               ((NULL (|intersection| '(|basic| |extended| |hidden|)
+                          |u|))
+                (SPADLET |u| (CONS '|extended| |u|))))
+             (SPADLET |bitIndexList| NIL)
+             (DO ((G166274 (REMDUP |u|) (CDR G166274)) (|x| NIL))
+                 ((OR (ATOM G166274)
+                      (PROGN (SETQ |x| (CAR G166274)) NIL))
+                  NIL)
+               (SEQ (EXIT (SPADLET |bitIndexList|
+                                   (CONS (|topicCode,fn| |x|)
+                                    |bitIndexList|)))))
+             (SPADLET |code|
+                      (PROG (G166280)
+                        (SPADLET G166280 0)
+                        (RETURN
+                          (DO ((G166285 |bitIndexList|
+                                   (CDR G166285))
+                               (|i| NIL))
+                              ((OR (ATOM G166285)
+                                   (PROGN
+                                     (SETQ |i| (CAR G166285))
+                                     NIL))
+                               G166280)
+                            (SEQ (EXIT (SETQ G166280
+                                        (PLUS G166280 |i|)))))))))))))
+
+;--=======================================================================
+;--           Add Codes to Documentation Property
+;--=======================================================================
+;--called to modify DOCUMENTATION property for each "con"
+;addTopic2Documentation(con,docAlist) ==
+;  alist := HGET($conTopicHash,con) or return docAlist
+;  [y for x in docAlist] where y ==
+;    [op,:pairlist] := x
+;    code := LASSOC(op,alist) or 0
+;    for sigDoc in pairlist repeat
+;      sigDoc is [.,.] => RPLACD(rest sigDoc,code)
+;      systemError sigDoc
+;  docAlist
+
+(DEFUN |addTopic2Documentation| (|con| |docAlist|)
+  (PROG (|alist| |op| |pairlist| |code| |ISTMP#1|)
+  (declare (special |$conTopicHash|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |alist|
+                      (OR (HGET |$conTopicHash| |con|)
+                          (RETURN |docAlist|)))
+             (PROG (G166326)
+               (SPADLET G166326 NIL)
+               (RETURN
+                 (DO ((G166337 |docAlist| (CDR G166337)) (|x| NIL))
+                     ((OR (ATOM G166337)
+                          (PROGN (SETQ |x| (CAR G166337)) NIL))
+                      (NREVERSE0 G166326))
+                   (SEQ (EXIT (SETQ G166326
+                                    (CONS
+                                     (PROGN
+                                       (SPADLET |op| (CAR |x|))
+                                       (SPADLET |pairlist| (CDR |x|))
+                                       (SPADLET |code|
+                                        (OR (LASSOC |op| |alist|) 0))
+                                       (DO
+                                        ((G166348 |pairlist|
+                                          (CDR G166348))
+                                         (|sigDoc| NIL))
+                                        ((OR (ATOM G166348)
+                                          (PROGN
+                                            (SETQ |sigDoc|
+                                             (CAR G166348))
+                                            NIL))
+                                         NIL)
+                                         (SEQ
+                                          (EXIT
+                                           (COND
+                                             ((AND (PAIRP |sigDoc|)
+                                               (PROGN
+                                                 (SPADLET |ISTMP#1|
+                                                  (QCDR |sigDoc|))
+                                                 (AND (PAIRP |ISTMP#1|)
+                                                  (EQ (QCDR |ISTMP#1|)
+                                                   NIL))))
+                                              (RPLACD (CDR |sigDoc|)
+                                               |code|))
+                                             ('T
+                                              (|systemError| |sigDoc|)))))))
+                                     G166326)))))))
+             |docAlist|)))))
+
+;
+;--=======================================================================
+;--           Test: Display Topics for a given constructor
+;--=======================================================================
+;td con ==
+;  $topicClasses := ASSOCRIGHT mySort
+;      [[HGET($topicHash,key),:key] for key in HKEYS $topicHash]
+;  hash := MAKE_-HASHTABLE 'ID
+;  tdAdd(con,hash)
+;  tdPrint hash
+
+(DEFUN |td| (|con|)
+  (PROG (|hash|)
+  (declare (special |$topicHash| |$topicClasses|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$topicClasses|
+                      (ASSOCRIGHT
+                          (|mySort|
+                              (PROG (G166368)
+                                (SPADLET G166368 NIL)
+                                (RETURN
+                                  (DO ((G166373 (HKEYS |$topicHash|)
+                                        (CDR G166373))
+                                       (|key| NIL))
+                                      ((OR (ATOM G166373)
+                                        (PROGN
+                                          (SETQ |key| (CAR G166373))
+                                          NIL))
+                                       (NREVERSE0 G166368))
+                                    (SEQ
+                                     (EXIT
+                                      (SETQ G166368
+                                       (CONS
+                                        (CONS (HGET |$topicHash| |key|)
+                                         |key|)
+                                        G166368))))))))))
+             (SPADLET |hash| (MAKE-HASHTABLE 'ID))
+             (|tdAdd| |con| |hash|)
+             (|tdPrint| |hash|))))))
+
+;tdAdd(con,hash) ==
+;  v := HGET($conTopicHash,con)
+;  u := addTopic2Documentation(con,v)
+;--u := GETDATABASE(con,'DOCUMENTATION)
+;  for pair in u | FIXP (code := myLastAtom pair) and (op := CAR pair) ^= 'construct repeat
+;    for x in (names := code2Classes code) repeat HPUT(hash,x,insert(op,HGET(hash,x)))
+
+(DEFUN |tdAdd| (|con| |hash|)
+  (PROG (|v| |u| |code| |op| |names|)
+  (declare (special |$conTopicHash|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |v| (HGET |$conTopicHash| |con|))
+             (SPADLET |u| (|addTopic2Documentation| |con| |v|))
+             (DO ((G166390 |u| (CDR G166390)) (|pair| NIL))
+                 ((OR (ATOM G166390)
+                      (PROGN (SETQ |pair| (CAR G166390)) NIL))
+                  NIL)
+               (SEQ (EXIT (COND
+                            ((AND (FIXP (SPADLET |code|
+                                         (|myLastAtom| |pair|)))
+                                  (NEQUAL (SPADLET |op| (CAR |pair|))
+                                          '|construct|))
+                             (DO ((G166399
+                                      (SPADLET |names|
+                                       (|code2Classes| |code|))
+                                      (CDR G166399))
+                                  (|x| NIL))
+                                 ((OR (ATOM G166399)
+                                      (PROGN
+                                        (SETQ |x| (CAR G166399))
+                                        NIL))
+                                  NIL)
+                               (SEQ (EXIT
+                                     (HPUT |hash| |x|
+                                (|insert| |op| (HGET |hash| |x|))))))))))))))))
+
+;tdPrint hash ==
+;  for key in mySort HKEYS hash repeat
+;    sayBrightly [key,'":"]
+;    sayBrightlyNT '"   "
+;    for x in HGET(hash,key) repeat sayBrightlyNT ['" ",x]
+;    TERPRI()
+
+(DEFUN |tdPrint| (|hash|)
+  (SEQ (DO ((G166421 (|mySort| (HKEYS |hash|)) (CDR G166421))
+            (|key| NIL))
+           ((OR (ATOM G166421)
+                (PROGN (SETQ |key| (CAR G166421)) NIL))
+            NIL)
+         (SEQ (EXIT (PROGN
+                      (|sayBrightly|
+                          (CONS |key| (CONS (MAKESTRING ":") NIL)))
+                      (|sayBrightlyNT| (MAKESTRING "   "))
+                      (DO ((G166430 (HGET |hash| |key|)
+                               (CDR G166430))
+                           (|x| NIL))
+                          ((OR (ATOM G166430)
+                               (PROGN (SETQ |x| (CAR G166430)) NIL))
+                           NIL)
+                        (SEQ (EXIT (|sayBrightlyNT|
+                                    (CONS (MAKESTRING " ")
+                                     (CONS |x| NIL))))))
+                      (TERPRI)))))))
+
+;topics con ==
+;  --assumes that DOCUMENTATION property already has #s added
+;  $topicClasses := ASSOCRIGHT mySort
+;      [[HGET($topicHash,key),:key] for key in HKEYS $topicHash]
+;  hash := MAKE_-HASHTABLE 'ID
+;  tdAdd(con,hash)
+;  for x in REMDUP [CAAR y for y in ancestorsOf(getConstructorForm con,nil)] repeat
+;    tdAdd(x,hash)
+;  for x in HKEYS hash repeat HPUT(hash,x,mySort HGET(hash,x))
+;  tdPrint hash
+
+(DEFUN |topics| (|con|)
+  (PROG (|hash|)
+  (declare (special |$topicHash| |$topicClasses|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$topicClasses|
+                      (ASSOCRIGHT
+                          (|mySort|
+                              (PROG (G166444)
+                                (SPADLET G166444 NIL)
+                                (RETURN
+                                  (DO ((G166449 (HKEYS |$topicHash|)
+                                        (CDR G166449))
+                                       (|key| NIL))
+                                      ((OR (ATOM G166449)
+                                        (PROGN
+                                          (SETQ |key| (CAR G166449))
+                                          NIL))
+                                       (NREVERSE0 G166444))
+                                    (SEQ
+                                     (EXIT
+                                      (SETQ G166444
+                                       (CONS
+                                        (CONS (HGET |$topicHash| |key|)
+                                         |key|)
+                                        G166444))))))))))
+             (SPADLET |hash| (MAKE-HASHTABLE 'ID))
+             (|tdAdd| |con| |hash|)
+             (DO ((G166458
+                      (REMDUP (PROG (G166468)
+                                (SPADLET G166468 NIL)
+                                (RETURN
+                                  (DO ((G166473
+                                        (|ancestorsOf|
+                                         (|getConstructorForm| |con|)
+                                         NIL)
+                                        (CDR G166473))
+                                       (|y| NIL))
+                                      ((OR (ATOM G166473)
+                                        (PROGN
+                                          (SETQ |y| (CAR G166473))
+                                          NIL))
+                                       (NREVERSE0 G166468))
+                                    (SEQ
+                                     (EXIT
+                                      (SETQ G166468
+                                       (CONS (CAAR |y|) G166468))))))))
+                      (CDR G166458))
+                  (|x| NIL))
+                 ((OR (ATOM G166458)
+                      (PROGN (SETQ |x| (CAR G166458)) NIL))
+                  NIL)
+               (SEQ (EXIT (|tdAdd| |x| |hash|))))
+             (DO ((G166482 (HKEYS |hash|) (CDR G166482)) (|x| NIL))
+                 ((OR (ATOM G166482)
+                      (PROGN (SETQ |x| (CAR G166482)) NIL))
+                  NIL)
+               (SEQ (EXIT (HPUT |hash| |x|
+                                (|mySort| (HGET |hash| |x|))))))
+             (|tdPrint| |hash|))))))
+
+;code2Classes cc ==
+;  cc := 2*cc
+;  [x while cc ^= 0 for x in $topicClasses | ODDP (cc := QUOTIENT(cc,2))]
+
+(DEFUN |code2Classes| (|cc|)
+  (PROG ()
+  (declare (special |$topicClasses|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |cc| (TIMES 2 |cc|))
+             (PROG (G166502)
+               (SPADLET G166502 NIL)
+               (RETURN
+                 (DO ((G166509 |$topicClasses| (CDR G166509))
+                      (|x| NIL))
+                     ((OR (NULL (NEQUAL |cc| 0)) (ATOM G166509)
+                          (PROGN (SETQ |x| (CAR G166509)) NIL))
+                      (NREVERSE0 G166502))
+                   (SEQ (EXIT (COND
+                                ((ODDP (SPADLET |cc| (QUOTIENT |cc| 2)))
+                              (SETQ G166502 (CONS |x| G166502))))))))))))))
+
+;
+;myLastAtom x ==
+;  while x is [.,:x] repeat nil
+;  x
+
+(DEFUN |myLastAtom| (|x|)
+  (SEQ (PROGN
+         (DO ()
+             ((NULL (AND (PAIRP |x|)
+                         (PROGN (SPADLET |x| (QCDR |x|)) 'T)))
+              NIL)
+           (SEQ (EXIT NIL)))
+         |x|)))
+
+;--=======================================================================
+;--           Transfer Codes to opAlist
+;--=======================================================================
+;transferClassCodes(conform,opAlist) ==
+;  transferCodeCon(opOf conform,opAlist)
+;  for x in ancestorsOf(conform,nil) repeat
+;    transferCodeCon(CAAR x,opAlist)
+
+(DEFUN |transferClassCodes| (|conform| |opAlist|)
+  (SEQ (PROGN
+         (|transferCodeCon| (|opOf| |conform|) |opAlist|)
+         (DO ((G166537 (|ancestorsOf| |conform| NIL) (CDR G166537))
+              (|x| NIL))
+             ((OR (ATOM G166537)
+                  (PROGN (SETQ |x| (CAR G166537)) NIL))
+              NIL)
+           (SEQ (EXIT (|transferCodeCon| (CAAR |x|) |opAlist|)))))))
+
+;transferCodeCon(con,opAlist) ==
+;  for pair in GETDATABASE(con,'DOCUMENTATION)
+;    | FIXP (code := myLastAtom pair) repeat
+;      u := ASSOC(QCAR pair,opAlist) => RPLACD(LASTNODE u,code)
+
+(DEFUN |transferCodeCon| (|con| |opAlist|)
+  (PROG (|code| |u|)
+    (RETURN
+      (SEQ (DO ((G166550 (GETDATABASE |con| 'DOCUMENTATION)
+                    (CDR G166550))
+                (|pair| NIL))
+               ((OR (ATOM G166550)
+                    (PROGN (SETQ |pair| (CAR G166550)) NIL))
+                NIL)
+             (SEQ (EXIT (COND
+                          ((FIXP (SPADLET |code| (|myLastAtom| |pair|)))
+                           (COND
+                             ((SPADLET |u|
+                                       (|assoc| (QCAR |pair|)
+                                        |opAlist|))
+                              (EXIT (RPLACD (LASTNODE |u|) |code|)))))))))))))
+
+;--=======================================================================
+;--           Filter Operation by Topic
+;--=======================================================================
+;filterByTopic(opAlist,topic) ==
+;  bitNumber := HGET($topicHash,topic)
+;  [x for x in opAlist
+;    | FIXP (code := myLastAtom x) and LOGBITP(bitNumber,code)]
+
+(DEFUN |filterByTopic| (|opAlist| |topic|)
+  (PROG (|bitNumber| |code|)
+  (declare (special |$topicHash|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |bitNumber| (HGET |$topicHash| |topic|))
+             (PROG (G166567)
+               (SPADLET G166567 NIL)
+               (RETURN
+                 (DO ((G166573 |opAlist| (CDR G166573)) (|x| NIL))
+                     ((OR (ATOM G166573)
+                          (PROGN (SETQ |x| (CAR G166573)) NIL))
+                      (NREVERSE0 G166567))
+                   (SEQ (EXIT (COND
+                                ((AND (FIXP
+                                       (SPADLET |code|
+                                        (|myLastAtom| |x|)))
+                                      (LOGBITP |bitNumber| |code|))
+                              (SETQ G166567 (CONS |x| G166567))))))))))))))
+
+;listOfTopics(conname) ==
+;  doc := GETDATABASE(conname,'DOCUMENTATION)
+;  u := ASSOC('constructor,doc) or return nil
+;  code := myLastAtom u
+;--null FIXP code => nil
+;  mySort [key for key in HKEYS($topicHash) | LOGBITP(HGET($topicHash,key),code)]
+
+(DEFUN |listOfTopics| (|conname|)
+  (PROG (|doc| |u| |code|)
+  (declare (special |$topicHash|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |doc| (GETDATABASE |conname| 'DOCUMENTATION))
+             (SPADLET |u|
+                      (OR (|assoc| '|constructor| |doc|) (RETURN NIL)))
+             (SPADLET |code| (|myLastAtom| |u|))
+             (|mySort|
+                 (PROG (G166591)
+                   (SPADLET G166591 NIL)
+                   (RETURN
+                     (DO ((G166597 (HKEYS |$topicHash|)
+                              (CDR G166597))
+                          (|key| NIL))
+                         ((OR (ATOM G166597)
+                              (PROGN (SETQ |key| (CAR G166597)) NIL))
+                          (NREVERSE0 G166591))
+                       (SEQ (EXIT (COND
+                                    ((LOGBITP (HGET |$topicHash| |key|)
+                                      |code|)
+                                     (SETQ G166591
+                                      (CONS |key| G166591)))))))))))))))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}
