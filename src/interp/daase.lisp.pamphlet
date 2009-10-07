@@ -314,12 +314,18 @@ database.
 
 (defun asharp (file &optional (flags *asharpflags*))
  "call the asharp compiler"
+ (declare (special *asharpflags*))
  (system::system
    (concatenate 'string (|getEnv| "AXIOM") "/compiler/bin/axiomxl "
     flags " " file)))
 
 (defun resethashtables ()
  "set all -hash* to clean values. used to clean up core before saving system"
+ (declare (special *sourcefiles* *interp-stream* *operation-stream*
+                    *category-stream* *browse-stream* *category-stream-stamp*
+                    *operation-stream-stamp* *interp-stream-stamp*
+                    *compress-stream-stamp* *compressvector*
+                    *allconstructors* *operation-hash* *hascategory-hash*))
  (setq *hascategory-hash* (make-hash-table :test #'equal))
  (setq *operation-hash* (make-hash-table))
  (setq *allconstructors* nil)
@@ -449,7 +455,8 @@ database.
 ;  )
 (defun interpOpen ()
  "open the interpreter database and hash the keys"
- (declare (special $spadroot))
+ (declare (special $spadroot *allconstructors* *interp-stream*
+                   *interp-stream-stamp*))
  (let (constructors pos stamp dbstruct)
   (setq *interp-stream* (open (DaaseName "interp.daase" nil)))
   (setq stamp (read *interp-stream*))
@@ -505,7 +512,8 @@ database.
 
 (defun browseOpen ()
  "open the constructor database and hash the keys"
- (declare (special $spadroot))
+ (declare (special $spadroot *allconstructors* *browse-stream*
+                   *browse-stream-stamp*))
  (let (constructors pos stamp dbstruct)
   (setq *browse-stream* (open (DaaseName "browse.daase" nil)))
   (setq stamp (read *browse-stream*))
@@ -535,7 +543,8 @@ database.
 
 (defun categoryOpen ()
  "open category.daase and hash the keys"
- (declare (special $spadroot))
+ (declare (special $spadroot *hasCategory-hash* *category-stream*
+                   *category-stream-stamp*))
  (let (pos keys stamp)
   (setq *category-stream* (open (DaaseName "category.daase" nil)))
   (setq stamp (read *category-stream*))
@@ -553,7 +562,8 @@ database.
 
 (defun operationOpen ()
  "read operation database and hash the keys"
- (declare (special $spadroot))
+ (declare (special $spadroot *operation-hash* *operation-stream*
+                   *operation-stream-stamp*))
  (let (operations pos stamp)
   (setq *operation-stream* (open (DaaseName "operation.daase" nil)))
   (setq stamp (read *operation-stream*))
@@ -653,7 +663,10 @@ database.
  (declare (special $spadroot) (special *miss*))
  (when (eq *miss* t) (format t "getdatabase call: ~20a ~a~%" constructor key))
  (let (data table stream ignore struct)
-  (declare (ignore ignore))
+  (declare (ignore ignore) 
+           (special *hascategory-hash* *operation-hash* *miss*
+                    *browse-stream* *defaultdomain-list* *interp-stream*
+                    *category-stream* *hasCategory-hash* *operation-stream*))
   (when (or (symbolp constructor)
           (and (eq key 'hascategory) (pairp constructor)))
   (case key
@@ -809,8 +822,7 @@ database.
 ; )library top level command
 
 (defun |library| (args)
- (declare (special |$options|))
- (declare (special |$newConlist|))
+ (declare (special |$options| |$newConlist|))
  (setq original-directory (get-current-directory))
  (setq |$newConlist| nil)
  (localdatabase args |$options|)
@@ -870,6 +882,7 @@ database.
     (values only dir noexpose)))
   (processDir (dirarg thisdir)
    (let (allfiles skipasos)
+    (declare (special vmlisp::*index-filename*))
     (system:chdir (string dirarg))
     (setq allfiles (directory "*"))
     (system:chdir thisdir)
@@ -898,7 +911,7 @@ database.
     ))))
  (let (thisdir nrlibs asos asys libs object only dir key 
       (|$forceDatabaseUpdate| t) noexpose)
-  (declare (special |$forceDatabaseUpdate|))
+  (declare (special |$forceDatabaseUpdate| vmlisp::*index-filename*))
   (setq thisdir (namestring (truename ".")))
   (setq noexpose nil)
   (multiple-value-setq (only dir noexpose) (processOptions options))
@@ -948,6 +961,8 @@ database.
 #+:CCL
   ;; Open the library
   (let (lib)
+    (declare (special *hascategory-hash* |$EmptyEnvironment| *allOperations*
+                      |$InteractiveMode| *operation-hash*))
     (if (filep (setq lib (make-pathname :name object :type "lib")) )
         (setq input-libraries (cons (truename lib) input-libraries))))
    (set-file-getter object)  ; sets the autoload property for G-object
@@ -1011,7 +1026,7 @@ database.
 		   (fetchdata alist "ancestors")))
 	 (if (eq kind '|domain|)
 	     (dolist (pair (cdr (assoc "ancestors" alist :test #'string=)))
-		     (setf (gethash (cons cname (caar pair)) *hascategory-hash*)
+               (setf (gethash (cons cname (caar pair)) *hascategory-hash*)
 			   (cdr pair))))
 	 (if |$InteractiveMode| (setq |$CategoryFrame| |$EmptyEnvironment|)))
 	(setf (database-cosig dbstruct)
@@ -1035,6 +1050,7 @@ database.
      (file-position in pos)
      (read in)))))
  (let (alist kind (systemdir? nil) pos constructorform oldmaps abbrev dbstruct)
+  (declare (special *allOperations* *allconstructors*))
   (with-open-file (in nrlib)
    (file-position in (read in))
    (setq alist (read in))
@@ -1134,8 +1150,7 @@ database.
 (defun make-databases (ext dirlist)
  (labels (
   (build-name-to-pamphlet-hash (dir)
-   (let ((ht (make-hash-table)) (eof '(done))
-         point mark end abbrev name file)
+   (let ((ht (make-hash-table)) (eof '(done)) point mark abbrev name file ns)
     (dolist (fn (directory dir))
      (with-open-file (f fn)
       (do ((ln (read-line f nil eof) (read-line f nil eof))
@@ -1163,6 +1178,7 @@ database.
     ;; we store some constructed data to make them perform like library
     ;; objects, the *operationalist-hash* key entry is used by allConstructors
   (withSpecialConstructors ()
+   (declare (special *allconstructors*))
    ; note: if item is not in *operationalist-hash* it will not be written
    ; Category
    (setf (get '|Category| 'database)
@@ -1189,7 +1205,8 @@ database.
     (format nil "~a.daase~a" root ext))
   )
  (let (d)
-  (declare (special |$constructorList|))
+  (declare (special |$constructorList| *sourcefiles* *compressvector*
+                    *allconstructors* *operation-hash*))
   (do-symbols (symbol)
    (when (get symbol 'database)
     (setf (get symbol 'database) nil)))
@@ -1235,15 +1252,15 @@ database.
      (when (setq dbstruct (get con 'database))
 	   (setf (database-cosig dbstruct)
 		 (cons nil (mapcar #'|categoryForm?|
-				   (cddar (database-constructormodemap dbstruct)))))
+			   (cddar (database-constructormodemap dbstruct)))))
 	   (when (and (|categoryForm?| con)
 		      (= (length (setq d (|domainsOf| (list con) NIL NIL))) 1))
 		 (setq d (caar d))
 		 (when (= (length d) (length (|getConstructorForm| con)))
-		       (format t "   ~a has a default domain of ~a~%" con (car d))
+	       (format t "   ~a has a default domain of ~a~%" con (car d))
 		       (setf (database-defaultdomain dbstruct) (car d)))))))
-					; note: genCategoryTable creates *ancestors-hash*. write-interpdb
-					; does gethash calls into it rather than doing a getdatabase call.
+	; note: genCategoryTable creates *ancestors-hash*. write-interpdb
+	; does gethash calls into it rather than doing a getdatabase call.
   (write-interpdb)
 #+:AKCL  (write-warmdata)
   (create-initializers)
@@ -1301,7 +1318,8 @@ short negative numbers.
 
 (defun compressOpen ()
  (let (lst stamp pos)
-  (declare (special $spadroot))
+  (declare (special $spadroot *compressvector* *compressVectorLength*
+                    *compress-stream* *compress-stream-stamp*))
   (setq *compress-stream*
     (open (DaaseName "compress.daase"  nil) :direction :input))
   (setq stamp (read *compress-stream*))
@@ -1326,6 +1344,7 @@ short negative numbers.
 
 (defun write-compress ()
  (let (compresslist masterpos out)
+  (declare (special *compress-stream* *attributes* *compressVectorLength*))
   (close *compress-stream*)
   (setq out (open "compress.build" :direction :output))
   (princ "                              " out)
@@ -1387,7 +1406,7 @@ Here I'll try to outline the interp database write procedure
 \begin{verbatim}
 (defun write-interpdb ()
  "build interp.daase from hash tables"
- (declare (special $spadroot) (special *ancestors-hash*))
+ (declare (special $spadroot *ancestors-hash*))
  (let (opalistpos modemapspos cmodemappos master masterpos obj *print-pretty*
 	concategory categorypos kind niladic cosig abbrev defaultdomain
 	ancestors ancestorspos out)
@@ -1572,7 +1591,7 @@ Here I'll try to outline the interp database write procedure
 <<*>>=
 (defun write-interpdb ()
  "build interp.daase from hash tables"
- (declare (special $spadroot) (special *ancestors-hash*))
+ (declare (special $spadroot *ancestors-hash*))
  (let (opalistpos modemapspos cmodemappos master masterpos obj *print-pretty*
 	concategory categorypos kind niladic cosig abbrev defaultdomain
 	ancestors ancestorspos out)
@@ -1656,7 +1675,7 @@ time stamp at the top of the file and close the file.
 <<*>>=
 (defun write-browsedb ()
  "make browse.daase from hash tables"
- (declare (special $spadroot))
+ (declare (special $spadroot *sourcefiles*))
  (let (master masterpos src formpos docpos attpos predpos *print-pretty* out)
   (declare (special *print-pretty*))
   (print "building browse.daase")
@@ -1698,7 +1717,7 @@ database format.
 (defun write-categorydb ()
  "make category.daase from scratch. contains the *hasCategory-hash* table"
  (let (out master pos *print-pretty*)
-  (declare (special *print-pretty*))
+  (declare (special *print-pretty* *hasCategory-hash*))
   (print "building category.daase")
   (|genCategoryTable|)
   (setq out (open "category.build" :direction :output))
@@ -1722,6 +1741,7 @@ database format.
   (close out)))
 
 (defun unsqueeze (expr)
+ (declare (special *compressvector*))
   (cond ((atom expr)
 	 (cond ((and (numberp expr) (<= expr 0))
 		(svref *compressVector* (- expr)))
@@ -1731,6 +1751,7 @@ database format.
 	   expr)))
 
 (defun squeeze (expr)
+ (declare (special *compressvector*))
  (let (leaves pos (bound (length *compressvector*)))
   (labels (
    (flat (expr)
@@ -1758,7 +1779,7 @@ database format.
 <<*>>=
 (defun write-operationdb ()
  (let (pos master out)
-  (declare (special leaves))
+  (declare (special leaves *operation-hash*))
   (setq out (open "operation.build" :direction :output))
   (princ "                              " out)
   (finish-output out)
@@ -1790,7 +1811,7 @@ database format.
  *allconstructors*)
 
 (defun |allOperations| ()
- (declare (special *allOperations*))
+ (declare (special *allOperations* *operation-hash*))
  (unless *allOperations*
   (maphash #'(lambda (k v) (declare (ignore v)) (push k *allOperations*))
     *operation-hash*))
@@ -2041,8 +2062,6 @@ database format.
 	  (when (|attribute?| bootname)
 		(set asharpname (|makeLazyOldAxiomDispatchDomain| bootname))))))
 	  
-		 
-
 ;(defun foam::process-export-entry (entry)
 ;  (let* ((asharpname (car entry))
 ;	 (stringname (cadr entry))
@@ -2055,12 +2074,6 @@ database format.
 ;		(cons (cons *this-file* asharpname)
 ;		      (get bootname 'asharp-name)))
 ;	  )))
-
-
-
-
-
-
 
 @
 \eject
