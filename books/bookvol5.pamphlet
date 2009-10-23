@@ -867,6 +867,38 @@ character. Otherwise, it returns nil.
 
 @
 
+\defun{intloopProcessString}{intloopProcessString}
+<<defun intloopProcessString>>=
+(defun |intloopProcessString| (s n)
+ (|setCurrentLine| s)
+ (|intloopProcess| n t
+  (|next| #'|ncloopParse|
+   (|next| #'|lineoftoks| (|incString| s)))))
+
+@
+
+\defun{ncloopParse}{ncloopParse}
+<<defun ncloopParse>>=
+(defun |ncloopParse| (s)
+ (let (cudr lines stream dq t1)
+  (setq t1 (car s))
+  (setq dq (car t1))
+  (setq stream (cadr t1))
+  (setq t1 (|ncloopDQlines| dq stream))
+  (setq lines (car t1))
+  (setq cudr (cadr t1))
+  (cons (list (list lines (|npParse| (|dqToList| dq)))) (cdr s))))
+
+@
+
+\defun{incString}{incString}
+<<defun incString>>=
+(defun |incString| (s)
+ (declare (special |Top|))
+ (|incRenumber| (|incLude| 0 (list s) 0 (list "strings") (list |Top|))))
+
+@
+
 \defunsec{reclaim}{Call the garbage collector}
 Call the garbage collector on various platforms.
 <<defun reclaim>>=
@@ -1096,6 +1128,315 @@ this is what the current code does so I won't change it.
     (|next| (function |insertpile|) 
      (|next| (function |lineoftoks|) 
       |$lines|))))))
+
+@
+
+\defun{intloopProcess}{intloopProcess}
+<<defun intloopProcess>>=
+(defun |intloopProcess| (n interactive s)
+ (let (ptree lines t1)
+ (declare (special |$systemCommandFunction|))
+  (cond
+   ((|StreamNull| s) n)
+   (t
+    (setq t1 (car s))
+    (setq lines (car t1))
+    (setq ptree (cadr t1))
+    (cond
+     ((|pfAbSynOp?| ptree '|command|)
+       (when interactive (|setCurrentLine| (|tokPart| ptree)))
+       (funcall |$systemCommandFunction| (|tokPart| ptree))
+       (|intloopProcess| n interactive (cdr s)))
+     (t
+       (|intloopProcess|
+         (|intloopSpadProcess| n lines ptree interactive)
+         interactive (cdr s))))))))
+
+@
+
+\defun{intloopSpadProcess}{intloopSpadProcess}
+<<defun intloopSpadProcess>>=
+(defun |intloopSpadProcess| (stepNo lines ptree interactive?)
+ (let (|$stepNo| result cc)
+ (declare (special |$stepNo| |$prevCarrier| |$intSpadReader| |flung|
+                   |$intCoerceFailure| |$ncMsgList| |$currentCarrier|))
+  (setq |$stepNo| stepNo)
+  (setq |$currentCarrier| (setq cc (list '|carrier|)))
+  (|ncPutQ| cc '|stepNumber| stepNo)
+  (|ncPutQ| cc '|messages| |$ncMsgList|)
+  (|ncPutQ| cc '|lines| lines)
+  (setq |$ncMsgList| nil)
+  (setq result
+   (|CatchAsCan| |flung|
+    (|Catch| '|SpadCompileItem|
+     (catch |$intCoerceFailure|
+      (catch |$intSpadReader|
+       (|intloopSpadProcess,interp| cc ptree interactive?))))))
+  (|intSetNeedToSignalSessionManager|)
+  (setq |$prevCarrier| |$currentCarrier|)
+  (cond
+    ((eq result '|ncEnd|) stepNo)
+    ((eq result '|ncError|) stepNo)
+    ((eq result '|ncEndItem|) stepNo)
+    (t (+ stepNo 1)))))
+
+@
+
+\defun{intloopSpadProcess,interp}{intloopSpadProcess,interp}
+<<defun intloopSpadProcess,interp>>=
+(defun |intloopSpadProcess,interp| (cc ptree interactive?)
+ (|ncConversationPhase| #'|phParse| (list cc ptree))
+ (|ncConversationPhase| #'|phMacro| (list cc))
+ (|ncConversationPhase| #'|phIntReportMsgs| (list cc interactive?))
+ (|ncConversationPhase| #'|phInterpret| (list cc))
+ (unless (eql (length (|ncEltQ| cc '|messages|)) 0) (|ncError|)))
+
+@
+
+\defun{phParse}{phParse}
+\begin{verbatim}
+phParse: carrier[tokens,...] -> carrier[ptree, tokens,...]
+\end{verbatim}
+<<defun phParse>>=
+(defun |phParse| (carrier ptree)
+ (declare (special |$ncmParse|))
+  (|phBegin| '|Parsing|)
+  (when |$ncmParse| (|intSayKeyedMsg| 'S2CTP003 (list (|%pform| ptree))))
+  (|ncPutQ| carrier '|ptree| ptree)
+  'ok)
+
+@
+
+\defun{phMacro}{phMacro}
+\begin{verbatim}
+carrier[ptree,...] -> carrier[ptree, ptreePremacro,...]
+\end{verbatim}
+<<defun phMacro>>=
+(defun |phMacro| (carrier)
+ (let (ptree)
+ (declare (special |$ncmMacro|))
+  (|phBegin| '|Macroing|)
+  (setq ptree (|ncEltQ| carrier '|ptree|))
+  (|ncPutQ| carrier '|ptreePremacro| ptree)
+  (setq ptree (|macroExpanded| ptree))
+  (when |$ncmMacro| (|intSayKeyedMsg| 'S2CTP007 (list (|%pform| ptree))))
+  (|ncPutQ| carrier '|ptree| ptree)
+  'ok))
+
+@
+
+\defun{phIntReportMsgs}{phIntReportMsgs}
+\begin{verbatim}
+carrier[lines,messages,..]-> carrier[lines,messages,..]
+\end{verbatim}
+<<defun phIntReportMsgs>>=
+(defun |phIntReportMsgs| (carrier interactive?)
+ (let (nerr msgs lines)
+ (declare (special |$erMsgToss|))
+  (cond
+   (|$erMsgToss| 'ok)
+   (t
+     (setq lines (|ncEltQ| carrier '|lines|))
+     (setq msgs (|ncEltQ| carrier '|messages|))
+     (setq nerr (length msgs))
+     (|ncPutQ| carrier '|ok?| (eql nerr 0))
+     (cond
+      ((eql nerr 0) 'ok)
+      (t
+       (|processMsgList| msgs lines)
+       (|intSayKeyedMsg| 'S2CTP010 (list nerr))
+       'ok))))))
+
+@
+
+\defun{phInterpret}{phInterpret}
+<<defun phInterpret>>=
+(defun |phInterpret| (carrier)
+ (let (val ptree)
+  (setq ptree (|ncEltQ| carrier '|ptree|))
+  (setq val (|intInterpretPform| ptree))
+  (|ncPutQ| carrier '|value| val)))
+
+@
+
+\defun{phBegin}{phBegin}
+<<defun phBegin>>=
+(defun |phBegin| (id)
+ (declare (special |$ncmPhase| |$convPhase|))
+ (setq |$convPhase| id)
+ (when |$ncmPhase| (|intSayKeyedMsg| 'S2CTP021 (list id))))
+
+@
+
+\defun{ncConversationPhase}{ncConversationPhase}
+<<defun ncConversationPhase>>=
+(defun |ncConversationPhase| (fn args)
+ (let (|$convPhase| |$ncMsgList| carrier)
+ (declare (special |$convPhase| |$ncMsgList|))
+  (setq carrier (car args))
+  (setq |$ncMsgList| nil)
+  (setq |$convPhase| '|NoPhase|)
+  (unwind-protect
+   (apply fn args)
+   (|ncConversationPhase,wrapup| carrier))))
+
+@
+
+\defun{ncConversationPhase,wrapup}{ncConversationPhase,wrapup}
+<<defun ncConversationPhase,wrapup>>=
+(defun |ncConversationPhase,wrapup| (carrier)
+ (declare (special |$ncMsgList|))
+  ((lambda (Var5 m)
+   (loop
+    (cond
+     ((or (atom Var5) (progn (setq m (car Var5)) nil))
+       (return nil))
+     (t
+      (|ncPutQ| carrier '|messages| (cons m (|ncEltQ| carrier '|messages|)))))
+    (setq Var5 (cdr Var5))))
+   |$ncMsgList| nil))
+
+@
+
+\defun{ncError}{ncError}
+<<defun ncError>>=
+(defun |ncError| ()
+ (throw '|SpadCompileItem| '|ncError|))
+
+@
+
+\defun{intloopEchoParse}{intloopEchoParse}
+<<defun intloopEchoParse>>=
+(defun |intloopEchoParse| (s)
+ (let (cudr lines stream dq t1)
+ (declare (special |$EchoLines| |$lines|))
+  (setq t1 (car s))
+  (setq dq (car t1))
+  (setq stream (cadr t1))
+  (setq t1 (|ncloopDQlines| dq |$lines|))
+  (setq lines (car t1))
+  (setq cudr (cadr t1))
+  (|setCurrentLine| (|mkLineList| lines))
+  (when |$EchoLines| (|ncloopPrintLines| lines))
+  (setq |$lines| cudr)
+  (cons (list (list lines (|npParse| (|dqToList| dq)))) (cdr s))))
+
+@
+
+\defun{ncloopPrintLines}{ncloopPrintLines}
+\begin{verbatim}
+;ncloopPrintLines lines ==
+;        for line in lines repeat WRITE_-LINE CDR line
+;        WRITE_-LINE '" "
+\end{verbatim}
+<<defun ncloopPrintLines>>=
+(defun |ncloopPrintLines| (lines)
+ ((lambda (Var4 line)
+  (loop
+   (cond
+    ((or (atom Var4) (progn (setq line (car Var4)) nil))
+      (return nil))
+    (t (write-line (cdr line))))
+   (setq Var4 (cdr Var4))))
+  lines nil)
+ (write-line " "))
+
+@
+
+\defun{mkLineList}{mkLineList}
+\begin{verbatim}
+;mkLineList lines ==
+;  l := [CDR line for line in lines | nonBlank CDR line]
+;  #l = 1 => CAR l
+;  l
+\end{verbatim}
+<<defun mkLineList>>=
+(defun |mkLineList| (lines)
+ (let (l)
+  (setq l
+   ((lambda (Var2 Var1 line)
+     (loop
+      (cond
+       ((or (atom Var1) (progn (setq line (car Var1)) nil))
+         (return (nreverse Var2)))
+       (t
+        (and (|nonBlank| (cdr line))
+             (setq Var2 (cons (cdr line) Var2)))))
+      (setq Var1 (cdr Var1))))
+    nil lines nil))
+  (cond 
+   ((eql (length l) 1) (car l))
+   (t l))))))
+
+@
+
+\defun{nonBlank}{nonBlank}
+\begin{verbatim}
+;nonBlank str ==
+;  value := false
+;  for i in 0..MAXINDEX str repeat
+;    str.i ^= char " " =>
+;      value := true
+;      return value
+;  value
+\end{verbatim}
+<<defun nonBlank>>=
+(defun |nonBlank| (str)
+ (let (value)
+  ((lambda (Var3 i)
+   (loop
+    (cond
+     ((> i Var3) (return nil))
+     (t
+      (cond
+       ((not (equal (elt str i) (|char| '| |)))
+         (identity (progn (setq value t) (return value)))))))
+    (setq i (+ i 1))))
+   (maxindex str) 0)
+  value))
+
+@
+
+\defun{ncloopDQlines}{ncloopDQlines}
+<<defun ncloopDQlines>>=
+(defun |ncloopDQlines| (dq stream)
+ (let (b a)
+  (|StreamNull| stream)
+  (setq a (|poGlobalLinePosn| (|tokPosn| (cadr dq))))
+  (setq b (|poGlobalLinePosn| (caar stream)))
+  (|streamChop| (+ (- a b) 1) stream)))
+
+@
+
+\defun{streamChop}{streamChop}
+<<defun streamChop>>=
+(DEFUN |streamChop| (|n| |s|)
+  (PROG (|d| |c| |line| |b| |a| |LETTMP#1|)
+    (RETURN
+      (COND
+        ((|StreamNull| |s|) (LIST NIL NIL))
+        ((EQL |n| 0) (LIST NIL |s|))
+        ('T (SETQ |LETTMP#1| (|streamChop| (- |n| 1) (CDR |s|)))
+         (SETQ |a| (CAR |LETTMP#1|)) (SETQ |b| (CADR |LETTMP#1|))
+         (SETQ |line| (CAR |s|))
+         (SETQ |c| (|ncloopPrefix?| ")command" (CDR |line|)))
+         (SETQ |d|
+               (CONS (CAR |line|) (COND (|c| |c|) ('T (CDR |line|)))))
+         (LIST (CONS |d| |a|) |b|))))))
+;(defun |streamChop| (n s)
+; (prog (d c line b a t1)
+;  (return
+;   (cond
+;    ((|StreamNull| s) (list nil nil))
+;    ((eql n 0) (list nil s))
+;    (t
+;     (setq t1 (|streamChop| (- n 1) (cdr s)))
+;     (setq a (car t1))
+;     (setq b (cadr t1))
+;     (setq line (car s))
+;     (setq c (|ncloopPrefix?| ")command" (cdr line)))
+;     (setq d (cons (car line) (cond (c c) (t (cdr line)))))
+;     (list (cons d a) b))))))
 
 @
 
@@ -1756,8 +2097,14 @@ This is a list of commands that can be in an include file
 
 @
 
+<<postvars>>=
+(eval-when (eval load)
+ (setq |$pfMacros| nil))
+
+@
+
 \defun{incClassify}{incClassify}
-\being{verbatim
+\being{verbatim}
 ;incClassify(s) ==
 ;            not incCommand? s => [false,0, '""]
 ;            i := 1; n := #s
@@ -17558,8 +17905,10 @@ $boot
 |$ConstructorCache|
 |$constructors|
 /countlist
+|$convPhase|
 curinstream
 curoutstream
+|$currentCarrier|
 $current-directory
 |$currentFrameNum|
 |$currentLine|
@@ -17580,6 +17929,7 @@ $directory-list
 *eof*
 |$erMsgToss|
 |$existingFiles|
+|flung|
 |$fn|
 |$formulaOutputStream|
 |$fortranOutputStream|
@@ -17595,11 +17945,13 @@ $directory-list
 |$inLispVM|
 |$InitialModemapFrame|)) 
 in-stream
+|$intCoerceFailure|
 |$InteractiveFrame| 
 |$internalHistoryTable|
 |$interpreterFrameName|
 |$interpreterFrameRing|
 |$intRestart|
+|$intSpadReader|
 |$intTopLevel|
 |$IOindex| 
 |$JoinOfCatDatabase|
@@ -17619,6 +17971,8 @@ $library-directory-list
 |$msgAlist|
 |$msgDatabase|
 |$msgDatabaseName|
+|$ncmParse|
+|$ncmPhase|
 |$ncMsgList|
 |$newConlist|
 |$NonNullStream| 
@@ -17634,6 +17988,7 @@ $newspad
 |$OutputForm|
 |$packages|
 /pretty
+|$prevCarrier|
 |$previousBindings|
 |$PrintCompilerMessageIfTrue|
 |$printLoadMsgs| 
@@ -17645,6 +18000,7 @@ $relative-library-directory-list
 |$seen|
 |$SessionManager|
 |$setOptions|
+|$stepNo|
 |$slamFlag|
 /sourcefiles
 |$sourceFiles|
@@ -17672,32 +18028,51 @@ $traceletflag
 
 \section{undefined functions}
 \begin{verbatim}
+|char|
+|Catch|
+|CatchAsCan|
 currenttime
-|%d| -- used as a function in inclmsgSay but never defined.
+|dqToList|
 error
 expand-tabs
 |%fname|
 |incAppend|
 |%id|
 |insertpile|
+|intInterpretPform|
 |intloopEchoParse|
 |intloopProcess|
 |intloopProcessString|
 |intnplisp|
+|intSayKeyedMsg|
+|intSetNeedToSignalSessionManager|
 |lineoftoks|
 |ListMemberQ?|
+|lineoftoks|
 |lnCreate|
 |lnSetGlobalNum|
+|macroExpanded|
 |MakeSymbol|
+maxindex
 |ncBug|
+|ncEltQ|
+|ncPutQ|
 |ncloopEchoParse|
 |ncloopProcess|
+|next|
+|npParse|
 |%origin|
+|pfAbSynOp?|
+|%pform|
+|poGlobalLinePosn|
 |porigin|
+|processMsgList|
 |resetStackLimits|
 |shoeread-line|
 |StreamNull|
 stringimage
+|tokPart|
+|tokPosn|
 \end{verbatim}
 
 \chapter{The Interpreter}
@@ -17858,6 +18233,7 @@ stringimage
 <<defun incLine>>
 <<defun incLine1>>
 <<defun inclmsgCannotRead>>
+<<defun inclmsgConsole>>
 <<defun inclmsgFileCycle>>
 <<defun inclmsgFinSkipped>>
 <<defun inclmsgPrematureEOF>>
@@ -17879,6 +18255,7 @@ stringimage
 <<defun incRgen>>
 <<defun incRgen1>>
 <<defun incStream>>
+<<defun incString>>
 <<defun initHist>>
 <<defun initHistList>>
 <<defun initializeInterpreterFrameRing>>
@@ -17886,10 +18263,15 @@ stringimage
 <<defun init-memory-config>>
 <<defun initroot>>
 <<defun intloop>>
+<<defun intloopEchoParse>>
 <<defun intloopInclude>>
 <<defun intloopInclude0>>
 <<defun intloopPrefix?>>
+<<defun intloopProcess>>
+<<defun intloopProcessString>>
 <<defun intloopReadConsole>>
+<<defun intloopSpadProcess>>
+<<defun intloopSpadProcess,interp>>
 <<defun isDomainOrPackage>>
 <<defun isInterpOnlyMap>>
 <<defun isListOfIdentifiers>>
@@ -17920,19 +18302,27 @@ stringimage
 <<defun messageprint>>
 <<defun messageprint-1>>
 <<defun messageprint-2>>
+<<defun mkLineList>>
 <<defun mkprompt>>
 
+<<defun ncConversationPhase>>
+<<defun ncConversationPhase,wrapup>>
+<<defun ncError>>
 <<defun ncIntLoop>>
 <<defun ncloopCommand>>
+<<defun ncloopDQlines>>
 <<defun ncloopEscaped>>
 <<defun ncloopIncFileName>>
 <<defun ncloopInclude>>
 <<defun ncloopInclude0>>
 <<defun ncloopInclude1>>
+<<defun ncloopParse>>
 <<defun ncloopPrefix?>>
+<<defun ncloopPrintLines>>
 <<defun ncTopLevel>>
 <<defun newHelpSpad2Cmd>>
 <<defun nextInterpreterFrame>>
+<<defun nonBlank>>
 
 <<defun oldHistFileName>>
 <<defun openOutputLibrary>>
@@ -17940,6 +18330,11 @@ stringimage
 <<defun orderBySlotNumber>>
 
 <<defun pcounters>>
+<<defun phBegin>>
+<<defun phMacro>>
+<<defun phParse>>
+<<defun phInterpret>>
+<<defun phIntReportMsgs>>
 <<defun pquit>>
 <<defun pquitSpad2Cmd>>
 <<defun previousInterpreterFrame>>
@@ -18045,6 +18440,7 @@ stringimage
 <<defun spadUntrace>>
 <<defun stackTraceOptionError>>
 <<defun statisticsInitialization>>
+<<defun streamChop>>
 <<defun stupidIsSpadFunction>>
 <<defun subTypes>>
 <<defun summary>>
@@ -18103,6 +18499,7 @@ stringimage
 <<defun xlCannotRead>>
 <<defun xlCmdBug>>
 <<defun xlConActive>>
+<<defun xlConsole>>
 <<defun xlConStill>>
 <<defun xlFileCycle>>
 <<defun xlIfBug>>
