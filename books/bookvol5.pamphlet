@@ -994,13 +994,13 @@ this is what the current code does so I won't change it.
  (case |$inputPromptType|
   (|none| "")
   (|plain| "-> ")
-  (|step|  (strconc "(" (stringimage |$IOindex|) ") -> "))
+  (|step|  (concat "(" (princ-to-string |$IOindex|) ") -> "))
   (|frame|
-   (strconc (stringimage |$interpreterFrameName|) " ("
-            (stringimage |$IOindex|) ") -> "))
-  (t (strconc (stringimage |$interpreterFrameName|) " ["
-              (substring (currenttime) 8 nil) "] [" 
-              (stringimage |$IOindex|) "] -> "))))
+   (concat (princ-to-string |$interpreterFrameName|) " ("
+           (princ-to-string |$IOindex|) ") -> "))
+  (t (concat (princ-to-string |$interpreterFrameName|) " ["
+             (substring (currenttime) 8 nil) "] [" 
+             (princ-to-string |$IOindex|) "] -> "))))
 
 @
 
@@ -1409,10 +1409,10 @@ carrier[lines,messages,..]-> carrier[lines,messages,..]
 @
 
 \defun{streamChop}{streamChop}
-<<defun streamChop>>=
 Note that changing the name ``lyne'' to ``line'' will break the system.
 I do not know why. The symptom shows up when there is a file with a large
 contiguous comment spanning enough lines to overflow the stack.
+<<defun streamChop>>=
 (defun |streamChop| (n s)
  (let (d c lyne b a tmp1)
   (cond
@@ -2281,6 +2281,1202 @@ Note that incRgen recursively wraps this function in a delay list.
     (close s) 
     |StreamNil|)
    (cons a (|incRgen| s)))))
+
+@
+
+\chapter{The Token Scanner}
+
+<<postvars>>=
+(eval-when (eval load)
+(defvar space (qenum "    " 0)))
+
+@
+
+<<postvars>>=
+(eval-when (eval load)
+(defvar escape (qenum "_  " 0)))
+@
+
+<<postvars>>=
+(eval-when (eval load)
+(defvar stringchar (qenum "\"  " 0)))
+@
+
+<<postvars>>=
+(eval-when (eval load)
+(defvar pluscomment (qenum "+   " 0)))
+@
+
+<<postvars>>=
+(eval-when (eval load)
+(defvar minuscomment (qenum "-   " 0)))
+@
+
+<<postvars>>=
+(eval-when (eval load)
+(defvar radixchar (qenum "r   " 0)))
+@
+
+<<postvars>>=
+(eval-when (eval load)
+(defvar dot (qenum ".   " 0)))
+@
+
+<<postvars>>=
+(eval-when (eval load)
+(defvar exponent1 (qenum "E   " 0)))
+@
+
+<<postvars>>=
+(eval-when (eval load)
+(defvar exponent2 (qenum "e   " 0)))
+@
+
+<<postvars>>=
+(eval-when (eval load)
+(defvar closeparen (qenum ")   " 0)))
+@
+
+<<postvars>>=
+(eval-when (eval load)
+(defvar closeangle (qenum ">   " 0)))
+@
+
+<<postvars>>=
+(eval-when (eval load)
+(defvar question (qenum "?   " 0)))
+@
+
+<<postvars>>=
+(eval-when (eval load)
+(defvar |scanKeyWords|
+ (list
+  (list "add" 'add)
+  (list "and" 'and)
+  (list "break" 'break)
+  (list "by" 'by)
+  (list "case" 'case)
+  (list "default" 'default)
+  (list "define" 'defn)
+  (list "do" 'do)
+  (list "else" 'else)
+  (list "exit" 'exit)
+  (list "export" 'export)
+  (list "for" 'for)
+  (list "free" 'free)
+  (list "from" 'from)
+  (list "has" 'has)
+  (list "if" 'if)
+  (list "import" 'import)
+  (list "in" 'in)
+  (list "inline" 'inline)
+  (list "is" 'is)
+  (list "isnt" 'isnt)
+  (list "iterate" 'iterate)
+  (list "local" '|local|)
+  (list "macro" 'macro)
+  (list "mod" 'mod)
+  (list "or" 'or)
+  (list "pretend" 'pretend)
+  (list "quo" 'quo)
+  (list "rem" 'rem)
+  (list "repeat" 'repeat)
+  (list "return" 'return)
+  (list "rule" 'rule)
+  (list "then" 'then)
+  (list "where" 'where)
+  (list "while" 'while)
+  (list "with" 'with)
+  (list "|" 'bar)
+  (list "." 'dot)
+  (list "::" 'coerce)
+  (list ":" 'colon)
+  (list ":-" 'colondash)
+  (list "@" 'at)
+  (list "@@" 'atat)
+  (list "," 'comma)
+  (list ";" 'semicolon)
+  (list "**" 'power)
+  (list "*" 'times)
+  (list "+" 'plus)
+  (list "-" 'minus)
+  (list "<" 'lt)
+  (list ">" 'gt)
+  (list "<=" 'le)
+  (list ">=" 'ge)
+  (list "=" 'equal)
+  (list "~=" 'notequal)
+  (list "~" '~)
+  (list "^" 'carat)
+  (list ".." 'seg)
+  (list "#" '|#|)
+  (list "&" 'ampersand)
+  (list "$" '$)
+  (list "/" 'slash)
+  (list "\\" 'backslash)
+  (list "//" 'slashslash)
+  (list "\\\\" 'backslashbackslash)
+  (list "/\\" 'slashbackslash)
+  (list "\\/" 'backslashslash)
+  (list "=>" 'exit)
+  (list ":=" 'becomes)
+  (list "==" 'def)
+  (list "==>" 'mdef)
+  (list "->" 'arrow)
+  (list "<-" 'larrow)
+  (list "+->" 'gives)
+  (list "(" '|(|)
+  (list ")" '|)|)
+  (list "(|" '|(\||)
+  (list "|)" '|\|)|)
+  (list "[" '[)
+  (list "]" '])
+  (list "[_]" '[])
+  (list "{" '{)
+  (list "}" '})
+  (list "{_}" '{})
+  (list "[|" '|[\||)
+  (list "|]" '|\|]|)
+  (list "[|_|]" '|[\|\|]|)
+  (list "{|" '|{\||)
+  (list "|}" '|\|}|)
+  (list "{|_|}" '|{\|\|}|)
+  (list "<<" 'oangle)
+  (list ">>" 'cangle)
+  (list "'" '|'|)
+  (list "`" 'backquote))))
+
+@
+
+<<postvars>>=
+(eval-when (eval load)
+(prog ()
+  (return
+    ((lambda (var value)
+       (loop
+         (cond
+           ((or (atom var) (progn (setq value (car var)) nil))
+            (return nil))
+           (t
+            (setf (get (car value) 'infgeneric) (cadr value))))
+         (setq var (cdr var))))
+     (list
+      (list 'equal '=)
+      (list 'times '*)
+      (list 'has '|has|)
+      (list 'case '|case|)
+      (list 'rem '|rem|)
+      (list 'mod '|mod|)
+      (list 'quo '|quo|)
+      (list 'slash '/)
+      (list 'backslash '|\\|)
+      (list 'slashslash '//)
+      (list 'backslashbackslash '|\\\\|)
+      (list 'slashbackslash '|/\\|)
+      (list 'backslashslash '|\\/|)
+      (list 'power '**)
+      (list 'carat '^)
+      (list 'plus '+)
+      (list 'minus '-)
+      (list 'lt '<)
+      (list 'gt '>)
+      (list 'oangle '<<)
+      (list 'cangle '>>)
+      (list 'le '<=)
+      (list 'ge '>=)
+      (list 'notequal '~=)
+      (list 'by '|by|)
+      (list 'arrow '->)
+      (list 'larrow '<-)
+      (list 'bar '|\||)
+      (list 'seg '|..|))
+     nil))))
+@
+
+\defun{lineoftoks}{lineoftoks}
+lineoftoks  bites off a token-dq from a line-stream
+returning the token-dq and the rest of the line-stream
+\begin{verbatim}
+;lineoftoks(s)==
+;   $f: local:=nil
+;   $r:local :=nil
+;   $ln:local :=nil
+;   $linepos:local:=nil
+;   $n:local:=nil
+;   $sz:local := nil
+;   $floatok:local:=true
+;   if not nextline s
+;   then CONS(nil,nil)
+;   else
+;     if null scanIgnoreLine($ln,$n) -- line of spaces or starts ) or >
+;     then cons(nil,$r)
+;     else
+;      toks:=[]
+;      a:= incPrefix?('"command",1,$ln)
+;      a =>
+;                 $ln:=SUBSTRING($ln,8,nil)
+;                 b:= dqUnit constoken($ln,$linepos,["command",$ln],0)
+;                 cons([[b,s]],$r)
+;
+;      while $n<$sz repeat toks:=dqAppend(toks,scanToken())
+;      if null toks
+;      then cons([],$r)
+;      else cons([[toks,s]],$r)
+\end{verbatim}
+<<defun lineoftoks>>=
+(defun |lineoftoks| (s)
+ (let (|$floatok| |$sz| |$n| |$linepos| |$ln| |$r| |$f| |b| |a| |toks|)
+ (declare (special |$floatok| |$f| |$sz| |$linepos| |$r| |$n| |$ln|))
+  (setq |$f| nil)
+  (setq |$r| nil)
+  (setq |$ln| nil)
+  (setq |$linepos| nil)
+  (setq |$n| nil)
+  (setq |$sz| nil)
+  (setq |$floatok| t)
+  (cond
+   ((null (|nextline| s)) (cons nil nil))
+   ((null (|scanIgnoreLine| |$ln| |$n|)) (cons nil |$r|))
+   (t
+    (setq |toks| nil)
+    (setq |a| (|incPrefix?| "command" 1 |$ln|))
+    (cond
+     (|a|
+      (setq |$ln| (substring |$ln| 8 nil))
+      (setq |b|
+       (|dqUnit| (|constoken| |$ln| |$linepos| (list '|command| |$ln|) 0)))
+      (cons (list (list |b| s)) |$r|))
+     (t
+      ((lambda ()
+        (loop
+         (cond
+          ((not (< |$n| |$sz|)) (return nil))
+          (t (setq |toks| (|dqAppend| |toks| (|scanToken|))))))))
+      (cond
+       ((null |toks|) (cons nil |$r|))
+       (t (cons (list (list |toks| s)) |$r|)))))))))
+
+@
+
+\defun{nextline}{nextline}
+<<defun nextline>>=
+(defun |nextline| (s)
+ (declare (special |$sz| |$n| |$linepos| |$ln| |$r| |$f|))
+ (cond
+  ((|npNull| s) nil)
+  (t
+   (setq |$f| (car s))
+   (setq |$r| (cdr s))
+   (setq |$ln| (cdr |$f|))
+   (setq |$linepos| (caar |$f|))
+   (setq |$n| (strposl " " |$ln| 0 t)) ; spaces at beginning
+   (setq |$sz| (length |$ln|))
+   t)))
+
+@
+
+\defun{scanIgnoreLine}{scanIgnoreLine}
+<<defun scanIgnoreLine>>=
+(defun |scanIgnoreLine| (ln n)
+ (let (fst)
+  (cond
+   ((null n) n)
+   (t
+    (setq fst (qenum ln 0))
+    (cond
+     ((eq fst closeparen)
+      (cond
+        ((|incPrefix?| "command" 1 ln) t)
+        (t nil)))
+     (t n))))))
+
+@
+
+\defun{constoken}{constoken}
+<<defun constoken>>=
+(defun |constoken| (ln lp b n)
+ (let (a)
+  (setq a (cons (elt b 0) (elt b 1)))
+  (|ncPutQ| a '|posn| (cons lp n))
+  a))
+
+@
+
+\defun{scanToken}{scanToken}
+<<defun scanToken>>=
+(defun |scanToken| ()
+ (let (b ch n linepos c ln)
+ (declare (special |$linepos| |$n| |$ln|))
+  (setq ln |$ln|)
+  (setq c (qenum |$ln| |$n|))
+  (setq linepos |$linepos|)
+  (setq n |$n|)
+  (setq ch (elt |$ln| |$n|))
+  (setq b
+   (cond
+    ((|startsComment?|) (|scanComment|) nil)
+    ((|startsNegComment?|) (|scanNegComment|) nil)
+    ((equal c question)
+      (setq |$n| (+ |$n| 1))
+      (|lfid| "?"))
+    ((|punctuation?| c) (|scanPunct|))
+    ((|startsId?| ch) (|scanWord| nil))
+    ((equal c space) (|scanSpace|) nil)
+    ((equal c stringchar) (|scanString|))
+    ((|digit?| ch) (|scanNumber|))
+    ((equal c escape) (|scanEscape|))
+    (t (|scanError|))))
+  (cond
+    ((null b) nil)
+    (t
+     (|dqUnit|
+      (|constoken| ln linepos b (+ n (|lnExtraBlanks| linepos))))))))
+
+@
+
+\defun{lfid}{lfid}
+To pair badge and badgee
+<<defun lfid>>=
+(defun |lfid| (|x|)
+ (list '|id| (intern |x| "BOOT")))
+
+@
+
+\defun{startsComment?}{startsComment?}
+<<defun startsComment?>>=
+(defun |startsComment?| ()
+ (let (www)
+ (declare (special |$ln| |$sz| |$n| pluscomment))
+  (cond
+   ((< |$n| |$sz|)
+    (cond
+     ((equal (qenum |$ln| |$n|) pluscomment)
+       (setq www (+ |$n| 1))
+       (cond
+        ((not (< www |$sz|)) nil)
+        (t (equal (qenum |$ln| www) pluscomment))))
+     (t nil)))
+   (t nil))))
+
+@
+
+\defun{scanComment}{scanComment}
+<<defun scanComment>>=
+(defun |scanComment| ()
+ (let (n)
+ (declare (special |$ln| |$sz| |$n|))
+  (setq n |$n|)
+  (setq |$n| |$sz|)
+  (|lfcomment| (substring |$ln| n nil))))
+
+@
+
+\defun{lfcomment}{lfcomment}
+<<defun lfcomment>>=
+(defun |lfcomment| (x)
+ (list '|comment| x))
+
+@
+
+\defun{startsNegComment?}{startsNegComment?}
+<<defun startsNegComment?>>=
+(defun |startsNegComment?| ()
+ (let (www)
+ (declare (special |$ln| |$sz| |$n|))
+  (cond
+   ((< |$n| |$sz|)
+    (cond
+     ((equal (qenum |$ln| |$n|) minuscomment)
+       (setq www (+ |$n| 1))
+       (cond
+        ((not (< www |$sz|)) nil)
+        (t (equal (qenum |$ln| www) minuscomment))))
+     (t nil)))
+   (t nil))))
+
+@
+
+\defun{scanNegComment}{scanNegComment}
+<<defun scanNegComment>>=
+(defun |scanNegComment| ()
+ (let (n)
+ (declare (special |$ln| |$sz| |$n|))
+  (setq n |$n|)
+  (setq |$n| |$sz|)
+  (|lfnegcomment| (substring |$ln| n nil))))
+
+@
+
+\defun{lfnegcomment}{lfnegcomment}
+<<defun lfnegcomment>>=
+(defun |lfnegcomment| (x)
+ (list '|negcomment| x))
+
+@
+
+\defun{punctuation?}{punctuation?}
+<<defun punctuation?>>=
+(defun |punctuation?| (c)
+ (eql (elt |scanPun| c) 1))
+@
+
+\defun{scanPunct}{scanPunct}
+<<defun scanPunct>>=
+(defun |scanPunct| ()
+ (let (a sss)
+ (declare (special |$n| |$ln|))
+  (setq sss (|subMatch| |$ln| |$n|))
+  (setq a (length sss))
+  (cond
+   ((eql a 0) (|scanError|))
+   (t (setq |$n| (+ |$n| a)) (|scanKeyTr| sss)))))
+
+@
+
+\defun{subMatch}{subMatch}
+<<defun subMatch>>=
+(defun |subMatch| (a b)
+ (|substringMatch| a |scanDict| b))
+
+@
+
+\defun{substringMatch}{substringMatch}
+\begin{verbatim}
+;substringMatch (l,d,i)==
+;       h:= QENUM(l, i)
+;       u:=ELT(d,h)
+;       ll:=SIZE l
+;       done:=false
+;       s1:='""
+;       for j in 0.. SIZE u - 1 while not done repeat
+;          s:=ELT(u,j)
+;          ls:=SIZE s
+;          done:=if ls+i > ll
+;                then false
+;                else
+;                 eql:= true
+;                 for k in 1..ls-1 while eql repeat
+;                    eql:= EQL(QENUM(s,k),QENUM(l,k+i))
+;                 if eql
+;                 then
+;                   s1:=s
+;                   true
+;                 else false
+;       s1
+\end{verbatim}
+<<defun substringMatch>>=
+(defun |substringMatch| (l dict i)
+ (let (equl ls s s1 done ll u h)
+  (setq h (qenum l i))
+  (setq u (elt dict h))
+  (setq ll (size l))
+  (setq s1 "")
+  ((lambda (Var4 j)
+    (loop
+     (cond
+      ((or (> j Var4) done) (return nil))
+      (t
+       (setq s (elt u j))
+       (setq ls (size s))
+       (setq done
+        (cond
+         ((< ll (+ ls i)) nil)
+         (t
+          (setq equl t)
+          ((lambda (Var5 k)
+           (loop
+            (cond
+             ((or (> k Var5) (not equl)) (return nil))
+             (t
+              (setq equl (eql (qenum s k) (qenum l (+ k i))))))
+              (setq k (+ k 1))))
+           (- ls 1) 1)
+          (cond (equl (setq s1 s) t) (t nil)))))))
+     (setq j (+ j 1))))
+   (- (size u) 1) 0)
+  s1))
+
+@
+
+\defun{scanKeyTr}{scanKeyTr}
+<<defun scanKeyTr>>=
+(defun |scanKeyTr| (w)
+ (declare (special |$floatok|))
+ (cond
+  ((eq (|keyword| w) 'dot)
+    (cond
+     (|$floatok| (|scanPossFloat| w))
+     (t (|lfkey| w))))
+  (t (setq |$floatok| (null (|scanCloser?| w))) (|lfkey| w))))
+
+@
+
+\defun{keyword}{keyword}
+<<defun keyword>>=
+(defun |keyword| (st)
+ (hget |scanKeyTable| st))
+
+@
+
+\defun{keyword?}{keyword?}
+<<defun keyword?>>=
+(defun |keyword?| (st)
+ (null (null (hget |scanKeyTable| st))))
+
+@
+
+\defun{scanPossFloat}{scanPossFloat}
+<<defun scanPossFloat>>=
+(defun |scanPossFloat| (w)
+ (declare (special |$ln| |$sz| |$n|))
+ (cond
+  ((or (not (< |$n| |$sz|)) (null (|digit?| (elt |$ln| |$n|))))
+    (|lfkey| w))
+  (t
+    (setq w (|spleI| #'|digit?|)) (|scanExponent| "0" w))))
+
+@
+
+\defun{digit?}{digit?}
+<<defun digit?>>=
+(defun |digit?| (x)
+ (digitp x))
+
+@
+
+\defun{lfkey}{lfkey}
+<<defun lfkey>>=
+(defun |lfkey| (x)
+ (list '|key| (|keyword| x)))
+
+@
+
+\defun{spleI}{spleI}
+<<defun spleI>>=
+(defun |spleI| (dig)
+ (|spleI1| dig nil))
+
+@
+
+\defun{spleI1}{spleI1}
+<<defun spleI1>>=
+(defun |spleI1| (dig zro)
+ (let (bb a str l n)
+ (declare (special |$ln| |$sz| |$n|))
+  (setq n |$n|)
+  (setq l |$sz|)
+  ; while $n<l and FUNCALL(dig,($ln.$n)) repeat $n:=$n+1
+  ((lambda ()
+    (loop
+     (cond
+      ((not (and (< |$n| l) (funcall dig (elt |$ln| |$n|))))
+       (return nil))
+      (t
+       (setq |$n| (+ |$n| 1)))))))
+  (cond
+   ((or (equal |$n| l) (not (equal (qenum |$ln| |$n|) escape)))
+    (cond
+      ((and (equal n |$n|) zro) "0")
+      (t (substring |$ln| n (- |$n| n)))))
+   (t                            ; escaped
+    (setq str (substring |$ln| n (- |$n| n)))
+    (setq |$n| (+ |$n| 1))
+    (setq a (|scanEsc|))
+    (setq bb (|spleI1| dig zro)) ; escape, any number of spaces are ignored
+    (concat str bb)))))
+
+@
+
+\defun{scanEsc}{scanEsc}
+\begin{verbatim}
+;scanEsc()==
+;     if $n>=$sz
+;     then if nextline($r)
+;          then
+;             while null $n repeat nextline($r)
+;             scanEsc()
+;             false
+;          else false
+;     else
+;           n1:=STRPOSL('" ",$ln,$n,true)
+;           if null n1
+;           then if nextline($r)
+;                then
+;                  while null $n repeat nextline($r)
+;                  scanEsc()
+;                  false
+;                else false
+;           else
+;                if $n=n1
+;                then true
+;                else if QENUM($ln,n1)=ESCAPE
+;                     then
+;                       $n:=n1+1
+;                       scanEsc()
+;                       false
+;                     else
+;                       $n:=n1
+;                       startsNegComment?() or startsComment?() =>
+;                                 nextline($r)
+;                                 scanEsc()
+;                                 false
+;                       false
+\end{verbatim}
+<<defun scanEsc>>=
+(defun |scanEsc| ()
+ (let (n1)
+ (declare (special |$ln| |$r| |$sz| |$n|))
+  (cond
+   ((not (< |$n| |$sz|))
+    (cond
+     ((|nextline| |$r|)
+      ((lambda ()
+       (loop
+        (cond 
+         (|$n| (return nil))
+         (t (|nextline| |$r|))))))
+      (|scanEsc|)
+      nil)
+     (t nil)))
+   (t 
+    (setq n1 (strposl " " |$ln| |$n| t))
+    (cond
+     ((null n1)
+      (cond
+       ((|nextline| |$r|)
+        ((lambda ()
+          (loop
+           (cond 
+            (|$n| (return nil))
+            (t (|nextline| |$r|))))))
+         (|scanEsc|)
+         nil)
+        (t nil)))
+     ((equal |$n| n1) t)
+     ((equal (qenum |$ln| n1) escape)
+       (setq |$n| (+ n1 1))
+       (|scanEsc|)
+       nil)
+     (t (setq |$n| n1)
+      (cond
+       ((or (|startsNegComment?|) (|startsComment?|))
+        (progn
+         (|nextline| |$r|)
+         (|scanEsc|)
+         nil))
+       (t nil))))))))
+
+
+
+@
+
+<<postvars>>=
+(eval-when (eval load)
+  (setq |scanCloser| (list '|)| '} '] '|\|)| '|\|}| '|\|]|)))
+@
+
+\defun{scanCloser?}{scanCloser?}
+<<defun scanCloser?>>=
+(defun |scanCloser?| (w)
+ (memq (|keyword| w) |scanCloser|))
+
+@
+
+\defun{scanWord}{scanWord}
+<<defun scanWord>>=
+(defun |scanWord| (esp)
+ (let (w aaa)
+ (declare (special |$floatok|))
+  (setq aaa (|scanW| nil))
+  (setq w (elt aaa 1))
+  (setq |$floatok| nil)
+  (cond
+   ((or esp (elt aaa 0))
+    (|lfid| w))
+   ((|keyword?| w)
+    (setq |$floatok| t)
+    (|lfkey| w))
+   (t
+    (|lfid| w)))))
+
+@
+
+\defun{scanExponent}{scanExponent}
+<<defun scanExponent>>=
+(defun |scanExponent| (a w)
+ (let (c1 e c n)
+ (declare (special |$ln| |$sz| |$n|))
+  (cond
+   ((not (< |$n| |$sz|)) (|lffloat| a w "0"))
+   (t
+    (setq n |$n|)
+    (setq c (qenum |$ln| |$n|))
+    (cond
+     ((or (equal c exponent1) (equal c exponent2))
+      (setq |$n| (+ |$n| 1))
+      (cond
+       ((not (< |$n| |$sz|))
+        (setq |$n| n)
+        (|lffloat| a w "0"))
+       ((|digit?| (elt |$ln| |$n|))
+        (setq e (|spleI| #'|digit?|))
+        (|lffloat| a w e))
+       (t
+        (setq c1 (qenum |$ln| |$n|))
+        (cond
+         ((or (equal c1 pluscomment) (equal c1 minuscomment))
+           (setq |$n| (+ |$n| 1))
+           (cond
+            ((not (< |$n| |$sz|))
+             (setq |$n| n)
+             (|lffloat| a w "0"))
+            ((|digit?| (elt |$ln| |$n|))
+             (setq e (|spleI| #'|digit?|))
+             (|lffloat| a w
+              (cond
+               ((equal c1 minuscomment)
+                (concat "-" e))
+               (t e))))
+            (t
+             (setq |$n| n)
+             (|lffloat| a w "0"))))))))
+     (t (|lffloat| a w "0"))))))))
+
+@
+
+\defun{lffloat}{lffloat}
+<<defun lffloat>>=
+(defun |lffloat| (a w e)
+ (list '|float| (concat a "." w "e" e)))
+
+@
+
+\defun{scanW}{scanW}
+<<defun scanW>>=
+(defun |scanW| (b)
+ (let (bb a str endid l n1)
+ (declare (special |$ln| |$sz| |$n|))
+  (setq n1 |$n|)
+  (setq |$n| (+ |$n| 1))
+  (setq l |$sz|)
+  (setq endid (|posend| |$ln| |$n|))
+  (cond
+   ((or (equal endid l) (not (equal (qenum |$ln| endid) escape)))
+    (setq |$n| endid)
+    (list b (substring |$ln| n1 (- endid n1))))
+   (t
+    (setq str (substring |$ln| n1 (- endid n1)))
+    (setq |$n| (+ endid 1))
+    (setq a (|scanEsc|))
+    (setq bb
+     (cond
+      (a (|scanW| t))
+      ((not (< |$n| |$sz|)) (list b ""))
+      ((|idChar?| (elt |$ln| |$n|)) (|scanW| b))
+      (t (list b ""))))
+    (list (or (elt bb 0) b) (concat str (elt bb 1)))))))
+
+@
+
+\defun{posend}{posend}
+\begin{verbatim}
+;posend(line,n)==
+;     while n<#line and idChar? line.n repeat n:=n+1
+;     n
+\end{verbatim}
+NOTE: do not replace ``lyne'' with ``line''
+<<defun posend>>=
+(defun |posend| (lyne n)
+ ((lambda ()
+  (loop
+   (cond
+    ((not (and (< n (length lyne)) (|idChar?| (elt lyne n))))
+     (return nil))
+    (t (setq n (+ n 1)))))))
+ n)
+
+@
+
+\defun{scanSpace}{scanSpace}
+<<defun scanSpace>>=
+(defun |scanSpace| ()
+ (let (n)
+ (declare (special |$floatok| |$ln| |$n|))
+  (setq n |$n|)
+  (setq |$n| (strposl " " |$ln| |$n| t))
+  (when (null |$n|) (setq |$n| (length |$ln|)))
+  (setq |$floatok| t)
+  (|lfspaces| (- |$n| n))))
+
+@
+
+\defun{lfspaces}{lfspaces}
+<<defun lfspaces>>=
+(defun |lfspaces| (x)
+ (list '|spaces| x))
+
+@
+
+\defun{scanString}{scanString}
+<<defun scanString>>=
+(defun |scanString| ()
+ (declare (special |$floatok| |$n|))
+  (setq |$n| (+ |$n| 1))
+  (setq |$floatok| nil)
+  (|lfstring| (|scanS|)))
+
+@
+
+\defun{lfstring}{lfstring}
+<<defun lfstring>>=
+(defun |lfstring| (x)
+ (if (eql (length x) 1)
+  (list '|char| x)
+  (list '|string| x)))
+
+@
+
+\defun{scanS}{scanS}
+<<defun scanS>>=
+(defun |scanS| ()
+ (let (b a str mn escsym strsym n)
+ (declare (special |$ln| |$linepos| |$sz| |$n|))
+ (cond
+  ((not (< |$n| |$sz|))
+   (|ncSoftError|
+    (cons |$linepos| (+ (|lnExtraBlanks| |$linepos|) |$n|)) 'S2CN0001 nil) "")
+  (t
+   (setq n |$n|)
+   (setq strsym (or (strpos "\"" |$ln| |$n| nil) |$sz|))
+   (setq escsym (or (strpos "_" |$ln| |$n| nil) |$sz|))
+   (setq mn (min strsym escsym))
+   (cond
+    ((equal mn |$sz|)
+     (setq |$n| |$sz|)
+     (|ncSoftError|
+      (cons |$linepos| (+ (|lnExtraBlanks| |$linepos|) |$n|)) 'S2CN0001 nil)
+       (substring |$ln| n nil))
+    ((equal mn strsym)
+     (setq |$n| (+ mn 1))
+     (substring |$ln| n (- mn n)))
+    (t 
+     (setq str (substring |$ln| n (- mn n)))
+     (setq |$n| (+ mn 1))
+     (setq a (|scanEsc|))
+     (setq b
+      (cond
+       (a 
+        (setq str (concat str (|scanTransform| (elt |$ln| |$n|))))
+        (setq |$n| (+ |$n| 1)) (|scanS|))
+       (t (|scanS|))))
+     (concat str b)))))))
+
+@
+
+\defun{scanTransform}{scanTransform}
+<<defun scanTransform>>=
+(defun |scanTransform| (x) x)
+
+@
+
+\defun{scanNumber}{scanNumber}
+<<defun scanNumber>>=
+(defun |scanNumber| ()
+ (let (v w n a)
+ (declare (special |$floatok| |$ln| |$sz| |$n|))
+  (setq a (|spleI| #'|digit?|))
+  (cond
+   ((not (< |$n| |$sz|))
+    (|lfinteger| a))
+   ((not (equal (qenum |$ln| |$n|) radixchar))
+    (cond
+     ((and |$floatok| (equal (qenum |$ln| |$n|) dot))
+      (setq n |$n|)
+      (setq |$n| (+ |$n| 1))
+      (cond
+       ((and (< |$n| |$sz|) (equal (qenum |$ln| |$n|) dot))
+        (setq |$n| n)
+        (|lfinteger| a))
+       (t
+        (setq w (|spleI1| #'|digit?| t))
+        (|scanExponent| a w))))
+     (t (|lfinteger| a))))
+   (t
+    (setq |$n| (+ |$n| 1))
+    (setq w (|spleI1| #'|rdigit?| t))
+    (|scanCheckRadix| (parse-integer a) w)
+    (cond
+     ((not (< |$n| |$sz|))
+      (|lfrinteger| a w))
+      ((equal (qenum |$ln| |$n|) dot)
+       (setq n |$n|)
+       (setq |$n| (+ |$n| 1))
+       (cond
+        ((and (< |$n| |$sz|) (equal (qenum |$ln| |$n|) dot))
+         (setq |$n| n)
+         (|lfrinteger| a w))
+        (t 
+         (setq v (|spleI1| #'|rdigit?| t))
+         (|scanCheckRadix| (parse-integer a) v)
+         (|scanExponent| (concat a "r" w) v))))
+      (t (|lfrinteger| a w)))))))
+
+@
+
+\defun{rdigit?}{rdigit?}
+<<defun rdigit?>>=
+(defun |rdigit?| (x)
+ (strpos x "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" 0 nil))
+
+@
+
+\defun{lfinteger}{lfinteger}
+<<defun lfinteger>>=
+(defun |lfinteger| (x)
+ (list '|integer| x))
+
+@
+
+\defun{lfrinteger}{lfrinteger}
+<<defun lfrinteger>>=
+(defun |lfrinteger| (r x)
+ (list '|integer| (concat r (concat "r" x))))
+
+@
+
+\defun{scanCheckRadix}{scanCheckRadix}
+\begin{verbatim}
+;scanCheckRadix(r,w)==
+;       ns:=#w
+;       done:=false
+;       for i in 0..ns-1  repeat
+;         a:=rdigit? w.i
+;         if null a or a>=r
+;         then  ncSoftError(cons($linepos,lnExtraBlanks $linepos+$n-ns+i),
+;                    "S2CN0002", [w.i])
+\end{verbatim}
+<<defun scanCheckRadix>>=
+(defun |scanCheckRadix| (r w)
+ (let (a done ns)
+ (declare (special |$n| |$linepos|))
+  (setq ns (length w))
+  ((lambda (Var1 i)
+   (loop
+    (cond
+     ((> i Var1) (return nil))
+     (t
+      (setq a (|rdigit?| (elt w i)))
+      (cond
+       ((or (null a) (not (< a r)))
+        (|ncSoftError|
+         (cons |$linepos| (+ (- (+ (|lnExtraBlanks| |$linepos|) |$n|) ns) i))
+          'S2CN0002 (list (elt w i)))))))
+    (setq i (+ i 1))))
+   (- ns 1) 0)))
+
+@
+
+\defun{scanEscape}{scanEscape}
+<<defun scanEscape>>=
+(defun |scanEscape| ()
+ (declare (special |$n|))
+  (setq |$n| (+ |$n| 1))
+  (when (|scanEsc|) (|scanWord| t)))
+
+@
+
+\defun{scanError}{scanError}
+<<defun scanError>>=
+(defun |scanError| ()
+ (let (n)
+ (declare (special |$ln| |$linepos| |$n|))
+  (setq n |$n|)
+  (setq |$n| (+ |$n| 1))
+  (|ncSoftError|
+   (cons |$linepos| (+ (|lnExtraBlanks| |$linepos|) |$n|))
+    'S2CN0003 (list (elt |$ln| n)))
+  (|lferror| (elt |$ln| n))))
+
+@
+
+\defun{lferror}{lferror}
+<<defun lferror>>=
+(defun |lferror| (x)
+ (list '|error| x))
+
+@
+
+<<postvars>>=
+(eval-when (eval load)
+ (defvar |scanKeyTable| (|scanKeyTableCons|)))
+@
+
+\defun{scanKeyTableCons}{scanKeyTableCons}
+This function is used to build the scanKeyTable
+\begin{verbatim}
+;scanKeyTableCons()==
+;   KeyTable:=MAKE_-HASHTABLE("CVEC",true)
+;   for st in scanKeyWords repeat
+;      HPUT(KeyTable,CAR st,CADR st)
+;   KeyTable
+\end{verbatim}
+<<defun scanKeyTableCons>>=
+(defun |scanKeyTableCons| ()
+ (let (KeyTable)
+  (setq KeyTable (make-hash-table :test #'equal))
+  ((lambda (Var6 st)
+   (loop
+    (cond
+     ((or (atom Var6) (progn (setq st (car Var6)) nil))
+      (return nil))
+     (t
+      (hput KeyTable (car st) (cadr st))))
+    (setq Var6 (cdr Var6))))
+   |scanKeyWords| nil)
+  KeyTable))
+
+@
+
+<<postvars>>=
+(eval-when (eval load)
+ (defvar |scanDict| (|scanDictCons|)))
+@
+
+\defun{scanDictCons}{scanDictCons}
+\begin{verbatim}
+;scanDictCons()==
+;      l:= HKEYS scanKeyTable
+;      d :=
+;          a:=MAKE_-VEC(256)
+;          b:=MAKE_-VEC(1)
+;          VEC_-SETELT(b,0,MAKE_-CVEC 0)
+;          for i in 0..255 repeat VEC_-SETELT(a,i,b)
+;          a
+;      for s in l repeat scanInsert(s,d)
+;      d
+\end{verbatim}
+<<defun scanDictCons>>=
+(defun |scanDictCons| ()
+ (let (d b a l)
+  (setq l (hkeys |scanKeyTable|))
+  (setq d
+   (progn
+    (setq a (make-array 256))
+    (setq b (make-array 1))
+    (setf (svref b 0)
+      (make-array 0 :fill-pointer 0 :element-type 'string-char))
+    ((lambda (i)
+     (loop
+      (cond
+       ((> i 255) (return nil))
+       (t (setf (svref a i) b)))
+      (setq i (+ i 1))))
+     0)
+    a))
+  ((lambda (Var7 s)
+   (loop
+    (cond
+     ((or (atom Var7) (progn (setq s (car Var7)) nil))
+      (return nil))
+     (t (|scanInsert| s d)))
+    (setq Var7 (cdr Var7))))
+   l nil)
+  d))
+
+@
+
+\defun{scanInsert}{scanInsert}
+\begin{verbatim}
+;scanInsert(s,d) ==
+;      l := #s
+;      h := QENUM(s,0)
+;      u := ELT(d,h)
+;      n := #u
+;      k:=0
+;      while l <= #(ELT(u,k)) repeat
+;          k:=k+1
+;      v := MAKE_-VEC(n+1)
+;      for i in 0..k-1 repeat VEC_-SETELT(v,i,ELT(u,i))
+;      VEC_-SETELT(v,k,s)
+;      for i in k..n-1 repeat VEC_-SETELT(v,i+1,ELT(u,i))
+;      VEC_-SETELT(d,h,v)
+;      s
+\end{verbatim}
+<<defun scanInsert>>=
+(defun |scanInsert| (s d)
+ (let (v k n u h l)
+  (setq l (length s))
+  (setq h (qenum s 0))
+  (setq u (elt d h))
+  (setq n (length u))
+  (setq k 0)
+  ((lambda ()
+   (loop
+    (cond
+     ((< (length (elt u k)) l) (return nil))
+     (t (setq k (+ k 1)))))))
+  (setq v (make-array (+ n 1)))
+  ((lambda (Var2 i)
+   (loop
+    (cond
+     ((> i Var2) (return nil))
+     (t (setf (svref v i) (elt u i))))
+    (setq i (+ i 1))))
+   (- k 1) 0)
+  (setf (svref v k) s)
+  ((lambda (Var3 i)
+   (loop
+    (cond
+     ((> i Var3) (return nil))
+     (t (setf (svref v (+ i 1)) (elt u i))))
+    (setq i (+ i 1))))
+   (- n 1) k)
+  (setf (svref d h) v)
+  s))
+
+@
+
+<<postvars>>=
+(eval-when (eval load)
+ (defvar |scanPun| (|scanPunCons|)))
+
+@
+
+\defun{scanPunCons}{scanPunCons}
+\begin{verbatim}
+;scanPunCons()==
+;    listing := HKEYS scanKeyTable
+;    a:=MAKE_-BVEC 256
+;    for i in 0..255 repeat BVEC_-SETELT(a,i,0)
+;    for k in listing repeat
+;       if not startsId? k.0
+;       then BVEC_-SETELT(a,QENUM(k,0),1)
+;    a
+\end{verbatim}
+<<defun scanPunCons>>=
+(defun |scanPunCons| ()
+ (let (a listing)
+  (setq listing (hkeys |scanKeyTable|))
+  (setq a (make-array (list 256) :element-type 'bit :initial-element 0))
+  ((lambda (i)
+   (loop
+    (cond
+     ((> i 255) (return nil))
+     (t (setf (sbit a i) 0)))
+    (setq i (+ i 1))))
+   0)
+  ((lambda (Var8 k)
+   (loop
+    (cond
+     ((or (atom Var8) (progn (setq k (car Var8)) nil))
+      (return nil))
+     (t
+      (cond
+       ((null (|startsId?| (elt k 0)))
+        (setf (sbit a (qenum k 0)) 1)))))
+    (setq Var8 (cdr Var8))))
+   listing nil)
+  a))
 
 @
 
@@ -4585,7 +5781,7 @@ TPDHERE: Note that this function also seems to parse out )except
   (|sayKeyedMsg| 's2iz0013 nil)
   (|clearClams|)
   (|clearConstructorCaches|)
-  (setq |$existingFiles| (make-hashtable 'uequal))
+  (setq |$existingFiles| (make-hash-table :test #'equal))
   (|sayKeyedMsg| 's2iz0014 nil)
   (reclaim)
   (|sayKeyedMsg| 's2iz0015 nil))
@@ -5403,7 +6599,7 @@ Portions Copyright (c) 2001-2009 Timothy Daly
 \defun{copyright}{copyright}
 <<defun copyright>>=
 (defun |copyright| ()
- (obey (strconc "cat " (getenviron "AXIOM") "/doc/spadhelp/spadhelp.help")))
+ (obey (concat "cat " (getenviron "AXIOM") "/doc/spadhelp/spadhelp.help")))
 
 @
 
@@ -6750,7 +7946,7 @@ Available algebra help topics are:
          (cons narg (cons 'helpspad (cons '* nil))))))
        nil)
      (|$useFullScreenHelp|
-      (obey (strconc "$AXIOM/lib/SPADEDIT " (|namestring| helpfile))) t)
+      (obey (concat "$AXIOM/lib/SPADEDIT " (|namestring| helpfile))) t)
      (t
       (setq filestream (make-instream helpfile))
       (do ((line (|read-line| filestream nil) (|read-line| filestream nil)))
@@ -7220,7 +8416,7 @@ Also used in the output routines.
                  ((or (qsgreaterp |j| maxn) (null (null done))) nil)
                (setq k (spaddifference (plus 1 maxn) |j|))
                (when (memq (elt vec k) breakChars)
-                 (setq svec (strconc (substring vec 0 (1+ k)) underbar))
+                 (setq svec (concat (substring vec 0 (1+ k)) underbar))
                  (setq lineList (cons svec lineList))
                  (setq done t)
                  (setq vec (substring vec (1+ k) nil))
@@ -7458,7 +8654,7 @@ Also used in the output routines.
  (let (|$seen| savefile inputfile saveStr n rec val)
  (declare (special |$seen| |$HiFiAccess| |$useInternalHistoryTable|
      |$internalHistoryTable|))
- (setq |$seen| (make-hashtable 'eq))
+ (setq |$seen| (make-hash-table :test #'eq))
  (cond 
   ((null |$HiFiAccess|) 
     (|sayKeyedMsg| 's2ih0016 nil)) ; the history file is not on
@@ -7849,7 +9045,7 @@ back.
          (hput |$seen| nob nob)
          (exit nob))
        (setq n (qvmaxindex ob))
-       (setq nob (make-vec (plus n 1)))
+       (setq nob (make-array (plus n 1)))
        (hput |$seen| ob nob)
        (hput |$seen| nob nob)
        (do ((|i| 0 (qsadd1 |i|)))
@@ -7911,7 +9107,7 @@ back.
     (when (floatp ob)
      (exit
       (seq
-       (when (boot-equal ob (read-from-string (stringimage ob)))
+       (when (boot-equal ob (read-from-string (princ-to-string ob)))
         (exit ob))
        (exit
         (cons 'writified!!
@@ -7929,7 +9125,7 @@ back.
   (if (null (|ScanOrPairVec| (|function| |unwritable?|) ob))
     ob
     (progn
-     (setq |$seen| (make-hashtable 'eq))
+     (setq |$seen| (make-hash-table :test #'eq))
      (setq |$writifyComplained| nil)
      (|writify,writifyInner| ob)))))
 
@@ -7989,7 +9185,7 @@ back.
        (when (eq type 'hashtable)
         (exit
          (seq
-          (setq nob (make-hashtable (elt ob 2)))
+          (setq nob (make-hash-table :test #'equal))
           (hput |$seen| ob nob)
           (hput |$seen| nob nob)
           (do ((tmp0 (elt ob 3) (cdr tmp0))
@@ -8025,7 +9221,7 @@ back.
           (when (null (fboundp name))
            (exit
             (|error| 
-             (strconc "undefined function: " (symbol-name name)))))
+             (concat "undefined function: " (symbol-name name)))))
           (setq nob (cons (symbol-function name) vec))
           (hput |$seen| ob nob)
           (hput |$seen| nob nob)
@@ -8073,7 +9269,7 @@ back.
      (exit
       (seq
        (setq n (qvmaxindex ob))
-       (setq nob (make-vec (plus n 1)))
+       (setq nob (make-array (plus n 1)))
        (hput |$seen| ob nob)
        (hput |$seen| nob nob)
        (do ((|i| 0 (qsadd1 |i|)))
@@ -8095,7 +9291,7 @@ back.
    (if (null (|ScanOrPairVec| (|function| |dewritify,is?|) ob))
     ob
     (progn
-      (setq |$seen| (make-hashtable 'eq))
+      (setq |$seen| (make-hash-table :test #'eq))
       (|dewritify,dewritifyInner| ob)))))
 
 @
@@ -8124,7 +9320,7 @@ back.
 (defun |ScanOrPairVec| (f ob)
  (let (|$seen|) 
  (declare (special |$seen|)) 
-  (setq |$seen| (make-hashtable 'eq))
+  (setq |$seen| (make-hash-table :test #'eq))
   (catch '|ScanOrPairVecAnswer| (|ScanOrPairVec,ScanOrInner| f ob))))
 
 @
@@ -8872,7 +10068,7 @@ explanations see the list structure section \ref{Theliststructure}.
   (setq /pretty nil)
   (setq /spacelist nil)
   (setq /timerlist nil)
-  (setq |$existingFiles| (make-hashtable 'uequal))
+  (setq |$existingFiles| (make-hash-table :test #'equal))
   (setq |$functionTable| nil)
   (setq $boot nil)
   (setq |$compileMapFlag| nil)
@@ -8904,7 +10100,7 @@ explanations see the list structure section \ref{Theliststructure}.
     (|displaySetVariableSettings| (sixth setdata) (first setdata)))
    (t 
     (|centerAndHighlight|
-     (strconc "The " (|object2String| arg) " Option")
+     (concat "The " (|object2String| arg) " Option")
       $linelength (|specialChar| '|hbar|))
     (|sayBrightly|
      `(|%l| ,@(|bright| "Description:") ,(second setdata)))
@@ -8949,9 +10145,9 @@ explanations see the list structure section \ref{Theliststructure}.
  (declare (special $linelength))
   (if (eq label '||) 
     (setq label ")set")
-    (setq label (strconc "  " (|object2String| label) " ")))
+    (setq label (concat "  " (|object2String| label) " ")))
   (|centerAndHighlight|
-    (strconc "Current Values of" label " Variables") $linelength '| |)
+    (concat "Current Values of" label " Variables") $linelength '| |)
   (terpri)
   (|sayBrightly| 
    (list "Variable     " "Description                                "
@@ -8962,11 +10158,11 @@ explanations see the list structure section \ref{Theliststructure}.
    (when (|satisfiesUserLevel| (third setdata))
      (setq setoption (|object2String| (first setdata)))
      (setq setoption
-      (strconc setoption
+      (concat setoption
        (|fillerSpaces| (spaddifference 13 (|#| setoption)) " ")
        (second setdata)))
      (setq setoption
-      (strconc setoption
+      (concat setoption
        (|fillerSpaces| (spaddifference 55 (|#| setoption)) " ")))
      (case (fourth setdata)
       (FUNCTION
@@ -9244,7 +10440,7 @@ args         arguments for compiling AXIOM code
     ((or (null arg) (eq arg '|%describe%|) (eq (car arg) '?) (/= (|#| arg) 1))
      (|describeOutputLibraryArgs|))
     (t
-     (when (filep (setq fn (stringimage (car arg))))
+     (when (filep (setq fn (princ-to-string (car arg))))
        (setq fn (truename fn)))
      (|openOutputLibrary| (setq |$outputLibraryName| fn))))))
 
@@ -9322,9 +10518,9 @@ The input-libraries is now maintained as a list of truenames.
          (setq act (|selectOptionLC| act '(|add| |drop|) nil)))
     (cond
      ((eq act '|add|)
-      (|addInputLibrary| (truename (stringimage filename))))
+      (|addInputLibrary| (truename (princ-to-string filename))))
      ((eq act '|drop|)
-      (|dropInputLibrary| (truename (stringimage filename))))))
+      (|dropInputLibrary| (truename (princ-to-string filename))))))
    (t (|setInputLibrary| nil)))))
 
 @
@@ -11975,7 +13171,7 @@ The current setting is:  On:CONSOLE
      (if |$algebraFormat|
       (setq label "On:")
       (setq label "Off:"))
-     (strconc label |$algebraOutputFile|))
+     (concat label |$algebraOutputFile|))
     ((or (null arg) (eq arg '|%describe%|) (eq (car arg) '?))
      (|describeSetOutputAlgebra|))
     (t
@@ -12021,7 +13217,7 @@ The current setting is:  On:CONSOLE
                                       (setq fm (qcar tmp2))
                                       t)))))))
        (when (setq ptype (|pathnameType| fn))
-        (setq fn (strconc (|pathnameDirectory| fn) (|pathnameName| fn)))
+        (setq fn (concat (|pathnameDirectory| fn) (|pathnameName| fn)))
         (setq ft ptype))
        (unless fm (setq fm 'a))
        (setq filename ($filep fn ft fm))
@@ -12150,7 +13346,7 @@ The current setting is:  On:CONSOLE
                 (progn (setq t2 (car t1)) nil)
                 (progn (progn (setq char (car t2)) t2) nil)) nil)
          (setq s
-          (strconc "   " (pname char) " is shown as " 
+          (concat "   " (pname char) " is shown as " 
            (pname (|specialChar| char))))
           (setq l (cons s l)))
         (|sayAsManyPerLineAsPossible| (reverse l)))
@@ -12249,7 +13445,7 @@ The current setting is:  Off:CONSOLE
     (if |$fortranFormat| 
      (setq label "On:")
      (setq label "Off:"))
-    (strconc label |$fortranOutputFile|))
+    (concat label |$fortranOutputFile|))
    ((or (null arg) (eq arg '|%describe%|) (eq (car arg) '?)) 
     (|describeSetOutputFortran|))
    (t
@@ -12302,7 +13498,7 @@ The current setting is:  Off:CONSOLE
                         (eq (qcdr tmp2) nil)
                         (progn (setq fm (qcar tmp2)) t)))))))
       (when (setq ptype (|pathnameType| fn))
-        (setq fn (strconc (|pathnameDirectory| fn) (|pathnameName| fn)))
+        (setq fn (concat (|pathnameDirectory| fn) (|pathnameName| fn)))
         (setq ft ptype))
       (unless fm (setq fm 'a))
       (setq filename ($filep fn ft fm))
@@ -12494,7 +13690,7 @@ The current setting is:  Off:CONSOLE
      (if |$mathmlFormat| 
       (setq label "On:")
       (setq label "Off:"))
-     (strconc label |$mathmlOutputFile|))
+     (concat label |$mathmlOutputFile|))
     ((or (null arg) (eq arg '|%describe%|) (eq (car arg) '?))
      (|describeSetOutputMathml|))
     (t
@@ -12542,7 +13738,7 @@ The current setting is:  Off:CONSOLE
                                 t)))))))
           (when (setq ptype (|pathnameType| fn))
            (setq fn 
-            (strconc (|pathnameDirectory| fn) (|pathnameName| fn)))
+            (concat (|pathnameDirectory| fn) (|pathnameName| fn)))
            (setq ft ptype))
           (unless fm (setq fm 'a))
           (setq filename ($filep fn ft fm))
@@ -12675,7 +13871,7 @@ The current setting is:  Off:CONSOLE
      (if |$openMathFormat| 
       (setq label "On:")
       (setq label "Off:"))
-     (strconc label |$openMathOutputFile|))
+     (concat label |$openMathOutputFile|))
     ((or (null arg) (eq arg '|%describe%|) (eq (car arg) '?))
      (|describeSetOutputOpenMath|))
     (t
@@ -12719,7 +13915,7 @@ The current setting is:  Off:CONSOLE
                                (eq (qcdr tmp2) nil)
                                (progn (setq fm (qcar tmp2)) t)))))))
         (when (setq ptype (|pathnameType| fn))
-         (setq fn (strconc (|pathnameDirectory| fn) (|pathnameName| fn)))
+         (setq fn (concat (|pathnameDirectory| fn) (|pathnameName| fn)))
          (setq ft ptype))
         (unless fm (setq fm 'a))
         (setq filename ($filep fn ft fm))
@@ -12857,7 +14053,7 @@ The current setting is:  Off:CONSOLE
      (if |$formulaFormat|
       (setq label "On:")
       (setq label "Off:"))
-     (strconc label |$formulaOutputFile|))
+     (concat label |$formulaOutputFile|))
     ((or (null arg) (eq arg '|%describe%|) (eq (car arg) '?)) 
      (|describeSetOutputFormula|))
     (t
@@ -12901,7 +14097,7 @@ The current setting is:  Off:CONSOLE
                                      (progn 
                                       (setq fm (qcar tmp2)) t)))))))
         (if (setq ptype (|pathnameType| fn))
-          (setq fn (strconc (|pathnameDirectory| fn) (|pathnameName| fn)))
+          (setq fn (concat (|pathnameDirectory| fn) (|pathnameName| fn)))
           (setq ft ptype))
         (unless fm (setq fm 'a))
         (setq filename ($filep fn ft fm))
@@ -13094,7 +14290,7 @@ The current setting is:  Off:CONSOLE
     (if |$texFormat| 
      (setq label "On:")
      (setq label "Off:"))
-    (strconc label |$texOutputFile|))
+    (concat label |$texOutputFile|))
    ((or (null arg) (eq arg '|%describe%|) (eq (car arg) '?))
     (|describeSetOutputTex|))
    (t
@@ -13137,7 +14333,7 @@ The current setting is:  Off:CONSOLE
                               (eq (qcdr tmp2) nil)
                               (progn (setq fm (qcar tmp2)) t)))))))
       (when (setq ptype (|pathnameType| fn))
-       (setq fn (strconc (|pathnameDirectory| fn) (|pathnameName| fn)))
+       (setq fn (concat (|pathnameDirectory| fn) (|pathnameName| fn)))
        (setq ft ptype))
       (unless fm (setq fm 'A))
       (setq filename ($filep fn ft fm))
@@ -13772,7 +14968,7 @@ o )cd
 <<defun summary>>=
 (defun |summary| (l)
  (declare (ignore l))
- (obey (strconc "cat " (getenviron "AXIOM") "/doc/spadhelp/summary.help")))
+ (obey (concat "cat " (getenviron "AXIOM") "/doc/spadhelp/summary.help")))
 
 @
 
@@ -14387,7 +15583,7 @@ This reports the traced functions
  (prog (g)
   (return
    (seq
-    (if (and (atom x) (null (upper-case-p (elt (stringimage x) 0))))
+    (if (and (atom x) (null (upper-case-p (elt (princ-to-string x) 0))))
      (exit
       (seq
        (if (|isDomainOrPackage| (eval x)) (exit x))
@@ -14449,7 +15645,7 @@ This reports the traced functions
         (t 
          (|stackTraceOptionError| 
           (cons 's2it0009 
-           (cons (cons (strconc ")" (|object2String| key)) nil) nil))))))
+           (cons (cons (concat ")" (|object2String| key)) nil) nil))))))
       ((eq key '|only|) (cons '|only| (|transOnlyOption| l)))
       ((eq key '|within|)
         (cond
@@ -14475,7 +15671,7 @@ This reports the traced functions
           (|stackTraceOptionError|
            (cons 's2it0011
             (cons
-             (cons (strconc ")"
+             (cons (concat ")"
               (|object2String| key)) nil) nil))))))
       ((eq key '|depth|)
         (cond 
@@ -14518,7 +15714,7 @@ This reports the traced functions
            (|stackTraceOptionError|
             (cons 's2it0015
              (cons
-              (cons (strconc ")" (|object2String| key)) nil) nil))))))
+              (cons (concat ")" (|object2String| key)) nil) nil))))))
       ((eq key '|varbreak|)
         (cond
          ((or (null l) 
@@ -14529,7 +15725,7 @@ This reports the traced functions
            (|stackTraceOptionError|
             (cons 's2it0016
              (cons
-              (cons (strconc ")" (|object2String| key)) nil) nil))))))
+              (cons (concat ")" (|object2String| key)) nil) nil))))))
       ((eq key '|mathprint|)
         (cond
          ((null l) arg)
@@ -14537,7 +15733,7 @@ This reports the traced functions
            (|stackTraceOptionError|
             (cons 's2it0009
              (cons
-              (cons (strconc ")" (|object2String| key)) nil) nil))))))
+              (cons (concat ")" (|object2String| key)) nil) nil))))))
       (key (|throwKeyedMsg| 's2it0005 (cons key nil))))))))) 
 
 @
@@ -14556,7 +15752,7 @@ This reports the traced functions
 (defun |resetTimers| ()
  (declare (special /timerlist))
  (dolist (timer /timerlist)
-  (set (intern (strconc timer ",TIMER")) 0)))
+  (set (intern (concat timer ",TIMER")) 0)))
 
 @
 
@@ -14565,7 +15761,7 @@ This reports the traced functions
 (defun |resetSpacers| ()
  (declare (special /spacelist))
  (dolist (spacer /spacelist)
-   (set (intern (strconc spacer ",SPACE")) 0)))
+   (set (intern (concat spacer ",SPACE")) 0)))
 
 @
 \defun{resetCounters}{resetCounters}
@@ -14573,7 +15769,7 @@ This reports the traced functions
 (defun |resetCounters| ()
  (declare (special /countlist))
  (dolist (k /countlist)
-  (set (intern (strconc k ",COUNT")) 0)))
+  (set (intern (concat k ",COUNT")) 0)))
 
 @
 
@@ -14586,7 +15782,7 @@ This reports the traced functions
    (dolist (timer /timerlist)
      (|sayBrightly|
       `("  " ,@(|bright| timer) |:| " "
-         ,(quotient (eval (intern (strconc timer ",TIMER")))
+         ,(quotient (eval (intern (concat timer ",TIMER")))
             (|float| |$timerTicksPerSecond|)) " sec.")))))
 
 @
@@ -14600,7 +15796,7 @@ This reports the traced functions
    (dolist (spacer /spacelist)
      (|sayBrightly|
       `("  " ,@(|bright| spacer) |: | 
-        ,(eval (intern (strconc spacer ",SPACE"))) " bytes")))))
+        ,(eval (intern (concat spacer ",SPACE"))) " bytes")))))
 
 @
 
@@ -14612,7 +15808,7 @@ This reports the traced functions
    (|sayBrightly| "   no functions are being counted")
    (dolist (k /countlist)
      (|sayBrightly|
-      `("  " ,@(|bright| k) |:| " " ,(eval (intern (strconc k ",COUNT")))
+      `("  " ,@(|bright| k) |:| " " ,(eval (intern (concat k ",COUNT")))
         " times")))))
 
 @
@@ -14722,7 +15918,7 @@ This reports the traced functions
           (cond 
            ((setq y (|domainToGenvar| x)) y)
            (t x)))
-        ((upper-case-p (elt (stringimage x) 0))
+        ((upper-case-p (elt (princ-to-string x) 0))
           (setq y (|unabbrev| x))
           (cond
            ((|constructor?| y) y)
@@ -15043,7 +16239,7 @@ This reports the traced functions
 
 @
 
-\defmacro{funfind}
+\defun{funfind,LAM}{funfind,LAM}
 <<defun funfind,LAM>>=
 (defun |funfind,LAM| (functor opname)
  (prog (ops tmp1)
@@ -15067,11 +16263,12 @@ This reports the traced functions
 
 @
 
+\defmacro{funfind}
 <<defmacro funfind>>=
 (defmacro |funfind| (&whole t0 &rest notused &aux t1)
  (declare (ignore notused))
  (dsetq t1 t0)
- (cons '|funfind,LAM| (vmlisp::wrap (cdr t1) '(quote quote)))) 
+ (cons '|funfind,LAM| (wrap (cdr t1) '(quote quote)))) 
 
 @
 
@@ -15313,7 +16510,7 @@ This reports the traced functions
            (|spadTrace| |domain| options))))
        (setq /tracenames (cons |domainConstructor| /tracenames))
        (setq |innerDomainConstructor|
-         (intern (strconc |domainConstructor| ";")))
+         (intern (concat |domainConstructor| ";")))
        (cond
         ((fboundp |innerDomainConstructor|)
           (setq |domainConstructor| |innerDomainConstructor|)))
@@ -15376,7 +16573,7 @@ This reports the traced functions
                     df |domainConstructor|)
              (setq t0 (cons df t0))))))))))
      (setq |innerDomainConstructor|
-      (intern (strconc |domainConstructor| ";")))
+      (intern (concat |domainConstructor| ";")))
      (cond
       ((fboundp |innerDomainConstructor|) (unembed |innerDomainConstructor|))
       (t (unembed |domainConstructor|)))
@@ -15442,7 +16639,7 @@ This reports the traced functions
             (null 
              (or (is_genvar x) (|isSharpVarWithNum| x) (gensymp x))))
         (|sayBrightlyNT| (append (|bright| x) (cons '|: | nil)))
-        (prin0 (|shortenForPrinting| |val|))
+        (prin1 (|shortenForPrinting| |val|))
         (terpri)))
      (cond
       ((and (setq y (|hasPair| 'break y))
@@ -15614,7 +16811,7 @@ to convert the data into type "Expression"
 \defun{spadTraceAlias}{spadTraceAlias}
 <<defun spadTraceAlias>>=
 (defun |spadTraceAlias| (domainid op n)
- (internl domainid (intern "." "boot") op '|,| (stringimage n))) 
+ (internl domainid (intern "." "boot") op '|,| (princ-to-string n))) 
 
 @
 
@@ -16477,7 +17674,7 @@ Properties of r ::
       (exit
        (progn
         (|sayBrightly|
-          (strconc '|Properties of | (pname name) " ::"))
+          (concat '|Properties of | (pname name) " ::"))
         (setq curproplist (lassoc name (caar |$InteractiveFrame|)))
         (do ((tmp2 proplist (cdr tmp2)) (tmp3 nil))
             ((or (atom tmp2) 
@@ -16524,8 +17721,8 @@ Properties of r ::
     (cond
      ((>= m |$IOindex|)
        (|userError| 
-        (strconc "Magnitude of undo argument must be less than step number ("
-           (stringimage |$IOindex|) ").")))
+        (concat "Magnitude of undo argument must be less than step number ("
+           (princ-to-string |$IOindex|) ").")))
      (t m)))))) 
 
 @
@@ -16739,7 +17936,7 @@ Removing undo lines from \verb|)hist )write linelist|
                     (|undoCount| (parse-integer s2)))
                   (t (spaddifference 1))))
                 (rplaca y
-                  (concat ">" code (stringimage n))))
+                  (concat ">" code (princ-to-string n))))
                (t nil)))
             (t (setq |$IOindex| (plus |$IOindex| 1)))))))
         (setq acc nil)
@@ -17026,7 +18223,7 @@ This displays all operation names containing these fragments
             (do ((t1 arg (cdr t1)) (p nil))
                 ((or (atom t1) (progn (setq p (car t1)) nil))
                   (nreverse0 t0))
-            (seq (exit (setq t0 (cons (downcase (stringimage p)) t0)))))))
+            (seq (exit (setq t0 (cons (downcase (princ-to-string p)) t0)))))))
           (|allOperations|)))))
      (cond
       (ops
@@ -17622,6 +18819,116 @@ load the file \verb|exposed.lsp| to set up the exposure group information.
 @
 \chapter{Special Lisp Functions}
 
+\defun{wrap}{wrap}
+<<defun wrap>>=
+(defun wrap (list-of-items wrapper)
+ (prog nil
+  (cond
+   ((or (not (pairp list-of-items)) (not wrapper))
+    (return list-of-items))
+   ((not (consp wrapper))
+    (setq wrapper (lotsof wrapper))))
+  (return
+    (cons
+     (if (first wrapper)
+      `(,(first wrapper) ,(first list-of-items))
+       (first list-of-items))
+     (wrap (cdr list-of-items) (cdr wrapper))))))
+
+@
+
+
+\defun{lotsof}{lotsof}
+<<defun lotsof>>=
+(defun lotsof (&rest items)
+  (setq items (copy-list items))
+  (nconc items items))
+
+@
+
+\defmacro{startsId?}
+<<defmacro startsId?>>=
+(defmacro |startsId?| (x)
+ `(or (alpha-char-p ,x) (member ,x '(#\? #\% #\!) :test #'char=)))
+
+@
+
+\defun{hput}{hput}
+<<defun hput>>=
+(defun hput (table key value)
+ (setf (gethash key table) value))
+
+@
+
+\defmacro{hget}
+<<defmacro hget>>=
+(defmacro HGET (table key &rest default)
+   `(gethash ,key ,table ,@default))
+
+@
+
+\defun{hkeys}{hkeys}
+<<defun hkeys>>=
+(defun hkeys (table)
+ (let (keys)
+  (maphash
+   #'(lambda (key val) (declare (ignore val)) (push key keys)) table)
+   keys))
+
+@
+
+\defun{digitp}{digitp}
+<<defun digitp>>=
+(defun digitp (x)
+  (or (and (symbolp x) (digitp (symbol-name x)))
+      (and (characterp x) (digit-char-p x))
+      (and (stringp x) (= (length x) 1) (digit-char-p (char x 0)))))
+
+@
+
+\defun{size}{size}
+<<defun size>>=
+(defun size (l) 
+ (cond
+  ((vectorp l) (length l))
+  ((consp l)   (list-length l))
+  (t 0)))
+
+@
+
+\defun{strpos}{strpos}
+<<defun strpos>>=
+(defun strpos (what in start dontcare)
+ (setq what (string what) in (string in))
+ (if dontcare 
+  (progn 
+   (setq dontcare (character dontcare))
+   (search what in :start2 start
+                   :test #'(lambda (x y) (or (eql x dontcare) (eql x y)))))
+  (if (= start 0)
+   (search what in)
+   (search what in :start2 start))))
+
+@
+
+\defun{strposl}{strposl}
+Note that this assumes ``table'' is a string.
+<<defun strposl>>=
+(defun strposl (table cvec sint item)
+ (setq cvec (string cvec))
+ (if (not item)
+  (position table cvec :test #'(lambda (x y) (position y x)) :start sint)
+  (position table cvec :test-not #'(lambda (x y) (position y x)) :start sint)))
+
+@
+
+\defun{qenum}{qenum}
+<<defun qenum>>=
+(defun qenum (cvec ind)
+ (char-code (char cvec ind)))
+
+@
+
 \defmacro{identp}
 <<defmacro identp>>=
 (defmacro identp (x) 
@@ -18029,15 +19336,10 @@ expand-tabs
 |%id|
 |insertpile|
 |intInterpretPform|
-|intloopEchoParse|
-|intloopProcess|
-|intloopProcessString|
 |intnplisp|
 |intSayKeyedMsg|
 |intSetNeedToSignalSessionManager|
-|lineoftoks|
 |ListMemberQ?|
-|lineoftoks|
 |lnCreate|
 |lnSetGlobalNum|
 |macroExpanded|
@@ -18059,7 +19361,6 @@ maxindex
 |resetStackLimits|
 |shoeread-line|
 |StreamNull|
-stringimage
 |tokPart|
 |tokPosn|
 \end{verbatim}
@@ -18070,7 +19371,9 @@ stringimage
 <<initvars>>
 
 <<defmacro funfind>>
+<<defmacro hget>>
 <<defmacro identp>>
+<<defmacro startsId?>>
 <<defmacro Rest>>
 
 <<defun abbQuery>>
@@ -18110,6 +19413,7 @@ stringimage
 <<defun compileBoot>>
 <<defun compiler>>
 <<defun concat>>
+<<defun constoken>>
 <<defun copyright>>
 <<defun countCache>>
 <<defun createCurrentInterpreterFrame>>
@@ -18139,6 +19443,8 @@ stringimage
 <<defun dewritify,dewritifyInner>>
 <<defun dewritify,is?>>
 <<defun diffAlist>>
+<<defun digit?>>
+<<defun digitp>>
 <<defun disableHist>>
 <<defun display>>
 <<defun displayExposedConstructors>>
@@ -18204,6 +19510,8 @@ stringimage
 <<defun histInputFileName>>
 <<defun history>>
 <<defun historySpad2Cmd>>
+<<defun hkeys>>
+<<defun hput>>
 
 <<defun If?>>
 <<defun ifCond>>
@@ -18270,14 +19578,28 @@ stringimage
 <<defun isUncompiledMap>>
 
 <<defun KeepPart?>>
+<<defun keyword>>
+<<defun keyword?>>
 
 <<defun lassocSub>>
 <<defun leaveScratchpad>>
 <<defun letPrint>>
 <<defun letPrint2>>
 <<defun letPrint3>>
+<<defun lfcomment>>
+<<defun lferror>>
+<<defun lffloat>>
+<<defun lfid>>
+<<defun lfinteger>>
+<<defun lfkey>>
+<<defun lfnegcomment>>
+<<defun lfrinteger>>
+<<defun lfspaces>>
+<<defun lfstring>>
+<<defun lineoftoks>>
 <<defun listConstructorAbbreviations>>
 <<defun loadExposureGroupData>>
+<<defun lotsof>>
 
 <<defun make-absolute-filename>>
 <<defun make-appendstream>>
@@ -18311,6 +19633,7 @@ stringimage
 <<defun ncTopLevel>>
 <<defun newHelpSpad2Cmd>>
 <<defun nextInterpreterFrame>>
+<<defun nextline>>
 <<defun nonBlank>>
 
 <<defun oldHistFileName>>
@@ -18324,6 +19647,7 @@ stringimage
 <<defun phParse>>
 <<defun phInterpret>>
 <<defun phIntReportMsgs>>
+<<defun posend>>
 <<defun pquit>>
 <<defun pquitSpad2Cmd>>
 <<defun previousInterpreterFrame>>
@@ -18333,13 +19657,16 @@ stringimage
 <<defun prTraceNames,fn>>
 <<defun pspacers>>
 <<defun ptimers>>
+<<defun punctuation?>>
 <<defun putHist>>
 
+<<defun qenum>>
 <<defun queryClients>>
 <<defun quit>>
 <<defun quitSpad2Cmd>>
 
 <<defun rassocSub>>
+<<defun rdigit?>>
 <<defun readHiFi>>
 <<defun reclaim>>
 <<defun recordFrame>>
@@ -18371,8 +19698,32 @@ stringimage
 <<defun sayCacheCount>>
 <<defun sayExample>>
 <<defun sayMSG>>
+<<defun scanCheckRadix>>
+<<defun scanCloser?>>
+<<defun scanComment>>
+<<defun scanDictCons>>
+<<defun scanError>>
+<<defun scanEsc>>
+<<defun scanEscape>>
+<<defun scanExponent>>
+<<defun scanIgnoreLine>>
+<<defun scanInsert>>
+<<defun scanKeyTr>>
+<<defun scanNegComment>>
+<<defun scanNumber>>
 <<defun ScanOrPairVec>>
 <<defun ScanOrPairVec,ScanOrInner>>
+<<defun scanPossFloat>>
+<<defun scanPunct>>
+<<defun scanPunCons>>
+<<defun scanS>>
+<<defun scanSpace>>
+<<defun scanString>>
+<<defun scanKeyTableCons>>
+<<defun scanToken>>
+<<defun scanTransform>>
+<<defun scanW>>
+<<defun scanWord>>
 <<defun selectOption>>
 <<defun selectOptionLC>>
 <<defun serverReadLine>>
@@ -18410,6 +19761,7 @@ stringimage
 <<defun showInOut>>
 <<defun showInput>>
 <<defun shut>>
+<<defun size>>
 <<defun SkipEnd?>>
 <<defun SkipPart?>>
 <<defun Skipping?>>
@@ -18427,10 +19779,18 @@ stringimage
 <<defun spadTrace,g>>
 <<defun spadTrace,isTraceable>>
 <<defun spadUntrace>>
+<<defun spleI>>
+<<defun spleI1>>
 <<defun stackTraceOptionError>>
+<<defun startsComment?>>
+<<defun startsNegComment?>>
 <<defun statisticsInitialization>>
 <<defun streamChop>>
+<<defun strpos>>
+<<defun strposl>>
 <<defun stupidIsSpadFunction>>
+<<defun subMatch>>
+<<defun substringMatch>>
 <<defun subTypes>>
 <<defun summary>>
 
@@ -18478,6 +19838,7 @@ stringimage
 <<defun with>>
 <<defun workfiles>>
 <<defun workfilesSpad2Cmd>>
+<<defun wrap>>
 <<defun writeHiFi>>
 <<defun writeHistModesAndValues>>
 <<defun writeInputLines>>
