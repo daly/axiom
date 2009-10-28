@@ -1,0 +1,324 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/input newtonlisp.input}
+\author{Mark Clements}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\begin{chunk}{*}
+)set break resume
+)sys rm -rf newtonlisp.output
+)spool newtonlisp.output
+)set message test on
+)set message auto off
+)clear all
+
+\end{chunk}
+First we extract the lisp and spad code from this file and compile them
+\begin{chunk}{*}
+
+)sys cp $AXIOM/../../src/input/newtonlisp.input.pamphlet .
+)lisp (tangle "newtonlisp.input.pamphlet" "funcall.lisp" "funcall.lisp")
+)lisp (compile-file "funcall.lisp")
+)lisp (load "funcall.o")
+)lisp (tangle "newtonlisp.input.pamphlet" "MKULF.spad" "MKULF.spad")
+)co MKULF
+)lisp (tangle "newtonlisp.input.pamphlet" "newton.lisp" "newton.lisp")
+)lisp (compile-file "newton.lisp")
+)lisp (load "newton.o")
+)lisp (tangle "newtonlisp.input.pamphlet" "TESTP.spad" "TESTP.spad")
+)co TESTP
+)lisp (tangle "newtonlisp.input.pamphlet" "lispspad.lisp" "lispspad.lisp")
+)lisp (compile-file "lispspad.lisp")
+)lisp (load "lispspad.o")
+)lisp (tangle "newtonlisp.input.pamphlet" "mklispfn.lisp" "mklispfn.lisp")
+)lisp (compile-file "mklispfn.lisp")
+)lisp (load "mklispfn.o")
+)lisp (tangle "newtonlisp.input.pamphlet" "TESTP2.spad" "TESTP2.spad")
+)co TESTP2
+
+\end{chunk}
+
+The following shows Newton's method for numerically solving $f(x)=0$.
+It also shows examples of calling Axiom expressions and Spad functions
+from Lisp.
+
+First, define Newton's method using the Axiom interpreter.
+
+\begin{chunk}{*}
+
+--S 1 of 14
+R ==> Float
+--R 
+--R                                                                   Type: Void
+--E 1
+
+--S 2 of 14
+I ==> Integer
+--R 
+--R                                                                   Type: Void
+--E 2
+
+--S 3 of 14
+newton(f:Expression R,x:Symbol,x0:R):R ==
+  dfdx:Expression R := D(f,x)
+  xt:R := x0
+  fxt:R := subst(f,x=xt)
+  iterNum:I :=0
+  maxIt:I := 100
+  repeat
+    xt := xt - fxt/subst(dfdx,x=xt)
+    fxt := subst(f,x=xt)
+    if abs(fxt)<1.0e-10 then return xt
+    iterNum:=iterNum+1::I
+    if iterNum >= maxIt then
+      error "Maximum iterations exceeded."
+--R 
+--R   Function declaration newton : (Expression Float,Symbol,Float) -> 
+--R      Float has been added to workspace.
+--R                                                                   Type: Void
+--E 3
+
+--S 4 of 14
+newton(x^2-2.0,x,2.0)
+--R 
+--R   Compiling function newton with type (Expression Float,Symbol,Float)
+--R       -> Float 
+--R
+--R   (4)  1.4142135623 746899106
+--R                                                                  Type: Float
+--E 4
+
+--S 5 of 14
+newton(y^2-2.0,y,2.0)
+--R 
+--R
+--R   (5)  1.4142135623 746899106
+--R                                                                  Type: Float
+--E 5
+
+--S 6 of 14
+newton(x^2-2.0,x,2.0)-sqrt(2.0)
+--R 
+--R
+--R   (6)  0.15948618 E -11
+--R                                                                  Type: Float
+--E 6
+
+\end{chunk}
+
+Second, we can also do this by calling the Newton method implemented in Lisp.
+We initially define/hack a Spad package which creates a Lisp function from
+an interpreter expression.
+
+\begin{chunk}{funcall.lisp}
+
+(defun |lambdaFuncallSpad| (f)
+ (lambda (x) (funcall f x nil)))
+
+\end{chunk}
+
+\begin{chunk}{MKULF.spad}
+
+)abbrev package MKULF MakeUnaryLispFunction
+++ Tools for making compiled lisp functions from top-level expressions
+++ Author: Mark Clements
+++ (based on the MakeUnaryCompiledFunction package by Manual Bronstein)
+++ Date Created 20 April 2009
+++ Date Last Updated: 20 April 2009
+++ Description: transforms top-level objects into lisp functions
+MakeUnaryLispFunction(S,D,I): Exports == Implementation where
+  S: ConvertibleTo InputForm
+  D, I: Type
+
+  SY ==> Symbol
+  DI ==> devaluate(D -> I)$Lisp
+
+  Exports ==> with
+    compiledFunction: (S,SY) -> SY
+      ++ compiledFunction(expr,x) returns a function lisp(f:D->I)
+      ++ defined by lisp((defun f(x) expr))
+      ++ Function f is compiled and directly
+      ++ applicable to objects of type D (in lisp)
+
+  Implementation ==> add
+    import MakeFunction(S)
+
+    compiledFunction(e:S,x:SY) ==
+      t:=[convert([devaluate(D)$Lisp]$List(InputForm))]$List(InputForm)
+      lambdaFuncallSpad(compile(function(e,declare DI,x),t))$Lisp
+
+\end{chunk}
+
+We can define newton in Lisp and then we can use this in Axiom.
+
+\begin{chunk}{newton.lisp}
+
+(defun newton (f dfdx x0 &optional (tol 1.0d-10) (maxit 100))
+ (let ((xt x0) (fxt (funcall f x0)) (iternum 0))
+  (loop
+   (setf xt (- xt (/ fxt (funcall dfdx xt))))
+   (setf fxt (funcall f xt))
+   (if (< (abs fxt) tol) (return xt))
+   (incf iternum)
+   (if (>= iternum maxit) (error "Maximum iterations exceeded")))))
+
+\end{chunk}
+
+This is a function to call a lisp compiled function
+
+\begin{chunk}{*}
+
+--S 7 of 14
+compiledDF(expr: EXPR FLOAT, x:Symbol):Symbol ==
+  compiledFunction(expr,x)$MakeUnaryLispFunction(EXPR FLOAT,DFLOAT,DFLOAT)
+--R 
+--R   Function declaration compiledDF : (Expression Float,Symbol) -> 
+--R      Symbol has been added to workspace.
+--R                                                                   Type: Void
+--E 7
+
+--S 8 of 14
+newtonUsingLisp(f:Expression Float,x:Symbol,x0:DFLOAT):DFLOAT ==
+  float(NEWTON(compiledDF(f,x),compiledDF(D(f,x),x),x0)$Lisp)
+--R 
+--R   Function declaration newtonUsingLisp : (Expression Float,Symbol,
+--R      DoubleFloat) -> DoubleFloat has been added to workspace.
+--R                                                                   Type: Void
+--E 8
+
+--S 9 of 14
+newtonUsingLisp(x**2-2.0,x,2.0::SF)-sqrt(2.0::SF)
+--R 
+--R   Compiling function compiledDF with type (Expression Float,Symbol)
+--R       -> Symbol 
+--R   Compiling function newtonUsingLisp with type (Expression Float,
+--R      Symbol,DoubleFloat) -> DoubleFloat 
+--I   Compiling function %A with type DoubleFloat -> DoubleFloat 
+--I   Compiling function %B with type DoubleFloat -> DoubleFloat 
+--R
+--R   (9)  1.5947243525715749E-12
+--R                                                            Type: DoubleFloat
+--E 9
+
+\end{chunk}
+
+Third, we can call a compiled Spad function in Lisp. Defining some
+example functions in Spad.
+
+\begin{chunk}{TESTP.spad}
+
+)abbrev package TESTP TestPackage
+R ==> DoubleFloat
+TestPackage: with
+    f:R -> R
+    dfdx:R -> R
+  == add
+    f(x) == x*x - 2.0::R
+    dfdx(x) == 2*x
+
+\end{chunk}
+
+and then calling those functions in Lisp from Axiom
+
+\begin{chunk}{lispspad.lisp}
+
+(defun |lispFromSpad| (f dom args)
+ (let ((spadf (|getFunctionFromDomain| f (list dom) args)))
+  (lambda (x) (spadcall x spadf))))
+
+\end{chunk}
+
+\begin{chunk}{*}
+
+--S 10 of 14
+float(NEWTON(lispFromSpad(f,'TestPackage,['DoubleFloat])$Lisp,_
+             lispFromSpad(dfdx,'TestPackage,['DoubleFloat])$Lisp,2::SF)$Lisp)_
+       -sqrt(2.0::SF)
+--R 
+--R
+--R   (10)  1.5947243525715749E-12
+--R                                                            Type: DoubleFloat
+--E 10
+
+\end{chunk}
+
+Finally, within a Spad package it is even easier to call a function 
+through Lisp
+
+\begin{chunk}{mklispfn.lisp}
+
+(defun |mkLispFunction1| (f)
+ (lambda (x) (spadcall x f)))
+
+\end{chunk}
+
+\begin{chunk}{TESTP2.spad}
+)abbrev package TESTP2 TestPackage2
+R ==> DoubleFloat
+I ==> Integer
+TestPackage2: with
+    newton:(R->R,R->R,R,R,I)->R
+    newton:(R->R,R->R,R)->R
+  == add
+    newton(f,dfdx,x0,tol,maxit) ==
+      NEWTON(mkLispFunction1(f@(R->R))$Lisp,
+              mkLispFunction1(dfdx@(R->R))$Lisp,
+               x0,tol,maxit)$Lisp
+
+    newton(f,dfdx,x0) == newton(f,dfdx,x0,1.0e-10::R,100::I)
+
+\end{chunk}
+
+then we can test it with:
+
+\begin{chunk}{*}
+
+--S 11 of 14
+R ==> DoubleFloat
+--R 
+--R                                                                   Type: Void
+--E 11
+
+--S 12 of 14
+newton((x:R):R +-> x^2-2.0::R,_
+       (x:R):R +-> 2.0::R*x, 3.0::SF, 1.0e-15, 100)$TestPackage2_
+          -sqrt(2.0)
+--R 
+--R
+--R   (12)  0.
+--R                                                            Type: DoubleFloat
+--E 12
+
+--S 13 of 14
+newtonExpression(f,x,x0) ==
+  dfdx := D(f,x)
+  newton((xt:R):R +-> eval(f,x,xt), _
+         (xt:R):R +-> eval(dfdx,x,xt),x0)$TestPackage2
+--R 
+--R                                                                   Type: Void
+--E 13
+
+--S 14 of 14
+newtonExpression(x^2-2.0,x,2.0)-sqrt(2.0)
+--R 
+--R   Compiling function newtonExpression with type (Polynomial Float,
+--R      Variable x,Float) -> DoubleFloat 
+--R
+--R   (14)  1.5949463971764999E-12
+--R                                                            Type: DoubleFloat
+--E 14
+
+)spool 
+)lisp (bye)
+ 
+\end{chunk}
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}
