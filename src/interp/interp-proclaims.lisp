@@ -2955,7 +2955,7 @@
             BOOT::|bcOpTable| BOOT::|xdrOpen| BOOT::|scanExponent|
             BOOT::|scanCheckRadix| BOOT::|coerceUn2E|
             BOOT::|inFirstNotSecond| BOOT::|coerceVal2E|
-            BOOT::|EnumPrint| BOOT::|scanInsert| VMLISP::WRAP
+            BOOT::|EnumPrint| BOOT::|scanInsert| BOOT::WRAP
             BOOT::|RecordPrint| BOOT::|coerceRe2E|
             BOOT::|syIgnoredFromTo| BOOT::|sySpecificErrorHere|
             BOOT::|pfTree| BOOT::|makeList|
