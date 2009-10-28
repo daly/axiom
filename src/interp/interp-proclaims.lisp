@@ -30,7 +30,7 @@
 (PROCLAIM '(FTYPE (FUNCTION (STRING FIXNUM) T) BOOT::|subWord|)) 
 (PROCLAIM
     '(FTYPE (FUNCTION (T T) FIXNUM) VMLISP:QSQUOTIENT
-            VMLISP:QSREMAINDER VMLISP:QENUM FOAM:|SetProgHashCode|
+            VMLISP:QSREMAINDER BOOT::QENUM FOAM:|SetProgHashCode|
             BOOT:GETCHARN BOOT::|attributeCategoryParentCount|)) 
 (PROCLAIM
     '(FTYPE (FUNCTION (T T) (VALUES T T)) BOOT::|htMakeLabel|
@@ -252,7 +252,7 @@
             BOOT::L2DP BOOT::|Up2Expr| BOOT::|Qf2Qf| BOOT::|NDmp2NDmp|
             BOOT::|V2Rm| BOOT::|Qf2PF| BOOT::|Dmp2Mp| BOOT::|Up2Dmp|
             BOOT::|Sy2Var| BOOT::|Agg2Agg| BOOT::|Expr2Up|
-            BOOT::|Sy2Up| VMLISP:HPUT BOOT::|pvarCondList1|
+            BOOT::|Sy2Up| BOOT::HPUT BOOT::|pvarCondList1|
             VMLISP:SUBSTRING BOOT::|interpRewriteRule| BOOT::|putAtree|
             BOOT::|isEltable| BOOT::|selectMms| BOOT::|throwKeyedMsgSP|
             BOOT::|pushDownTargetInfo|
@@ -529,7 +529,7 @@
             BOOT::|braceApp| BOOT::|compSetq1| BOOT::|timesApp|
             BOOT::|rootApp| BOOT::|bracketApp| BOOT::|plusApp|
             BOOT::|appparu1| BOOT::|bigopWidth| BOOT::|P2Us|
-            BOOT::|pi2App| BOOT::|boxLApp| VMLISP:STRPOSL
+            BOOT::|pi2App| BOOT::|boxLApp| BOOT::STRPOSL
             BOOT::|compOrCroak1| BOOT::|piApp| BOOT::|compForm2|
             BOOT::|compForm3| BOOT::|getConditionalCategoryOfType1|
             BOOT::|indefIntegralApp| BOOT::|nothingApp|
@@ -1302,7 +1302,7 @@
             BOOT::|args2HtString| BOOT::|dc| BOOT::|bcNameCountTable|
             VMLISP::MAKE-LIBSTREAM BOOT::|nextown1| BOOT::|next1|
             BOOT::|incAppend1| BOOT::|synonym| BOOT::|grepConstruct|
-            VMLISP::LOTSOF BOOT::|htBeginMenu| BOOT::|bcCon|
+            BOOT::LOTSOF BOOT::|htBeginMenu| BOOT::|bcCon|
             BOOT::|koOps| BOOT::|dbWriteLines| BOOT::|catsOf|
             BOOT::|getDomainOpTable| BOOT:|PlainError|
             BOOT:|PlainPrint| BOOT::|htInitPageNoScroll|
@@ -1590,10 +1590,10 @@
             BOOT::|htEscapeString| BOOT::|e01safSolve,f|
             BOOT::|e04ucfSolve,fe| BOOT::|e01befSolve,f|
             BOOT::|e01bffSolve,g| VMLISP:LOG2 BOOT::|e01dafSolve,g|
-            BOOT::|e01dafSolve,f| VMLISP:SIZE VMLISP:EOFP
+            BOOT::|e01dafSolve,f| BOOT::SIZE VMLISP:EOFP
             BOOT::|e01bffSolve,f| VMLISP:RSHUT BOOT::|e04ucfSolve,fd|
             BOOT::|e01bhfSolve,f| BOOT::|objVal| BOOT::|getValue|
-            BOOT::|getMode| BOOT::|getUnname| VMLISP:DIGITP
+            BOOT::|getMode| BOOT::|getUnname| BOOT::DIGITP
             BOOT::|bottomUp| BOOT::|mkAtreeNode| VMLISP:VEC2LIST
             VMLISP:MAKE-VEC VMLISP:GCMSG BOOT::|retract|
             BOOT::|getUnionOrRecordTags| BOOT::|e02dcfColdSolve,h|
