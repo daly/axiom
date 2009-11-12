@@ -3135,6 +3135,13 @@ To pair badge and badgee
 
 @
 
+\defmacro{idChar?}
+<<defmacro idChar?>>=
+(defmacro |idChar?| (x)
+ `(or (alphanumericp ,x) (member ,x '(#\? #\% #\' #\!) :test #'char=)))
+ 
+@
+
 \defun{scanW}{scanW}
 <<defun scanW>>=
 (defun |scanW| (b)
@@ -3341,7 +3348,7 @@ NOTE: do not replace ``lyne'' with ``line''
 \end{verbatim}
 <<defun scanCheckRadix>>=
 (defun |scanCheckRadix| (r w)
- (let (a done ns)
+ (let (a ns)
  (declare (special |$n| |$linepos|))
   (setq ns (length w))
   ((lambda (Var1 i)
@@ -3862,6 +3869,992 @@ The dqAppend function appends 2 dq's, destroying the first
 <<defun dqToList>>=
 (defun |dqToList| (s)
  (when s (car s)))
+
+@
+
+\chapter{Message Handling}
+
+\defun{msgCreate}{msgCreate}
+\begin{verbatim}
+msgObject  tag -- catagory of msg
+                    -- attributes as a-list
+                        'imPr  => dont save for list processing
+                        toWhere, screen or file
+                        'norep => only display once in list
+           pos -- position with possible FROM/TO tag
+           key -- key for message database
+          argL -- arguments to be placed in the msg test
+        prefix -- things like "Error: "
+          text -- the actual text
+\end{verbatim}
+<<defun msgCreate>>=
+(defun |msgCreate| (tag posWTag key argL optPre &rest optAttr)
+ (let (msg)
+  (when (consp key) (setq tag '|old|))
+  (setq msg (list tag posWTag key argL optPre nil))
+  (when (car optAttr) (|setMsgForcedAttrList| msg (car optAttr)))
+  (|putDatabaseStuff| msg)
+  (|initImPr| msg)
+  (|initToWhere| msg)
+  msg))
+
+@
+
+\defun{getMsgPosTagOb}{getMsgPosTagOb}
+<<defun getMsgPosTagOb>>=
+(defun |getMsgPosTagOb| (msg) (elt msg 1))
+
+@
+
+\defun{getMsgKey}{getMsgKey}
+<<defun getMsgKey>>=
+(defun |getMsgKey| (msg)  (elt msg 2))
+
+@
+
+\defun{getMsgArgL}{getMsgArgL}
+<<defun getMsgArgL>>=
+(defun |getMsgArgL| (msg) (elt msg 3))
+
+@
+
+\defun{getMsgPrefix}{getMsgPrefix}
+<<defun getMsgPrefix>>=
+(defun |getMsgPrefix| (msg) (elt msg 4))
+
+@
+
+\defun{setMsgPrefix}{setMsgPrefix}
+<<defun setMsgPrefix>>=
+(defun |setMsgPrefix| (msg val) (setf (elt msg 4) val))
+
+@
+
+\defun{getMsgText}{getMsgText}
+<<defun getMsgText>>=
+(defun |getMsgText| (msg) (elt msg 5))
+
+@
+
+\defun{setMsgText}{setMsgText}
+<<defun setMsgText>>=
+(defun |setMsgText| (msg val)
+  (setf (elt msg 5) val))
+
+@
+
+\defun{getMsgPrefix?}{getMsgPrefix?}
+<<defun getMsgPrefix?>>=
+(defun |getMsgPrefix?| (msg)
+ (let ((pre (|getMsgPrefix| msg)))
+  (unless (eq pre '|noPre|) pre)))
+
+@
+
+\defun{getMsgTag}{getMsgTag}
+The valid message tags are:
+line, old, error, warn, bug, unimple, remark, stat, say, debug
+<<defun getMsgTag>>=
+(defun |getMsgTag| (msg) (|ncTag| msg))
+
+@
+
+\defun{getMsgTag?}{getMsgTag?}
+<<defun getMsgTag?>>=
+(defun |getMsgTag?| (|msg|)
+ (ifcar (member (|getMsgTag| |msg|)
+         (list '|line| '|old| '|error| '|warn| '|bug|
+               '|unimple| '|remark| '|stat| '|say| '|debug|))))
+
+@
+
+\defun{line?}{line?}
+<<defun line?>>=
+(defun |line?| (msg) (eq (|getMsgTag| msg) '|line|))
+
+@
+
+\defun{leader?}{leader?}
+<<defun leader?>>=
+(defun |leader?| (msg) (eq (|getMsgTag| msg) '|leader|))
+
+@
+
+\defun{toScreen?}{toScreen?}
+<<defun toScreen?>>=
+(defun |toScreen?| (msg) (not (eq (|getMsgToWhere| msg) '|fileOnly|)))
+
+@
+
+\defun{ncSoftError}{ncSoftError}
+Messages for the USERS of the compiler.
+The program being compiled has a minor error.
+Give a message and continue processing.
+<<defun ncSoftError>>=
+(defun |ncSoftError| (pos erMsgKey erArgL &rest optAttr)
+ (declare (special |$compErrorPrefix| |$newcompErrorCount|))
+  (setq |$newcompErrorCount| (+ |$newcompErrorCount| 1))
+  (when (|desiredMsg| erMsgKey)
+   (|processKeyedError|
+    (|msgCreate| '|error| pos erMsgKey erArgL
+                  |$compErrorPrefix| optAttr))))
+
+@
+
+\defun{ncHardError}{ncHardError}
+The program being compiled is seriously incorrect.
+Give message and throw to a recovery point.
+<<defun ncHardError>>=
+(defun |ncHardError| (pos erMsgKey erArgL &rest optAttr)
+ (let (erMsg)
+ (declare (special |$compErrorPrefix| |$newcompErrorCount|))
+  (setq |$newcompErrorCount| (+ |$newcompErrorCount| 1))
+  (if (|desiredMsg| erMsgKey)
+   (setq erMsg
+    (|processKeyedError|
+     (|msgCreate| '|error| pos erMsgKey erArgL |$compErrorPrefix| optAttr)))
+   (|ncError|))))
+
+@
+
+\defun{desiredMsg}{desiredMsg}
+<<defun desiredMsg>>=
+(defun |desiredMsg| (erMsgKey &rest optCatFlag)
+ (cond
+  ((|isKeyQualityP| erMsgKey '|show|) t)
+  ((|isKeyQualityP| erMsgKey '|stifle|) nil)
+  ((null (null optCatFlag)) (car optCatFlag))
+  (t t)))
+
+@
+
+\defun{isKeyQualityP}{isKeyQualityP}
+This seems dumb logic to me. There is nothing that iterates in the loop.
+Thus the value is either found immediate or never found at all.
+But if we ever enter the loop it would be infinite.
+\begin{verbatim}
+isKeyQualityP (key,qual)  ==
+    --returns pair if found, else NIL
+    found := false
+    while not found and (qualPair := ASSOC(key,$specificMsgTags)) repeat
+        if CDR qualPair = qual then found := true
+    qualPair
+\end{verbatim}
+<<defun isKeyQualityP>>=
+(defun |isKeyQualityP| (key qual)
+ (let (qualPair found)
+ (declare (special |$specificMsgTags|))
+  (do ()
+      ((not (and (null found)
+                 (setq qualPair (assoc key |$specificMsgTags|))))
+        nil)
+   (when (equal (cdr qualPair) qual) (setq found t)))
+  qualPair))
+
+@
+
+\defun{processKeyedError}{processKeyedError}
+<<defun processKeyedError>>=
+(defun |processKeyedError| (msg)
+ (prog (pre erMsg)
+ (declare (special |$ncMsgList|))
+  (cond
+   ((eq (|getMsgTag?| msg) '|old|)
+     (setq erMsg (|getMsgKey| msg))
+     (cond
+      ((setq pre (|getMsgPrefix?| msg))
+        (setq erMsg (cons '|%b| (cons pre (cons '|%d| erMsg))))))
+     (|sayBrightly| (cons "old msg from " (cons (|CallerName| 4) erMsg))))
+   ((|msgImPr?| msg) (|msgOutputter| msg))
+   (t (setq |$ncMsgList| (cons msg |$ncMsgList|))))))
+
+@
+
+\defun{msgOutputter}{msgOutputter}
+<<defun msgOutputter>>=
+(defun |msgOutputter| (msg)
+ (let (alreadyOpened shouldFlow st)
+ (declare (special $loglength $linelength))
+  (setq st (|getStFromMsg| msg))
+  (setq shouldFlow (null (or (|leader?| msg) (|line?| msg))))
+  (when (|toScreen?| msg)
+    (when shouldFlow (setq st (|flowSegmentedMsg| st $linelength 0)))
+    (|sayBrightly| st))
+  (when (|toFile?| msg)
+    (when shouldFlow (setq st (|flowSegmentedMsg| st $loglength 0)))
+    (setq alreadyOpened (|alreadyOpened?| msg)))))
+
+@
+
+\defun{listOutputter}{listOutputter}
+<<defun listOutputter>>=
+(defun |listOutputter| (outputList)
+ (dolist (msg outputList)
+  (|msgOutputter| msg)))
+
+@
+
+\defun{getStFromMsg}{getStFromMsg}
+<<defun getStFromMsg>>=
+(defun |getStFromMsg| (msg)
+ (let (|$optKeyBlanks| st optKey msgKey posStL preStL)
+ (declare (special |$showKeyNum| |$optKeyBlanks|))
+  (setq |$optKeyBlanks| "")
+  (|setOptKeyBlanks|)
+  (setq preStL (|getPreStL| (|getMsgPrefix?| msg)))
+  (cond
+   ((eq (|getMsgTag| msg) '|line|)
+     (cons |$optKeyBlanks|
+       (cons "%x1" (append preStL (cons (|getMsgText| msg) nil)))))
+   (t
+    (setq posStL (|getPosStL| msg))
+    (setq optKey
+      (cond
+        (|$showKeyNum|
+         (cond
+          ((setq msgKey (|getMsgKey?| msg)) (pname msgKey))
+          (t "no key  ")))
+        (t "")))
+    (setq st
+     (cons posStL
+      (cons (|getMsgLitSym| msg)
+       (cons optKey
+        (append preStL
+         (cons (|tabbing| msg)
+          (|getMsgText| msg)))))))))))
+
+@
+
+\defun{setOptKeyBlanks}{setOptKeyBlanks}
+<<defun setOptKeyBlanks>>=
+(defun |setOptKeyBlanks| ()
+ (declare (special |$optKeyBlanks| |$showKeyNum|))
+  (setq |$optKeyBlanks| (if |$showKeyNum| "%x8" "")))
+
+@
+
+\defun{getPreStL}{getPreStL}
+<<defun getPreStL>>=
+(defun |getPreStL| (optPre)
+ (let (spses extraPlaces)
+ (declare (special |$preLength|))
+  (cond
+   ((null optPre) (list (make-full-cvec 2)))
+   (t
+    (setq spses
+     (cond
+      ((< 0 (setq extraPlaces (- (- |$preLength| (size optPre)) 3)))
+       (make-full-cvec extraPlaces))
+      (t "")))
+    (list '|%b| optPre spses ":" '|%d|)))))
+
+@
+
+\defun{getPosStL}{getPosStL}
+<<defun getPosStL>>=
+(defun |getPosStL| (msg)
+ (let (printedOrigin printedLineNum printedFileName fullPrintedPos howMuch 
+       msgPos)
+ (declare (special |$optKeyBlanks| |$lastPos|))
+ (cond
+  ((null (|showMsgPos?| msg)) "")
+  (t
+   (setq msgPos (|getMsgPos| msg))
+   (setq howMuch
+    (if (|msgImPr?| msg) 
+     (|decideHowMuch| msgPos |$lastPos|)
+     (|listDecideHowMuch| msgPos |$lastPos|)))
+   (setq |$lastPos| msgPos)
+   (setq fullPrintedPos (|ppos| msgPos))
+   (setq printedFileName
+    (cons "%x2" (cons "[" (append (|remLine| fullPrintedPos) (cons "]" nil)))))
+   (setq printedLineNum
+    (cons "%x2" (cons "[" (append (|remFile| fullPrintedPos) (cons "]" nil)))))
+   (setq printedOrigin
+    (cons "%x2" (cons "[" (append fullPrintedPos (cons "]" nil)))))
+   (cond
+    ((eq howMuch 'org)
+     (cons |$optKeyBlanks| (append printedOrigin (cons '|%l| nil))))
+    ((eq howMuch 'line)
+     (cons |$optKeyBlanks| (append printedLineNum (cons '|%l| nil))))
+    ((eq howMuch 'file)
+     (cons |$optKeyBlanks| (append printedFileName (cons '|%l| nil))))
+    ((eq howMuch 'all)
+     (cons |$optKeyBlanks|
+      (append printedFileName
+       (cons '|%l|
+        (cons |$optKeyBlanks|
+         (append printedLineNum
+          (cons '|%l| nil)))))))
+    (t ""))))))
+
+@
+
+\defun{remFile}{remFile}
+<<defun remFile>>=
+(defun |remFile| (positionList) (ifcdr (ifcdr positionList)))
+
+@
+
+\defun{showMsgPos?}{showMsgPos?}
+<<defun showMsgPos?>>=
+(defun |showMsgPos?| (msg)
+ (declare (special |$erMsgToss|))
+ (or |$erMsgToss| (and (null (|msgImPr?| msg)) (null (|leader?| msg)))))
+
+@
+
+\defun{msgImPr?}{msgImPr?}
+<<defun msgImPr?>>=
+(defun |msgImPr?| (msg)
+ (eq (|getMsgCatAttr| msg '|$imPrGuys|) '|imPr|))
+
+@
+
+\defun{getMsgCatAttr}{getMsgCatAttr}
+<<defun getMsgCatAttr>>=
+(defun |getMsgCatAttr| (msg cat)
+ (ifcdr (qassq cat (|ncAlist| msg))))
+
+@
+
+\defun{getMsgPos}{getMsgPos}
+<<defun getMsgPos>>=
+(defun |getMsgPos| (msg)
+ (if (|getMsgFTTag?| msg)
+  (cadr (|getMsgPosTagOb| msg))
+  (|getMsgPosTagOb| msg)))
+
+@
+
+\defun{getMsgFTTag?}{getMsgFTTag?}
+<<defun getMsgFTTag?>>=
+(defun |getMsgFTTag?| (msg)
+ (ifcar (member (ifcar (|getMsgPosTagOb| msg)) (list 'from 'to 'fromto))))
+
+@
+
+\defun{decideHowMuch}{decideHowMuch}
+When printing a msg, we wish not to show pos information that was
+shown for a previous msg with identical pos info.
+org prints out the word noposition or console
+<<defun decideHowMuch>>=
+(defun |decideHowMuch| (pos oldPos)
+ (cond
+  ((or (and (|poNopos?| pos) (|poNopos?| oldPos))
+       (and (|poPosImmediate?| pos) (|poPosImmediate?| oldPos)))
+    'none)
+  ((or (|poNopos?| pos) (|poPosImmediate?| pos)) 'org)
+  ((or (|poNopos?| oldPos) (|poPosImmediate?| oldPos)) 'all)
+  ((not (equal (|poFileName| oldPos) (|poFileName| pos))) 'all)
+  ((not (equal (|poLinePosn| oldPos) (|poLinePosn| pos))) 'line)
+  (t 'none)))
+
+@
+
+\defun{listDecideHowMuch}{listDecideHowMuch}
+<<defun listDecideHowMuch>>=
+(defun |listDecideHowMuch| (pos oldPos)
+ (cond
+  ((or (and (|poNopos?| pos) (|poNopos?| oldPos))
+       (and (|poPosImmediate?| pos) (|poPosImmediate?| oldPos)))
+    'none)
+  ((|poNopos?| pos) 'org)
+  ((|poNopos?| oldPos) 'none)
+  ((< (|poGlobalLinePosn| pos) (|poGlobalLinePosn| oldPos))
+   (if (|poPosImmediate?| pos) 'org 'line))
+  (t 'none)))
+
+@
+
+\defun{remLine}{remLine}
+<<defun remLine>>=
+(defun |remLine| (positionList) (list (ifcar positionList)))
+
+@
+
+\defun{getMsgKey?}{getMsgKey?}
+<<defun getMsgKey?>>=
+(defun |getMsgKey?| (msg)
+ (let ((val (|getMsgKey| msg)))
+  (when (identp val) val)))
+
+@
+
+\defun{getMsgLitSym}{getMsgLitSym}
+<<defun getMsgLitSym>>=
+(defun |getMsgLitSym| (msg)
+ (if (|getMsgKey?| msg) " " "*"))
+
+@
+
+\defun{tabbing}{tabbing}
+<<defun tabbing>>=
+(defun |tabbing| (msg)
+ (let (chPos)
+ (declare (special |$showKeyNum| |$preLength|))
+  (setq chPos 2)
+  (when (|getMsgPrefix?| msg) (setq chPos (- (+ chPos |$preLength|) 1)))
+  (when |$showKeyNum| (setq chPos (+ chPos 8)))
+  (cons '|%t| chPos)))
+
+@
+
+\defun{getMsgToWhere}{getMsgToWhere}
+<<defun getMsgToWhere>>=
+(defun |getMsgToWhere| (msg) (|getMsgCatAttr| msg '|$toWhereGuys|))
+
+@
+
+\defun{toFile?}{toFile?}
+<<defun toFile?>>=
+(defun |toFile?| (msg)
+ (declare (special |$fn|))
+ (and (consp |$fn|) (not (eq (|getMsgToWhere| msg) '|screenOnly|))))
+
+@
+
+\defun{alreadyOpened?}{alreadyOpened?}
+<<defun alreadyOpened?>>=
+(defun |alreadyOpened?| (msg) (null (|msgImPr?| msg)))
+
+@
+
+\defun{setMsgForcedAttrList}{setMsgForcedAttrList}
+<<defun setMsgForcedAttrList>>=
+(defun |setMsgForcedAttrList| (msg attrlist)
+ (dolist (attr attrlist)
+  (|setMsgForcedAttr| msg (|whichCat| attr) attr)))
+
+@
+
+\defun{setMsgForcedAttr}{setMsgForcedAttr}
+<<defun setMsgForcedAttr>>=
+(defun |setMsgForcedAttr| (msg cat attr)
+ (if (eq cat '|catless|)
+  (|setMsgCatlessAttr| msg attr)
+  (|ncPutQ| msg cat attr)))
+
+@
+
+\defun{whichCat}{whichCat}
+<<defun whichCat>>=
+(defun |whichCat| (attr)
+ (let ((found '|catless|) done)
+ (declare (special |$attrCats|))
+  (loop for cat in |$attrCats| do
+    (when (|ListMember?| attr (eval cat))
+     (setq found cat)
+     (setq done t))
+   until done)
+  found))
+
+@
+
+\defun{setMsgCatlessAttr}{setMsgCatlessAttr}
+<<defun setMsgCatlessAttr>>=
+(defun |setMsgCatlessAttr| (msg attr)
+ (|ncPutQ| msg |catless|      ; probably should be '|catless|? -- TPDHERE
+  (cons attr (ifcdr (qassq |catless| (|ncAlist| msg))))))
+
+@
+
+\defun{putDatabaseStuff}{putDatabaseStuff}
+<<defun putDatabaseStuff>>=
+(defun |putDatabaseStuff| (msg)
+ (let (attributes text tmp)
+  (setq tmp (|getMsgInfoFromKey| msg))
+  (setq text (car tmp))
+  (setq attributes (cadr tmp))
+  (when attributes (|setMsgUnforcedAttrList| msg al))
+  (|setMsgText| msg text)))
+
+@
+
+\defun{getMsgInfoFromKey}{getMsgInfoFromKey}
+<<defun getMsgInfoFromKey>>=
+(defun |getMsgInfoFromKey| (msg)
+ (let (|$msgDatabaseName| attributes tmp msgText dbl msgKey)
+ (declare (special |$msgDatabaseName| |$erGlbMsgDatabaseName|
+                   |$erLocMsgDatabaseName|))
+  (setq |$msgDatabaseName| nil)
+  (setq msgText
+   (cond
+    ((setq msgKey (|getMsgKey?| msg))
+     (setq dbl (list |$erLocMsgDatabaseName| |$erGlbMsgDatabaseName|))
+     (|getErFromDbL| msgKey dbl))
+    (t (|getMsgKey| msg))))
+  (setq msgText (|segmentKeyedMsg| msgText))
+  (setq tmp (|removeAttributes| msgText))
+  (setq msgText (car tmp))
+  (setq attributes (cadr tmp))
+  (setq msgText (|substituteSegmentedMsg| msgText (|getMsgArgL| msg)))
+  (list msgText attributes)))
+
+@
+
+\defun{getErFromDbL}{getErFromDbL}
+\begin{verbatim}
+;getErFromDbL (erMsgKey,dbL) ==
+;    erMsg := NIL
+;    while null erMsg   repeat
+;        dbName := CAR dbL
+;        dbL    := CDR dbL
+;        $msgDatabaseName      := dbName
+;        lastName := null dbL
+;--        fileFound := '"co_-eng.msgs"
+;        fileFound := '"s2_-us.msgs"
+;        if fileFound or lastName then
+;            erMsg := fetchKeyedMsg(erMsgKey,not lastName)
+;    erMsg
+\end{verbatim}
+<<defun getErFromDbL>>=
+(defun |getErFromDbL| (erMsgKey dbL)
+ (let (fileFound lastName dbName erMsg)
+ (declare (special |$msgDatabaseName|))
+  ((lambda ()
+   (loop
+    (cond
+     (erMsg (return nil))
+     (t
+      (setq dbName (car dbl))
+      (setq dbl (cdr dbl))
+      (setq |$msgDatabaseName| dbName)
+      (setq lastName (null dbl))
+      (setq fileFound "s2-us.msgs")
+      (cond
+       ((or fileFound lastName)
+        (setq erMsg (|fetchKeyedMsg| erMsgKey (null lastName))))))))))
+  erMsg))
+
+@
+
+\defun{setMsgUnforcedAttrList}{setMsgUnforcedAttrList}
+<<defun setMsgUnforcedAttrList>>=
+(defun |setMsgUnforcedAttrList| (msg attrlist)
+ (dolist (attr attrlist)
+  (|setMsgUnforcedAttr| msg (|whichCat| attr) attr)))
+
+@
+
+\defun{setMsgUnforcedAttr}{setMsgUnforcedAttr}
+<<defun setMsgUnforcedAttr>>=
+(defun |setMsgUnforcedAttr| (msg cat attr)
+ (cond
+  ((eq cat '|catless|) (|setMsgCatlessAttr| msg attr))
+  ((null (qassq cat (|ncAlist| msg))) (|ncPutQ| msg cat attr))))
+
+@
+
+\defun{initImPr}{initImPr}
+<<defun initImPr>>=
+(defun |initImPr| (msg)
+ (declare (special |$imPrTagGuys| |$erMsgToss|))
+ (when (or |$erMsgToss| (memq (|getMsgTag| msg) |$imPrTagGuys|))
+   (|setMsgUnforcedAttr| msg '|$imPrGuys| '|imPr|)))
+
+@
+
+\defun{initToWhere}{initToWhere}
+<<defun initToWhere>>=
+(defun |initToWhere| (msg)
+ (if (member '|trace| (|getMsgCatAttr| msg '|catless|))
+   (|setMsgUnforcedAttr| msg '|$toWhereGuys| '|screenOnly|)))
+
+@
+
+\defun{ncBug}{ncBug}
+Bug in the compiler: something which shouldn't have happened did.
+<<defun ncBug>>=
+(defun |ncBug| (erMsgKey erArgL &rest optAttr)
+ (let (erMsg)
+ (declare (special |$compBugPrefix| |$nopos| |$newcompErrorCount|))
+  (setq |$newcompErrorCount| (+ |$newcompErrorCount| 1))
+  (setq erMsg
+   (|processKeyedError|
+    (|msgCreate| '|bug| |$nopos| erMsgKey erArgL |$compBugPrefix| optAttr)))
+  (enable-backtrace nil)
+  (break)
+  (|ncAbort|)))
+
+@
+
+\defun{processMsgList}{processMsgList}
+<<defun processMsgList>>=
+(defun |processMsgList| (erMsgList lineList)
+ (let (|$noRepList| |$outputList| st globalNumOfLine msgLine)
+ (declare (special |$noRepList| |$outputList|))
+  (setq |$outputList| nil)
+  (setq |$noRepList| nil)
+  (setq erMsgList (|erMsgSort| erMsgList))
+  (dolist (line lineList)
+   (setq msgLine (|makeMsgFromLine| line))
+   (setq |$outputList| (cons msgLine |$outputList|))
+   (setq globalNumOfLine (|poGlobalLinePosn| (|getMsgPos| msgLine)))
+   (setq erMsgList (|queueUpErrors| globalNumOfLine erMsgList)))
+  (setq |$outputList| (append erMsgList |$outputList|))
+  (setq st "---------SOURCE-TEXT-&-ERRORS------------------------")
+  (|listOutputter| (reverse |$outputList|))))
+
+@
+
+\defun{erMsgSort}{erMsgSort}
+<<defun erMsgSort>>=
+(defun |erMsgSort| (erMsgList)
+ (let (msgWOPos msgWPos tmp)
+  (setq tmp (|erMsgSep| erMsgList))
+  (setq msgWPos (car tmp))
+  (setq msgWOPos (cadr tmp))
+  (setq msgWPos (|listSort| #'|erMsgCompare| msgWPos))
+  (setq msgWOPos (reverse msgWOPos))
+  (append msgWPos msgWOPos)))
+
+@
+
+\defun{erMsgCompare}{erMsgCompare}
+<<defun erMsgCompare>>=
+(defun |erMsgCompare| (ob1 ob2)
+ (|compareposns| (|getMsgPos| ob2) (|getMsgPos| ob1)))
+
+@
+
+\defun{erMsgSep}{erMsgSep}
+<<defun erMsgSep>>=
+(defun |erMsgSep| (erMsgList)
+ (let (msgWOPos msgWPos)
+  (dolist (msg erMsgList)
+   (if (|poNopos?| (|getMsgPos| msg))
+    (setq msgWOPos (cons msg msgWOPos))
+    (setq msgWPos (cons msg msgWPos))))
+  (list msgWPos msgWOPos)))
+
+@
+
+\defun{makeMsgFromLine}{makeMsgFromLine}
+<<defun makeMsgFromLine>>=
+(defun |makeMsgFromLine| (line)
+ (let (localNumOfLine stNum i globalNumOfLine textOfLine posOfLine)
+ (declare (special |$preLength|))
+  (setq posOfLine (|getLinePos| line))
+  (setq textOfLine (|getLineText| line))
+  (setq globalNumOfLine (|poGlobalLinePosn| posOfLine))
+  (setq stNum (stringimage (|poLinePosn| posOfLine)))
+  (setq localNumOfLine
+    (strconc (|rep| (|char| '| |) (- |$preLength| 7 (size stNum))) stNum))
+  (list '|line| posOfLine nil nil (strconc "Line" localNumOfLine) textOfLine)))
+
+@
+
+\defun{rep}{rep}
+<<defun rep>>=
+(defun |rep| (c n)
+ (if (< 0 n)
+  (make-full-cvec n c)
+  ""))
+
+@
+
+\defun{getLinePos}{getLinePos}
+<<defun getLinePos>>=
+(defun |getLinePos| (line) (car line))
+
+@
+
+\defun{getLineText}{getLineText}
+<<defun getLineText>>=
+(defun |getLineText| (line) (cdr line))
+
+@
+
+\defun{queueUpErrors}{queueUpErrors}
+\begin{verbatim}
+;queueUpErrors(globalNumOfLine,msgList)==
+;    thisPosMsgs  := []
+;    notThisLineMsgs := []
+;    for msg in msgList _
+;      while thisPosIsLess(getMsgPos msg,globalNumOfLine) repeat
+;    --these are msgs that refer to positions from earlier compilations
+;        if not redundant (msg,notThisPosMsgs) then
+;           notThisPosMsgs := [msg,:notThisPosMsgs]
+;        msgList := rest msgList
+;    for msg in msgList _
+;      while thisPosIsEqual(getMsgPos msg,globalNumOfLine) repeat
+;       if not redundant (msg,thisPosMsgs) then
+;           thisPosMsgs := [msg,:thisPosMsgs]
+;       msgList := rest msgList
+;    if thisPosMsgs then
+;        thisPosMsgs := processChPosesForOneLine  thisPosMsgs
+;        $outputList := NCONC(thisPosMsgs,$outputList)
+;    if notThisPosMsgs then
+;        $outputList := NCONC(notThisPosMsgs,$outputList)
+;    msgList
+\end{verbatim}
+<<defun queueUpErrors>>=
+(DEFUN |queueUpErrors| (|globalNumOfLine| |msgList|)
+  (PROG (|notThisPosMsgs| |notThisLineMsgs| |thisPosMsgs|)
+    (DECLARE (SPECIAL |$outputList|))
+    (RETURN
+      (PROGN
+        (SETQ |thisPosMsgs| NIL)
+        (SETQ |notThisLineMsgs| NIL)
+        ((LAMBDA (|bfVar#7| |msg|)
+           (LOOP
+             (COND
+               ((OR (ATOM |bfVar#7|)
+                    (PROGN (SETQ |msg| (CAR |bfVar#7|)) NIL)
+                    (NOT (|thisPosIsLess| (|getMsgPos| |msg|)
+                             |globalNumOfLine|)))
+                (RETURN NIL))
+               ('T
+                (PROGN
+                  (COND
+                    ((NULL (|redundant| |msg| |notThisPosMsgs|))
+                     (SETQ |notThisPosMsgs|
+                           (CONS |msg| |notThisPosMsgs|))))
+                  (SETQ |msgList| (CDR |msgList|)))))
+             (SETQ |bfVar#7| (CDR |bfVar#7|))))
+         |msgList| NIL)
+        ((LAMBDA (|bfVar#8| |msg|)
+           (LOOP
+             (COND
+               ((OR (ATOM |bfVar#8|)
+                    (PROGN (SETQ |msg| (CAR |bfVar#8|)) NIL)
+                    (NOT (|thisPosIsEqual| (|getMsgPos| |msg|)
+                             |globalNumOfLine|)))
+                (RETURN NIL))
+               ('T
+                (PROGN
+                  (COND
+                    ((NULL (|redundant| |msg| |thisPosMsgs|))
+                     (SETQ |thisPosMsgs| (CONS |msg| |thisPosMsgs|))))
+                  (SETQ |msgList| (CDR |msgList|)))))
+             (SETQ |bfVar#8| (CDR |bfVar#8|))))
+         |msgList| NIL)
+        (COND
+          (|thisPosMsgs|
+              (SETQ |thisPosMsgs|
+                    (|processChPosesForOneLine| |thisPosMsgs|))
+              (SETQ |$outputList| (NCONC |thisPosMsgs| |$outputList|))))
+        (COND
+          (|notThisPosMsgs|
+              (SETQ |$outputList|
+                    (NCONC |notThisPosMsgs| |$outputList|))))
+        |msgList|))))
+
+@
+
+\defun{thisPosIsLess}{thisPosIsLess}
+<<defun thisPosIsLess>>=
+(defun |thisPosIsLess| (pos num)
+ (unless (|poNopos?| pos) (< (|poGlobalLinePosn| pos) num)))
+
+@
+
+\defun{thisPosIsEqual}{thisPosIsEqual}
+<<defun thisPosIsEqual>>=
+(defun |thisPosIsEqual| (pos num)
+ (unless (|poNopos?| pos) (equal (|poGlobalLinePosn| pos) num)))
+
+@
+
+\defun{redundant}{redundant}
+\begin{verbatim}
+redundant(msg,thisPosMsgs) ==
+    found := NIL
+    if msgNoRep? msg then
+        for item in $noRepList repeat
+            sameMsg?(msg,item) => return (found := true)
+        $noRepList := [msg,$noRepList]
+    found or MEMBER(msg,thisPosMsgs)
+\end{verbatim}
+<<defun redundant>>=
+(defun |redundant| (msg thisPosMsgs)
+ (prog (found)
+ (declare (special |$noRepList|))
+  (return
+   (progn
+    (cond
+     ((|msgNoRep?| msg)
+      ((lambda (Var9 item)
+       (loop
+        (cond
+         ((or (atom Var9) (progn (setq item (car Var9)) nil))
+           (return nil))
+         (t
+          (cond
+           ((|sameMsg?| msg item) (return (setq found t))))))
+        (setq Var9 (cdr Var9))))
+       |$noRepList| nil)
+      (setq |$noRepList| (list msg |$noRepList|))))
+   (or found (member msg thisPosMsgs))))))
+
+@
+
+\defun{msgNoRep?}{msgNoRep?}
+<<defun msgNoRep?>>=
+(defun |msgNoRep?| (msg) (eq (|getMsgCatAttr| msg '|$repGuys|) '|noRep|))
+
+@
+
+\defun{sameMsg?}{sameMsg?}
+<<defun sameMsg?>>=
+(defun |sameMsg?| (msg1 msg2)
+ (and (equal (|getMsgKey| msg1) (|getMsgKey| msg2))
+      (equal (|getMsgArgL| msg1) (|getMsgArgL| msg2))))
+
+@
+
+\defun{processChPosesForOneLine}{processChPosesForOneLine}
+<<defun processChPosesForOneLine>>=
+(defun |processChPosesForOneLine| (msgList)
+ (let (leaderMsg oldPre posLetter chPosList)
+ (declare (special |$preLength|))
+  (setq chPosList (|posPointers| msgList))
+  (dolist (msg msgList)
+   (when (|getMsgFTTag?| msg) (|putFTText| msg chPosList))
+   (setq posLetter (cdr (assoc (|poCharPosn| (|getMsgPos| msg)) chPosList)))
+   (setq oldPre (|getMsgPrefix| msg))
+   (|setMsgPrefix| msg
+    (strconc oldPre
+     (make-full-cvec (- |$preLength| 4 (size oldPre))) posLetter)))
+  (setq leaderMsg (|makeLeaderMsg| chPosList))
+  (nconc msgList (list leaderMsg))))
+
+@
+
+\defun{makeLeaderMsg}{makeLeaderMsg}
+\begin{verbatim}
+makeLeaderMsg chPosList ==
+    st := MAKE_-FULL_-CVEC ($preLength- 3)
+    oldPos := -1
+    for [posNum,:posLetter] in reverse chPosList repeat
+        st := STRCONC(st, _
+            rep(char ".", (posNum - oldPos - 1)),posLetter)
+        oldPos := posNum
+    ['leader,$nopos,'nokey,NIL,NIL,[st]]
+\end{verbatim}
+<<defun makeLeaderMsg>>=
+(defun |makeLeaderMsg| (chPosList)
+ (let (posLetter posNum oldPos st)
+ (declare (special |$nopos| |$preLength|))
+  (setq st (make-full-cvec (- |$preLength| 3)))
+  (setq oldPos -1)
+  ((lambda (Var15 Var14)
+   (loop
+    (cond
+     ((or (atom Var15) (progn (setq Var14 (car Var15)) nil))
+       (return nil))
+     (t
+      (and (consp Var14)
+           (progn
+            (setq posNum (car Var14))
+            (setq posLetter (cdr Var14))
+            t)
+           (progn
+            (setq st 
+             (strconc st (|rep| (|char| '|.|) (- posNum oldPos 1)) posLetter))
+            (setq oldPos posNum)))))
+    (setq Var15 (cdr Var15))))
+   (reverse chPosList) nil)
+  (list '|leader| |$nopos| '|nokey| nil nil (list st))))
+
+@
+
+\defun{posPointers}{posPointers}
+<<defun posPointers>>=
+(defun |posPointers| (msgList)
+ (let (posLetterList pos ftPosList posList increment pointers)
+  (setq pointers "ABCDEFGHIJKLMONPQRS")
+  (setq increment 0)
+  (dolist (msg msgList)
+   (setq pos (|poCharPosn| (|getMsgPos| msg)))
+   (unless (equal pos (ifcar posList))
+    (setq posList (cons pos posList)))
+   ; this should probably read TPDHERE
+   ; (when (eq (getMsgPosTagOb| msg) 'fromto)
+   (when (eq getMsgFTTag 'fromto)
+    (setq ftPosList (cons (|poCharPosn| (|getMsgPos2| msg)) ftPosList))))
+  (dolist (toPos ftPosList)
+   (setq posList (|insertPos| toPos posList)))
+  (dolist (pos posList)
+   (setq posLetterList
+    (cons (cons pos (elt pointers increment)) posLetterList))
+   (setq increment (+ increment 1)))
+  posLetterList))
+
+@
+
+\defun{getMsgPos2}{getMsgPos2}
+<<defun getMsgPos2>>=
+(defun |getMsgPos2| (msg)
+ (if (|getMsgFTTag?| msg)
+  (caddr (|getMsgPosTagOb| msg))
+  (|ncBug| "not a from to" nil)))
+
+@
+
+\defun{insertPos}{insertPos}
+This function inserts a position in the proper place of a position list.
+This is used for the 2nd pos of a fromto
+<<defun insertPos>>=
+(defun |insertPos| (newPos posList)
+ (let (pos top bot done)
+ (setq bot (cons 0 posList))
+ (do () (done)
+  (setq top (cons (car bot) top))
+  (setq bot (cdr bot))
+  (setq pos (car bot))
+  (setq done
+   (cond
+    ((< pos newPos) nil)
+    ((equal pos newPos) t)
+    ((< newPos pos)
+     (setq top (cons newPos top))
+     t))))
+ (cons (cdr (reverse top)) bot)))
+
+@
+
+\defun{putFTText}{putFTText}
+<<defun putFTText>>=
+(defun |putFTText| (msg chPosList)
+ (let (charMarker2 pos2 markingText charMarker pos tag)
+  (setq tag (|getMsgFTTag?| msg))
+  (setq pos (|poCharPosn| (|getMsgPos| msg)))
+  (setq charMarker (cdr (assoc pos chPosList)))
+  (cond
+   ((eq tag 'from)
+    (setq markingText (list "(from " charMarker " and on) "))
+    (|setMsgText| msg (append markingText (|getMsgText| msg))))
+   ((eq tag 'to)
+    (setq markingText (list "(up to " charMarker ") "))
+    (|setMsgText| msg (append markingText (|getMsgText| msg))))
+   ((eq tag 'fromto)
+    (setq pos2 (|poCharPosn| (|getMsgPos2| msg)))
+    (setq charMarker2 (cdr (assoc pos2 chPosList)))
+    (setq markingText (list "(from " charMarker " up to " charMarker2 ") "))
+    (|setMsgText| msg (append markingText (|getMsgText| msg)))))))
+
+@
+
+\defun{From}{From}
+This is called from parameter list of nc message functions
+<<defun From>>=
+(defun |From| (pos) (list 'from pos))
+
+@
+
+\defun{To}{To}
+This is called from parameter list of nc message functions
+<<defun To>>=
+(defun |To| (pos) (list 'to pos))
+
+@
+
+\defun{FromTo}{FromTo}
+This is called from parameter list of nc message functions
+<<defun FromTo>>=
+(defun |FromTo| (pos1 pos2) (list 'fromto pos1 pos2))
 
 @
 
@@ -19902,7 +20895,6 @@ maxindex
 |%pform|
 |poGlobalLinePosn|
 |porigin|
-|processMsgList|
 |resetStackLimits|
 |shoeread-line|
 |StreamNull|
@@ -19917,6 +20909,7 @@ maxindex
 
 <<defmacro funfind>>
 <<defmacro hget>>
+<<defmacro idChar?>>
 <<defmacro identp>>
 <<defmacro startsId?>>
 <<defmacro Rest>>
@@ -19927,6 +20920,7 @@ maxindex
 <<defun addInputLibrary>>
 <<defun addNewInterpreterFrame>>
 <<defun addTraceItem>>
+<<defun alreadyOpened?>>
 <<defun apropos>>
 <<defun assertCond>>
 <<defun augmentTraceNames>>
@@ -19964,6 +20958,7 @@ maxindex
 <<defun createCurrentInterpreterFrame>>
 <<defun credits>>
 
+<<defun decideHowMuch>>
 <<defun defiostream>>
 <<defun Delay>>
 <<defun describeAsharpArgs>>
@@ -19984,6 +20979,7 @@ maxindex
 <<defun describeSetOutputOpenMath>>
 <<defun describeSetOutputTex>>
 <<defun describeSetStreamsCalculate>>
+<<defun desiredMsg>>
 <<defun dewritify>>
 <<defun dewritify,dewritifyInner>>
 <<defun dewritify,is?>>
@@ -20016,6 +21012,9 @@ maxindex
 <<defun enPile>>
 <<defun eofp>>
 <<defun eqpileTree>>
+<<defun erMsgCompare>>
+<<defun erMsgSep>>
+<<defun erMsgSort>>
 
 <<defun fetchOutput>>
 <<defun filterAndFormatConstructors>>
@@ -20036,6 +21035,8 @@ maxindex
 <<defun frameName>>
 <<defun frameNames>>
 <<defun frameSpad2Cmd>>
+<<defun From>>
+<<defun FromTo>>
 <<defun functionp>>
 <<defun funfind,LAM>>
 
@@ -20045,10 +21046,32 @@ maxindex
 <<defun getBpiNameIfTracedMap>>
 <<defun get-current-directory>>
 <<defun getenviron>>
+<<defun getErFromDbL>>
+<<defun getLinePos>>
+<<defun getLineText>>
 <<defun getMapSig>>
 <<defun getMapSubNames>>
+<<defun getMsgArgL>>
+<<defun getMsgCatAttr>>
+<<defun getMsgFTTag?>>
+<<defun getMsgInfoFromKey>>
+<<defun getMsgKey>>
+<<defun getMsgKey?>>
+<<defun getMsgLitSym>>
+<<defun getMsgPrefix>>
+<<defun getMsgPos>>
+<<defun getMsgPos2>>
+<<defun getMsgPosTagOb>>
+<<defun getMsgPrefix?>>
+<<defun getMsgTag>>
+<<defun getMsgTag?>>
+<<defun getMsgText>>
+<<defun getMsgToWhere>>
 <<defun getOption>>
+<<defun getPosStL>>
+<<defun getPreStL>>
 <<defun getPreviousMapSubNames>>
+<<defun getStFromMsg>>
 <<defun getTraceOption>>
 <<defun getTraceOption,hn>>
 <<defun getTraceOptions>>
@@ -20115,9 +21138,12 @@ maxindex
 <<defun initHistList>>
 <<defun initializeInterpreterFrameRing>>
 <<defun initializeSetVariables>>
+<<defun initImPr>>
 <<defun init-memory-config>>
 <<defun initroot>>
+<<defun initToWhere>>
 <<defun insertpile>>
+<<defun insertPos>>
 <<defun intloop>>
 <<defun intloopEchoParse>>
 <<defun intloopInclude>>
@@ -20130,6 +21156,7 @@ maxindex
 <<defun intloopSpadProcess,interp>>
 <<defun isDomainOrPackage>>
 <<defun isInterpOnlyMap>>
+<<defun isKeyQualityP>>
 <<defun isListOfIdentifiers>>
 <<defun isListOfIdentifiersOrStrings>>
 <<defun isSubForRedundantMapName>>
@@ -20142,6 +21169,7 @@ maxindex
 
 <<defun lassocSub>>
 <<defun lastTokPosn>>
+<<defun leader?>>
 <<defun leaveScratchpad>>
 <<defun letPrint>>
 <<defun letPrint2>>
@@ -20156,8 +21184,11 @@ maxindex
 <<defun lfrinteger>>
 <<defun lfspaces>>
 <<defun lfstring>>
+<<defun line?>>
 <<defun lineoftoks>>
 <<defun listConstructorAbbreviations>>
+<<defun listDecideHowMuch>>
+<<defun listOutputter>>
 <<defun loadExposureGroupData>>
 <<defun lotsof>>
 
@@ -20166,6 +21197,8 @@ maxindex
 <<defun makeHistFileName>>
 <<defun makeInitialModemapFrame>>
 <<defun make-instream>>
+<<defun makeLeaderMsg>>
+<<defun makeMsgFromLine>>
 <<defun make-outstream>>
 <<defun makeStream>>
 <<defun mapLetPrint>>
@@ -20175,12 +21208,18 @@ maxindex
 <<defun messageprint-2>>
 <<defun mkLineList>>
 <<defun mkprompt>>
+<<defun msgCreate>>
+<<defun msgImPr?>>
+<<defun msgNoRep?>>
+<<defun msgOutputter>>
 
 <<defun ncAlist>>
+<<defun ncBug>>
 <<defun ncConversationPhase>>
 <<defun ncConversationPhase,wrapup>>
 <<defun ncEltQ>>
 <<defun ncError>>
+<<defun ncHardError>>
 <<defun ncIntLoop>>
 <<defun ncloopCommand>>
 <<defun ncloopDQlines>>
@@ -20193,6 +21232,7 @@ maxindex
 <<defun ncloopPrefix?>>
 <<defun ncloopPrintLines>>
 <<defun ncPutQ>>
+<<defun ncSoftError>>
 <<defun ncTag>>
 <<defun ncTopLevel>>
 <<defun newHelpSpad2Cmd>>
@@ -20225,20 +21265,27 @@ maxindex
 <<defun pilePlusComments>>
 <<defun pileTree>>
 <<defun posend>>
+<<defun posPointers>>
 <<defun pquit>>
 <<defun pquitSpad2Cmd>>
 <<defun previousInterpreterFrame>>
+<<defun processChPosesForOneLine>>
+<<defun processKeyedError>>
+<<defun processMsgList>>
 <<defun protectedSymbolsWarning>>
 <<defun protectSymbols>>
 <<defun prTraceNames>>
 <<defun prTraceNames,fn>>
 <<defun pspacers>>
 <<defun ptimers>>
+<<defun putFTText>>
 <<defun punctuation?>>
+<<defun putDatabaseStuff>>
 <<defun putHist>>
 
 <<defun qenum>>
 <<defun queryClients>>
+<<defun queueUpErrors>>
 <<defun quit>>
 <<defun quitSpad2Cmd>>
 
@@ -20251,9 +21298,13 @@ maxindex
 <<defun recordNewValue0>>
 <<defun recordOldValue>>
 <<defun recordOldValue0>>
+<<defun redundant>>
+<<defun remFile>>
+<<defun remLine>>
 <<defun removeOption>>
 <<defun removeTracedMapSigs>>
 <<defun removeUndoLines>>
+<<defun rep>>
 <<defun reportSpadTrace>>
 <<defun reportUndo>>
 <<defun reroot>>
@@ -20268,6 +21319,7 @@ maxindex
 <<defun runspad>>
 
 <<defun safeWritify>>
+<<defun sameMsg?>>
 <<defun saveHistory>>
 <<defun saveMapSig>>
 <<defun sayAllCacheCounts>>
@@ -20324,7 +21376,15 @@ maxindex
 <<defun setInputLibrary>>
 <<defun setIOindex>>
 <<defun setLinkerArgs>>
+<<defun setMsgCatlessAttr>>
+<<defun setMsgForcedAttr>>
+<<defun setMsgForcedAttrList>>
+<<defun setMsgPrefix>>
+<<defun setMsgText>>
+<<defun setMsgUnforcedAttr>>
+<<defun setMsgUnforcedAttrList>>
 <<defun setNagHost>>
+<<defun setOptKeyBlanks>>
 <<defun setOutputAlgebra>>
 <<defun setOutputCharacters>>
 <<defun setOutputFormula>>
@@ -20338,6 +21398,7 @@ maxindex
 <<defun shortenForPrinting>>
 <<defun showInOut>>
 <<defun showInput>>
+<<defun showMsgPos?>>
 <<defun shut>>
 <<defun size>>
 <<defun SkipEnd?>>
@@ -20374,11 +21435,17 @@ maxindex
 <<defun summary>>
 
 <<defun ?t>>
+<<defun tabbing>>
+<<defun thisPosIsEqual>>
+<<defun thisPosIsLess>>
+<<defun toFile?>>
 <<defun tokConstruct>>
 <<defun tokPart>>
 <<defun tokPosn>>
 <<defun tokType>>
+<<defun To>>
 <<defun Top?>>
+<<defun toScreen?>>
 <<defun trace>>
 <<defun trace1>>
 <<defun traceDomainConstructor>>
@@ -20418,6 +21485,7 @@ maxindex
 <<defun whatConstructors>>
 <<defun whatSpad2Cmd>>
 <<defun whatSpad2Cmd,fixpat>>
+<<defun whichCat>>
 <<defun with>>
 <<defun workfiles>>
 <<defun workfilesSpad2Cmd>>
