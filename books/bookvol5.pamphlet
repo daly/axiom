@@ -7307,6 +7307,7 @@ See:\\
    (|compiler|			     . |compiler|   )
    (|copyright|			     . |interpreter|)
    (|credits|			     . |interpreter|)
+   (|describe|			     . |interpreter|)
    (|display|			     . |interpreter|)
    (|edit|			     . |interpreter|)
    (|fin|			     . |development|)
@@ -7460,6 +7461,7 @@ tokenized and validated the input before calling the history function.
     |compiler|
     |depends|
     |display|
+    |describe|
     |edit|
     |frame|
     |frame|
@@ -9315,6 +9317,226 @@ verbatim. This will eventually result in a call to the function
 \verb|handleNoParseCommands| \ref{handleNoParseCommands}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\cmdhead{describe}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+<<describe.help>>=
+====================================================================
+  )describe
+====================================================================
+ 
+User Level Required:  interpreter
+ 
+Command Syntax: 
+ 
+  -  )describe operations opName
+  -  )describe category   catName
+  -  )describe domain     domName
+  -  )describe package    packName
+ 
+Command Description: 
+ 
+This command is used to display the comments for the operation, category,
+domain or package. The comments are part of the algebra source code.
+ 
+The command
+ 
+)describe operations opName
+ 
+shows comments from each instance of an operation name. For instance,
+
+)describe op sqrt
+
+will show
+
+Description of sqrt from FortranExpression
+
+sqrt(x) represents the Fortran intrinsic function SQRT
+
+Description of sqrt from PAdicIntegerCategory
+
+sqrt(b,a) returns a square root of b. Argument a is a square root of b (mod p).
+
+Description of sqrt from RadicalCategory
+
+sqrt(x) returns the square root of x.
+
+Description of sqrt from RealClosedField
+
+sqrt(x) is x ** (1/2)
+
+ 
+The commands
+ 
+)describe category catName
+)describe domain   domName  internal
+)describe package  packName internal
+ 
+will show a properly formatted version of the "Description:" keyword
+from the comments in the algebra source for the category, domain,
+or package requested. 
+
+If 'internal' is requested, then the internal format of the domain or 
+package is described. Categories do not have an internal representation.
+ 
+@ 
+
+\defdollar{describeOptions}
+The current value of \$describeOptions is
+<<initvars>>=
+(defvar $describeOptions '(|category| |domain| |package|))
+
+@
+
+\section{Functions}
+\defun{describe}{Print comment strings from algebra libraries}
+This trivial function satisfies the standard pattern of making a
+user command match the name of the function which implements the
+command. That command immediatly invokes a ``Spad2Cmd'' version.
+\calls{describe}{describespad2cmd}
+<<defun describe>>=
+(defun |describe| (l)
+ (describeSpad2Cmd l)) 
+
+@
+
+\defun{describeSpad2Cmd}{describeSpad2Cmd}
+The describe command prints cleaned-up comment strings from the algebra
+libraries. It can print strings associated with a category, domain, package,
+or by operation.
+
+This implements command line options of the form:
+\begin{verbatim}
+  )describe category <name> 
+  )describe domain   <name> [internal]
+  )describe package  <name> [internal]
+\end{verbatim}
+The describeInternal function will either call the ``dc'' function
+to describe the internal representation of the argument or it will
+print a cleaned up version of the text for the "Description" keyword
+in the Category, Domain, or Package source code.
+\calls{describeSpad2Cmd}{selectOptionLC}
+\calls{describeSpad2Cmd}{flatten}
+\calls{describeSpad2Cmd}{cleanline}
+\calls{describeSpad2Cmd}{getdatabase}
+\calls{describeSpad2Cmd}{sayMessage}
+\usesdollar{describeSpad2Cmd}{e}
+\usesdollar{describeSpad2Cmd}{EmptyEnvironment}
+\usesdollar{describeSpad2Cmd}{describeOptions}
+<<defun describeSpad2Cmd>>=
+(defun describeSpad2Cmd (l)
+ (labels (
+  (describeInternal (cdp internal?)
+   (if internal?
+    (|dc| cdp)
+    (mapcar #'(lambda (x) (if (stringp x) (cleanline x)))
+     (flatten  (car (getdatabase cdp 'documentation)))))))
+ (let ((|$e| |$EmptyEnvironment|) (opt (second l)))
+  (declare (special |$e| |$EmptyEnvironment| $describeOptions))
+  (if (and (pairp l) (not (eq opt '?)))
+    (case (|selectOptionLC| (first l) $describeOptions '|optionError|)
+     (|category|   (describeInternal opt nil))
+     (|domain|     (describeInternal opt (third l)))
+     (|package|    (describeInternal opt (third l))))
+   (|sayMessage|
+    (append 
+     '("  )describe keyword arguments are")
+     (mapcar #'(lambda (x) (format nil "~%     ~a" x)) $describeOptions)
+     (format nil "~%  or abbreviations thereof")))))))
+
+@
+
+\defun{cleanline}{cleanline}
+<<defun cleanline>>=
+(defun cleanline (line)
+ (labels (
+   (replaceInLine (thing other line)
+    (do ((mark (search thing line) (search thing line)))
+        ((null mark) line)
+     (setq line
+      (concatenate 'string (subseq line 0 mark) other
+                           (subseq line (+ mark (length thing)))))))
+
+   (removeFromLine (thing line) (replaceInLine thing "" line))
+
+   (removeKeyword (str line)
+    (do ((mark (search str line) (search str line)))
+     ((null mark) line)
+     (let (left point mid right)
+      (setq left (subseq line 0 mark))
+      (setq point (search "}" line :start2 mark))
+      (setq mid (subseq line (+ mark (length str)) point))
+      (setq right (subseq line (+ point 1)))
+      (setq line (concatenate 'string left mid right)))))
+
+   (addSpaces (str line)
+    (do ((mark (search str line) (search str line)) (cnt))
+     ((null mark) line)
+     (let (left point mid right)
+      (setq left (subseq line 0 mark))
+      (setq point (search "}" line :start2 mark))
+      (setq mid (subseq line (+ mark (length str)) point))
+      (if (setq cnt (parse-integer mid :junk-allowed t))
+        (setq mid (make-string cnt :initial-element #\ ))
+        (setq mid ""))
+      (setq right (subseq line (+ point 1)))
+      (setq line (concatenate 'string left mid right)))))
+
+   (splitAtNewline (line) 
+    (do ((mark (search "~%" line) (search "~%" line)) (lines))
+        ((null mark) 
+          (push " " lines)
+          (push line lines)
+          (nreverse lines))
+      (push (subseq line 0 mark) lines)
+      (setq line (subseq line (+ mark 2)))))
+
+   (wrapOneLine (line margin result) 
+    (if (null line) 
+      (nreverse result)
+      (if (< (length line) margin)
+        (wrapOneLine nil margin (append (list line) result))
+        (let (oneline spill aspace)
+         (setq aspace (position #\space (subseq line 0 margin) :from-end t))
+         (setq oneline (string-trim '(#\space) (subseq line 0 aspace)))
+         (setq spill (string-trim '(#\space) (subseq line aspace)))
+         (wrapOneLine spill margin (append (list oneline) result))))))
+
+   (reflowParagraph (line) 
+    (let (lst1 lst2)
+     (setq lst1 (splitAtNewLine line))
+     (dolist (x lst1)
+      (mapcar #'(lambda(y) (format t "~a~%" y))
+       (wrapOneLine x 70 nil))))))
+
+ (setq line (removeFromLine "{}" line))
+ (setq line (replaceInLine "\\blankline" "~%~%" line))
+ (setq line (replaceInLine "\\br" "~%" line))
+ (setq line (removeFromLine "\\" line))
+ (dolist (str '("spad{" "spadtype{" "spadop{" "spadfun{" "spadatt{"
+                "axiom{" "axiomType{" "spadignore{" "axiomFun{"
+                "centerline{" "inputbitmap{" "axiomOp{" "spadgloss{"))
+  (setq line (removeKeyword str line)))
+ (setq line (replaceInLine "{e.g.}" "e.g." line))
+ (dolist (str '("tab{" "indented{" ))
+   (setq line (addSpaces str line)))
+  (reflowParagraph line)))
+
+@
+
+\defun{flatten}{flatten}
+<<defun flatten>>=
+(defun flatten (x)
+ (labels (
+  (rec (x acc)
+   (cond
+    ((null x) acc)
+    ((atom x) (cons x acc))
+    (t (rec (car x) (rec (cdr x) acc))))))
+  (rec x nil)))
+
+@
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \cmdhead{display}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 <<display.help>>=
@@ -10736,12 +10958,13 @@ Other help topics
 Available help topics are: 
 
 abbreviations assignment blocks     browse     boot       cd
-clear         clef       close      collection compile    display
-edit          fin        for        frame      help       history
-if            iterate    leave      library    lisp       load
-ltrace        parallel   pquit      quit       read       repeat
-savesystem    set        show       spool      suchthat   synonym
-system        syntax     trace      undo       what       while
+clear         clef       close      collection compile    describe
+display       edit       fin        for        frame      help       
+history       if         iterate    leave      library    lisp       
+load          ltrace     parallel   pquit      quit       read       
+repeat        savesystem set        show       spool      suchthat   
+synonym       system     syntax     trace      undo       what       
+while
 
 Available algebra help topics are:
 
@@ -24314,6 +24537,7 @@ maxindex
 <<defun changeHistListLen>>
 <<defun changeToNamedInterpreterFrame>>
 <<defun charDigitVal>>
+<<defun cleanline>>
 <<defun cleanupLine>>
 <<defun clear>>
 <<defun clearCmdAll>>
@@ -24344,6 +24568,7 @@ maxindex
 <<defun decideHowMuch>>
 <<defun defiostream>>
 <<defun Delay>>
+<<defun describe>>
 <<defun describeAsharpArgs>>
 <<defun describeFortPersistence>>
 <<defun describeInputLibraryArgs>>
@@ -24362,6 +24587,7 @@ maxindex
 <<defun describeSetOutputOpenMath>>
 <<defun describeSetOutputTex>>
 <<defun describeSetStreamsCalculate>>
+<<defun describeSpad2Cmd>>
 <<defun desiredMsg>>
 <<defun dewritify>>
 <<defun dewritify,dewritifyInner>>
@@ -24409,6 +24635,7 @@ maxindex
 <<defun findFrameInRing>>
 <<defun firstTokPosn>>
 <<defun fixObjectForPrinting>>
+<<defun flatten>>
 <<defun flattenOperationAlist>>
 <<defun frame>>
 <<defun frameEnvironment>>
