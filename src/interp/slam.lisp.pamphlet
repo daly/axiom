@@ -1,0 +1,1295 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp slam.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;reportFunctionCompilation(op,nam,argl,body,isRecursive) ==
+;  -- for an alternate definition of this function which does not allow
+;  -- dynamic caching, see SLAMOLD BOOT
+;--+
+;  $compiledOpNameList := [nam]
+;  minivectorName := makeInternalMapMinivectorName(nam)
+;  $minivectorNames := [[op,:minivectorName],:$minivectorNames]
+;  body := SUBST(minivectorName,"$$$",body)
+;  if $compilingInputFile then
+;    $minivectorCode := [:$minivectorCode,minivectorName]
+;  SET(minivectorName,LIST2REFVEC $minivector)
+;  argl := COPY argl     -- play it safe for optimization
+;  init :=
+;    not(isRecursive and $compileRecurrence and #argl = 1) => nil
+;    NRTisRecurrenceRelation(nam,body,minivectorName)
+;  init => compileRecurrenceRelation(op,nam,argl,body,init)
+;  cacheCount:= getCacheCount op
+;  cacheCount = "all" => reportFunctionCacheAll(op,nam,argl,body)
+;  cacheCount = 0 or null argl =>
+;    function:= [nam,['LAMBDA,[:argl,'envArg],body]]
+;    compileInteractive function
+;    nam
+;  num :=
+;    FIXP cacheCount =>
+;      cacheCount < 1 =>
+;        keyedSystemError("S2IM0019",[cacheCount,op])
+;      cacheCount
+;    keyedSystemError("S2IM0019",[cacheCount,op])
+;  sayKeyedMsg("S2IX0003",[op,num])
+;  auxfn := mkAuxiliaryName nam
+;  g1:= GENSYM()  --argument or argument list
+;  [arg,computeValue] :=
+;    null argl => [nil,[auxfn]]
+;    argl is [.] => [[g1, 'envArg],[auxfn,g1, 'envArg]]  --g1 is a parameter
+;    [g1,['APPLX,MKQ auxfn,g1]]          --g1 is a parameter list
+;  cacheName := mkCacheName nam
+;  g2:= GENSYM()  --length of cache or arg-value pair
+;  g3:= GENSYM()  --value computed by calling function
+;  secondPredPair:=
+;    null argl => [cacheName]
+;    [['SETQ,g3,['assocCircular,g1,cacheName]],['CDR,g3]]
+;  thirdPredPair:=
+;    null argl => ['(QUOTE T),['SETQ,cacheName,computeValue]]
+;    ['(QUOTE T),
+;      ['SETQ,g2,computeValue],
+;        ['SETQ,g3,
+;            ['CAR,['SETQ,cacheName,['predCircular,cacheName,cacheCount]]]],
+;          ['RPLACA,g3,g1],
+;            ['RPLACD,g3,g2],
+;              g2]
+;  codeBody:=
+;    ['PROG,[g2,g3],['RETURN,['COND,secondPredPair,thirdPredPair]]]
+;  -- cannot use envArg in next statement without redoing much
+;  -- of above.
+;  lamex:= ['LAM,arg,codeBody]
+;  mainFunction:= [nam,lamex]
+;  computeFunction:= [auxfn,['LAMBDA,[:argl, 'envArg],body]]
+;  compileInteractive mainFunction
+;  compileInteractive computeFunction
+;  cacheType:= 'function
+;  cacheResetCode:= ['SETQ,cacheName,['mkCircularAlist,cacheCount]]
+;  cacheCountCode:= ['countCircularAlist,cacheName,cacheCount]
+;  cacheVector:=
+;    mkCacheVec(op,cacheName,cacheType,cacheResetCode,cacheCountCode)
+;  $e:= put(nam,'cacheInfo, cacheVector,$e)
+;  eval cacheResetCode
+;  SETANDFILE(cacheName,mkCircularAlist cacheCount)
+;  nam
+
+;;;     ***       |reportFunctionCompilation| REDEFINED
+
+(DEFUN |reportFunctionCompilation|
+       (|op| |nam| |argl| |body| |isRecursive|)
+  (PROG (|minivectorName| |init| |cacheCount| |function| |num| |auxfn|
+            |g1| |LETTMP#1| |arg| |computeValue| |cacheName| |g2| |g3|
+            |secondPredPair| |thirdPredPair| |codeBody| |lamex|
+            |mainFunction| |computeFunction| |cacheType|
+            |cacheResetCode| |cacheCountCode| |cacheVector|)
+  (declare (special |$e| |$compileRecurrence| |$minivector| |$minivectorCode|
+                    |$compilingInputFile| |$minivectorNames|
+                    |$compiledOpNameList|))
+    (RETURN
+      (PROGN
+        (SPADLET |$compiledOpNameList| (CONS |nam| NIL))
+        (SPADLET |minivectorName|
+                 (|makeInternalMapMinivectorName| |nam|))
+        (SPADLET |$minivectorNames|
+                 (CONS (CONS |op| |minivectorName|) |$minivectorNames|))
+        (SPADLET |body| (MSUBST |minivectorName| '$$$ |body|))
+        (COND
+          (|$compilingInputFile|
+              (SPADLET |$minivectorCode|
+                       (APPEND |$minivectorCode|
+                               (CONS |minivectorName| NIL)))))
+        (SET |minivectorName| (LIST2REFVEC |$minivector|))
+        (SPADLET |argl| (COPY |argl|))
+        (SPADLET |init|
+                 (COND
+                   ((NULL (AND |isRecursive| |$compileRecurrence|
+                               (EQL (|#| |argl|) 1)))
+                    NIL)
+                   ('T
+                    (|NRTisRecurrenceRelation| |nam| |body|
+                        |minivectorName|))))
+        (COND
+          (|init| (|compileRecurrenceRelation| |op| |nam| |argl| |body|
+                      |init|))
+          ('T (SPADLET |cacheCount| (|getCacheCount| |op|))
+           (COND
+             ((BOOT-EQUAL |cacheCount| '|all|)
+              (|reportFunctionCacheAll| |op| |nam| |argl| |body|))
+             ((OR (EQL |cacheCount| 0) (NULL |argl|))
+              (SPADLET |function|
+                       (CONS |nam|
+                             (CONS (CONS 'LAMBDA
+                                    (CONS
+                                     (APPEND |argl|
+                                      (CONS '|envArg| NIL))
+                                     (CONS |body| NIL)))
+                                   NIL)))
+              (|compileInteractive| |function|) |nam|)
+             ('T
+              (SPADLET |num|
+                       (COND
+                         ((FIXP |cacheCount|)
+                          (COND
+                            ((> 1 |cacheCount|)
+                             (|keyedSystemError| 'S2IM0019
+                                 (CONS |cacheCount| (CONS |op| NIL))))
+                            ('T |cacheCount|)))
+                         ('T
+                          (|keyedSystemError| 'S2IM0019
+                              (CONS |cacheCount| (CONS |op| NIL))))))
+              (|sayKeyedMsg| 'S2IX0003 (CONS |op| (CONS |num| NIL)))
+              (SPADLET |auxfn| (|mkAuxiliaryName| |nam|))
+              (SPADLET |g1| (GENSYM))
+              (SPADLET |LETTMP#1|
+                       (COND
+                         ((NULL |argl|)
+                          (CONS NIL (CONS (CONS |auxfn| NIL) NIL)))
+                         ((AND (PAIRP |argl|) (EQ (QCDR |argl|) NIL))
+                          (CONS (CONS |g1| (CONS '|envArg| NIL))
+                                (CONS (CONS |auxfn|
+                                       (CONS |g1| (CONS '|envArg| NIL)))
+                                      NIL)))
+                         ('T
+                          (CONS |g1|
+                                (CONS (CONS 'APPLX
+                                       (CONS (MKQ |auxfn|)
+                                        (CONS |g1| NIL)))
+                                      NIL)))))
+              (SPADLET |arg| (CAR |LETTMP#1|))
+              (SPADLET |computeValue| (CADR |LETTMP#1|))
+              (SPADLET |cacheName| (|mkCacheName| |nam|))
+              (SPADLET |g2| (GENSYM)) (SPADLET |g3| (GENSYM))
+              (SPADLET |secondPredPair|
+                       (COND
+                         ((NULL |argl|) (CONS |cacheName| NIL))
+                         ('T
+                          (CONS (CONS 'SETQ
+                                      (CONS |g3|
+                                       (CONS
+                                        (CONS '|assocCircular|
+                                         (CONS |g1|
+                                          (CONS |cacheName| NIL)))
+                                        NIL)))
+                                (CONS (CONS 'CDR (CONS |g3| NIL)) NIL)))))
+              (SPADLET |thirdPredPair|
+                       (COND
+                         ((NULL |argl|)
+                          (CONS ''T
+                                (CONS (CONS 'SETQ
+                                       (CONS |cacheName|
+                                        (CONS |computeValue| NIL)))
+                                      NIL)))
+                         ('T
+                          (CONS ''T
+                                (CONS (CONS 'SETQ
+                                       (CONS |g2|
+                                        (CONS |computeValue| NIL)))
+                                      (CONS
+                                       (CONS 'SETQ
+                                        (CONS |g3|
+                                         (CONS
+                                          (CONS 'CAR
+                                           (CONS
+                                            (CONS 'SETQ
+                                             (CONS |cacheName|
+                                              (CONS
+                                               (CONS '|predCircular|
+                                                (CONS |cacheName|
+                                                 (CONS |cacheCount|
+                                                  NIL)))
+                                               NIL)))
+                                            NIL))
+                                          NIL)))
+                                       (CONS
+                                        (CONS 'RPLACA
+                                         (CONS |g3| (CONS |g1| NIL)))
+                                        (CONS
+                                         (CONS 'RPLACD
+                                          (CONS |g3| (CONS |g2| NIL)))
+                                         (CONS |g2| NIL)))))))))
+              (SPADLET |codeBody|
+                       (CONS 'PROG
+                             (CONS (CONS |g2| (CONS |g3| NIL))
+                                   (CONS
+                                    (CONS 'RETURN
+                                     (CONS
+                                      (CONS 'COND
+                                       (CONS |secondPredPair|
+                                        (CONS |thirdPredPair| NIL)))
+                                      NIL))
+                                    NIL))))
+              (SPADLET |lamex|
+                       (CONS 'LAM (CONS |arg| (CONS |codeBody| NIL))))
+              (SPADLET |mainFunction| (CONS |nam| (CONS |lamex| NIL)))
+              (SPADLET |computeFunction|
+                       (CONS |auxfn|
+                             (CONS (CONS 'LAMBDA
+                                    (CONS
+                                     (APPEND |argl|
+                                      (CONS '|envArg| NIL))
+                                     (CONS |body| NIL)))
+                                   NIL)))
+              (|compileInteractive| |mainFunction|)
+              (|compileInteractive| |computeFunction|)
+              (SPADLET |cacheType| '|function|)
+              (SPADLET |cacheResetCode|
+                       (CONS 'SETQ
+                             (CONS |cacheName|
+                                   (CONS
+                                    (CONS '|mkCircularAlist|
+                                     (CONS |cacheCount| NIL))
+                                    NIL))))
+              (SPADLET |cacheCountCode|
+                       (CONS '|countCircularAlist|
+                             (CONS |cacheName| (CONS |cacheCount| NIL))))
+              (SPADLET |cacheVector|
+                       (|mkCacheVec| |op| |cacheName| |cacheType|
+                           |cacheResetCode| |cacheCountCode|))
+              (SPADLET |$e|
+                       (|put| |nam| '|cacheInfo| |cacheVector| |$e|))
+              (|eval| |cacheResetCode|)
+              (SETANDFILE |cacheName| (|mkCircularAlist| |cacheCount|))
+              |nam|))))))))
+
+;getCacheCount fn ==
+;  n:= LASSOC(fn,$cacheAlist) => n
+;  $cacheCount
+
+;;;     ***       |getCacheCount| REDEFINED
+
+(DEFUN |getCacheCount| (|fn|)
+  (PROG (|n|)
+  (declare (special |$cacheCount| |$cacheAlist|))
+    (RETURN
+      (COND
+        ((SPADLET |n| (LASSOC |fn| |$cacheAlist|)) |n|)
+        ('T |$cacheCount|)))))
+
+;reportFunctionCacheAll(op,nam,argl,body) ==
+;  sayKeyedMsg("S2IX0004",[op])
+;  auxfn:= mkAuxiliaryName nam
+;  g1:= GENSYM()  --argument or argument list
+;  [arg,computeValue] :=
+;    null argl => [['envArg],[auxfn, 'envArg]]
+;    argl is [.] => [[g1, 'envArg],[auxfn,g1, 'envArg]]  --g1 is a parameter
+;    [g1,['APPLX,MKQ auxfn,g1]]          --g1 is a parameter list
+;  if null argl then g1:=nil
+;  cacheName:= mkCacheName nam
+;  g2:= GENSYM()  --value computed by calling function
+;  secondPredPair:= [['SETQ,g2,['HGET,cacheName,g1]],g2]
+;  thirdPredPair:= ['(QUOTE T),['HPUT,cacheName,g1,computeValue]]
+;  codeBody:= ['PROG,[g2],['RETURN,['COND,secondPredPair,thirdPredPair]]]
+;  lamex:= ['LAM,arg,codeBody]
+;  mainFunction:= [nam,lamex]
+;  computeFunction:= [auxfn,['LAMBDA,[:argl, 'envArg],body]]
+;  compileInteractive mainFunction
+;  compileInteractive computeFunction
+;  cacheType:= 'hash_-table
+;  cacheResetCode:= ['SETQ,cacheName,['MAKE_-HASHTABLE,''UEQUAL]]
+;  cacheCountCode:= ['hashCount,cacheName]
+;  cacheVector:=
+;    mkCacheVec(op,cacheName,cacheType,cacheResetCode,cacheCountCode)
+;  $e:= put(nam,'cacheInfo, cacheVector,$e)
+;  eval cacheResetCode
+;  nam
+
+;;;     ***       |reportFunctionCacheAll| REDEFINED
+
+(DEFUN |reportFunctionCacheAll| (|op| |nam| |argl| |body|)
+  (PROG (|auxfn| |LETTMP#1| |arg| |computeValue| |g1| |cacheName| |g2|
+                 |secondPredPair| |thirdPredPair| |codeBody| |lamex|
+                 |mainFunction| |computeFunction| |cacheType|
+                 |cacheResetCode| |cacheCountCode| |cacheVector|)
+  (declare (special |$e|))
+    (RETURN
+      (PROGN
+        (|sayKeyedMsg| 'S2IX0004 (CONS |op| NIL))
+        (SPADLET |auxfn| (|mkAuxiliaryName| |nam|))
+        (SPADLET |g1| (GENSYM))
+        (SPADLET |LETTMP#1|
+                 (COND
+                   ((NULL |argl|)
+                    (CONS (CONS '|envArg| NIL)
+                          (CONS (CONS |auxfn| (CONS '|envArg| NIL))
+                                NIL)))
+                   ((AND (PAIRP |argl|) (EQ (QCDR |argl|) NIL))
+                    (CONS (CONS |g1| (CONS '|envArg| NIL))
+                          (CONS (CONS |auxfn|
+                                      (CONS |g1| (CONS '|envArg| NIL)))
+                                NIL)))
+                   ('T
+                    (CONS |g1|
+                          (CONS (CONS 'APPLX
+                                      (CONS (MKQ |auxfn|)
+                                       (CONS |g1| NIL)))
+                                NIL)))))
+        (SPADLET |arg| (CAR |LETTMP#1|))
+        (SPADLET |computeValue| (CADR |LETTMP#1|))
+        (COND ((NULL |argl|) (SPADLET |g1| NIL)))
+        (SPADLET |cacheName| (|mkCacheName| |nam|))
+        (SPADLET |g2| (GENSYM))
+        (SPADLET |secondPredPair|
+                 (CONS (CONS 'SETQ
+                             (CONS |g2|
+                                   (CONS
+                                    (CONS 'HGET
+                                     (CONS |cacheName| (CONS |g1| NIL)))
+                                    NIL)))
+                       (CONS |g2| NIL)))
+        (SPADLET |thirdPredPair|
+                 (CONS ''T
+                       (CONS (CONS 'HPUT
+                                   (CONS |cacheName|
+                                    (CONS |g1|
+                                     (CONS |computeValue| NIL))))
+                             NIL)))
+        (SPADLET |codeBody|
+                 (CONS 'PROG
+                       (CONS (CONS |g2| NIL)
+                             (CONS (CONS 'RETURN
+                                    (CONS
+                                     (CONS 'COND
+                                      (CONS |secondPredPair|
+                                       (CONS |thirdPredPair| NIL)))
+                                     NIL))
+                                   NIL))))
+        (SPADLET |lamex|
+                 (CONS 'LAM (CONS |arg| (CONS |codeBody| NIL))))
+        (SPADLET |mainFunction| (CONS |nam| (CONS |lamex| NIL)))
+        (SPADLET |computeFunction|
+                 (CONS |auxfn|
+                       (CONS (CONS 'LAMBDA
+                                   (CONS
+                                    (APPEND |argl|
+                                     (CONS '|envArg| NIL))
+                                    (CONS |body| NIL)))
+                             NIL)))
+        (|compileInteractive| |mainFunction|)
+        (|compileInteractive| |computeFunction|)
+        (SPADLET |cacheType| '|hash-table|)
+        (SPADLET |cacheResetCode|
+                 (CONS 'SETQ
+                       (CONS |cacheName|
+                             (CONS (CONS 'MAKE-HASHTABLE
+                                    (CONS ''UEQUAL NIL))
+                                   NIL))))
+        (SPADLET |cacheCountCode|
+                 (CONS '|hashCount| (CONS |cacheName| NIL)))
+        (SPADLET |cacheVector|
+                 (|mkCacheVec| |op| |cacheName| |cacheType|
+                     |cacheResetCode| |cacheCountCode|))
+        (SPADLET |$e| (|put| |nam| '|cacheInfo| |cacheVector| |$e|))
+        (|eval| |cacheResetCode|)
+        |nam|))))
+
+;hashCount table ==
+;  +/[ADD1 nodeCount HGET(table,key) for key in HKEYS table]
+
+;;;     ***       |hashCount| REDEFINED
+
+(DEFUN |hashCount| (|table|)
+  (PROG ()
+    (RETURN
+      (SEQ (PROG (G166140)
+             (SPADLET G166140 0)
+             (RETURN
+               (DO ((G166145 (HKEYS |table|) (CDR G166145))
+                    (|key| NIL))
+                   ((OR (ATOM G166145)
+                        (PROGN (SETQ |key| (CAR G166145)) NIL))
+                    G166140)
+                 (SEQ (EXIT (SETQ G166140
+                                  (PLUS G166140
+                                        (ADD1
+                                         (|nodeCount|
+                                          (HGET |table| |key|))))))))))))))
+
+;
+;mkCircularAlist n ==
+;  l:= [[$failed,:$failed] for i in 1..n]
+;  RPLACD(LASTNODE l,l)
+
+;;;     ***       |mkCircularAlist| REDEFINED
+
+(DEFUN |mkCircularAlist| (|n|)
+  (PROG (|l|)
+  (declare (special |$failed|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |l|
+                      (PROG (G166160)
+                        (SPADLET G166160 NIL)
+                        (RETURN
+                          (DO ((|i| 1 (QSADD1 |i|)))
+                              ((QSGREATERP |i| |n|)
+                               (NREVERSE0 G166160))
+                            (SEQ (EXIT (SETQ G166160
+                                        (CONS
+                                         (CONS |$failed| |$failed|)
+                                         G166160))))))))
+             (RPLACD (LASTNODE |l|) |l|))))))
+
+;countCircularAlist(cal,n) ==
+;  +/[nodeCount x for x in cal for i in 1..n]
+
+;;;     ***       |countCircularAlist| REDEFINED
+
+(DEFUN |countCircularAlist| (|cal| |n|)
+  (PROG ()
+    (RETURN
+      (SEQ (PROG (G166173)
+             (SPADLET G166173 0)
+             (RETURN
+               (DO ((G166179 |cal| (CDR G166179)) (|x| NIL)
+                    (|i| 1 (QSADD1 |i|)))
+                   ((OR (ATOM G166179)
+                        (PROGN (SETQ |x| (CAR G166179)) NIL)
+                        (QSGREATERP |i| |n|))
+                    G166173)
+                 (SEQ (EXIT (SETQ G166173
+                                  (PLUS G166173 (|nodeCount| |x|))))))))))))
+
+;predCircular(al,n) ==
+;  for i in 1..QSSUB1 n repeat al:= QCDR al
+;  al
+
+;;;     ***       |predCircular| REDEFINED
+
+(DEFUN |predCircular| (|al| |n|)
+  (SEQ (PROGN
+         (DO ((G166194 (QSSUB1 |n|)) (|i| 1 (QSADD1 |i|)))
+             ((QSGREATERP |i| G166194) NIL)
+           (SEQ (EXIT (SPADLET |al| (QCDR |al|)))))
+         |al|)))
+
+;assocCircular(x,al) ==  --like ASSOC except that al is circular
+;  forwardPointer:= al
+;  val:= nil
+;  until EQ(forwardPointer,al) repeat
+;    EQUAL(CAAR forwardPointer,x) => return (val:= CAR forwardPointer)
+;    forwardPointer:= CDR forwardPointer
+;  val
+
+;;;     ***       |assocCircular| REDEFINED
+
+(DEFUN |assocCircular| (|x| |al|)
+  (PROG (|val| |forwardPointer|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |forwardPointer| |al|)
+             (SPADLET |val| NIL)
+             (DO ((G166207 NIL (EQ |forwardPointer| |al|)))
+                 (G166207 NIL)
+               (SEQ (EXIT (COND
+                            ((BOOT-EQUAL (CAAR |forwardPointer|) |x|)
+                             (RETURN
+                               (SPADLET |val| (CAR |forwardPointer|))))
+                            ('T
+                             (SPADLET |forwardPointer|
+                                      (CDR |forwardPointer|)))))))
+             |val|)))))
+
+;compileRecurrenceRelation(op,nam,argl,junk,[body,sharpArg,n,:initCode]) ==
+;  k:= #initCode
+;  extraArgumentCode :=
+;    extraArguments := [x for x in argl | x ^= sharpArg] =>
+;      extraArguments is [x] => x
+;      ['LIST,:extraArguments]
+;    nil
+;  g:= GENSYM()
+;  gIndex:= GENSYM()
+;  gsList:= [GENSYM() for x in initCode]
+;  auxfn := mkAuxiliaryName(nam)
+;  $compiledOpNameList := [:$compiledOpNameList,auxfn]
+;  stateNam:= GENVAR()
+;  stateVar:= GENSYM()
+;  stateVal:= GENSYM()
+;  lastArg := INTERNL STRCONC('"#",STRINGIMAGE QSADD1 LENGTH argl)
+;  decomposeCode:=
+;    [['LET,gIndex,['ELT,lastArg,0]],:[['LET,g,['ELT,lastArg,i]]
+;      for g in gsList for i in 1..]]
+;  gsRev:= REVERSE gsList
+;  rotateCode:= [['LET,p,q] for p in gsRev for q in [:rest gsRev,g]]
+;  advanceCode:= ['LET,gIndex,['ADD1,gIndex]]
+;
+;  newTripleCode := ['LIST,sharpArg,:gsList]
+;  newStateCode :=
+;    null extraArguments => ['SETQ,stateNam,newTripleCode]
+;    ['HPUT,stateNam,extraArgumentCode,newTripleCode]
+;
+;  computeFunction:= [auxfn,['LAM,cargl,cbody]] where
+;    cargl:= [:argl,lastArg]
+;    returnValue:= ['PROGN,newStateCode,first gsList]
+;    cbody:=
+;      endTest:=
+;        ['COND, [['EQL,sharpArg,gIndex],['RETURN,returnValue]]]
+;      newValueCode:= ['LET,g,SUBST(gIndex,sharpArg,
+;        EQSUBSTLIST(gsList,rest $TriangleVariableList,body))]
+;      ['PROGN,:decomposeCode,
+;        ['REPEAT,['WHILE,'T],['PROGN,endTest,advanceCode,
+;          newValueCode,:rotateCode]]]
+;  fromScratchInit:=
+;    [['LET,gIndex,n],:[['LET,g,x] for g in gsList for x in initCode]]
+;  continueInit:=
+;    [['LET,gIndex,['ELT,stateVar,0]],
+;      :[['LET,g,['ELT,stateVar,i]] for g in gsList for i in 1..]]
+;  mainFunction:= [nam,['LAM,margl,mbody]] where
+;    margl:= [:argl,'envArg]
+;    max:= GENSYM()
+;    tripleCode := ['CONS,n,['LIST,:initCode]]
+;
+;    -- initialSetCode initializes the global variable if necessary and
+;    --  also binds "stateVar" to its current value
+;    initialSetCode :=
+;      initialValueCode :=
+;        extraArguments => ['MAKE_-HASHTABLE,''UEQUAL]
+;        tripleCode
+;      cacheResetCode := ['SETQ,stateNam,initialValueCode]
+;      ['COND,[['NULL,['AND,['BOUNDP,MKQ stateNam], _
+;                          ['PAIRP,stateNam]]],    _
+;                 ['LET,stateVar,cacheResetCode]], _
+;             [''T, ['LET,stateVar,stateNam]]]
+;
+;    -- when there are extra arguments, initialResetCode resets "stateVar"
+;    --  to the hashtable entry for the extra arguments
+;    initialResetCode :=
+;      null extraArguments => nil
+;      [['LET,stateVar,['OR,
+;         ['HGET,stateVar,extraArgumentCode],
+;          ['HPUT,stateVar,extraArgumentCode,tripleCode]]]]
+;
+;    mbody :=
+;      preset := [initialSetCode,:initialResetCode,['LET,max,['ELT,stateVar,0]]]
+;      phrase1:= [['AND,['LET,max,['ELT,stateVar,0]],['GE,sharpArg,max]],
+;                  [auxfn,:argl,stateVar]]
+;      phrase2:= [['GT,sharpArg,['SETQ,max,['DIFFERENCE,max,k]]],
+;                  ['ELT,stateVar,['QSADD1,['QSDIFFERENCE,k,['DIFFERENCE,sharpArg,max]]]]]
+;      phrase3:= [['GT,sharpArg,n],[auxfn,:argl,['LIST,n,:initCode]]]
+;      phrase4:= [['GT,sharpArg,n-k],
+;        ['ELT,['LIST,:initCode],['QSDIFFERENCE,n,sharpArg]]]
+;      phrase5:= ['(QUOTE T),['recurrenceError,MKQ op,sharpArg]]
+;      ['PROGN,:preset,['COND,phrase1,phrase2,phrase3,phrase4,phrase5]]
+;  sayKeyedMsg("S2IX0001",[op])
+;  compileInteractive computeFunction
+;  compileInteractive mainFunction
+;  cacheType:= 'recurrence
+;  cacheCountCode:= ['nodeCount,stateNam]
+;  cacheVector:= mkCacheVec(op,stateNam,cacheType,cacheResetCode,cacheCountCode)
+;  $e:= put(nam,'cacheInfo, cacheVector,$e)
+;  nam
+
+;;;     ***       |compileRecurrenceRelation| REDEFINED
+
+(DEFUN |compileRecurrenceRelation| (|op| |nam| |argl| |junk| G166238)
+  (declare (ignore |junk|))
+  (PROG (|body| |sharpArg| |n| |initCode| |k| |extraArguments| |x|
+                |extraArgumentCode| |g| |gIndex| |gsList| |auxfn|
+                |stateNam| |stateVar| |stateVal| |lastArg|
+                |decomposeCode| |gsRev| |rotateCode| |advanceCode|
+                |newTripleCode| |newStateCode| |cargl| |returnValue|
+                |endTest| |newValueCode| |cbody| |computeFunction|
+                |fromScratchInit| |continueInit| |margl| |max|
+                |tripleCode| |initialValueCode| |cacheResetCode|
+                |initialSetCode| |initialResetCode| |preset| |phrase1|
+                |phrase2| |phrase3| |phrase4| |phrase5| |mbody|
+                |mainFunction| |cacheType| |cacheCountCode|
+                |cacheVector|)
+  (declare (special |$e| |$TriangleVariableList| |$compiledOpNameList|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |body| (CAR G166238))
+             (SPADLET |sharpArg| (CADR G166238))
+             (SPADLET |n| (CADDR G166238))
+             (SPADLET |initCode| (CDDDR G166238))
+             (SPADLET |k| (|#| |initCode|))
+             (SPADLET |extraArgumentCode|
+                      (COND
+                        ((SPADLET |extraArguments|
+                                  (PROG (G166269)
+                                    (SPADLET G166269 NIL)
+                                    (RETURN
+                                      (DO
+                                       ((G166275 |argl|
+                                         (CDR G166275))
+                                        (|x| NIL))
+                                       ((OR (ATOM G166275)
+                                         (PROGN
+                                           (SETQ |x| (CAR G166275))
+                                           NIL))
+                                        (NREVERSE0 G166269))
+                                        (SEQ
+                                         (EXIT
+                                          (COND
+                                            ((NEQUAL |x| |sharpArg|)
+                                             (SETQ G166269
+                                              (CONS |x| G166269))))))))))
+                         (COND
+                           ((AND (PAIRP |extraArguments|)
+                                 (EQ (QCDR |extraArguments|) NIL)
+                                 (PROGN
+                                   (SPADLET |x|
+                                    (QCAR |extraArguments|))
+                                   'T))
+                            |x|)
+                           ('T (CONS 'LIST |extraArguments|))))
+                        ('T NIL)))
+             (SPADLET |g| (GENSYM))
+             (SPADLET |gIndex| (GENSYM))
+             (SPADLET |gsList|
+                      (PROG (G166285)
+                        (SPADLET G166285 NIL)
+                        (RETURN
+                          (DO ((G166290 |initCode| (CDR G166290))
+                               (|x| NIL))
+                              ((OR (ATOM G166290)
+                                   (PROGN
+                                     (SETQ |x| (CAR G166290))
+                                     NIL))
+                               (NREVERSE0 G166285))
+                            (SEQ (EXIT (SETQ G166285
+                                        (CONS (GENSYM) G166285))))))))
+             (SPADLET |auxfn| (|mkAuxiliaryName| |nam|))
+             (SPADLET |$compiledOpNameList|
+                      (APPEND |$compiledOpNameList| (CONS |auxfn| NIL)))
+             (SPADLET |stateNam| (GENVAR))
+             (SPADLET |stateVar| (GENSYM))
+             (SPADLET |stateVal| (GENSYM))
+             (SPADLET |lastArg|
+                      (INTERNL (STRCONC (MAKESTRING "#")
+                                        (STRINGIMAGE
+                                         (QSADD1 (LENGTH |argl|))))))
+             (SPADLET |decomposeCode|
+                      (CONS (CONS 'LET
+                                  (CONS |gIndex|
+                                        (CONS
+                                         (CONS 'ELT
+                                          (CONS |lastArg| (CONS 0 NIL)))
+                                         NIL)))
+                            (PROG (G166301)
+                              (SPADLET G166301 NIL)
+                              (RETURN
+                                (DO ((G166307 |gsList|
+                                      (CDR G166307))
+                                     (|g| NIL) (|i| 1 (QSADD1 |i|)))
+                                    ((OR (ATOM G166307)
+                                      (PROGN
+                                        (SETQ |g| (CAR G166307))
+                                        NIL))
+                                     (NREVERSE0 G166301))
+                                  (SEQ (EXIT
+                                        (SETQ G166301
+                                         (CONS
+                                          (CONS 'LET
+                                           (CONS |g|
+                                            (CONS
+                                             (CONS 'ELT
+                                              (CONS |lastArg|
+                                               (CONS |i| NIL)))
+                                             NIL)))
+                                          G166301)))))))))
+             (SPADLET |gsRev| (REVERSE |gsList|))
+             (SPADLET |rotateCode|
+                      (PROG (G166318)
+                        (SPADLET G166318 NIL)
+                        (RETURN
+                          (DO ((G166324 |gsRev| (CDR G166324))
+                               (|p| NIL)
+                               (G166325
+                                   (APPEND (CDR |gsRev|)
+                                    (CONS |g| NIL))
+                                   (CDR G166325))
+                               (|q| NIL))
+                              ((OR (ATOM G166324)
+                                   (PROGN
+                                     (SETQ |p| (CAR G166324))
+                                     NIL)
+                                   (ATOM G166325)
+                                   (PROGN
+                                     (SETQ |q| (CAR G166325))
+                                     NIL))
+                               (NREVERSE0 G166318))
+                            (SEQ (EXIT (SETQ G166318
+                                        (CONS
+                                         (CONS 'LET
+                                          (CONS |p| (CONS |q| NIL)))
+                                         G166318))))))))
+             (SPADLET |advanceCode|
+                      (CONS 'LET
+                            (CONS |gIndex|
+                                  (CONS (CONS 'ADD1
+                                         (CONS |gIndex| NIL))
+                                        NIL))))
+             (SPADLET |newTripleCode|
+                      (CONS 'LIST (CONS |sharpArg| |gsList|)))
+             (SPADLET |newStateCode|
+                      (COND
+                        ((NULL |extraArguments|)
+                         (CONS 'SETQ
+                               (CONS |stateNam|
+                                     (CONS |newTripleCode| NIL))))
+                        ('T
+                         (CONS 'HPUT
+                               (CONS |stateNam|
+                                     (CONS |extraArgumentCode|
+                                      (CONS |newTripleCode| NIL)))))))
+             (SPADLET |cargl| (APPEND |argl| (CONS |lastArg| NIL)))
+             (SPADLET |returnValue|
+                      (CONS 'PROGN
+                            (CONS |newStateCode|
+                                  (CONS (CAR |gsList|) NIL))))
+             (SPADLET |cbody|
+                      (PROGN
+                        (SPADLET |endTest|
+                                 (CONS 'COND
+                                       (CONS
+                                        (CONS
+                                         (CONS 'EQL
+                                          (CONS |sharpArg|
+                                           (CONS |gIndex| NIL)))
+                                         (CONS
+                                          (CONS 'RETURN
+                                           (CONS |returnValue| NIL))
+                                          NIL))
+                                        NIL)))
+                        (SPADLET |newValueCode|
+                                 (CONS 'LET
+                                       (CONS |g|
+                                        (CONS
+                                         (MSUBST |gIndex| |sharpArg|
+                                          (EQSUBSTLIST |gsList|
+                                           (CDR
+                                            |$TriangleVariableList|)
+                                           |body|))
+                                         NIL))))
+                        (CONS 'PROGN
+                              (APPEND |decomposeCode|
+                                      (CONS
+                                       (CONS 'REPEAT
+                                        (CONS
+                                         (CONS 'WHILE (CONS 'T NIL))
+                                         (CONS
+                                          (CONS 'PROGN
+                                           (CONS |endTest|
+                                            (CONS |advanceCode|
+                                             (CONS |newValueCode|
+                                              |rotateCode|))))
+                                          NIL)))
+                                       NIL)))))
+             (SPADLET |computeFunction|
+                      (CONS |auxfn|
+                            (CONS (CONS 'LAM
+                                        (CONS |cargl|
+                                         (CONS |cbody| NIL)))
+                                  NIL)))
+             (SPADLET |fromScratchInit|
+                      (CONS (CONS 'LET (CONS |gIndex| (CONS |n| NIL)))
+                            (PROG (G166339)
+                              (SPADLET G166339 NIL)
+                              (RETURN
+                                (DO ((G166345 |gsList|
+                                      (CDR G166345))
+                                     (|g| NIL)
+                                     (G166346 |initCode|
+                                      (CDR G166346))
+                                     (|x| NIL))
+                                    ((OR (ATOM G166345)
+                                      (PROGN
+                                        (SETQ |g| (CAR G166345))
+                                        NIL)
+                                      (ATOM G166346)
+                                      (PROGN
+                                        (SETQ |x| (CAR G166346))
+                                        NIL))
+                                     (NREVERSE0 G166339))
+                                  (SEQ (EXIT
+                                        (SETQ G166339
+                                         (CONS
+                                          (CONS 'LET
+                                           (CONS |g| (CONS |x| NIL)))
+                                          G166339)))))))))
+             (SPADLET |continueInit|
+                      (CONS (CONS 'LET
+                                  (CONS |gIndex|
+                                        (CONS
+                                         (CONS 'ELT
+                                          (CONS |stateVar|
+                                           (CONS 0 NIL)))
+                                         NIL)))
+                            (PROG (G166360)
+                              (SPADLET G166360 NIL)
+                              (RETURN
+                                (DO ((G166366 |gsList|
+                                      (CDR G166366))
+                                     (|g| NIL) (|i| 1 (QSADD1 |i|)))
+                                    ((OR (ATOM G166366)
+                                      (PROGN
+                                        (SETQ |g| (CAR G166366))
+                                        NIL))
+                                     (NREVERSE0 G166360))
+                                  (SEQ (EXIT
+                                        (SETQ G166360
+                                         (CONS
+                                          (CONS 'LET
+                                           (CONS |g|
+                                            (CONS
+                                             (CONS 'ELT
+                                              (CONS |stateVar|
+                                               (CONS |i| NIL)))
+                                             NIL)))
+                                          G166360)))))))))
+             (SPADLET |margl| (APPEND |argl| (CONS '|envArg| NIL)))
+             (SPADLET |max| (GENSYM))
+             (SPADLET |tripleCode|
+                      (CONS 'CONS
+                            (CONS |n|
+                                  (CONS (CONS 'LIST |initCode|) NIL))))
+             (SPADLET |initialSetCode|
+                      (PROGN
+                        (SPADLET |initialValueCode|
+                                 (COND
+                                   (|extraArguments|
+                                    (CONS 'MAKE-HASHTABLE
+                                     (CONS ''UEQUAL NIL)))
+                                   ('T |tripleCode|)))
+                        (SPADLET |cacheResetCode|
+                                 (CONS 'SETQ
+                                       (CONS |stateNam|
+                                        (CONS |initialValueCode| NIL))))
+                        (CONS 'COND
+                              (CONS (CONS
+                                     (CONS 'NULL
+                                      (CONS
+                                       (CONS 'AND
+                                        (CONS
+                                         (CONS 'BOUNDP
+                                          (CONS (MKQ |stateNam|) NIL))
+                                         (CONS
+                                          (CONS 'PAIRP
+                                           (CONS |stateNam| NIL))
+                                          NIL)))
+                                       NIL))
+                                     (CONS
+                                      (CONS 'LET
+                                       (CONS |stateVar|
+                                        (CONS |cacheResetCode| NIL)))
+                                      NIL))
+                                    (CONS
+                                     (CONS ''T
+                                      (CONS
+                                       (CONS 'LET
+                                        (CONS |stateVar|
+                                         (CONS |stateNam| NIL)))
+                                       NIL))
+                                     NIL)))))
+             (SPADLET |initialResetCode|
+                      (COND
+                        ((NULL |extraArguments|) NIL)
+                        ('T
+                         (CONS (CONS 'LET
+                                     (CONS |stateVar|
+                                      (CONS
+                                       (CONS 'OR
+                                        (CONS
+                                         (CONS 'HGET
+                                          (CONS |stateVar|
+                                           (CONS |extraArgumentCode|
+                                            NIL)))
+                                         (CONS
+                                          (CONS 'HPUT
+                                           (CONS |stateVar|
+                                            (CONS |extraArgumentCode|
+                                             (CONS |tripleCode| NIL))))
+                                          NIL)))
+                                       NIL)))
+                               NIL))))
+             (SPADLET |mbody|
+                      (PROGN
+                        (SPADLET |preset|
+                                 (CONS |initialSetCode|
+                                       (APPEND |initialResetCode|
+                                        (CONS
+                                         (CONS 'LET
+                                          (CONS |max|
+                                           (CONS
+                                            (CONS 'ELT
+                                             (CONS |stateVar|
+                                              (CONS 0 NIL)))
+                                            NIL)))
+                                         NIL))))
+                        (SPADLET |phrase1|
+                                 (CONS (CONS 'AND
+                                        (CONS
+                                         (CONS 'LET
+                                          (CONS |max|
+                                           (CONS
+                                            (CONS 'ELT
+                                             (CONS |stateVar|
+                                              (CONS 0 NIL)))
+                                            NIL)))
+                                         (CONS
+                                          (CONS 'GE
+                                           (CONS |sharpArg|
+                                            (CONS |max| NIL)))
+                                          NIL)))
+                                       (CONS
+                                        (CONS |auxfn|
+                                         (APPEND |argl|
+                                          (CONS |stateVar| NIL)))
+                                        NIL)))
+                        (SPADLET |phrase2|
+                                 (CONS (CONS 'GT
+                                        (CONS |sharpArg|
+                                         (CONS
+                                          (CONS 'SETQ
+                                           (CONS |max|
+                                            (CONS
+                                             (CONS 'DIFFERENCE
+                                              (CONS |max|
+                                               (CONS |k| NIL)))
+                                             NIL)))
+                                          NIL)))
+                                       (CONS
+                                        (CONS 'ELT
+                                         (CONS |stateVar|
+                                          (CONS
+                                           (CONS 'QSADD1
+                                            (CONS
+                                             (CONS 'QSDIFFERENCE
+                                              (CONS |k|
+                                               (CONS
+                                                (CONS 'DIFFERENCE
+                                                 (CONS |sharpArg|
+                                                  (CONS |max| NIL)))
+                                                NIL)))
+                                             NIL))
+                                           NIL)))
+                                        NIL)))
+                        (SPADLET |phrase3|
+                                 (CONS (CONS 'GT
+                                        (CONS |sharpArg|
+                                         (CONS |n| NIL)))
+                                       (CONS
+                                        (CONS |auxfn|
+                                         (APPEND |argl|
+                                          (CONS
+                                           (CONS 'LIST
+                                            (CONS |n| |initCode|))
+                                           NIL)))
+                                        NIL)))
+                        (SPADLET |phrase4|
+                                 (CONS (CONS 'GT
+                                        (CONS |sharpArg|
+                                         (CONS (SPADDIFFERENCE |n| |k|)
+                                          NIL)))
+                                       (CONS
+                                        (CONS 'ELT
+                                         (CONS (CONS 'LIST |initCode|)
+                                          (CONS
+                                           (CONS 'QSDIFFERENCE
+                                            (CONS |n|
+                                             (CONS |sharpArg| NIL)))
+                                           NIL)))
+                                        NIL)))
+                        (SPADLET |phrase5|
+                                 (CONS ''T
+                                       (CONS
+                                        (CONS '|recurrenceError|
+                                         (CONS (MKQ |op|)
+                                          (CONS |sharpArg| NIL)))
+                                        NIL)))
+                        (CONS 'PROGN
+                              (APPEND |preset|
+                                      (CONS
+                                       (CONS 'COND
+                                        (CONS |phrase1|
+                                         (CONS |phrase2|
+                                          (CONS |phrase3|
+                                           (CONS |phrase4|
+                                            (CONS |phrase5| NIL))))))
+                                       NIL)))))
+             (SPADLET |mainFunction|
+                      (CONS |nam|
+                            (CONS (CONS 'LAM
+                                        (CONS |margl|
+                                         (CONS |mbody| NIL)))
+                                  NIL)))
+             (|sayKeyedMsg| 'S2IX0001 (CONS |op| NIL))
+             (|compileInteractive| |computeFunction|)
+             (|compileInteractive| |mainFunction|)
+             (SPADLET |cacheType| '|recurrence|)
+             (SPADLET |cacheCountCode|
+                      (CONS '|nodeCount| (CONS |stateNam| NIL)))
+             (SPADLET |cacheVector|
+                      (|mkCacheVec| |op| |stateNam| |cacheType|
+                          |cacheResetCode| |cacheCountCode|))
+             (SPADLET |$e|
+                      (|put| |nam| '|cacheInfo| |cacheVector| |$e|))
+             |nam|)))))
+
+;nodeCount x == NUMOFNODES x
+
+;;;     ***       |nodeCount| REDEFINED
+
+(DEFUN |nodeCount| (|x|) (NUMOFNODES |x|)) 
+
+;recurrenceError(op,arg) == throwKeyedMsg("S2IX0002",[op,arg])
+
+;;;     ***       |recurrenceError| REDEFINED
+
+(DEFUN |recurrenceError| (|op| |arg|)
+  (|throwKeyedMsg| 'S2IX0002 (CONS |op| (CONS |arg| NIL))))
+
+;mkCacheVec(op,nam,kind,resetCode,countCode) ==
+;  [op,nam,kind,resetCode,countCode]
+
+;;;     ***       |mkCacheVec| REDEFINED
+
+(DEFUN |mkCacheVec| (|op| |nam| |kind| |resetCode| |countCode|)
+  (CONS |op|
+        (CONS |nam|
+              (CONS |kind| (CONS |resetCode| (CONS |countCode| NIL))))))
+
+;-- reportCacheStore vl ==
+;--   sayMSG concat(centerString('"Name",22,'" "),"   Kind          #Cells")
+;--   sayMSG concat(centerString('"----",22,'" "),"   ----          ------")
+;--   for x in vl repeat reportCacheStoreFor x
+;--
+;-- op2String op ==
+;--   u:= linearFormatName op
+;--   atom u => PNAME u
+;--   "STRCONC"/u
+;--
+;-- reportCacheStorePrint(op,kind,count) ==
+;--   ops:= op2String op
+;--   opString:= centerString(ops,22,'" ")
+;--   kindString:= centerString(PNAME kind,10,'" ")
+;--   countString:= centerString(count,19,'" ")
+;--   sayMSG concat(opString,kindString,countString)
+;--
+;-- reportCacheStoreFor op ==
+;--   u:= getI(op,'localModemap) =>
+;--     for [['local,target,:.],[.,fn],:.] in u repeat
+;--       [op1,cacheName,kind,.,countCode]:= getI(fn,'cacheInfo) or
+;--         keyedSystemError("S2GE0016",['"reportCacheStoreFor",
+;--           '"missing cache information vector"])
+;--       reportCacheStorePrint(op,kind,eval countCode)
+;--     true
+;--   u:= getI(op,"cache") =>
+;--     reportCacheStorePrint(op,'variable,nodeCount u)
+;--   nil
+;
+;clearCache x ==
+;  get(x,'localModemap,$e) or get(x,'mapBody,$e) =>
+;    for [map,:sub] in $mapSubNameAlist repeat
+;      map=x => _/UNTRACE_,2(sub,NIL)
+;    $e:= putHist(x,'localModemap,nil,$e)
+;    $e:= putHist(x,'mapBody,nil,$e)
+;    $e:= putHist(x,'localVars,nil,$e)
+;    sayKeyedMsg("S2IX0007",[x])
+
+;;;     ***       |clearCache| REDEFINED
+
+(DEFUN |clearCache| (|x|)
+  (PROG (|map| |sub|)
+  (declare (special |$e| |$mapSubNameAlist|))
+    (RETURN
+      (SEQ (COND
+             ((OR (|get| |x| '|localModemap| |$e|)
+                  (|get| |x| '|mapBody| |$e|))
+              (EXIT (SEQ (DO ((G166449 |$mapSubNameAlist|
+                                  (CDR G166449))
+                              (G166440 NIL))
+                             ((OR (ATOM G166449)
+                                  (PROGN
+                                    (SETQ G166440 (CAR G166449))
+                                    NIL)
+                                  (PROGN
+                                    (PROGN
+                                      (SPADLET |map| (CAR G166440))
+                                      (SPADLET |sub| (CDR G166440))
+                                      G166440)
+                                    NIL))
+                              NIL)
+                           (SEQ (EXIT (COND
+                                        ((BOOT-EQUAL |map| |x|)
+                                         (EXIT
+                                          (|/UNTRACE,2| |sub| NIL)))))))
+                         (SPADLET |$e|
+                                  (|putHist| |x| '|localModemap| NIL
+                                      |$e|))
+                         (SPADLET |$e|
+                                  (|putHist| |x| '|mapBody| NIL |$e|))
+                         (SPADLET |$e|
+                                  (|putHist| |x| '|localVars| NIL |$e|))
+                         (|sayKeyedMsg| 'S2IX0007 (CONS |x| NIL))))))))))
+
+;clearLocalModemaps x ==
+;  u:= get(x,"localModemap",$e) =>
+;    for sub in ASSOCRIGHT $mapSubNameAlist repeat
+;      _/UNTRACE_,2(sub,NIL)
+;    $e:= putHist(x,"localModemap",nil,$e)
+;    for mm in u repeat
+;      [.,fn,:.] := mm
+;      if def:= get(fn,'definition,$e) then
+;        $e:= putHist(x,'value,mkObj(def,$EmptyMode),$e)
+;      if cacheVec:= get(fn,'cacheInfo,$e) then
+;        SET(cacheVec.cacheName,NIL)
+;      -- now clear the property list of the identifier
+;      $e := addIntSymTabBinding(x,nil,$e)
+;    sayKeyedMsg("S2IX0007",[x])
+
+;;;     ***       |clearLocalModemaps| REDEFINED
+
+(DEFUN |clearLocalModemaps| (|x|)
+  (PROG (|u| |fn| |def| |cacheVec|)
+  (declare (special |$e| |$EmptyMode| |$mapSubNameAlist|))
+    (RETURN
+      (SEQ (COND
+             ((SPADLET |u| (|get| |x| '|localModemap| |$e|))
+              (EXIT (PROGN
+                      (DO ((G166471 (ASSOCRIGHT |$mapSubNameAlist|)
+                               (CDR G166471))
+                           (|sub| NIL))
+                          ((OR (ATOM G166471)
+                               (PROGN
+                                 (SETQ |sub| (CAR G166471))
+                                 NIL))
+                           NIL)
+                        (SEQ (EXIT (|/UNTRACE,2| |sub| NIL))))
+                      (SPADLET |$e|
+                               (|putHist| |x| '|localModemap| NIL |$e|))
+                      (DO ((G166484 |u| (CDR G166484)) (|mm| NIL))
+                          ((OR (ATOM G166484)
+                               (PROGN (SETQ |mm| (CAR G166484)) NIL))
+                           NIL)
+                        (SEQ (EXIT (PROGN
+                                     (SPADLET |fn| (CADR |mm|))
+                                     (COND
+                                       ((SPADLET |def|
+                                         (|get| |fn| '|definition|
+                                          |$e|))
+                                        (SPADLET |$e|
+                                         (|putHist| |x| '|value|
+                                          (|mkObj| |def| |$EmptyMode|)
+                                          |$e|))))
+                                     (COND
+                                       ((SPADLET |cacheVec|
+                                         (|get| |fn| '|cacheInfo| |$e|))
+                                        (SET (CADR |cacheVec|) NIL)))
+                                     (SPADLET |$e|
+                                      (|addIntSymTabBinding| |x| NIL
+                                       |$e|))))))
+                      (|sayKeyedMsg| 'S2IX0007 (CONS |x| NIL))))))))))
+
+;compileInteractive fn ==
+;  if $InteractiveMode then startTimingProcess 'compilation
+;  --following not used for common lisp
+;  --removeUnnecessaryLastArguments CADR fn
+;  if $reportCompilation then
+;    sayBrightlyI bright '"Generated LISP code for function:"
+;    pp fn
+;  optfn :=
+;     $InteractiveMode => [timedOptimization fn]
+;     [fn]
+;  result := compQuietly optfn
+;  if $InteractiveMode then stopTimingProcess 'compilation
+;  result
+
+;;;     ***       |compileInteractive| REDEFINED
+
+(DEFUN |compileInteractive| (|fn|)
+  (PROG (|optfn| |result|)
+  (declare (special |$InteractiveMode| |$reportCompilation|))
+    (RETURN
+      (PROGN
+        (COND
+          (|$InteractiveMode| (|startTimingProcess| '|compilation|)))
+        (COND
+          (|$reportCompilation|
+              (|sayBrightlyI|
+                  (|bright|
+                      (MAKESTRING "Generated LISP code for function:")))
+              (|pp| |fn|)))
+        (SPADLET |optfn|
+                 (COND
+                   (|$InteractiveMode|
+                       (CONS (|timedOptimization| |fn|) NIL))
+                   ('T (CONS |fn| NIL))))
+        (SPADLET |result| (|compQuietly| |optfn|))
+        (COND
+          (|$InteractiveMode| (|stopTimingProcess| '|compilation|)))
+        |result|))))
+
+;clearAllSlams x ==
+;  fn(x,nil) where
+;    fn(thoseToClear,thoseCleared) ==
+;      for x in thoseToClear | not MEMQ(x,thoseCleared) repeat
+;        slamListName:= mkCacheName x
+;        SET(slamListName,nil)
+;        thoseCleared:= ADJOIN(x,thoseCleared)
+;        someMoreToClear:=
+;          setDifference(LASSOC(x,$functorDependencyAlist),[:thoseToClear,:
+;            thoseCleared])
+;        NCONC(thoseToClear,someMoreToClear)
+
+;;;     ***       |clearAllSlams,fn| REDEFINED
+
+(DEFUN |clearAllSlams,fn| (|thoseToClear| |thoseCleared|)
+  (PROG (|slamListName| |someMoreToClear|)
+  (declare (special |$functorDependencyAlist|))
+    (RETURN
+      (SEQ (DO ((G166513 |thoseToClear| (CDR G166513)) (|x| NIL))
+               ((OR (ATOM G166513)
+                    (PROGN (SETQ |x| (CAR G166513)) NIL))
+                NIL)
+             (SEQ (EXIT (COND
+                          ((NULL (MEMQ |x| |thoseCleared|))
+                           (SEQ (SPADLET |slamListName|
+                                         (|mkCacheName| |x|))
+                                (SET |slamListName| NIL)
+                                (SPADLET |thoseCleared|
+                                         (ADJOIN |x| |thoseCleared|))
+                                (SPADLET |someMoreToClear|
+                                         (SETDIFFERENCE
+                                          (LASSOC |x|
+                                           |$functorDependencyAlist|)
+                                          (APPEND |thoseToClear|
+                                           |thoseCleared|)))
+                                (EXIT (NCONC |thoseToClear|
+                                       |someMoreToClear|))))))))))))
+
+
+;;;     ***       |clearAllSlams| REDEFINED
+
+(DEFUN |clearAllSlams| (|x|) (|clearAllSlams,fn| |x| NIL)) 
+
+;clearSlam("functor")==
+;  id:= mkCacheName functor
+;  SET(id,nil)
+
+;;;     ***       |clearSlam| REDEFINED
+
+(DEFUN |clearSlam,LAM| (|functor|)
+  (PROG (|id|)
+    (RETURN
+      (PROGN (SPADLET |id| (|mkCacheName| |functor|)) (SET |id| NIL)))))
+
+(DEFMACRO |clearSlam| (&WHOLE G166536 &REST G166537 &AUX G166535)
+  (DSETQ G166535 G166536)
+  (CONS '|clearSlam,LAM| (WRAP (CDR G166535) '(QUOTE))))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

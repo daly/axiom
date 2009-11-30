@@ -1,0 +1,573 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp rulesets.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;--% Mode and Type Resolution Rule Data and Ruleset Creation
+;--% resolveTT Rules
+;-- These rules are applied only once at the outermost position of a term
+;-- some things can't be done by term rewriting conveniently (e.g. set
+;-- difference), so a form is created which is interpreted by
+;-- resolveTTRed later. The meanings of these forms are:
+;-- Incl(x,y): y if x is a member of y, failed otherwise
+;-- SetEqual(x,y): x if y is a permutation of x, failed otherwise
+;-- SetComp(x,y): x-y, if y is a subset of x, failed otherwise
+;-- SetInter(x,y): intersection of x and y, if nonempty, failed otherwise
+;-- SetDiff(x,y): x-y, if x and y have a nonempty intersection, failed ...
+;-- These first rules will be expanded for each of MP, DMP and NDMP
+;SETANDFILEQ($mpolyTTRules,'( _
+;  ((Resolve (RN) (mpoly1 x t1)) . (mpoly1 x (Resolve (RN) t1))) _
+;  ((Resolve (UP x t1) (mpoly1 y t2)) . _
+;    (Resolve t1 (mpoly1 (Incl x y) t2))) _
+;  ((Resolve (mpoly1 x t1) (G t2)) . _
+;    (mpoly1 x (G (VarEqual t1 t2)))) _
+;  ((Resolve (VARIABLE x) (mpoly1 y t2)) . _
+;    (mpoly1 (Incl x y) t2)) _
+;  ((Resolve (mpoly1 x t1) (mpoly1 y t2)) . _
+;    (mpoly1 (SetEqual x y) (Resolve t1 t2))) _
+;  ((Resolve (mpoly1 x t1) (mpoly1 y t2)) . _
+;    (mpoly1 x (Resolve t1 (mpoly1 (SetComp y x) t2)))) _
+;  ((Resolve (mpoly1 x t1) (mpoly1 y t2)) . _
+;    (mpoly1 y (Resolve (mpoly1 (SetComp x y) t1) t2))) _
+;  ((Resolve (mpoly1 x t1) (mpoly1 y t2)) . _
+;    (mpoly1 (SetInter x y) (Resolve _
+;      (mpoly1 (SetDiff x y) t1) (mpoly1 (SetDiff y x) t2)))) _
+;  ))
+
+(SETANDFILEQ |$mpolyTTRules|
+    '(((|Resolve| (RN) (|mpoly1| |x| |t1|)) |mpoly1| |x|
+       (|Resolve| (RN) |t1|))
+      ((|Resolve| (UP |x| |t1|) (|mpoly1| |y| |t2|)) |Resolve| |t1|
+       (|mpoly1| (|Incl| |x| |y|) |t2|))
+      ((|Resolve| (|mpoly1| |x| |t1|) (G |t2|)) |mpoly1| |x|
+       (G (|VarEqual| |t1| |t2|)))
+      ((|Resolve| (VARIABLE |x|) (|mpoly1| |y| |t2|)) |mpoly1|
+       (|Incl| |x| |y|) |t2|)
+      ((|Resolve| (|mpoly1| |x| |t1|) (|mpoly1| |y| |t2|)) |mpoly1|
+       (|SetEqual| |x| |y|) (|Resolve| |t1| |t2|))
+      ((|Resolve| (|mpoly1| |x| |t1|) (|mpoly1| |y| |t2|)) |mpoly1| |x|
+       (|Resolve| |t1| (|mpoly1| (|SetComp| |y| |x|) |t2|)))
+      ((|Resolve| (|mpoly1| |x| |t1|) (|mpoly1| |y| |t2|)) |mpoly1| |y|
+       (|Resolve| (|mpoly1| (|SetComp| |x| |y|) |t1|) |t2|))
+      ((|Resolve| (|mpoly1| |x| |t1|) (|mpoly1| |y| |t2|)) |mpoly1|
+       (|SetInter| |x| |y|)
+       (|Resolve| (|mpoly1| (|SetDiff| |x| |y|) |t1|)
+           (|mpoly1| (|SetDiff| |y| |x|) |t2|)))))
+
+;-- These are the general rules, excluding those above.
+;SETANDFILEQ($generalTTRules, '( _
+;  ((Resolve (L (L t1)) (M t2)) . (M (Resolve t1 t2))) _
+;  ((Resolve (EQ t1) (B)) . (B)) _
+;  ((Resolve (SY) t1) . (Resolve (P (I)) t1)) _
+;  ((Resolve (M t1) (SM x t2)) . (M (Resolve t1 t2))) _
+;  ((Resolve (M t1) (RM x y t2)) . (M (Resolve t1 t2))) _
+;  ((Resolve (SM x t1) (RM y y t2)) . _
+;    (SM (VarEqual x y) (Resolve t1 t2))) _
+;  ((Resolve (V t1) (L t2)) . (V (Resolve t1 t2))) _
+;  ((Resolve (FF t1) (FR t2)) . (FR (Resolve t1 t2))) _
+;  ((Resolve (F) (RN)) . (F) ) _
+; _
+;  ((Resolve (OV x) (OV y)) . (OV (SetUnion x y))) _
+;  ((Resolve (P t1) (UP y t2)) . (Resolve (P t1) t2)) _
+; _
+;  ((Resolve (UP y t1) (G t2)) . (UP y (G (VarEqual t1 t2)))) _
+;  ((Resolve (P t1) (P t2)) . (P (Resolve t1 t2))) _
+;  ((Resolve (G t1) (G t2)) . (G (Resolve t1 t2))) _
+;  ((Resolve (G t1) (P t2)) . (P (G (VarEqual t1 t2)))) _
+; _
+;  ((Resolve (AF t1) (EF t2)) . (EF (Resolve t1 t2))) _
+;  ((Resolve (AF t1) (LF t2)) . (LF (Resolve t1 t2))) _
+;  ((Resolve (AF t1) (FE t2)) . (FE (Resolve t1 t2))) _
+;  ((Resolve (EF t1) (LF t2)) . (LF (Resolve t1 t2))) _
+;  ((Resolve (EF t1) (FE t2)) . (FE (Resolve t1 t2))) _
+;  ((Resolve (LF t1) (FE t2)) . (FE (Resolve t1 t2))) _
+; _
+;  ((Resolve (RN) (P t1)) . (P (Resolve (RN) t1))) _
+;  ((Resolve (RN) (UP x t1)) . (UP x (Resolve (RN) t1))) _
+;  ((Resolve (RN) (UPS x t1)) . (UPS x (Resolve (RN) t1))) _
+;  ((Resolve (RN) (CFPS x t1)) . (CFPS x (Resolve (RN) t1))) _
+; _
+;  ((Resolve (RR) (EF t1)) . (EF (Resolve (RR) t1))) _
+;  ((Resolve (P t1) (AF t2)) . (AF (Resolve t1 t2 ))) _
+;  ((Resolve (P t1) (EF t2)) . (EF (Resolve t1 t2 ))) _
+;  ((Resolve (P t1) (LF t2)) . (LF (Resolve t1 t2 ))) _
+; _
+;  ((Resolve (MP x t1) (DMP y t2)) . _
+;    (MP (SetEqual x y) (Resolve t1 t2))) _
+;  ((Resolve (MP x t1) (DMP y t2)) . _
+;    (MP x (Resolve t1 (DMP (SetComp y x) t2)))) _
+;  ((Resolve (MP x t1) (DMP y t2)) . _
+;    (MP y (Resolve (MP (SetComp x y) t1) t2))) _
+;  ((Resolve (MP x t1) (DMP y t2)) . _
+;    (MP (SetInter x y) (Resolve _
+;      (MP (SetDiff x y) t1) (DMP (SetDiff y x) t2)))) _
+; _
+;  ((Resolve (MP x t1) (NDMP y t2)) . _
+;    (MP (SetEqual x y) (Resolve t1 t2))) _
+;  ((Resolve (MP x t1) (NDMP y t2)) . _
+;    (MP x (Resolve t1 (NDMP (SetComp y x) t2)))) _
+;  ((Resolve (MP x t1) (NDMP y t2)) . _
+;    (MP y (Resolve (MP (SetComp x y) t1) t2))) _
+;  ((Resolve (MP x t1) (NDMP y t2)) . _
+;    (MP (SetInter x y) (Resolve _
+;      (MP (SetDiff x y) t1) (NDMP (SetDiff y x) t2)))) _
+; _
+;  ((Resolve (DMP x t1) (NDMP y t2)) . _
+;    (DMP (SetEqual x y) (Resolve t1 t2))) _
+;  ((Resolve (DMP x t1) (NDMP y t2)) . _
+;    (DMP x (Resolve t1 (NDMP (SetComp y x) t2)))) _
+;  ((Resolve (DMP x t1) (NDMP y t2)) . _
+;    (DMP y (Resolve (DMP (SetComp x y) t1) t2))) _
+;  ((Resolve (DMP x t1) (NDMP y t2)) . _
+;    (DMP (SetInter x y) (Resolve _
+;      (DMP (SetDiff x y) t1) (NDMP (SetDiff y x) t2)))) _
+;  ))
+
+(SETANDFILEQ |$generalTTRules|
+    '(((|Resolve| (L (L |t1|)) (M |t2|)) M (|Resolve| |t1| |t2|))
+      ((|Resolve| (EQ |t1|) (B)) B)
+      ((|Resolve| (SY) |t1|) |Resolve| (P (I)) |t1|)
+      ((|Resolve| (M |t1|) (SM |x| |t2|)) M (|Resolve| |t1| |t2|))
+      ((|Resolve| (M |t1|) (RM |x| |y| |t2|)) M (|Resolve| |t1| |t2|))
+      ((|Resolve| (SM |x| |t1|) (RM |y| |y| |t2|)) SM
+       (|VarEqual| |x| |y|) (|Resolve| |t1| |t2|))
+      ((|Resolve| (V |t1|) (L |t2|)) V (|Resolve| |t1| |t2|))
+      ((|Resolve| (FF |t1|) (FR |t2|)) FR (|Resolve| |t1| |t2|))
+      ((|Resolve| (F) (RN)) F)
+      ((|Resolve| (OV |x|) (OV |y|)) OV (|SetUnion| |x| |y|))
+      ((|Resolve| (P |t1|) (UP |y| |t2|)) |Resolve| (P |t1|) |t2|)
+      ((|Resolve| (UP |y| |t1|) (G |t2|)) UP |y|
+       (G (|VarEqual| |t1| |t2|)))
+      ((|Resolve| (P |t1|) (P |t2|)) P (|Resolve| |t1| |t2|))
+      ((|Resolve| (G |t1|) (G |t2|)) G (|Resolve| |t1| |t2|))
+      ((|Resolve| (G |t1|) (P |t2|)) P (G (|VarEqual| |t1| |t2|)))
+      ((|Resolve| (AF |t1|) (EF |t2|)) EF (|Resolve| |t1| |t2|))
+      ((|Resolve| (AF |t1|) (LF |t2|)) LF (|Resolve| |t1| |t2|))
+      ((|Resolve| (AF |t1|) (FE |t2|)) FE (|Resolve| |t1| |t2|))
+      ((|Resolve| (EF |t1|) (LF |t2|)) LF (|Resolve| |t1| |t2|))
+      ((|Resolve| (EF |t1|) (FE |t2|)) FE (|Resolve| |t1| |t2|))
+      ((|Resolve| (LF |t1|) (FE |t2|)) FE (|Resolve| |t1| |t2|))
+      ((|Resolve| (RN) (P |t1|)) P (|Resolve| (RN) |t1|))
+      ((|Resolve| (RN) (UP |x| |t1|)) UP |x| (|Resolve| (RN) |t1|))
+      ((|Resolve| (RN) (UPS |x| |t1|)) UPS |x| (|Resolve| (RN) |t1|))
+      ((|Resolve| (RN) (CFPS |x| |t1|)) CFPS |x| (|Resolve| (RN) |t1|))
+      ((|Resolve| (RR) (EF |t1|)) EF (|Resolve| (RR) |t1|))
+      ((|Resolve| (P |t1|) (AF |t2|)) AF (|Resolve| |t1| |t2|))
+      ((|Resolve| (P |t1|) (EF |t2|)) EF (|Resolve| |t1| |t2|))
+      ((|Resolve| (P |t1|) (LF |t2|)) LF (|Resolve| |t1| |t2|))
+      ((|Resolve| (MP |x| |t1|) (DMP |y| |t2|)) MP (|SetEqual| |x| |y|)
+       (|Resolve| |t1| |t2|))
+      ((|Resolve| (MP |x| |t1|) (DMP |y| |t2|)) MP |x|
+       (|Resolve| |t1| (DMP (|SetComp| |y| |x|) |t2|)))
+      ((|Resolve| (MP |x| |t1|) (DMP |y| |t2|)) MP |y|
+       (|Resolve| (MP (|SetComp| |x| |y|) |t1|) |t2|))
+      ((|Resolve| (MP |x| |t1|) (DMP |y| |t2|)) MP (|SetInter| |x| |y|)
+       (|Resolve| (MP (|SetDiff| |x| |y|) |t1|)
+           (DMP (|SetDiff| |y| |x|) |t2|)))
+      ((|Resolve| (MP |x| |t1|) (NDMP |y| |t2|)) MP
+       (|SetEqual| |x| |y|) (|Resolve| |t1| |t2|))
+      ((|Resolve| (MP |x| |t1|) (NDMP |y| |t2|)) MP |x|
+       (|Resolve| |t1| (NDMP (|SetComp| |y| |x|) |t2|)))
+      ((|Resolve| (MP |x| |t1|) (NDMP |y| |t2|)) MP |y|
+       (|Resolve| (MP (|SetComp| |x| |y|) |t1|) |t2|))
+      ((|Resolve| (MP |x| |t1|) (NDMP |y| |t2|)) MP
+       (|SetInter| |x| |y|)
+       (|Resolve| (MP (|SetDiff| |x| |y|) |t1|)
+           (NDMP (|SetDiff| |y| |x|) |t2|)))
+      ((|Resolve| (DMP |x| |t1|) (NDMP |y| |t2|)) DMP
+       (|SetEqual| |x| |y|) (|Resolve| |t1| |t2|))
+      ((|Resolve| (DMP |x| |t1|) (NDMP |y| |t2|)) DMP |x|
+       (|Resolve| |t1| (NDMP (|SetComp| |y| |x|) |t2|)))
+      ((|Resolve| (DMP |x| |t1|) (NDMP |y| |t2|)) DMP |y|
+       (|Resolve| (DMP (|SetComp| |x| |y|) |t1|) |t2|))
+      ((|Resolve| (DMP |x| |t1|) (NDMP |y| |t2|)) DMP
+       (|SetInter| |x| |y|)
+       (|Resolve| (DMP (|SetDiff| |x| |y|) |t1|)
+           (NDMP (|SetDiff| |y| |x|) |t2|)))))
+
+;-- The following creates the ruleset
+;createResolveTTRules() ==
+;  -- expand multivariate polynomial rules
+;  mps := '(MP DMP NDMP)
+;  mpRules := "append"/[SUBST(mp,'mpoly1,$mpolyTTRules) for mp in mps]
+;  $Res := CONS('(t1 t2 x y),
+;    EQSUBSTLIST($nameList,$abList,append($generalTTRules,mpRules)))
+;  true
+
+(DEFUN |createResolveTTRules| ()
+  (PROG (|mps| |mpRules|)
+  (declare (special |$generalTTRules| |$nameList| |$abList| |$Res|
+                    |$mpolyTTRules|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |mps| '(MP DMP NDMP))
+             (SPADLET |mpRules|
+                      (PROG (G166058)
+                        (SPADLET G166058 NIL)
+                        (RETURN
+                          (DO ((G166063 |mps| (CDR G166063))
+                               (|mp| NIL))
+                              ((OR (ATOM G166063)
+                                   (PROGN
+                                     (SETQ |mp| (CAR G166063))
+                                     NIL))
+                               G166058)
+                            (SEQ (EXIT (SETQ G166058
+                                        (APPEND G166058
+                                         (MSUBST |mp| '|mpoly1|
+                                          |$mpolyTTRules|)))))))))
+             (SPADLET |$Res|
+                      (CONS '(|t1| |t2| |x| |y|)
+                            (EQSUBSTLIST |$nameList| |$abList|
+                                (APPEND |$generalTTRules| |mpRules|))))
+             'T)))))
+
+;--% resolveTM Rules
+;-- Same rules as for resolveTT, with two exceptions:
+;-- Diff(x,y): removes y from x, if possible, failed otherwise
+;-- SetIncl(x,y): y if x is a subset of y, failed otherwise
+;-- These first rules will be expanded for each of MP, DMP and NDMP
+;SETANDFILEQ($mpolyTMRules,'( _
+;  ((Resolve (mpoly1 x t1) (P t2)) . (Resolve t1 (P t2))) _
+;  ((Resolve (mpoly1 (x) t1) (UP x t2)) . (UP x (Resolve t1 t2))) _
+;  ((Resolve (mpoly1 x t1) (UP y t2)) . _
+;    (UP y (Resolve (mpoly1 (Diff x y) t1) t2))) _
+;  ((Resolve (UP x t1) (mpoly1 y t2)) . _
+;    (Resolve t1 (mpoly1 (Incl x y) t2))) _
+;  ((Resolve (VARIABLE x) (mpoly1 y t2)) . _
+;    (mpoly1 (Incl x y) (Resolve (I) t2))) _
+;  ((Resolve (mpoly1 x t1) (mpoly2 y t2)) . _
+;    (Resolve t1 (mpoly2 (SetIncl x y) t2))) _
+;  ((Resolve (mpoly1 x t1) (mpoly2 y t2)) . _
+;    (mpoly2 y (Resolve (mpoly1 (SetComp x y) t1) t2))) _
+;  ((Resolve (mpoly1 x t1) (mpoly2 y t2)) . _
+;    (Resolve (mpoly1 (SetDiff x y) t1) (mpoly2 y t2))) _
+; ))
+
+(SETANDFILEQ |$mpolyTMRules|
+    '(((|Resolve| (|mpoly1| |x| |t1|) (P |t2|)) |Resolve| |t1|
+       (P |t2|))
+      ((|Resolve| (|mpoly1| (|x|) |t1|) (UP |x| |t2|)) UP |x|
+       (|Resolve| |t1| |t2|))
+      ((|Resolve| (|mpoly1| |x| |t1|) (UP |y| |t2|)) UP |y|
+       (|Resolve| (|mpoly1| (|Diff| |x| |y|) |t1|) |t2|))
+      ((|Resolve| (UP |x| |t1|) (|mpoly1| |y| |t2|)) |Resolve| |t1|
+       (|mpoly1| (|Incl| |x| |y|) |t2|))
+      ((|Resolve| (VARIABLE |x|) (|mpoly1| |y| |t2|)) |mpoly1|
+       (|Incl| |x| |y|) (|Resolve| (I) |t2|))
+      ((|Resolve| (|mpoly1| |x| |t1|) (|mpoly2| |y| |t2|)) |Resolve|
+       |t1| (|mpoly2| (|SetIncl| |x| |y|) |t2|))
+      ((|Resolve| (|mpoly1| |x| |t1|) (|mpoly2| |y| |t2|)) |mpoly2| |y|
+       (|Resolve| (|mpoly1| (|SetComp| |x| |y|) |t1|) |t2|))
+      ((|Resolve| (|mpoly1| |x| |t1|) (|mpoly2| |y| |t2|)) |Resolve|
+       (|mpoly1| (|SetDiff| |x| |y|) |t1|) (|mpoly2| |y| |t2|))))
+
+;-- These are the general rules, excluding those above.
+;SETANDFILEQ($generalTMRules,'( _
+;  ((Resolve (VARIABLE x) (P t1)) . (P (Resolve (I) t1))) _
+;  ((Resolve (VARIABLE x) (UP y t1)) . _
+;    (UP (VarEqual x y) (Resolve (I) t1))) _
+;  ((Resolve (VARIABLE x) (UPS y t1)) . _
+;    (UPS (VarEqual x y) (Resolve (I) t1))) _
+;  ((Resolve (VARIABLE x) (CFPS y t1)) . _
+;    (CFPS (VarEqual x y) (Resolve (RN) t1))) _
+;  ((Resolve (VARIABLE x) (ELFPS y t1)) . _
+;    (ELFPS (VarEqual x y) (Resolve (RN) t1))) _
+;  ((Resolve (VARIABLE x) (EF t1)) . (EF t1)) _
+;  ((Resolve (L (L (SY))) (M _*_*)) . (M (P (I)))) _
+;  ((Resolve (L (L (SY))) (SM x _*_*)) . (SM x (P (I)))) _
+;  ((Resolve (L (L t1)) (M t2)) . (M (Resolve t1 t2))) _
+;  ((Resolve (L (L t1)) (SM x t2)) . (SM x (Resolve t1 t2))) _
+;  ((Resolve (L (L t1)) (RM x y t2)) . (RM x y (Resolve t1 t2))) _
+;  ((Resolve (SY) t1) . (Resolve (P (I)) t1)) _
+;  ((Resolve (VARIABLE x) t1) . (Resolve (P (I)) t1)) _
+;  ((Resolve (SM x t1) (M t2)) . (M (Resolve t1 t2))) _
+;  ((Resolve (RM x y t1) (M t2)) . (M (Resolve t1 t2))) _
+; _
+;  ((Resolve (M t1) (L _*_*)) . (L (L t1))) _
+;  ((Resolve (SM x t1) (L _*_*)) . (L (L t1))) _
+;  ((Resolve (RM x y t1) (L _*_*)) . (L (L t1))) _
+;  ((Resolve (M t1) (L t2)) . (L (Resolve (L t1) t2))) _
+;  ((Resolve (SM x t1) (L t2)) . (L (Resolve (L t1) t2))) _
+;  ((Resolve (RM x y t1) (L t2)) . (L (Resolve (L t1) t2))) _
+; _
+;  ((Resolve (M t1) (V _*_*)) . (V (V t1))) _
+;  ((Resolve (SM x t1) (V _*_*)) . (V (V t1))) _
+;  ((Resolve (RM x y t1) (V _*_*)) . (V (V t1))) _
+;  ((Resolve (M t1) (V t2)) . (V (Resolve (V t1) t2))) _
+;  ((Resolve (SM x t1) (V t2)) . (V (Resolve (V t1) t2))) _
+;  ((Resolve (RM x y t1) (V t2)) . (V (Resolve (V t1) t2))) _
+; _
+;  ((Resolve (L t1) (V t2)) . (V (Resolve t1 t2))) _
+;  ((Resolve (V t1) (L t2)) . (L (Resolve t1 t2))) _
+;  ((Resolve (FF t1) (FR t2)) . (FR (Resolve t1 t2))) _
+;  ((Resolve (UP x t1) (P t2)) . (Resolve t1 (P t2))) _
+; ))
+
+(SETANDFILEQ |$generalTMRules|
+    '(((|Resolve| (VARIABLE |x|) (P |t1|)) P (|Resolve| (I) |t1|))
+      ((|Resolve| (VARIABLE |x|) (UP |y| |t1|)) UP (|VarEqual| |x| |y|)
+       (|Resolve| (I) |t1|))
+      ((|Resolve| (VARIABLE |x|) (UPS |y| |t1|)) UPS
+       (|VarEqual| |x| |y|) (|Resolve| (I) |t1|))
+      ((|Resolve| (VARIABLE |x|) (CFPS |y| |t1|)) CFPS
+       (|VarEqual| |x| |y|) (|Resolve| (RN) |t1|))
+      ((|Resolve| (VARIABLE |x|) (ELFPS |y| |t1|)) ELFPS
+       (|VarEqual| |x| |y|) (|Resolve| (RN) |t1|))
+      ((|Resolve| (VARIABLE |x|) (EF |t1|)) EF |t1|)
+      ((|Resolve| (L (L (SY))) (M **)) M (P (I)))
+      ((|Resolve| (L (L (SY))) (SM |x| **)) SM |x| (P (I)))
+      ((|Resolve| (L (L |t1|)) (M |t2|)) M (|Resolve| |t1| |t2|))
+      ((|Resolve| (L (L |t1|)) (SM |x| |t2|)) SM |x|
+       (|Resolve| |t1| |t2|))
+      ((|Resolve| (L (L |t1|)) (RM |x| |y| |t2|)) RM |x| |y|
+       (|Resolve| |t1| |t2|))
+      ((|Resolve| (SY) |t1|) |Resolve| (P (I)) |t1|)
+      ((|Resolve| (VARIABLE |x|) |t1|) |Resolve| (P (I)) |t1|)
+      ((|Resolve| (SM |x| |t1|) (M |t2|)) M (|Resolve| |t1| |t2|))
+      ((|Resolve| (RM |x| |y| |t1|) (M |t2|)) M (|Resolve| |t1| |t2|))
+      ((|Resolve| (M |t1|) (L **)) L (L |t1|))
+      ((|Resolve| (SM |x| |t1|) (L **)) L (L |t1|))
+      ((|Resolve| (RM |x| |y| |t1|) (L **)) L (L |t1|))
+      ((|Resolve| (M |t1|) (L |t2|)) L (|Resolve| (L |t1|) |t2|))
+      ((|Resolve| (SM |x| |t1|) (L |t2|)) L (|Resolve| (L |t1|) |t2|))
+      ((|Resolve| (RM |x| |y| |t1|) (L |t2|)) L
+       (|Resolve| (L |t1|) |t2|))
+      ((|Resolve| (M |t1|) (V **)) V (V |t1|))
+      ((|Resolve| (SM |x| |t1|) (V **)) V (V |t1|))
+      ((|Resolve| (RM |x| |y| |t1|) (V **)) V (V |t1|))
+      ((|Resolve| (M |t1|) (V |t2|)) V (|Resolve| (V |t1|) |t2|))
+      ((|Resolve| (SM |x| |t1|) (V |t2|)) V (|Resolve| (V |t1|) |t2|))
+      ((|Resolve| (RM |x| |y| |t1|) (V |t2|)) V
+       (|Resolve| (V |t1|) |t2|))
+      ((|Resolve| (L |t1|) (V |t2|)) V (|Resolve| |t1| |t2|))
+      ((|Resolve| (V |t1|) (L |t2|)) L (|Resolve| |t1| |t2|))
+      ((|Resolve| (FF |t1|) (FR |t2|)) FR (|Resolve| |t1| |t2|))
+      ((|Resolve| (UP |x| |t1|) (P |t2|)) |Resolve| |t1| (P |t2|))))
+
+;-- Private abbreviation table for resolve rules
+;SETANDFILEQ($resolveAbbreviations, '( _
+;    (P .  Polynomial) _
+;    (G .  Gaussian) _
+;    (L .  List) _
+;    (M .  Matrix) _
+;    (EQ . Equation) _
+;    (B .  Boolean) _
+;    (SY . Symbol) _
+;    (I .  Integer) _
+;    (SM . SquareMatrix) _
+;    (RM . RectangularMatrix) _
+;    (V .  Vector) _
+;    (FF . FactoredForm) _
+;    (FR . FactoredRing) _
+;    (RN . RationalNumber) _
+;    (F .  Float) _
+;    (OV . OrderedVariableList) _
+;    (UP . UnivariatePoly) _
+;    (DMP . DistributedMultivariatePolynomial) _
+;    (MP . MultivariatePolynomial) _
+;    (HDMP . HomogeneousDistributedMultivariatePolynomial) _
+;    (QF . QuotientField) _
+;    (RF . RationalFunction) _
+;    (RE . RadicalExtension) _
+;    (RR . RationalRadicals) _
+;    (UPS . UnivariatePowerSeries) _
+;    (CFPS . ContinuedFractionPowerSeries) _
+;    (ELFPS . EllipticFunctionPowerSeries) _
+;    (EF . ElementaryFunction) _
+;    (VARIABLE . Variable) _
+; ))
+
+(SETANDFILEQ |$resolveAbbreviations|
+    '((P . |Polynomial|) (G . |Gaussian|) (L . |List|) (M . |Matrix|)
+      (EQ . |Equation|) (B . |Boolean|) (SY . |Symbol|) (I . |Integer|)
+      (SM . |SquareMatrix|) (RM . |RectangularMatrix|) (V . |Vector|)
+      (FF . |FactoredForm|) (FR . |FactoredRing|)
+      (RN . |RationalNumber|) (F . |Float|)
+      (OV . |OrderedVariableList|) (UP . |UnivariatePoly|)
+      (DMP . |DistributedMultivariatePolynomial|)
+      (MP . |MultivariatePolynomial|)
+      (HDMP . |HomogeneousDistributedMultivariatePolynomial|)
+      (QF . |QuotientField|) (RF . |RationalFunction|)
+      (RE . |RadicalExtension|) (RR . |RationalRadicals|)
+      (UPS . |UnivariatePowerSeries|)
+      (CFPS . |ContinuedFractionPowerSeries|)
+      (ELFPS . |EllipticFunctionPowerSeries|)
+      (EF . |ElementaryFunction|) (VARIABLE . |Variable|)))
+
+;SETANDFILEQ($newResolveAbbreviations, '( _
+;    (P .  Polynomial) _
+;    (G .  Complex) _
+;    (L .  List) _
+;    (M .  Matrix) _
+;    (EQ . Equation) _
+;    (B .  Boolean) _
+;    (SY . Symbol) _
+;    (I .  Integer) _
+;    (SM . SquareMatrix) _
+;    (RM . RectangularMatrix) _
+;    (V .  Vector) _
+;    (FF . Factored) _
+;    (FR . Factored) _
+;    (F .  Float) _
+;    (OV . OrderedVariableList) _
+;    (UP . UnivariatePolynomial) _
+;    (DMP . DistributedMultivariatePolynomial) _
+;    (MP . MultivariatePolynomial) _
+;    (HDMP . HomogeneousDistributedMultivariatePolynomial) _
+;    (QF . Fraction) _
+;    (UPS . UnivariatePowerSeries) _
+;    (VARIABLE . Variable) _
+; ))
+
+(SETANDFILEQ |$newResolveAbbreviations|
+    '((P . |Polynomial|) (G . |Complex|) (L . |List|) (M . |Matrix|)
+      (EQ . |Equation|) (B . |Boolean|) (SY . |Symbol|) (I . |Integer|)
+      (SM . |SquareMatrix|) (RM . |RectangularMatrix|) (V . |Vector|)
+      (FF . |Factored|) (FR . |Factored|) (F . |Float|)
+      (OV . |OrderedVariableList|) (UP . |UnivariatePolynomial|)
+      (DMP . |DistributedMultivariatePolynomial|)
+      (MP . |MultivariatePolynomial|)
+      (HDMP . |HomogeneousDistributedMultivariatePolynomial|)
+      (QF . |Fraction|) (UPS . |UnivariatePowerSeries|)
+      (VARIABLE . |Variable|)))
+
+;-- The following creates the ruleset
+;createResolveTMRules() ==
+;  -- expand multivariate polynomial rules
+;  mps := '(MP DMP NDMP)
+;  mpRules0 := "append"/[SUBST(mp,'mpoly1,$mpolyTMRules) for mp in mps]
+;  mpRules := "append"/[SUBST(mp,'mpoly2,mpRules0) for mp in mps]
+;  $ResMode := CONS('(t1 t2 x y),
+;    EQSUBSTLIST($nameList,$abList,append(mpRules,$generalTMRules)))
+;  true
+
+(DEFUN |createResolveTMRules| ()
+  (PROG (|mps| |mpRules0| |mpRules|)
+  (declare (special |$generalTMRules| |$nameList| |$abList| |$ResMode|
+                    |$mpolyTMRules|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |mps| '(MP DMP NDMP))
+             (SPADLET |mpRules0|
+                      (PROG (G166077)
+                        (SPADLET G166077 NIL)
+                        (RETURN
+                          (DO ((G166082 |mps| (CDR G166082))
+                               (|mp| NIL))
+                              ((OR (ATOM G166082)
+                                   (PROGN
+                                     (SETQ |mp| (CAR G166082))
+                                     NIL))
+                               G166077)
+                            (SEQ (EXIT (SETQ G166077
+                                        (APPEND G166077
+                                         (MSUBST |mp| '|mpoly1|
+                                          |$mpolyTMRules|)))))))))
+             (SPADLET |mpRules|
+                      (PROG (G166088)
+                        (SPADLET G166088 NIL)
+                        (RETURN
+                          (DO ((G166093 |mps| (CDR G166093))
+                               (|mp| NIL))
+                              ((OR (ATOM G166093)
+                                   (PROGN
+                                     (SETQ |mp| (CAR G166093))
+                                     NIL))
+                               G166088)
+                            (SEQ (EXIT (SETQ G166088
+                                        (APPEND G166088
+                                         (MSUBST |mp| '|mpoly2|
+                                          |mpRules0|)))))))))
+             (SPADLET |$ResMode|
+                      (CONS '(|t1| |t2| |x| |y|)
+                            (EQSUBSTLIST |$nameList| |$abList|
+                                (APPEND |mpRules| |$generalTMRules|))))
+             'T)))))
+
+;createTypeEquivRules() ==
+;  -- used by eqType, for example
+;  $TypeEQ := CONS('(t1), EQSUBSTLIST($nameList,$abList,'(
+;    ((QF (P t1)) . (RF t1))
+;      ((QF (I)) . (RN))
+;        ((RE (RN)) . (RR)) )))
+;  $TypeEqui := CONS(CAR $TypeEQ, [[b,:a] for [a,:b] in CDR $TypeEQ])
+;  true
+
+(DEFUN |createTypeEquivRules| ()
+  (PROG (|a| |b|)
+  (declare (special |$TypeEQ| |$TypeEqui| |$abList| |$nameList|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$TypeEQ|
+                      (CONS '(|t1|)
+                            (EQSUBSTLIST |$nameList| |$abList|
+                                '(((QF (P |t1|)) RF |t1|) ((QF (I)) RN)
+                                  ((RE (RN)) RR)))))
+             (SPADLET |$TypeEqui|
+                      (CONS (CAR |$TypeEQ|)
+                            (PROG (G166118)
+                              (SPADLET G166118 NIL)
+                              (RETURN
+                                (DO ((G166124 (CDR |$TypeEQ|)
+                                      (CDR G166124))
+                                     (G166108 NIL))
+                                    ((OR (ATOM G166124)
+                                      (PROGN
+                                        (SETQ G166108
+                                         (CAR G166124))
+                                        NIL)
+                                      (PROGN
+                                        (PROGN
+                                          (SPADLET |a| (CAR G166108))
+                                          (SPADLET |b| (CDR G166108))
+                                          G166108)
+                                        NIL))
+                                     (NREVERSE0 G166118))
+                                  (SEQ (EXIT
+                                        (SETQ G166118
+                                         (CONS (CONS |b| |a|)
+                                          G166118)))))))))
+             'T)))))
+
+;initializeRuleSets() ==
+;  $abList: local :=
+;    ASSOCLEFT $newResolveAbbreviations
+;  $nameList: local :=
+;    ASSOCRIGHT $newResolveAbbreviations
+;  createResolveTTRules()
+;  createResolveTMRules()
+;  createTypeEquivRules()
+;  $ruleSetsInitialized := true
+;  true
+
+(DEFUN |initializeRuleSets| ()
+  (PROG (|$abList| |$nameList|)
+    (DECLARE (SPECIAL |$abList| |$nameList| |$ruleSetsInitialized|
+                      |$newResolveAbbreviations| |$newResolveAbbreviations|))
+    (RETURN
+      (PROGN
+        (SPADLET |$abList| (ASSOCLEFT |$newResolveAbbreviations|))
+        (SPADLET |$nameList| (ASSOCRIGHT |$newResolveAbbreviations|))
+        (|createResolveTTRules|)
+        (|createResolveTMRules|)
+        (|createTypeEquivRules|)
+        (SPADLET |$ruleSetsInitialized| 'T)
+        'T))))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

@@ -1,0 +1,1222 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp template.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;getOperationAlistFromLisplib x ==
+;  -- used to be in clammed.boot. Moved on 1/24/94
+;--+
+;--  newType? x => GETDATABASE(x, 'OPERATIONALIST)
+;  NRTgetOperationAlistFromLisplib x
+
+(DEFUN |getOperationAlistFromLisplib| (|x|)
+  (|NRTgetOperationAlistFromLisplib| |x|))
+
+;NRTgetOperationAlistFromLisplib x ==
+;  u := GETDATABASE(x, 'OPERATIONALIST)
+;--  u := removeZeroOneDestructively u
+;  null u => u          -- this can happen for Object
+;  CAAR u = '_$unique => rest u
+;  f:= addConsDB '(NIL T ELT)
+;  for [op,:sigList] in u repeat
+;    for items in tails sigList repeat
+;      [sig,:r] := first items
+;      if r is [.,:s] then
+;        if s is [.,:t] then
+;          if t is [.] then nil
+;          else RPLACD(s,QCDDR f)
+;        else RPLACD(r,QCDR f)
+;      else RPLACD(first items,f)
+;      RPLACA(items,addConsDB CAR items)
+;  u and markUnique u
+
+(DEFUN |NRTgetOperationAlistFromLisplib| (|x|)
+  (PROG (|u| |f| |op| |sigList| |LETTMP#1| |sig| |r| |s| |t|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |u| (GETDATABASE |x| 'OPERATIONALIST))
+             (COND
+               ((NULL |u|) |u|)
+               ((BOOT-EQUAL (CAAR |u|) '|$unique|) (CDR |u|))
+               ('T (SPADLET |f| (|addConsDB| '(NIL T ELT)))
+                (DO ((G166086 |u| (CDR G166086)) (G166068 NIL))
+                    ((OR (ATOM G166086)
+                         (PROGN (SETQ G166068 (CAR G166086)) NIL)
+                         (PROGN
+                           (PROGN
+                             (SPADLET |op| (CAR G166068))
+                             (SPADLET |sigList| (CDR G166068))
+                             G166068)
+                           NIL))
+                     NIL)
+                  (SEQ (EXIT (DO ((|items| |sigList| (CDR |items|)))
+                                 ((ATOM |items|) NIL)
+                               (SEQ (EXIT
+                                     (PROGN
+                                       (SPADLET |LETTMP#1|
+                                        (CAR |items|))
+                                       (SPADLET |sig| (CAR |LETTMP#1|))
+                                       (SPADLET |r| (CDR |LETTMP#1|))
+                                       (COND
+                                         ((AND (PAIRP |r|)
+                                           (PROGN
+                                             (SPADLET |s| (QCDR |r|))
+                                             'T))
+                                          (COND
+                                            ((AND (PAIRP |s|)
+                                              (PROGN
+                                                (SPADLET |t|
+                                                 (QCDR |s|))
+                                                'T))
+                                             (COND
+                                               ((AND (PAIRP |t|)
+                                                 (EQ (QCDR |t|) NIL))
+                                                NIL)
+                                               ('T
+                                                (RPLACD |s|
+                                                 (QCDDR |f|)))))
+                                            ('T
+                                             (RPLACD |r| (QCDR |f|)))))
+                                         ('T
+                                          (RPLACD (CAR |items|) |f|)))
+                                       (RPLACA |items|
+                                        (|addConsDB| (CAR |items|))))))))))
+                (AND |u| (|markUnique| |u|)))))))))
+
+;markUnique x ==
+;  u := first x
+;  RPLACA(x,'(_$unique))
+;  RPLACD(x,[u,:rest x])
+;  rest x
+
+(DEFUN |markUnique| (|x|)
+  (PROG (|u|)
+    (RETURN
+      (PROGN
+        (SPADLET |u| (CAR |x|))
+        (RPLACA |x| '(|$unique|))
+        (RPLACD |x| (CONS |u| (CDR |x|)))
+        (CDR |x|)))))
+
+;--=======================================================================
+;--                   Instantiation/Run-Time Operations
+;--=======================================================================
+;evalSlotDomain(u,dollar) ==
+;  $returnNowhereFromGoGet: local := false
+;  $ : fluid := dollar
+;  $lookupDefaults : local := nil -- new world
+;  isDomain u => u
+;  u = '$ => dollar
+;  u = "$$" => dollar
+;  FIXP u =>
+;    VECP (y := dollar.u) => y
+;    isDomain y => y
+;    y is ['SETELT,:.] => eval y--lazy domains need to marked; this is dangerous?
+;    y is [v,:.] =>
+;      VECP v => lazyDomainSet(y,dollar,u)               --old style has [$,code,:lazyt]
+;      constructor? v or MEMQ(v,'(Record Union Mapping)) =>
+;        lazyDomainSet(y,dollar,u)                       --new style has lazyt
+;      y
+;    y
+;  u is ['NRTEVAL,y] =>
+;    y is ['ELT,:.] => evalSlotDomain(y,dollar)
+;    eval  y
+;  u is ['QUOTE,y] => y
+;  u is ['Record,:argl] =>
+;     FUNCALL('Record0,[[tag,:evalSlotDomain(dom,dollar)]
+;                                 for [.,tag,dom] in argl])
+;  u is ['Union,:argl] and first argl is ['_:,.,.] =>
+;     APPLY('Union,[['_:,tag,evalSlotDomain(dom,dollar)]
+;                                 for [.,tag,dom] in argl])
+;  u is ['spadConstant,d,n] =>
+;    dom := evalSlotDomain(d,dollar)
+;    SPADCALL(dom . n)
+;  u is ['ELT,d,n] =>
+;    dom := evalSlotDomain(d,dollar)
+;    slot := dom . n
+;    slot is ['newGoGet,:env] => replaceGoGetSlot env
+;    slot
+;  u is [op,:argl] => APPLY(op,[evalSlotDomain(x,dollar) for x in argl])
+;  systemErrorHere '"evalSlotDomain"
+
+(DEFUN |evalSlotDomain| (|u| |dollar|)
+  (PROG (|$returnNowhereFromGoGet| $ |$lookupDefaults| |v| |y|
+            |ISTMP#3| |tag| |ISTMP#1| |d| |ISTMP#2| |n| |dom| |slot|
+            |env| |op| |argl|)
+    (DECLARE (SPECIAL |$returnNowhereFromGoGet| $ |$lookupDefaults|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$returnNowhereFromGoGet| NIL)
+             (SPADLET $ |dollar|)
+             (SPADLET |$lookupDefaults| NIL)
+             (COND
+               ((|isDomain| |u|) |u|)
+               ((BOOT-EQUAL |u| '$) |dollar|)
+               ((BOOT-EQUAL |u| '$$) |dollar|)
+               ((FIXP |u|)
+                (COND
+                  ((VECP (SPADLET |y| (ELT |dollar| |u|))) |y|)
+                  ((|isDomain| |y|) |y|)
+                  ((AND (PAIRP |y|) (EQ (QCAR |y|) 'SETELT))
+                   (|eval| |y|))
+                  ((AND (PAIRP |y|)
+                        (PROGN (SPADLET |v| (QCAR |y|)) 'T))
+                   (COND
+                     ((VECP |v|) (|lazyDomainSet| |y| |dollar| |u|))
+                     ((OR (|constructor?| |v|)
+                          (MEMQ |v| '(|Record| |Union| |Mapping|)))
+                      (|lazyDomainSet| |y| |dollar| |u|))
+                     ('T |y|)))
+                  ('T |y|)))
+               ((AND (PAIRP |u|) (EQ (QCAR |u|) 'NRTEVAL)
+                     (PROGN
+                       (SPADLET |ISTMP#1| (QCDR |u|))
+                       (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                            (PROGN (SPADLET |y| (QCAR |ISTMP#1|)) 'T))))
+                (COND
+                  ((AND (PAIRP |y|) (EQ (QCAR |y|) 'ELT))
+                   (|evalSlotDomain| |y| |dollar|))
+                  ('T (|eval| |y|))))
+               ((AND (PAIRP |u|) (EQ (QCAR |u|) 'QUOTE)
+                     (PROGN
+                       (SPADLET |ISTMP#1| (QCDR |u|))
+                       (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                            (PROGN (SPADLET |y| (QCAR |ISTMP#1|)) 'T))))
+                |y|)
+               ((AND (PAIRP |u|) (EQ (QCAR |u|) '|Record|)
+                     (PROGN (SPADLET |argl| (QCDR |u|)) 'T))
+                (FUNCALL '|Record0|
+                         (PROG (G166199)
+                           (SPADLET G166199 NIL)
+                           (RETURN
+                             (DO ((G166205 |argl| (CDR G166205))
+                                  (G166136 NIL))
+                                 ((OR (ATOM G166205)
+                                      (PROGN
+                                        (SETQ G166136
+                                         (CAR G166205))
+                                        NIL)
+                                      (PROGN
+                                        (PROGN
+                                          (SPADLET |tag|
+                                           (CADR G166136))
+                                          (SPADLET |dom|
+                                           (CADDR G166136))
+                                          G166136)
+                                        NIL))
+                                  (NREVERSE0 G166199))
+                               (SEQ (EXIT
+                                     (SETQ G166199
+                                      (CONS
+                                       (CONS |tag|
+                                        (|evalSlotDomain| |dom|
+                                         |dollar|))
+                                       G166199)))))))))
+               ((AND (PAIRP |u|) (EQ (QCAR |u|) '|Union|)
+                     (PROGN (SPADLET |argl| (QCDR |u|)) 'T)
+                     (PROGN
+                       (SPADLET |ISTMP#1| (CAR |argl|))
+                       (AND (PAIRP |ISTMP#1|)
+                            (EQ (QCAR |ISTMP#1|) '|:|)
+                            (PROGN
+                              (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                              (AND (PAIRP |ISTMP#2|)
+                                   (PROGN
+                                     (SPADLET |ISTMP#3|
+                                      (QCDR |ISTMP#2|))
+                                     (AND (PAIRP |ISTMP#3|)
+                                      (EQ (QCDR |ISTMP#3|) NIL))))))))
+                (APPLY '|Union|
+                       (PROG (G166217)
+                         (SPADLET G166217 NIL)
+                         (RETURN
+                           (DO ((G166223 |argl| (CDR G166223))
+                                (G166152 NIL))
+                               ((OR (ATOM G166223)
+                                    (PROGN
+                                      (SETQ G166152 (CAR G166223))
+                                      NIL)
+                                    (PROGN
+                                      (PROGN
+                                        (SPADLET |tag|
+                                         (CADR G166152))
+                                        (SPADLET |dom|
+                                         (CADDR G166152))
+                                        G166152)
+                                      NIL))
+                                (NREVERSE0 G166217))
+                             (SEQ (EXIT (SETQ G166217
+                                         (CONS
+                                          (CONS '|:|
+                                           (CONS |tag|
+                                            (CONS
+                                             (|evalSlotDomain| |dom|
+                                              |dollar|)
+                                             NIL)))
+                                          G166217)))))))))
+               ((AND (PAIRP |u|) (EQ (QCAR |u|) '|spadConstant|)
+                     (PROGN
+                       (SPADLET |ISTMP#1| (QCDR |u|))
+                       (AND (PAIRP |ISTMP#1|)
+                            (PROGN
+                              (SPADLET |d| (QCAR |ISTMP#1|))
+                              (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                              (AND (PAIRP |ISTMP#2|)
+                                   (EQ (QCDR |ISTMP#2|) NIL)
+                                   (PROGN
+                                     (SPADLET |n| (QCAR |ISTMP#2|))
+                                     'T))))))
+                (SPADLET |dom| (|evalSlotDomain| |d| |dollar|))
+                (SPADCALL (ELT |dom| |n|)))
+               ((AND (PAIRP |u|) (EQ (QCAR |u|) 'ELT)
+                     (PROGN
+                       (SPADLET |ISTMP#1| (QCDR |u|))
+                       (AND (PAIRP |ISTMP#1|)
+                            (PROGN
+                              (SPADLET |d| (QCAR |ISTMP#1|))
+                              (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                              (AND (PAIRP |ISTMP#2|)
+                                   (EQ (QCDR |ISTMP#2|) NIL)
+                                   (PROGN
+                                     (SPADLET |n| (QCAR |ISTMP#2|))
+                                     'T))))))
+                (SPADLET |dom| (|evalSlotDomain| |d| |dollar|))
+                (SPADLET |slot| (ELT |dom| |n|))
+                (COND
+                  ((AND (PAIRP |slot|) (EQ (QCAR |slot|) '|newGoGet|)
+                        (PROGN (SPADLET |env| (QCDR |slot|)) 'T))
+                   (|replaceGoGetSlot| |env|))
+                  ('T |slot|)))
+               ((AND (PAIRP |u|)
+                     (PROGN
+                       (SPADLET |op| (QCAR |u|))
+                       (SPADLET |argl| (QCDR |u|))
+                       'T))
+                (APPLY |op|
+                       (PROG (G166234)
+                         (SPADLET G166234 NIL)
+                         (RETURN
+                           (DO ((G166239 |argl| (CDR G166239))
+                                (|x| NIL))
+                               ((OR (ATOM G166239)
+                                    (PROGN
+                                      (SETQ |x| (CAR G166239))
+                                      NIL))
+                                (NREVERSE0 G166234))
+                             (SEQ (EXIT (SETQ G166234
+                                         (CONS
+                                          (|evalSlotDomain| |x|
+                                           |dollar|)
+                                          G166234)))))))))
+               ('T (|systemErrorHere| (MAKESTRING "evalSlotDomain")))))))))
+
+;
+;--=======================================================================
+;--                       Loadtime Operations
+;--=======================================================================
+;setLoadTime alist ==
+;  for [nam,:val] in alist repeat SET(nam,eval val)
+
+(DEFUN |setLoadTime| (|alist|)
+  (PROG (|nam| |val|)
+    (RETURN
+      (SEQ (DO ((G166297 |alist| (CDR G166297)) (G166289 NIL))
+               ((OR (ATOM G166297)
+                    (PROGN (SETQ G166289 (CAR G166297)) NIL)
+                    (PROGN
+                      (PROGN
+                        (SPADLET |nam| (CAR G166289))
+                        (SPADLET |val| (CDR G166289))
+                        G166289)
+                      NIL))
+                NIL)
+             (SEQ (EXIT (SET |nam| (|eval| |val|)))))))))
+
+;setLoadTimeQ alist ==
+;  for [nam,:val] in alist repeat SET(nam,val)
+
+(DEFUN |setLoadTimeQ| (|alist|)
+  (PROG (|nam| |val|)
+    (RETURN
+      (SEQ (DO ((G166317 |alist| (CDR G166317)) (G166309 NIL))
+               ((OR (ATOM G166317)
+                    (PROGN (SETQ G166309 (CAR G166317)) NIL)
+                    (PROGN
+                      (PROGN
+                        (SPADLET |nam| (CAR G166309))
+                        (SPADLET |val| (CDR G166309))
+                        G166309)
+                      NIL))
+                NIL)
+             (SEQ (EXIT (SET |nam| |val|))))))))
+
+;makeTemplate vec ==
+;--called at instantiation time by setLoadTime
+;--the form ['makeTemplate,MKQ $template] is recorded by compDefineFunctor1
+;--  $template is set below in NRTdescendCodeTran and NRTaddDeltaOpt
+;  newVec := GETREFV SIZE vec
+;  for index in 0..MAXINDEX vec repeat
+;    item := vec.index
+;    null item => nil
+;    item is ['local,:.] => nil --this information used to for display of domains
+;    newVec.index :=
+;      atom item => item
+;      null atom first item =>
+;        [sig,dcIndex,op,:flag] := item
+;        code := 4*index
+;        if dcIndex > 0 then
+;          code := code + 2   --means "bind"
+;          else dcIndex := -dcIndex
+;        if flag = 'CONST then code := code + 1 --means "constant"
+;        sourceIndex := 8192*dcIndex + code
+;        uniqueSig:= addConsDB sig
+;        MKQ [op,uniqueSig,:sourceIndex]
+;      item is ['CONS,:.] =>  item --constant case
+;      MKQ item
+;  newVec
+
+(DEFUN |makeTemplate| (|vec|)
+  (PROG (|newVec| |item| |sig| |op| |flag| |dcIndex| |code|
+            |sourceIndex| |uniqueSig|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |newVec| (GETREFV (SIZE |vec|)))
+             (DO ((G166343 (MAXINDEX |vec|))
+                  (|index| 0 (QSADD1 |index|)))
+                 ((QSGREATERP |index| G166343) NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |item| (ELT |vec| |index|))
+                            (COND
+                              ((NULL |item|) NIL)
+                              ((AND (PAIRP |item|)
+                                    (EQ (QCAR |item|) '|local|))
+                               NIL)
+                              ('T
+                               (SETELT |newVec| |index|
+                                       (COND
+                                         ((ATOM |item|) |item|)
+                                         ((NULL (ATOM (CAR |item|)))
+                                          (SPADLET |sig| (CAR |item|))
+                                          (SPADLET |dcIndex|
+                                           (CADR |item|))
+                                          (SPADLET |op| (CADDR |item|))
+                                          (SPADLET |flag|
+                                           (CDDDR |item|))
+                                          (SPADLET |code|
+                                           (TIMES 4 |index|))
+                                          (COND
+                                            ((> |dcIndex| 0)
+                                             (SPADLET |code|
+                                              (PLUS |code| 2)))
+                                            ('T
+                                             (SPADLET |dcIndex|
+                                              (SPADDIFFERENCE
+                                               |dcIndex|))))
+                                          (COND
+                                            ((BOOT-EQUAL |flag| 'CONST)
+                                             (SPADLET |code|
+                                              (PLUS |code| 1))))
+                                          (SPADLET |sourceIndex|
+                                           (PLUS (TIMES 8192 |dcIndex|)
+                                            |code|))
+                                          (SPADLET |uniqueSig|
+                                           (|addConsDB| |sig|))
+                                          (MKQ
+                                           (CONS |op|
+                                            (CONS |uniqueSig|
+                                             |sourceIndex|))))
+                                         ((AND (PAIRP |item|)
+                                           (EQ (QCAR |item|) 'CONS))
+                                          |item|)
+                                         ('T (MKQ |item|))))))))))
+             |newVec|)))))
+
+;makeOpDirect u ==
+;  [nam,[addForm,:opList]] := u
+;  opList = 'derived => 'derived
+;  [[op,:[fn y for y in items]] for [op,:items] in opList] where fn y ==
+;        [sig,:r] := y
+;        uniqueSig := addConsDB sig
+;        predCode := 0
+;        isConstant := false
+;        r is [subSig,pred,'Subsumed] => [uniqueSig,'subsumed,addConsDB subSig]
+;        if r is [n,:s] then
+;          slot :=
+;            n is [p,:.] => p  --the CDR is linenumber of function definition
+;            n
+;          if s is [pred,:t] then
+;            predCode := (pred = 'T => 0; mkUniquePred pred)
+;            if t is [='CONST,:.] then isConstant := true
+;        index:= 8192*predCode
+;        if NUMBERP slot and slot ^= 0 then index := index + 2*slot
+;        if isConstant then index := index + 1
+;        [uniqueSig,:index]
+
+(DEFUN |makeOpDirect,fn| (|y|)
+  (PROG (|sig| |r| |uniqueSig| |subSig| |ISTMP#1| |ISTMP#2| |n| |s| |p|
+               |slot| |pred| |t| |predCode| |isConstant| |index|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |sig| (CAR |y|))
+             (SPADLET |r| (CDR |y|))
+             |y|)
+           (SPADLET |uniqueSig| (|addConsDB| |sig|))
+           (SPADLET |predCode| 0) (SPADLET |isConstant| NIL)
+           (IF (AND (PAIRP |r|)
+                    (PROGN
+                      (SPADLET |subSig| (QCAR |r|))
+                      (SPADLET |ISTMP#1| (QCDR |r|))
+                      (AND (PAIRP |ISTMP#1|)
+                           (PROGN
+                             (SPADLET |pred| (QCAR |ISTMP#1|))
+                             (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                             (AND (PAIRP |ISTMP#2|)
+                                  (EQ (QCDR |ISTMP#2|) NIL)
+                                  (EQ (QCAR |ISTMP#2|) '|Subsumed|))))))
+               (EXIT (CONS |uniqueSig|
+                           (CONS '|subsumed|
+                                 (CONS (|addConsDB| |subSig|) NIL)))))
+           (IF (AND (PAIRP |r|)
+                    (PROGN
+                      (SPADLET |n| (QCAR |r|))
+                      (SPADLET |s| (QCDR |r|))
+                      'T))
+               (SEQ (SPADLET |slot|
+                             (SEQ (IF (AND (PAIRP |n|)
+                                       (PROGN
+                                         (SPADLET |p| (QCAR |n|))
+                                         'T))
+                                      (EXIT |p|))
+                                  (EXIT |n|)))
+                    (EXIT (IF (AND (PAIRP |s|)
+                                   (PROGN
+                                     (SPADLET |pred| (QCAR |s|))
+                                     (SPADLET |t| (QCDR |s|))
+                                     'T))
+                              (SEQ (SPADLET |predCode|
+                                    (SEQ
+                                     (IF (BOOT-EQUAL |pred| 'T)
+                                      (EXIT 0))
+                                     (EXIT (|mkUniquePred| |pred|))))
+                                   (EXIT
+                                    (IF
+                                     (AND (PAIRP |t|)
+                                      (EQUAL (QCAR |t|) 'CONST))
+                                     (SPADLET |isConstant| 'T) NIL)))
+                              NIL)))
+               NIL)
+           (SPADLET |index| (TIMES 8192 |predCode|))
+           (IF (AND (NUMBERP |slot|) (NEQUAL |slot| 0))
+               (SPADLET |index| (PLUS |index| (TIMES 2 |slot|))) NIL)
+           (IF |isConstant| (SPADLET |index| (PLUS |index| 1)) NIL)
+           (EXIT (CONS |uniqueSig| |index|))))))
+
+(DEFUN |makeOpDirect| (|u|)
+  (PROG (|nam| |addForm| |opList| |op| |items|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |nam| (CAR |u|))
+             (SPADLET |addForm| (CAADR |u|))
+             (SPADLET |opList| (CDADR |u|))
+             (COND
+               ((BOOT-EQUAL |opList| '|derived|) '|derived|)
+               ('T
+                (PROG (G166433)
+                  (SPADLET G166433 NIL)
+                  (RETURN
+                    (DO ((G166439 |opList| (CDR G166439))
+                         (G166419 NIL))
+                        ((OR (ATOM G166439)
+                             (PROGN
+                               (SETQ G166419 (CAR G166439))
+                               NIL)
+                             (PROGN
+                               (PROGN
+                                 (SPADLET |op| (CAR G166419))
+                                 (SPADLET |items| (CDR G166419))
+                                 G166419)
+                               NIL))
+                         (NREVERSE0 G166433))
+                      (SEQ (EXIT (SETQ G166433
+                                       (CONS
+                                        (CONS |op|
+                                         (PROG (G166450)
+                                           (SPADLET G166450 NIL)
+                                           (RETURN
+                                             (DO
+                                              ((G166455 |items|
+                                                (CDR G166455))
+                                               (|y| NIL))
+                                              ((OR (ATOM G166455)
+                                                (PROGN
+                                                  (SETQ |y|
+                                                   (CAR G166455))
+                                                  NIL))
+                                               (NREVERSE0 G166450))
+                                               (SEQ
+                                                (EXIT
+                                                 (SETQ G166450
+                                                  (CONS
+                                                   (|makeOpDirect,fn|
+                                                    |y|)
+                                                   G166450))))))))
+                                        G166433))))))))))))))
+
+;--=======================================================================
+;--          Creation of System Sig/Pred Vectors & Hash Tables
+;--=======================================================================
+;mkUniquePred pred == putPredHash addConsDB pred
+
+(DEFUN |mkUniquePred| (|pred|) (|putPredHash| (|addConsDB| |pred|))) 
+;putPredHash pred == --pred MUST have had addConsDB applied to it
+;  if pred is [op,:u] and MEMQ(op,'(AND OR NOT)) then
+;    for x in u repeat putPredHash x
+;  k := HGET($predHash,pred) => k
+;  HPUT($predHash,pred,$predVectorFrontier)
+;  if $predVectorFrontier > MAXINDEX $predVector
+;    then $predVector := extendVectorSize $predVector
+;  $predVector.$predVectorFrontier := pred
+;  $predVectorFrontier := $predVectorFrontier + 1
+;  $predVectorFrontier - 1
+
+(DEFUN |putPredHash| (|pred|)
+  (PROG (|op| |u| |k|)
+  (declare (special |$predVectorFrontier| |$predVector| |$predHash|))
+    (RETURN
+      (SEQ (PROGN
+             (COND
+               ((AND (PAIRP |pred|)
+                     (PROGN
+                       (SPADLET |op| (QCAR |pred|))
+                       (SPADLET |u| (QCDR |pred|))
+                       'T)
+                     (MEMQ |op| '(AND OR NOT)))
+                (DO ((G166481 |u| (CDR G166481)) (|x| NIL))
+                    ((OR (ATOM G166481)
+                         (PROGN (SETQ |x| (CAR G166481)) NIL))
+                     NIL)
+                  (SEQ (EXIT (|putPredHash| |x|))))))
+             (COND
+               ((SPADLET |k| (HGET |$predHash| |pred|)) |k|)
+               ('T (HPUT |$predHash| |pred| |$predVectorFrontier|)
+                (COND
+                  ((> |$predVectorFrontier| (MAXINDEX |$predVector|))
+                   (SPADLET |$predVector|
+                            (|extendVectorSize| |$predVector|))))
+                (SETELT |$predVector| |$predVectorFrontier| |pred|)
+                (SPADLET |$predVectorFrontier|
+                         (PLUS |$predVectorFrontier| 1))
+                (SPADDIFFERENCE |$predVectorFrontier| 1))))))))
+
+;extendVectorSize v ==
+;  n:= MAXINDEX v
+;  m:= (7*n)/5   -- make 40% longer
+;  newVec := GETREFV m
+;  for i in 0..n repeat newVec.i := v.i
+;  newVec
+
+(DEFUN |extendVectorSize| (|v|)
+  (PROG (|n| |m| |newVec|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |n| (MAXINDEX |v|))
+             (SPADLET |m| (QUOTIENT (TIMES 7 |n|) 5))
+             (SPADLET |newVec| (GETREFV |m|))
+             (DO ((|i| 0 (QSADD1 |i|))) ((QSGREATERP |i| |n|) NIL)
+               (SEQ (EXIT (SETELT |newVec| |i| (ELT |v| |i|)))))
+             |newVec|)))))
+
+;mkSigPredVectors() ==
+;  $predHash:= MAKE_-HASHTABLE 'UEQUAL
+;  $consDB:= MAKE_-HASHTABLE 'UEQUAL
+;  $predVectorFrontier:= 1   --slot 0 in vector will be vacant
+;  $predVector:= GETREFV 100
+;  for nam in allConstructors() |
+;          null (GETDATABASE(nam, 'CONSTRUCTORKIND) = 'package) repeat
+;    for [op,:sigList] in GETDATABASE(nam,'OPERATIONALIST) repeat
+;      for [sig,:r] in sigList repeat
+;        addConsDB sig
+;        r is [.,pred,:.] => putPredHash addConsDB pred
+;  'done
+
+(DEFUN |mkSigPredVectors| ()
+  (PROG (|op| |sigList| |sig| |r| |ISTMP#1| |pred|)
+  (declare (special |$predVector| |$predVectorFrontier| |$consDB| |$predHash|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$predHash| (MAKE-HASHTABLE 'UEQUAL))
+             (SPADLET |$consDB| (MAKE-HASHTABLE 'UEQUAL))
+             (SPADLET |$predVectorFrontier| 1)
+             (SPADLET |$predVector| (GETREFV 100))
+             (DO ((G166538 (|allConstructors|) (CDR G166538))
+                  (|nam| NIL))
+                 ((OR (ATOM G166538)
+                      (PROGN (SETQ |nam| (CAR G166538)) NIL))
+                  NIL)
+               (SEQ (EXIT (COND
+                            ((NULL (BOOT-EQUAL
+                                    (GETDATABASE |nam|
+                                     'CONSTRUCTORKIND)
+                                    '|package|))
+                             (DO ((G166557
+                                      (GETDATABASE |nam|
+                                       'OPERATIONALIST)
+                                      (CDR G166557))
+                                  (G166517 NIL))
+                                 ((OR (ATOM G166557)
+                                      (PROGN
+                                        (SETQ G166517
+                                         (CAR G166557))
+                                        NIL)
+                                      (PROGN
+                                        (PROGN
+                                          (SPADLET |op|
+                                           (CAR G166517))
+                                          (SPADLET |sigList|
+                                           (CDR G166517))
+                                          G166517)
+                                        NIL))
+                                  NIL)
+                               (SEQ (EXIT
+                                     (DO
+                                      ((G166574 |sigList|
+                                        (CDR G166574))
+                                       (G166513 NIL))
+                                      ((OR (ATOM G166574)
+                                        (PROGN
+                                          (SETQ G166513
+                                           (CAR G166574))
+                                          NIL)
+                                        (PROGN
+                                          (PROGN
+                                            (SPADLET |sig|
+                                             (CAR G166513))
+                                            (SPADLET |r|
+                                             (CDR G166513))
+                                            G166513)
+                                          NIL))
+                                       NIL)
+                                       (SEQ
+                                        (EXIT
+                                         (PROGN
+                                           (|addConsDB| |sig|)
+                                           (COND
+                                             ((AND (PAIRP |r|)
+                                               (PROGN
+                                                 (SPADLET |ISTMP#1|
+                                                  (QCDR |r|))
+                                                 (AND (PAIRP |ISTMP#1|)
+                                                  (PROGN
+                                                    (SPADLET |pred|
+                                                     (QCAR |ISTMP#1|))
+                                                    'T))))
+                                              (|putPredHash|
+                                               (|addConsDB| |pred|))))))))))))))))
+             '|done|)))))
+
+;list2LongerVec(u,n) ==
+;  vec := GETREFV ((7*n)/5) -- make 40% longer
+;  for i in 0.. for x in u repeat vec.i := x
+;  vec
+
+(DEFUN |list2LongerVec| (|u| |n|)
+  (PROG (|vec|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |vec| (GETREFV (QUOTIENT (TIMES 7 |n|) 5)))
+             (DO ((|i| 0 (QSADD1 |i|)) (G166599 |u| (CDR G166599))
+                  (|x| NIL))
+                 ((OR (ATOM G166599)
+                      (PROGN (SETQ |x| (CAR G166599)) NIL))
+                  NIL)
+               (SEQ (EXIT (SETELT |vec| |i| |x|))))
+             |vec|)))))
+
+;squeezeConsDB u ==
+;  fn u where fn u ==
+;    VECP u => for i in 0..MAXINDEX u repeat fn u.i
+;    PAIRP u =>
+;      EQ(x := QCAR u,'QUOTE) => RPLAC(CADR u,addConsDB CADR u)
+;      squeezeConsDB x
+;      squeezeConsDB QCDR u
+;    nil
+;  u
+
+(DEFUN |squeezeConsDB,fn| (|u|)
+  (PROG (|x|)
+    (RETURN
+      (SEQ (IF (VECP |u|)
+               (EXIT (DO ((G166614 (MAXINDEX |u|))
+                          (|i| 0 (QSADD1 |i|)))
+                         ((QSGREATERP |i| G166614) NIL)
+                       (SEQ (EXIT (|squeezeConsDB,fn| (ELT |u| |i|)))))))
+           (IF (PAIRP |u|)
+               (EXIT (SEQ (IF (EQ (SPADLET |x| (QCAR |u|)) 'QUOTE)
+                              (EXIT (RPLAC (CADR |u|)
+                                     (|addConsDB| (CADR |u|)))))
+                          (|squeezeConsDB| |x|)
+                          (EXIT (|squeezeConsDB| (QCDR |u|))))))
+           (EXIT NIL)))))
+
+(DEFUN |squeezeConsDB| (|u|) (PROGN (|squeezeConsDB,fn| |u|) |u|))
+
+;mapConsDB x == [addConsDB y for y in x]
+
+(DEFUN |mapConsDB| (|x|)
+  (PROG ()
+    (RETURN
+      (SEQ (PROG (G166631)
+             (SPADLET G166631 NIL)
+             (RETURN
+               (DO ((G166636 |x| (CDR G166636)) (|y| NIL))
+                   ((OR (ATOM G166636)
+                        (PROGN (SETQ |y| (CAR G166636)) NIL))
+                    (NREVERSE0 G166631))
+                 (SEQ (EXIT (SETQ G166631
+                                  (CONS (|addConsDB| |y|) G166631)))))))))))
+
+;addConsDB x ==
+;  min x where
+;    min x ==
+;      y:=HGET($consDB,x)
+;      y => y
+;      PAIRP x =>
+;        for z in tails x repeat
+;          u:=min CAR z
+;          if not EQ(u,CAR z) then RPLACA(z,u)
+;        HashCheck x
+;      REFVECP x =>
+;        for i in 0..MAXINDEX x repeat
+;          x.i:=min (x.i)
+;        HashCheck x
+;      STRINGP x => HashCheck x
+;      x
+;    HashCheck x ==
+;      y:=HGET($consDB,x)
+;      y => y
+;      HPUT($consDB,x,x)
+;      x
+;  x
+
+(DEFUN |addConsDB,HashCheck| (|x|)
+  (PROG (|y|)
+  (declare (special |$consDB|))
+    (RETURN
+      (SEQ (SPADLET |y| (HGET |$consDB| |x|)) (IF |y| (EXIT |y|))
+           (HPUT |$consDB| |x| |x|) (EXIT |x|)))))
+
+(DEFUN |addConsDB,min| (|x|)
+  (PROG (|y| |u|)
+  (declare (special |$consDB|))
+    (RETURN
+      (SEQ (SPADLET |y| (HGET |$consDB| |x|)) (IF |y| (EXIT |y|))
+           (IF (PAIRP |x|)
+               (EXIT (SEQ (DO ((|z| |x| (CDR |z|))) ((ATOM |z|) NIL)
+                            (SEQ (SPADLET |u|
+                                          (|addConsDB,min| (CAR |z|)))
+                                 (EXIT (IF (NULL (EQ |u| (CAR |z|)))
+                                        (RPLACA |z| |u|) NIL))))
+                          (EXIT (|addConsDB,HashCheck| |x|)))))
+           (IF (REFVECP |x|)
+               (EXIT (SEQ (DO ((G166664 (MAXINDEX |x|))
+                               (|i| 0 (QSADD1 |i|)))
+                              ((QSGREATERP |i| G166664) NIL)
+                            (SEQ (EXIT (SETELT |x| |i|
+                                        (|addConsDB,min| (ELT |x| |i|))))))
+                          (EXIT (|addConsDB,HashCheck| |x|)))))
+           (IF (STRINGP |x|) (EXIT (|addConsDB,HashCheck| |x|)))
+           (EXIT |x|)))))
+
+
+(DEFUN |addConsDB| (|x|) (PROGN (|addConsDB,min| |x|) |x|))
+
+;--=======================================================================
+;--               Functions Creating Lisplib Information
+;--=======================================================================
+;NRTdescendCodeTran(u,condList) ==
+;--NRTbuildFunctor calls to fill $template slots with names of compiled functions
+;  null u => nil
+;  u is ['LIST] => nil
+;  u is [op,.,i,a] and MEMQ(op,'(SETELT QSETREFV)) =>
+;    null condList and a is ['CONS,fn,:.] =>
+;      RPLACA(u,'LIST)
+;      RPLACD(u,nil)
+;      $template.i :=
+;        fn = 'IDENTITY => a
+;        fn is ['dispatchFunction,fn'] => fn'
+;        fn
+;    nil   --code for this will be generated by the instantiator
+;  u is ['COND,:c] =>
+;    for [pred,:y] in c|y repeat NRTdescendCodeTran(first y,[pred,:condList])
+;  u is ['PROGN,:c] => for x in c repeat NRTdescendCodeTran(x,condList)
+;  nil
+
+(DEFUN |NRTdescendCodeTran| (|u| |condList|)
+  (PROG (|op| |ISTMP#2| |i| |ISTMP#3| |a| |fn| |ISTMP#1| |fn'| |pred| |y| |c|)
+  (declare (special |$template|))
+    (RETURN
+      (SEQ (COND
+             ((NULL |u|) NIL)
+             ((AND (PAIRP |u|) (EQ (QCDR |u|) NIL)
+                   (EQ (QCAR |u|) 'LIST))
+              NIL)
+             ((AND (PAIRP |u|)
+                   (PROGN
+                     (SPADLET |op| (QCAR |u|))
+                     (SPADLET |ISTMP#1| (QCDR |u|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (PROGN
+                                   (SPADLET |i| (QCAR |ISTMP#2|))
+                                   (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                                   (AND (PAIRP |ISTMP#3|)
+                                    (EQ (QCDR |ISTMP#3|) NIL)
+                                    (PROGN
+                                      (SPADLET |a| (QCAR |ISTMP#3|))
+                                      'T)))))))
+                   (MEMQ |op| '(SETELT QSETREFV)))
+              (COND
+                ((AND (NULL |condList|) (PAIRP |a|)
+                      (EQ (QCAR |a|) 'CONS)
+                      (PROGN
+                        (SPADLET |ISTMP#1| (QCDR |a|))
+                        (AND (PAIRP |ISTMP#1|)
+                             (PROGN
+                               (SPADLET |fn| (QCAR |ISTMP#1|))
+                               'T))))
+                 (RPLACA |u| 'LIST) (RPLACD |u| NIL)
+                 (SETELT |$template| |i|
+                         (COND
+                           ((BOOT-EQUAL |fn| 'IDENTITY) |a|)
+                           ((AND (PAIRP |fn|)
+                                 (EQ (QCAR |fn|) '|dispatchFunction|)
+                                 (PROGN
+                                   (SPADLET |ISTMP#1| (QCDR |fn|))
+                                   (AND (PAIRP |ISTMP#1|)
+                                    (EQ (QCDR |ISTMP#1|) NIL)
+                                    (PROGN
+                                      (SPADLET |fn'| (QCAR |ISTMP#1|))
+                                      'T))))
+                            |fn'|)
+                           ('T |fn|))))
+                ('T NIL)))
+             ((AND (PAIRP |u|) (EQ (QCAR |u|) 'COND)
+                   (PROGN (SPADLET |c| (QCDR |u|)) 'T))
+              (DO ((G166734 |c| (CDR G166734)) (G166724 NIL))
+                  ((OR (ATOM G166734)
+                       (PROGN (SETQ G166724 (CAR G166734)) NIL)
+                       (PROGN
+                         (PROGN
+                           (SPADLET |pred| (CAR G166724))
+                           (SPADLET |y| (CDR G166724))
+                           G166724)
+                         NIL))
+                   NIL)
+                (SEQ (EXIT (COND
+                             (|y| (|NRTdescendCodeTran| (CAR |y|)
+                                      (CONS |pred| |condList|))))))))
+             ((AND (PAIRP |u|) (EQ (QCAR |u|) 'PROGN)
+                   (PROGN (SPADLET |c| (QCDR |u|)) 'T))
+              (DO ((G166744 |c| (CDR G166744)) (|x| NIL))
+                  ((OR (ATOM G166744)
+                       (PROGN (SETQ |x| (CAR G166744)) NIL))
+                   NIL)
+                (SEQ (EXIT (|NRTdescendCodeTran| |x| |condList|)))))
+             ('T NIL))))))
+
+;--=======================================================================
+;--                  Miscellaneous Functions
+;--=======================================================================
+;NRTaddInner x ==
+;--called by genDeltaEntry and others that affect $NRTdeltaList
+;  PROGN
+;    atom x => nil
+;    x is ['Record,:l] =>
+;      for [.,.,y] in l repeat NRTinnerGetLocalIndex y
+;    first x in '(Union Mapping) =>
+;      for y in rest x repeat
+;         y is [":",.,z] => NRTinnerGetLocalIndex z
+;         NRTinnerGetLocalIndex y
+;    x is ['SubDomain,y,:.] => NRTinnerGetLocalIndex y
+;    getConstructorSignature x is [.,:ml] =>
+;      for y in rest x for m in ml | not (y = '$) repeat
+;        isCategoryForm(m,$CategoryFrame) => NRTinnerGetLocalIndex y
+;    keyedSystemError("S2NR0003",[x])
+;  x
+
+(DEFUN |NRTaddInner| (|x|)
+  (PROG (|l| |ISTMP#2| |z| |y| |ISTMP#1| |ml|)
+  (declare (special |$CategoryFrame|))
+    (RETURN
+      (SEQ (PROGN
+             (SEQ (COND
+                    ((ATOM |x|) NIL)
+                    ((AND (PAIRP |x|) (EQ (QCAR |x|) '|Record|)
+                          (PROGN (SPADLET |l| (QCDR |x|)) 'T))
+                     (DO ((G166795 |l| (CDR G166795))
+                          (G166767 NIL))
+                         ((OR (ATOM G166795)
+                              (PROGN
+                                (SETQ G166767 (CAR G166795))
+                                NIL)
+                              (PROGN
+                                (PROGN
+                                  (SPADLET |y| (CADDR G166767))
+                                  G166767)
+                                NIL))
+                          NIL)
+                       (SEQ (EXIT (|NRTinnerGetLocalIndex| |y|)))))
+                    ((|member| (CAR |x|) '(|Union| |Mapping|))
+                     (DO ((G166811 (CDR |x|) (CDR G166811))
+                          (|y| NIL))
+                         ((OR (ATOM G166811)
+                              (PROGN (SETQ |y| (CAR G166811)) NIL))
+                          NIL)
+                       (SEQ (EXIT (COND
+                                    ((AND (PAIRP |y|)
+                                      (EQ (QCAR |y|) '|:|)
+                                      (PROGN
+                                        (SPADLET |ISTMP#1| (QCDR |y|))
+                                        (AND (PAIRP |ISTMP#1|)
+                                         (PROGN
+                                           (SPADLET |ISTMP#2|
+                                            (QCDR |ISTMP#1|))
+                                           (AND (PAIRP |ISTMP#2|)
+                                            (EQ (QCDR |ISTMP#2|) NIL)
+                                            (PROGN
+                                              (SPADLET |z|
+                                               (QCAR |ISTMP#2|))
+                                              'T))))))
+                                     (|NRTinnerGetLocalIndex| |z|))
+                                    ('T (|NRTinnerGetLocalIndex| |y|)))))))
+                    ((AND (PAIRP |x|) (EQ (QCAR |x|) '|SubDomain|)
+                          (PROGN
+                            (SPADLET |ISTMP#1| (QCDR |x|))
+                            (AND (PAIRP |ISTMP#1|)
+                                 (PROGN
+                                   (SPADLET |y| (QCAR |ISTMP#1|))
+                                   'T))))
+                     (|NRTinnerGetLocalIndex| |y|))
+                    ((PROGN
+                       (SPADLET |ISTMP#1|
+                                (|getConstructorSignature| |x|))
+                       (AND (PAIRP |ISTMP#1|)
+                            (PROGN (SPADLET |ml| (QCDR |ISTMP#1|)) 'T)))
+                     (DO ((G166822 (CDR |x|) (CDR G166822))
+                          (|y| NIL) (G166823 |ml| (CDR G166823))
+                          (|m| NIL))
+                         ((OR (ATOM G166822)
+                              (PROGN (SETQ |y| (CAR G166822)) NIL)
+                              (ATOM G166823)
+                              (PROGN (SETQ |m| (CAR G166823)) NIL))
+                          NIL)
+                       (SEQ (EXIT (COND
+                                    ((NULL (BOOT-EQUAL |y| '$))
+                                     (COND
+                                       ((|isCategoryForm| |m|
+                                         |$CategoryFrame|)
+                                        (EXIT
+                                         (|NRTinnerGetLocalIndex| |y|))))))))))
+                    ('T (|keyedSystemError| 'S2NR0003 (CONS |x| NIL)))))
+             |x|)))))
+
+;-- NRTaddInner should call following function instead of NRTgetLocalIndex
+;-- This would prevent putting spurious items in $NRTdeltaList
+;NRTinnerGetLocalIndex x ==
+;  atom x => x
+;  -- following test should skip Unions, Records, Mapping
+;  MEMQ(opOf x,'(Union Record Mapping)) => NRTgetLocalIndex x
+;  constructor?(x) => NRTgetLocalIndex x
+;  NRTaddInner x
+
+(DEFUN |NRTinnerGetLocalIndex| (|x|)
+  (COND
+    ((ATOM |x|) |x|)
+    ((MEMQ (|opOf| |x|) '(|Union| |Record| |Mapping|))
+     (|NRTgetLocalIndex| |x|))
+    ((|constructor?| |x|) (|NRTgetLocalIndex| |x|))
+    ('T (|NRTaddInner| |x|))))
+
+;assignSlotToPred cond ==
+;--called by ProcessCond
+;  cond is ['AND,:u] => ['AND,:[assignSlotToPred x for x in u]]
+;  cond is ['OR,:u] => ['OR,:[assignSlotToPred x for x in u]]
+;  cond is ['NOT,u] => ['NOT,assignSlotToPred u]
+;  thisNeedsTOBeFilledIn()
+
+(DEFUN |assignSlotToPred| (|cond|)
+  (PROG (|ISTMP#1| |u|)
+    (RETURN
+      (SEQ (COND
+             ((AND (PAIRP |cond|) (EQ (QCAR |cond|) 'AND)
+                   (PROGN (SPADLET |u| (QCDR |cond|)) 'T))
+              (CONS 'AND
+                    (PROG (G166857)
+                      (SPADLET G166857 NIL)
+                      (RETURN
+                        (DO ((G166862 |u| (CDR G166862)) (|x| NIL))
+                            ((OR (ATOM G166862)
+                                 (PROGN
+                                   (SETQ |x| (CAR G166862))
+                                   NIL))
+                             (NREVERSE0 G166857))
+                          (SEQ (EXIT (SETQ G166857
+                                      (CONS (|assignSlotToPred| |x|)
+                                       G166857)))))))))
+             ((AND (PAIRP |cond|) (EQ (QCAR |cond|) 'OR)
+                   (PROGN (SPADLET |u| (QCDR |cond|)) 'T))
+              (CONS 'OR
+                    (PROG (G166872)
+                      (SPADLET G166872 NIL)
+                      (RETURN
+                        (DO ((G166877 |u| (CDR G166877)) (|x| NIL))
+                            ((OR (ATOM G166877)
+                                 (PROGN
+                                   (SETQ |x| (CAR G166877))
+                                   NIL))
+                             (NREVERSE0 G166872))
+                          (SEQ (EXIT (SETQ G166872
+                                      (CONS (|assignSlotToPred| |x|)
+                                       G166872)))))))))
+             ((AND (PAIRP |cond|) (EQ (QCAR |cond|) 'NOT)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |cond|))
+                     (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                          (PROGN (SPADLET |u| (QCAR |ISTMP#1|)) 'T))))
+              (CONS 'NOT (CONS (|assignSlotToPred| |u|) NIL)))
+             ('T (|thisNeedsTOBeFilledIn|)))))))
+
+;measure() ==
+;  pp MEASURE (f := SparseUnivariatePolynomial_;)
+;  pp MEASURE (o := SparseUnivariatePolynomial_;opDirect)
+;  pp MEASURE (t := SparseUnivariatePolynomial_;template)
+;  pp measureCommon [o,t]
+;  MEASURE [f,o,t]
+
+(DEFUN |measure| ()
+  (PROG (|f| |o| |t|)
+    (RETURN
+      (PROGN
+        (|pp| (MEASURE (SPADLET |f| |SparseUnivariatePolynomial;|)))
+        (|pp| (MEASURE (SPADLET |o|
+                                |SparseUnivariatePolynomial;opDirect|)))
+        (|pp| (MEASURE (SPADLET |t|
+                                |SparseUnivariatePolynomial;template|)))
+        (|pp| (|measureCommon| (CONS |o| (CONS |t| NIL))))
+        (MEASURE (CONS |f| (CONS |o| (CONS |t| NIL))))))))
+
+;measureCommon u ==
+;--measures bytes which ARE on $consDB
+;  $table: local := MAKE_-HASHTABLE 'UEQUAL
+;  fn(u,0) where fn(u,n) == n +
+;    VECP u => +/[fn(u.i,0) for i in 0..MAXINDEX u]
+;    HASH-TABLE-P u =>
+;      +/[fn(key,0) + fn(HGET(u,key),0) for key in HKEYS u]
+;    PAIRP u =>
+;      HGET($table,u) => 0
+;      m := fn(first u,0) + fn(rest u,0)
+;      HGET($consDB,u) => 8 + m
+;      HPUT($table,u,'T)
+;      m
+;    0
+
+(DEFUN |measureCommon,fn| (|u| |n|)
+  (PROG (|m|)
+  (declare (special |$table| |$consDB|))
+    (RETURN
+      (SEQ (PLUS |n|
+                 (SEQ (IF (VECP |u|)
+                          (EXIT (PROG (G166901)
+                                  (SPADLET G166901 0)
+                                  (RETURN
+                                    (DO
+                                     ((G166906 (MAXINDEX |u|))
+                                      (|i| 0 (QSADD1 |i|)))
+                                     ((QSGREATERP |i| G166906)
+                                      G166901)
+                                      (SEQ
+                                       (EXIT
+                                        (SETQ G166901
+                                         (PLUS G166901
+                                          (|measureCommon,fn|
+                                           (ELT |u| |i|) 0))))))))))
+                      (IF (SPADDIFFERENCE (SPADDIFFERENCE HASH TABLE)
+                              (P |u|))
+                          (EXIT (PROG (G166910)
+                                  (SPADLET G166910 0)
+                                  (RETURN
+                                    (DO
+                                     ((G166915 (HKEYS |u|)
+                                       (CDR G166915))
+                                      (|key| NIL))
+                                     ((OR (ATOM G166915)
+                                       (PROGN
+                                         (SETQ |key| (CAR G166915))
+                                         NIL))
+                                      G166910)
+                                      (SEQ
+                                       (EXIT
+                                        (SETQ G166910
+                                         (PLUS G166910
+                                          (PLUS
+                                           (|measureCommon,fn| |key| 0)
+                                           (|measureCommon,fn|
+                                            (HGET |u| |key|) 0)))))))))))
+                      (IF (PAIRP |u|)
+                          (EXIT (SEQ (IF (HGET |$table| |u|) (EXIT 0))
+                                     (SPADLET |m|
+                                      (PLUS
+                                       (|measureCommon,fn| (CAR |u|) 0)
+                                       (|measureCommon,fn| (CDR |u|) 0)))
+                                     (IF (HGET |$consDB| |u|)
+                                      (EXIT (PLUS 8 |m|)))
+                                     (HPUT |$table| |u| 'T) (EXIT |m|))))
+                      (EXIT 0)))))))
+
+
+(DEFUN |measureCommon| (|u|)
+  (PROG (|$table|)
+    (DECLARE (SPECIAL |$table|))
+    (RETURN
+      (PROGN
+        (SPADLET |$table| (MAKE-HASHTABLE 'UEQUAL))
+        (|measureCommon,fn| |u| 0)))))
+
+;makeSpadConstant [fn,dollar,slot] ==
+;  val := FUNCALL(fn,dollar)
+;  u:= dollar.slot
+;  RPLACA(u,function IDENTITY)
+;  RPLACD(u,val)
+;  val
+
+(DEFUN |makeSpadConstant| (G166936)
+  (PROG (|fn| |dollar| |slot| |val| |u|)
+    (RETURN
+      (PROGN
+        (SPADLET |fn| (CAR G166936))
+        (SPADLET |dollar| (CADR G166936))
+        (SPADLET |slot| (CADDR G166936))
+        (SPADLET |val| (FUNCALL |fn| |dollar|))
+        (SPADLET |u| (ELT |dollar| |slot|))
+        (RPLACA |u| (|function| IDENTITY))
+        (RPLACD |u| |val|)
+        |val|))))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

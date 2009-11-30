@@ -1,0 +1,1484 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp i-eval.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+Some Antique Comments About the Interpreter
+
+EVAL BOOT contains the top level interface to the Scratchhpad-II
+interpreter.  The Entry point into the interpreter from the parser is
+processInteractive.
+
+The type analysis algorithm is contained in the file BOTMUP BOOT,
+and MODSEL boot,
+the map handling routines are in MAP BOOT and NEWMAP BOOT, and
+the interactive coerce routines are in COERCE BOOT and COERCEFN BOOT.
+
+{\bf Conventions:}
+All spad values in the interpreter are passed around in triples.
+These are lists of three items: 
+\begin{verbatim}
+[value,mode,environment]
+\end{verbatim}
+The value
+may be wrapped (this is a pair whose CAR is the atom WRAPPED and
+whose CDR is the value), which indicates that it is a real value,
+or unwrapped in which case it needs to be EVALed to produce the
+proper value.  The mode is the type of value, and should always be
+completely specified (not contain \$EmptyMode).  The environment
+is always empty, and is included for historical reasons.
+
+{\bf Modemaps:}
+Modemaps are descriptions of compiled Spad function which the
+interpreter uses to perform type analysis. They consist of patterns
+of types for the arguments, and conditions the types must satisfy
+for the function to apply.  For each function name there is a list
+of modemaps in file modemap DATABASE for each distinct function with
+that name. The following is the list of the modemaps for ``*''
+(multiplication. The first modemap (the one with the labels) is for
+module mltiplication which is multiplication of an element of a
+module by a member of its scalar domain.
+
+This is the signature pattern for the modemap, it is of the form:
+\begin{verbatim}
+    (DomainOfComputation TargetType <ArgumentType ...>)
+          |
+          |                This is the predicate that needs to be
+          |                 satisfied for the modemap to apply
+          |                            |
+          V                            |
+     /-----------/                     |
+ ( ( (*1 *1 *2 *1)                     V
+       /-----------------------------------------------------------/
+     ( (AND (ofCategory *1 (Module *2)) (ofCategory *2 (SimpleRing))) )
+      . CATDEF) <-- This is the file where the function was defined
+   ( (*1 *1 *2 *1)
+     ( (AND (isDomain *2 (Integer)) (ofCategory *1 (AbelianGroup))) )
+      . CATDEF)
+   ( (*1 *1 *2 *1)
+     ( (AND
+         (isDomain *2 (NonNegativeInteger))
+         (ofCategory *1 (AbelianMonoid))) )
+      . CATDEF)
+   ((*1 *1 *1 *1) ((ofCategory *1 (SemiGroup)) ) . CATDEF)
+      )
+\end{verbatim}
+{\bf Environments:}
+Environments associate properties with atoms.
+(see CUTIL BOOT for the exact structure of environments).
+Some common properties are:
+\begin{itemize}
+\item {\bf modeSet:}
+During interpretation we build a modeSet property for each node in
+the expression.  This is (in theory) a list of all the types
+possible for the node.  In the current implementation these
+modeSets always contain a single type.
+\item {\bf value:}
+Value properties are always triples.  This is where the values of
+variables are stored.  We also build value properties for internal
+nodes during the bottom up phase.
+\item {\bf mode:}
+This is the declared type of an identifier.
+\end{itemize}
+
+There are several different environments used in the interpreter:
+\begin{itemize}
+\item {\bf \$InteractiveFrame:} this is the environment where the user
+values are stored.  Any side effects of evaluation of a top-level
+expression are stored in this environment.  It is always used as
+the starting environment for interpretation.
+\item {\bf \$e:} 
+This is the name used for \$InteractiveFrame while interpreting.
+\item {\bf \$env:} This is local environment used by the interpreter.
+Only temporary information (such as types of local variables is
+stored in \$env.
+It is thrown away after evaluation of each expression.
+\end{itemize}
+
+Frequently used global variables:
+\begin{itemize}
+\item {\bf \$genValue}: if true then evaluate generated code, otherwise leave
+code unevaluated.  If \$genValue is false then we are compiling.
+\item {\bf \$op}: name of the top level operator 
+(unused except in map printing)
+\item {\bf \$mapList}:  list of maps being type analyzed, used in recursive
+map type anlysis.
+\item {\bf \$compilingMap}: true when compiling a map, used to detect where to
+THROW when interpret-only is invoked
+\item {\bf \$compilingLoop}: true when compiling a loop body, used to control
+nesting level of interp-only loop CATCH points
+\item {\bf \$interpOnly}: true when in interpret only mode, used to call
+alternate forms of COLLECT and REPEAT.
+\item {\bf \$inCOLLECT}: true when compiling a COLLECT, used only for hacked
+stream compiler.
+\item {\bf \$StreamFrame}: used in printing streams, it is the environment
+where local stream variables are stored
+\item {\bf \$declaredMode}: Weak type propagation for symbols, set in upCOERCE
+and upLET.  This variable is used to determine
+the alternate polynomial types of Symbols.
+\item {\bf \$localVars}: list of local variables in a map body
+\item {\bf \$MapArgumentTypeList}: hack for stream compilation
+\end{itemize}
+<<*>>=
+(IN-PACKAGE "BOOT" )
+
+;--% Constructor Evaluation
+;$noEvalTypeMsg := nil
+
+(SPADLET |$noEvalTypeMsg| NIL) 
+
+;evalDomain form ==
+;  if $evalDomain then
+;    sayMSG concat('"   instantiating","%b",prefix2String form,"%d")
+;  startTimingProcess 'instantiation
+;  newType? form => form
+;  result := eval mkEvalable form
+;  stopTimingProcess 'instantiation
+;  result
+
+(DEFUN |evalDomain| (|form|)
+ (PROG (|result|)
+ (declare (special |$evalDomain|))
+  (RETURN
+   (PROGN
+    (COND
+     (|$evalDomain|
+      (|sayMSG| 
+       (|concat| "   instantiating" 
+        (QUOTE |%b|) (|prefix2String| |form|) (QUOTE |%d|)))))
+    (|startTimingProcess| (QUOTE |instantiation|))
+    (COND
+     ((|newType?| |form|) |form|)
+     ((QUOTE T)
+      (SPADLET |result| (|eval| (|mkEvalable| |form|)))
+      (|stopTimingProcess| (QUOTE |instantiation|))
+      |result|)))))) 
+
+;mkEvalable form ==
+;  form is [op,:argl] =>
+;    op="QUOTE" => form
+;    op="WRAPPED" => mkEvalable devaluate argl
+;    op="Record" => mkEvalableRecord form
+;    op="Union"  => mkEvalableUnion  form
+;    op="Mapping"=> mkEvalableMapping form
+;    op="Enumeration" => form
+;    loadIfNecessary op
+;    kind:= GETDATABASE(op,'CONSTRUCTORKIND)
+;    cosig := GETDATABASE(op, 'COSIG) =>
+;      [op,:[val for x in argl for typeFlag in rest cosig]] where val ==
+;        typeFlag =>
+;          kind = 'category => MKQ x
+;          VECP x => MKQ x
+;          loadIfNecessary x
+;          mkEvalable x
+;        x is ['QUOTE,:.] => x
+;        x is ['_#,y] => ['SIZE,MKQ y]
+;        MKQ x
+;    [op,:[mkEvalable x for x in argl]]
+;  form=$EmptyMode => $Integer
+;  IDENTP form and constructor?(form) => [form]
+;  FBPIP form => BPINAME form
+;  form
+
+(DEFUN |mkEvalable| (|form|)
+ (PROG (|op| |argl| |kind| |cosig| |ISTMP#1| |y|)
+ (declare (special |$Integer| |$EmptyMode|))
+  (RETURN
+   (SEQ
+    (COND
+     ((AND (PAIRP |form|)
+           (PROGN
+            (SPADLET |op| (QCAR |form|))
+            (SPADLET |argl| (QCDR |form|))
+            (QUOTE T)))
+      (COND
+       ((BOOT-EQUAL |op| (QUOTE QUOTE)) |form|)
+       ((BOOT-EQUAL |op| (QUOTE WRAPPED)) (|mkEvalable| (|devaluate| |argl|)))
+       ((BOOT-EQUAL |op| (QUOTE |Record|)) (|mkEvalableRecord| |form|))
+       ((BOOT-EQUAL |op| (QUOTE |Union|)) (|mkEvalableUnion| |form|))
+       ((BOOT-EQUAL |op| (QUOTE |Mapping|)) (|mkEvalableMapping| |form|))
+       ((BOOT-EQUAL |op| (QUOTE |Enumeration|)) |form|)
+       ((QUOTE T)
+        (|loadIfNecessary| |op|)
+        (SPADLET |kind| (GETDATABASE |op| (QUOTE CONSTRUCTORKIND)))
+        (COND
+         ((SPADLET |cosig| (GETDATABASE |op| (QUOTE COSIG)))
+          (CONS |op|
+           (PROG (#0=#:G166087)
+            (SPADLET #0# NIL)
+            (RETURN
+             (DO ((#1=#:G166097 |argl| (CDR #1#)) 
+                  (|x| NIL)
+                  (#2=#:G166098 (CDR |cosig|) (CDR #2#))
+                  (|typeFlag| NIL))
+                 ((OR (ATOM #1#)
+                      (PROGN (SETQ |x| (CAR #1#)) NIL)
+                      (ATOM #2#)
+                      (PROGN (SETQ |typeFlag| (CAR #2#)) NIL))
+                   (NREVERSE0 #0#))
+              (SEQ
+               (EXIT
+               (SETQ #0#
+                (CONS
+                 (COND
+                  (|typeFlag|
+                   (COND
+                    ((BOOT-EQUAL |kind| (QUOTE |category|)) (MKQ |x|))
+                    ((VECP |x|) (MKQ |x|))
+                    ((QUOTE T) (|loadIfNecessary| |x|) (|mkEvalable| |x|))))
+                  ((AND (PAIRP |x|) (EQ (QCAR |x|) (QUOTE QUOTE))) |x|)
+                  ((AND (PAIRP |x|)
+                        (EQ (QCAR |x|) (QUOTE |#|))
+                        (PROGN
+                         (SPADLET |ISTMP#1| (QCDR |x|))
+                         (AND
+                          (PAIRP |ISTMP#1|)
+                          (EQ (QCDR |ISTMP#1|) NIL)
+                          (PROGN (SPADLET |y| (QCAR |ISTMP#1|)) (QUOTE T)))))
+                   (CONS (QUOTE SIZE) (CONS (MKQ |y|) NIL)))
+                  ((QUOTE T) (MKQ |x|))) #0#)))))))))
+         ((QUOTE T)
+          (CONS |op|
+           (PROG (#3=#:G166111)
+            (SPADLET #3# NIL)
+            (RETURN
+             (DO ((#4=#:G166116 |argl| (CDR #4#)) (|x| NIL))
+                 ((OR (ATOM #4#) (PROGN (SETQ |x| (CAR #4#)) NIL))
+                   (NREVERSE0 #3#))
+              (SEQ (EXIT (SETQ #3# (CONS (|mkEvalable| |x|) #3#)))))))))))))
+     ((BOOT-EQUAL |form| |$EmptyMode|) |$Integer|)
+     ((AND (IDENTP |form|) (|constructor?| |form|)) (CONS |form| NIL))
+     ((FBPIP |form|) (BPINAME |form|))
+     ((QUOTE T) |form|)))))) 
+
+;mkEvalableMapping form ==
+;  [first form,:[mkEvalable d for d in rest form]]
+
+(DEFUN |mkEvalableMapping| (|form|)
+ (PROG NIL
+  (RETURN
+   (SEQ
+    (CONS
+     (CAR |form|)
+     (PROG (#0=#:G166137)
+      (SPADLET #0# NIL)
+      (RETURN
+       (DO ((#1=#:G166142 (CDR |form|) (CDR #1#)) (|d| NIL))
+           ((OR (ATOM #1#) (PROGN (SETQ |d| (CAR #1#)) NIL)) (NREVERSE0 #0#))
+        (SEQ (EXIT (SETQ #0# (CONS (|mkEvalable| |d|) #0#)))))))))))) 
+
+;mkEvalableRecord form ==
+;  [first form,:[[":",n,mkEvalable d] for [":",n,d] in rest form]]
+
+(DEFUN |mkEvalableRecord| (|form|)
+ (PROG (|n| |d|)
+  (RETURN
+   (SEQ
+    (CONS
+     (CAR |form|)
+     (PROG (#0=#:G166161)
+      (SPADLET #0# NIL)
+      (RETURN
+       (DO ((#1=#:G166167 (CDR |form|) (CDR #1#)) (#2=#:G166152 NIL))
+           ((OR (ATOM #1#)
+                (PROGN (SETQ #2# (CAR #1#)) NIL)
+                (PROGN 
+                 (PROGN (SPADLET |n| (CADR #2#)) (SPADLET |d| (CADDR #2#)) #2#)
+                 NIL))
+             (NREVERSE0 #0#))
+        (SEQ
+         (EXIT
+          (SETQ #0#
+           (CONS
+            (CONS (QUOTE |:|) (CONS |n| (CONS (|mkEvalable| |d|) NIL)))
+            #0#)))))))))))) 
+
+;mkEvalableUnion form ==
+;  isTaggedUnion form =>
+;    [first form,:[[":",n,mkEvalable d] for [":",n,d] in rest form]]
+;  [first form,:[mkEvalable d for d in rest form]]
+
+(DEFUN |mkEvalableUnion| (|form|)
+ (PROG (|n| |d|)
+  (RETURN
+   (SEQ
+    (COND
+     ((|isTaggedUnion| |form|)
+      (CONS
+       (CAR |form|)
+       (PROG (#0=#:G166190)
+        (SPADLET #0# NIL)
+        (RETURN
+         (DO ((#1=#:G166196 (CDR |form|) (CDR #1#)) (#2=#:G166180 NIL))
+             ((OR (ATOM #1#)
+                  (PROGN (SETQ #2# (CAR #1#)) NIL)
+                  (PROGN
+                   (PROGN
+                    (SPADLET |n| (CADR #2#))
+                    (SPADLET |d| (CADDR #2#))
+                    #2#)
+                   NIL))
+               (NREVERSE0 #0#))
+          (SEQ
+           (EXIT
+            (SETQ #0#
+             (CONS
+              (CONS (QUOTE |:|) (CONS |n| (CONS (|mkEvalable| |d|) NIL)))
+              #0#)))))))))
+     ((QUOTE T)
+      (CONS
+       (CAR |form|)
+       (PROG (#3=#:G166207)
+        (SPADLET #3# NIL)
+        (RETURN
+         (DO ((#4=#:G166212 (CDR |form|) (CDR #4#)) (|d| NIL))
+             ((OR (ATOM #4#) (PROGN (SETQ |d| (CAR #4#)) NIL)) (NREVERSE0 #3#))
+          (SEQ (EXIT (SETQ #3# (CONS (|mkEvalable| |d|) #3#)))))))))))))) 
+
+;evaluateType0 form ==
+;  -- Takes a parsed, unabbreviated type and evaluates it, replacing
+;  --  type valued variables with their values, and calling bottomUp
+;  --  on non-type valued arguemnts to the constructor
+;  --  and finally checking to see whether the type satisfies the
+;  --  conditions of its modemap
+;  -- However, the input might be an attribute, not a type
+;  -- $noEvalTypeMsg: fluid := true
+;  domain:= isDomainValuedVariable form => domain
+;  form = $EmptyMode => form
+;  form = "?"        => $EmptyMode
+;  STRINGP form => form
+;  form = "$" => form
+;  $expandSegments : local := nil
+;  form is ['typeOf,.] =>
+;    form' := mkAtree form
+;    bottomUp form'
+;    objVal getValue(form')
+;  form is [op,:argl] =>
+;    op='CATEGORY =>
+;      argl is [x,:sigs] => [op,x,:[evaluateSignature(s) for s in sigs]]
+;      form
+;    op in '(Join Mapping) =>
+;      [op,:[evaluateType arg for arg in argl]]
+;    op='Union  =>
+;      argl and first argl is [x,.,.] and member(x,'(_: Declare)) =>
+;        [op,:[['_:,sel,evaluateType type] for ['_:,sel,type] in argl]]
+;      [op,:[evaluateType arg for arg in argl]]
+;    op='Record =>
+;      [op,:[['_:,sel,evaluateType type] for ['_:,sel,type] in argl]]
+;    op='Enumeration => form
+;    constructor? op => evaluateType1 form
+;    NIL
+;  constructor? form =>
+;    ATOM form => evaluateType [form]
+;    throwEvalTypeMsg("S2IE0003",[form,form])
+
+(DEFUN |evaluateType0| (|form|)
+ (PROG (|$expandSegments| |domain| |form'| |op| |argl| |sigs| |ISTMP#1| 
+        |x| |ISTMP#2| |ISTMP#3| |sel| |type|)
+ (DECLARE (SPECIAL |$expandSegments| |$EmptyMode|))
+  (RETURN
+   (SEQ
+    (COND
+     ((SPADLET |domain| (|isDomainValuedVariable| |form|)) |domain|)
+     ((BOOT-EQUAL |form| |$EmptyMode|) |form|)
+     ((BOOT-EQUAL |form| (QUOTE ?)) |$EmptyMode|)
+     ((STRINGP |form|) |form|)
+     ((BOOT-EQUAL |form| (QUOTE $)) |form|)
+     ((QUOTE T)
+      (SPADLET |$expandSegments| NIL)
+      (COND
+       ((AND (PAIRP |form|)
+             (EQ (QCAR |form|) (QUOTE |typeOf|))
+             (PROGN
+              (SPADLET |ISTMP#1| (QCDR |form|))
+              (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL))))
+        (SPADLET |form'| (|mkAtree| |form|))
+        (|bottomUp| |form'|)
+        (|objVal| (|getValue| |form'|)))
+       ((AND (PAIRP |form|)
+             (PROGN
+              (SPADLET |op| (QCAR |form|))
+              (SPADLET |argl| (QCDR |form|))
+              (QUOTE T)))
+        (COND
+         ((BOOT-EQUAL |op| (QUOTE CATEGORY))
+          (COND
+           ((AND (PAIRP |argl|)
+                 (PROGN
+                  (SPADLET |x| (QCAR |argl|))
+                  (SPADLET |sigs| (QCDR |argl|))
+                  (QUOTE T)))
+            (CONS |op|
+             (CONS |x|
+              (PROG (#0=#:G166269)
+               (SPADLET #0# NIL)
+               (RETURN
+                (DO ((#1=#:G166274 |sigs| (CDR #1#)) (|s| NIL))
+                    ((OR (ATOM #1#) (PROGN (SETQ |s| (CAR #1#)) NIL))
+                      (NREVERSE0 #0#))
+                 (SEQ
+                  (EXIT (SETQ #0# (CONS (|evaluateSignature| |s|) #0#))))))))))
+           ((QUOTE T) |form|)))
+         ((|member| |op| (QUOTE (|Join| |Mapping|)))
+           (CONS |op|
+            (PROG (#2=#:G166284)
+             (SPADLET #2# NIL)
+             (RETURN
+              (DO ((#3=#:G166289 |argl| (CDR #3#)) (|arg| NIL))
+                  ((OR (ATOM #3#) (PROGN (SETQ |arg| (CAR #3#)) NIL))
+                    (NREVERSE0 #2#))
+                (SEQ (EXIT (SETQ #2# (CONS (|evaluateType| |arg|) #2#)))))))))
+         ((BOOT-EQUAL |op| (QUOTE |Union|))
+          (COND
+           ((AND
+             |argl|
+             (PROGN
+              (SPADLET |ISTMP#1| (CAR |argl|))
+              (AND
+               (PAIRP |ISTMP#1|)
+               (PROGN
+                (SPADLET |x| (QCAR |ISTMP#1|))
+                (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                (AND
+                 (PAIRP |ISTMP#2|)
+                 (PROGN
+                  (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                  (AND (PAIRP |ISTMP#3|) (EQ (QCDR |ISTMP#3|) NIL)))))))
+             (|member| |x| (QUOTE (|:| |Declare|))))
+            (CONS |op|
+             (PROG (#4=#:G166300)
+              (SPADLET #4# NIL)
+              (RETURN
+               (DO ((#5=#:G166306 |argl| (CDR #5#)) (#6=#:G166253 NIL))
+                   ((OR (ATOM #5#)
+                        (PROGN (SETQ #6# (CAR #5#)) NIL)
+                        (PROGN
+                         (PROGN
+                          (SPADLET |sel| (CADR #6#))
+                          (SPADLET |type| (CADDR #6#))
+                          #6#)
+                         NIL))
+                     (NREVERSE0 #4#))
+                (SEQ
+                 (EXIT
+                  (SETQ #4#
+                   (CONS
+                    (CONS
+                     (QUOTE |:|)
+                      (CONS |sel| (CONS (|evaluateType| |type|) NIL)))
+                    #4#)))))))))
+           ((QUOTE T)
+            (CONS |op|
+             (PROG (#7=#:G166317)
+              (SPADLET #7# NIL)
+              (RETURN
+               (DO ((#8=#:G166322 |argl| (CDR #8#)) (|arg| NIL))
+                   ((OR (ATOM #8#) (PROGN (SETQ |arg| (CAR #8#)) NIL))
+                     (NREVERSE0 #7#))
+                 (SEQ
+                  (EXIT
+                   (SETQ #7# (CONS (|evaluateType| |arg|) #7#)))))))))))
+         ((BOOT-EQUAL |op| (QUOTE |Record|))
+          (CONS |op|
+           (PROG (#9=#:G166333)
+            (SPADLET #9# NIL)
+            (RETURN
+             (DO ((#10=#:G166339 |argl| (CDR #10#)) (#11=#:G166258 NIL))
+                 ((OR (ATOM #10#)
+                      (PROGN (SETQ #11# (CAR #10#)) NIL)
+                      (PROGN
+                       (PROGN
+                        (SPADLET |sel| (CADR #11#))
+                        (SPADLET |type| (CADDR #11#))
+                        #11#)
+                       NIL))
+                   (NREVERSE0 #9#))
+              (SEQ
+               (EXIT
+                (SETQ #9#
+                 (CONS
+                  (CONS
+                   (QUOTE |:|)
+                   (CONS |sel| (CONS (|evaluateType| |type|) NIL)))
+                  #9#)))))))))
+         ((BOOT-EQUAL |op| (QUOTE |Enumeration|)) |form|)
+         ((|constructor?| |op|) (|evaluateType1| |form|))
+         ((QUOTE T) NIL)))
+       ((|constructor?| |form|)
+        (COND
+         ((ATOM |form|) (|evaluateType| (CONS |form| NIL)))
+         ((QUOTE T)
+         (|throwEvalTypeMsg| 'S2IE0003
+          (CONS |form| (CONS |form| NIL))))))))))))) 
+
+;evaluateType form ==
+;  -- Takes a parsed, unabbreviated type and evaluates it, replacing
+;  --  type valued variables with their values, and calling bottomUp
+;  --  on non-type valued arguemnts to the constructor
+;  --  and finally checking to see whether the type satisfies the
+;  --  conditions of its modemap
+;  domain:= isDomainValuedVariable form => domain
+;  form = $EmptyMode => form
+;  form = "?"        => $EmptyMode
+;  STRINGP form => form
+;  form = "$" => form
+;  $expandSegments : local := nil
+;  form is ['typeOf,.] =>
+;    form' := mkAtree form
+;    bottomUp form'
+;    objVal getValue(form')
+;  form is [op,:argl] =>
+;    op='CATEGORY =>
+;      argl is [x,:sigs] => [op,x,:[evaluateSignature(s) for s in sigs]]
+;      form
+;    op in '(Join Mapping) =>
+;      [op,:[evaluateType arg for arg in argl]]
+;    op='Union  =>
+;      argl and first argl is [x,.,.] and member(x,'(_: Declare)) =>
+;        [op,:[['_:,sel,evaluateType type] for ['_:,sel,type] in argl]]
+;      [op,:[evaluateType arg for arg in argl]]
+;    op='Record =>
+;      [op,:[['_:,sel,evaluateType type] for ['_:,sel,type] in argl]]
+;    op='Enumeration => form
+;    evaluateType1 form
+;  constructor? form =>
+;    ATOM form => evaluateType [form]
+;    throwEvalTypeMsg("S2IE0003",[form,form])
+;  throwEvalTypeMsg("S2IE0004",[form])
+
+(DEFUN |evaluateType| (|form|)
+ (PROG (|$expandSegments| |domain| |form'| |op| |argl| |sigs| |ISTMP#1| 
+        |x| |ISTMP#2| |ISTMP#3| |sel| |type|)
+ (DECLARE (SPECIAL |$expandSegments| |$EmptyMode|))
+  (RETURN
+   (SEQ
+    (COND
+     ((SPADLET |domain| (|isDomainValuedVariable| |form|)) |domain|)
+     ((BOOT-EQUAL |form| |$EmptyMode|) |form|)
+     ((BOOT-EQUAL |form| (QUOTE ?)) |$EmptyMode|)
+     ((STRINGP |form|) |form|)
+     ((BOOT-EQUAL |form| (QUOTE $)) |form|)
+     ((QUOTE T)
+      (SPADLET |$expandSegments| NIL)
+      (COND
+       ((AND (PAIRP |form|)
+             (EQ (QCAR |form|) (QUOTE |typeOf|))
+             (PROGN
+              (SPADLET |ISTMP#1| (QCDR |form|))
+              (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL))))
+        (SPADLET |form'| (|mkAtree| |form|))
+        (|bottomUp| |form'|)
+        (|objVal| (|getValue| |form'|)))
+       ((AND (PAIRP |form|)
+             (PROGN
+              (SPADLET |op| (QCAR |form|))
+              (SPADLET |argl| (QCDR |form|))
+              (QUOTE T)))
+        (COND
+         ((BOOT-EQUAL |op| (QUOTE CATEGORY))
+          (COND
+           ((AND (PAIRP |argl|)
+                 (PROGN
+                  (SPADLET |x| (QCAR |argl|))
+                  (SPADLET |sigs| (QCDR |argl|))
+                  (QUOTE T)))
+            (CONS |op|
+             (CONS |x|
+              (PROG (#0=#:G166416)
+               (SPADLET #0# NIL)
+               (RETURN
+                (DO ((#1=#:G166421 |sigs| (CDR #1#)) (|s| NIL))
+                    ((OR (ATOM #1#) (PROGN (SETQ |s| (CAR #1#)) NIL))
+                      (NREVERSE0 #0#))
+                 (SEQ
+                  (EXIT
+                   (SETQ #0# (CONS (|evaluateSignature| |s|) #0#))))))))))
+           ((QUOTE T) |form|)))
+         ((|member| |op| (QUOTE (|Join| |Mapping|)))
+          (CONS |op|
+           (PROG (#2=#:G166431)
+            (SPADLET #2# NIL)
+            (RETURN
+             (DO ((#3=#:G166436 |argl| (CDR #3#)) (|arg| NIL))
+                 ((OR (ATOM #3#) (PROGN (SETQ |arg| (CAR #3#)) NIL))
+                   (NREVERSE0 #2#))
+              (SEQ (EXIT (SETQ #2# (CONS (|evaluateType| |arg|) #2#)))))))))
+         ((BOOT-EQUAL |op| (QUOTE |Union|))
+          (COND
+           ((AND
+             |argl|
+             (PROGN
+              (SPADLET |ISTMP#1| (CAR |argl|))
+              (AND
+               (PAIRP |ISTMP#1|)
+               (PROGN
+                (SPADLET |x| (QCAR |ISTMP#1|))
+                (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                (AND
+                 (PAIRP |ISTMP#2|)
+                 (PROGN
+                  (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                  (AND (PAIRP |ISTMP#3|) (EQ (QCDR |ISTMP#3|) NIL)))))))
+             (|member| |x| (QUOTE (|:| |Declare|))))
+            (CONS |op|
+             (PROG (#4=#:G166447)
+              (SPADLET #4# NIL)
+              (RETURN
+               (DO ((#5=#:G166453 |argl| (CDR #5#)) (#6=#:G166400 NIL))
+                   ((OR (ATOM #5#)
+                        (PROGN (SETQ #6# (CAR #5#)) NIL)
+                        (PROGN
+                         (PROGN
+                          (SPADLET |sel| (CADR #6#))
+                          (SPADLET |type| (CADDR #6#))
+                          #6#)
+                         NIL))
+                     (NREVERSE0 #4#))
+                (SEQ
+                 (EXIT
+                  (SETQ #4# 
+                   (CONS
+                    (CONS
+                     (QUOTE |:|)
+                     (CONS |sel| (CONS (|evaluateType| |type|) NIL)))
+                    #4#)))))))))
+           ((QUOTE T)
+            (CONS |op|
+             (PROG (#7=#:G166464)
+              (SPADLET #7# NIL)
+              (RETURN
+               (DO ((#8=#:G166469 |argl| (CDR #8#)) (|arg| NIL))
+                   ((OR (ATOM #8#) (PROGN (SETQ |arg| (CAR #8#)) NIL))
+                     (NREVERSE0 #7#))
+                (SEQ
+                 (EXIT
+                  (SETQ #7# (CONS (|evaluateType| |arg|) #7#)))))))))))
+         ((BOOT-EQUAL |op| (QUOTE |Record|))
+          (CONS |op|
+           (PROG (#9=#:G166480)
+            (SPADLET #9# NIL)
+            (RETURN
+             (DO ((#10=#:G166486 |argl| (CDR #10#)) (#11=#:G166405 NIL))
+                 ((OR (ATOM #10#)
+                      (PROGN (SETQ #11# (CAR #10#)) NIL)
+                      (PROGN
+                       (PROGN
+                        (SPADLET |sel| (CADR #11#))
+                        (SPADLET |type| (CADDR #11#))
+                        #11#)
+                       NIL))
+                   (NREVERSE0 #9#))
+              (SEQ
+               (EXIT
+                (SETQ #9#
+                 (CONS
+                  (CONS
+                   (QUOTE |:|)
+                   (CONS |sel| (CONS (|evaluateType| |type|) NIL)))
+                  #9#)))))))))
+         ((BOOT-EQUAL |op| (QUOTE |Enumeration|)) |form|)
+         ((QUOTE T) (|evaluateType1| |form|))))
+       ((|constructor?| |form|)
+        (COND
+         ((ATOM |form|) (|evaluateType| (CONS |form| NIL)))
+         ((QUOTE T)
+          (|throwEvalTypeMsg|
+           (QUOTE S2IE0003)
+           (CONS |form| (CONS |form| NIL))))))
+       ((QUOTE T)
+        (|throwEvalTypeMsg| (QUOTE S2IE0004) (CONS |form| NIL)))))))))) 
+
+;evaluateType1 form ==
+;  --evaluates the arguments passed to a constructor
+;  [op,:argl]:= form
+;  constructor? op =>
+;    null (sig := getConstructorSignature form) =>
+;       throwEvalTypeMsg("S2IE0005",[form])
+;    [.,:ml] := sig
+;    ml := replaceSharps(ml,form)
+;    # argl ^= #ml => throwEvalTypeMsg("S2IE0003",[form,form])
+;    for x in argl for m in ml for argnum in 1.. repeat
+;      typeList := [v,:typeList] where v ==
+;        categoryForm?(m) =>
+;          m := evaluateType MSUBSTQ(x,'_$,m)
+;          evalCategory(x' := (evaluateType x), m) => x'
+;          throwEvalTypeMsg("S2IE0004",[form])
+;        m := evaluateType m
+;        GETDATABASE(opOf m,'CONSTRUCTORKIND) = 'domain and
+;            (tree := mkAtree x) and  
+;              putTarget(tree,m) and ((bottomUp tree) is [m1]) =>
+;                [zt,:zv]:= z1:= getAndEvalConstructorArgument tree
+;                (v:= coerceOrRetract(z1,m)) => objValUnwrap v
+;                throwKeyedMsgCannotCoerceWithValue(zv,zt,m)
+;        if x = $EmptyMode then x := $quadSymbol
+;        throwEvalTypeMsg("S2IE0006",[makeOrdinal argnum,m,form])
+;    [op,:NREVERSE typeList]
+;  throwEvalTypeMsg("S2IE0007",[op])
+
+(DEFUN |evaluateType1| (|form|)
+ (PROG (|op| |argl| |sig| |ml| |x'| |tree| |ISTMP#1| |m1| |z1| |zt| |zv| 
+        |v| |typeList|)
+ (declare (special |$quadSymbol| |$EmptyMode|))
+  (RETURN
+   (SEQ
+    (PROGN
+     (SPADLET |op| (CAR |form|))
+     (SPADLET |argl| (CDR |form|))
+     (COND
+      ((|constructor?| |op|)
+       (COND
+        ((NULL (SPADLET |sig| (|getConstructorSignature| |form|)))
+         (|throwEvalTypeMsg| (QUOTE S2IE0005) (CONS |form| NIL)))
+        ((QUOTE T)
+         (SPADLET |ml| (CDR |sig|))
+         (SPADLET |ml| (|replaceSharps| |ml| |form|))
+         (COND
+          ((NEQUAL (|#| |argl|) (|#| |ml|))
+           (|throwEvalTypeMsg|
+            (QUOTE S2IE0003)
+            (CONS |form| (CONS |form| NIL))))
+          ((QUOTE T)
+           (DO ((#0=#:G166558 |argl| (CDR #0#))
+                (|x| NIL)
+                (#1=#:G166559 |ml| (CDR #1#))
+                (|m| NIL)
+                (|argnum| 1 (QSADD1 |argnum|)))
+               ((OR (ATOM #0#)
+                    (PROGN (SETQ |x| (CAR #0#)) NIL)
+                    (ATOM #1#)
+                    (PROGN (SETQ |m| (CAR #1#)) NIL))
+                  NIL)
+            (SEQ
+             (EXIT
+              (SPADLET |typeList|
+               (CONS
+                (COND
+                 ((|categoryForm?| |m|)
+                  (SPADLET |m| (|evaluateType| (MSUBSTQ |x| (QUOTE $) |m|)))
+                  (COND
+                   ((|evalCategory| (SPADLET |x'| (|evaluateType| |x|)) |m|)
+                    |x'|)
+                   ((QUOTE T)
+                    (|throwEvalTypeMsg| (QUOTE S2IE0004) (CONS |form| NIL)))))
+                 ((QUOTE T)
+                  (SPADLET |m| (|evaluateType| |m|))
+                  (COND
+                   ((AND
+                     (BOOT-EQUAL
+                      (GETDATABASE (|opOf| |m|) (QUOTE CONSTRUCTORKIND))
+                      (QUOTE |domain|))
+                     (SPADLET |tree| (|mkAtree| |x|))
+                     (|putTarget| |tree| |m|)
+                     (PROGN
+                      (SPADLET |ISTMP#1| (|bottomUp| |tree|))
+                      (AND
+                       (PAIRP |ISTMP#1|)
+                       (EQ (QCDR |ISTMP#1|) NIL)
+                       (PROGN (SPADLET |m1| (QCAR |ISTMP#1|)) (QUOTE T)))))
+                    (SPADLET |z1| (|getAndEvalConstructorArgument| |tree|))
+                    (SPADLET |zt| (CAR |z1|))
+                    (SPADLET |zv| (CDR |z1|))
+                    (COND
+                     ((SPADLET |v| (|coerceOrRetract| |z1| |m|))
+                      (|objValUnwrap| |v|))
+                     ((QUOTE T)
+                      (|throwKeyedMsgCannotCoerceWithValue| |zv| |zt| |m|))))
+                   ((QUOTE T)
+                    (COND
+                     ((BOOT-EQUAL |x| |$EmptyMode|)
+                      (SPADLET |x| |$quadSymbol|)))
+                    (|throwEvalTypeMsg|
+                     (QUOTE S2IE0006)
+                     (CONS
+                      (|makeOrdinal| |argnum|)
+                      (CONS |m| (CONS |form| NIL))))))))
+                |typeList|)))))
+           (CONS |op| (NREVERSE |typeList|)))))))
+      ((QUOTE T) (|throwEvalTypeMsg| (QUOTE S2IE0007) (CONS |op| NIL))))))))) 
+
+;throwEvalTypeMsg(msg, args) ==
+;  $noEvalTypeMsg => spadThrow()
+;  throwKeyedMsg(msg, args)
+
+(DEFUN |throwEvalTypeMsg| (|msg| |args|)
+ (declare (special |$noEvalTypeMsg|))
+ (COND
+  (|$noEvalTypeMsg| (|spadThrow|))
+  ((QUOTE T) (|throwKeyedMsg| |msg| |args|)))) 
+
+;makeOrdinal i ==
+;  ('(first second third fourth fifth sixth seventh eighth ninth tenth)).(i-1)
+
+(DEFUN |makeOrdinal| (|i|)
+ (ELT
+  (QUOTE (|first| |second| |third| |fourth| |fifth| |sixth| |seventh| 
+          |eighth| |ninth| |tenth|))
+  (SPADDIFFERENCE |i| 1))) 
+
+;evaluateSignature sig ==
+;  -- calls evaluateType on a signature
+;  sig is [ ='SIGNATURE,fun,sigl] =>
+;    ['SIGNATURE,fun,
+;      [(t = '_$ => t; evaluateType(t)) for t in sigl]]
+;  sig
+
+(DEFUN |evaluateSignature| (|sig|)
+ (PROG (|ISTMP#1| |fun| |ISTMP#2| |sigl|)
+  (RETURN
+   (SEQ
+    (COND
+     ((AND (PAIRP |sig|)
+           (EQUAL (QCAR |sig|) (QUOTE SIGNATURE))
+           (PROGN
+            (SPADLET |ISTMP#1| (QCDR |sig|))
+            (AND (PAIRP |ISTMP#1|)
+                 (PROGN
+                  (SPADLET |fun| (QCAR |ISTMP#1|))
+                  (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                  (AND
+                   (PAIRP |ISTMP#2|)
+                   (EQ (QCDR |ISTMP#2|) NIL)
+                   (PROGN (SPADLET |sigl| (QCAR |ISTMP#2|)) (QUOTE T)))))))
+      (CONS
+       (QUOTE SIGNATURE)
+       (CONS |fun|
+        (CONS
+         (PROG (#0=#:G166617)
+          (SPADLET #0# NIL)
+          (RETURN
+           (DO ((#1=#:G166622 |sigl| (CDR #1#)) (|t| NIL))
+               ((OR (ATOM #1#) (PROGN (SETQ |t| (CAR #1#)) NIL))
+                 (NREVERSE0 #0#))
+            (SEQ
+             (EXIT
+              (SETQ #0#
+               (CONS
+                (COND
+                 ((BOOT-EQUAL |t| (QUOTE $)) |t|)
+                 ((QUOTE T) (|evaluateType| |t|)))
+                #0#)))))))
+         NIL))))
+     ((QUOTE T) |sig|)))))) 
+
+;--% Code Evaluation
+;-- This code generates, then evaluates code during the bottom up phase
+;-- of interpretation
+;splitIntoBlocksOf200 a ==
+;  null a => nil
+;  [[first (r:=x) for x in tails a for i in 1..200],
+;    :splitIntoBlocksOf200 rest r]
+
+(DEFUN |splitIntoBlocksOf200| (|a|)
+ (PROG (|r|)
+  (RETURN
+   (SEQ
+    (COND
+     ((NULL |a|) NIL)
+     ((QUOTE T)
+      (CONS
+       (PROG (#0=#:G166642)
+        (SPADLET #0# NIL)
+        (RETURN
+         (DO ((|x| |a| (CDR |x|)) (|i| 1 (QSADD1 |i|)))
+             ((OR (ATOM |x|) (QSGREATERP |i| 200)) (NREVERSE0 #0#))
+           (SEQ (EXIT (SETQ #0# (CONS (CAR (SPADLET |r| |x|)) #0#)))))))
+       (|splitIntoBlocksOf200| (CDR |r|))))))))) 
+
+;evalForm(op,opName,argl,mmS) ==
+;  -- applies the first applicable function
+;  for mm in mmS until form repeat
+;    [sig,fun,cond]:= mm
+;    (CAR sig) = 'interpOnly => form := CAR sig
+;    #argl ^= #CDDR sig => 'skip ---> RDJ 6/95
+;    form:=
+;      $genValue or null cond =>
+;        [getArgValue2(x,t,sideEffectedArg?(t,sig,opName),opName) or return NIL
+;         for x in argl for t in CDDR sig]
+;      [getArgValueComp2(x,t,c,sideEffectedArg?(t,sig,opName),opName) 
+;       or return NIL
+;        for x in argl for t in CDDR sig for c in cond]
+;    form or null argl =>
+;      dc:= CAR sig
+;      form :=
+;        dc='local => --[fun,:form]
+;          atom fun =>
+;            fun in $localVars => ['SPADCALL,:form,fun]
+;            [fun,:form,NIL]
+;          ['SPADCALL,:form,fun]
+;        dc is ["__FreeFunction__",:freeFun] =>
+;          ['SPADCALL,:form,freeFun]
+;        fun is ['XLAM,xargs,:xbody] =>
+;          rec :=  first form
+;          xbody is [['RECORDELT,.,ind,len]] =>
+;            optRECORDELT([CAAR xbody,rec,ind,len])
+;          xbody is [['SETRECORDELT,.,ind,len,.]] =>
+;            optSETRECORDELT([CAAR xbody,rec,ind,len,CADDR form])
+;          xbody is [['RECORDCOPY,.,len]] =>
+;            optRECORDCOPY([CAAR xbody,rec,len])
+;          ['FUNCALL,['function , ['LAMBDA,xargs,:xbody]],:TAKE(#xargs, form)]
+;        dcVector := evalDomain dc
+;        fun0 :=
+;          newType? CAAR mm =>
+;            mm' := first ncSigTransform mm
+;            ncGetFunction(opName, first mm', rest mm')
+;          NRTcompileEvalForm(opName,fun,dcVector)
+;        null fun0 => throwKeyedMsg("S2IE0008",[opName])
+;        [bpi,:domain] := fun0
+;        EQ(bpi,function Undef) =>
+;         sayKeyedMsg("S2IE0009",[opName,formatSignature CDR sig,CAR sig])
+;         NIL
+;        if $NRTmonitorIfTrue = true then
+;          sayBrightlyNT ['"Applying ",first fun0,'" to:"]
+;          pp [devaluateDeeply x for x in form]
+;        _$:fluid := domain
+;        ['SPADCALL, :form, fun0]
+;  not form => nil
+;--  not form => throwKeyedMsg("S2IE0008",[opName])
+;  form='interpOnly => rewriteMap(op,opName,argl)
+;  targetType := CADR sig
+;  if CONTAINED('_#,targetType) then targetType := NRTtypeHack targetType
+;  evalFormMkValue(op,form,targetType)
+
+(DEFUN |evalForm| (|op| |opName| |argl| |mmS|)
+ (PROG ($ |sig| |fun| |cond| |dc| |freeFun| |xargs| |xbody| |rec| |ind| 
+        |ISTMP#4| |ISTMP#5| |ISTMP#1| |ISTMP#2| |ISTMP#3| |len| |dcVector| 
+        |mm'| |fun0| |bpi| |domain| |form| |targetType|)
+ (DECLARE (SPECIAL $ |$NRTmonitorIfTrue| |$localVars| |$genValue|))
+  (RETURN
+   (SEQ
+    (PROGN
+     (DO ((#0=#:G166832 |mmS| (CDR #0#)) (|mm| NIL) (#1=#:G166833 NIL |form|))
+         ((OR (ATOM #0#) (PROGN (SETQ |mm| (CAR #0#)) NIL) #1#) NIL)
+      (SEQ
+       (EXIT
+        (PROGN
+         (SPADLET |sig| (CAR |mm|))
+         (SPADLET |fun| (CADR |mm|))
+         (SPADLET |cond| (CADDR |mm|))
+         (COND
+          ((BOOT-EQUAL (CAR |sig|) (QUOTE |interpOnly|))
+           (SPADLET |form| (CAR |sig|)))
+          ((NEQUAL (|#| |argl|) (|#| (CDDR |sig|))) (QUOTE |skip|))
+          ((QUOTE T)
+           (SPADLET |form|
+            (COND
+             ((OR |$genValue| (NULL |cond|))
+              (PROG (#2=#:G166845)
+               (SPADLET #2# NIL)
+               (RETURN
+                (DO ((#3=#:G166851 |argl| (CDR #3#))
+                     (|x| NIL)
+                     (#4=#:G166852 (CDDR |sig|) (CDR #4#))
+                     (|t| NIL))
+                    ((OR (ATOM #3#)
+                         (PROGN (SETQ |x| (CAR #3#)) NIL)
+                         (ATOM #4#)
+                         (PROGN (SETQ |t| (CAR #4#)) NIL))
+                      (NREVERSE0 #2#))
+                 (SEQ
+                  (EXIT
+                   (SETQ #2#
+                    (CONS
+                     (OR
+                      (|getArgValue2| |x| |t|
+                       (|sideEffectedArg?| |t| |sig| |opName|) |opName|)
+                      (RETURN NIL))
+                     #2#))))))))
+             ((QUOTE T)
+              (PROG (#5=#:G166867)
+               (SPADLET #5# NIL)
+               (RETURN
+                (DO ((#6=#:G166874 |argl| (CDR #6#))
+                     (|x| NIL)
+                     (#7=#:G166875 (CDDR |sig|) (CDR #7#))
+                     (|t| NIL)
+                     (#8=#:G166876 |cond| (CDR #8#))
+                     (|c| NIL))
+                    ((OR (ATOM #6#)
+                         (PROGN (SETQ |x| (CAR #6#)) NIL)
+                         (ATOM #7#)
+                         (PROGN (SETQ |t| (CAR #7#)) NIL)
+                         (ATOM #8#)
+                         (PROGN (SETQ |c| (CAR #8#)) NIL))
+                      (NREVERSE0 #5#))
+                 (SEQ
+                  (EXIT
+                   (SETQ #5#
+                    (CONS
+                     (OR
+                      (|getArgValueComp2| |x| |t| |c|
+                       (|sideEffectedArg?| |t| |sig| |opName|) |opName|)
+                      (RETURN NIL))
+                     #5#))))))))))
+           (COND
+            ((OR |form| (NULL |argl|))
+             (PROGN
+              (SPADLET |dc| (CAR |sig|))
+              (SPADLET |form|
+               (COND
+                ((BOOT-EQUAL |dc| (QUOTE |local|))
+                 (COND
+                  ((ATOM |fun|)
+                   (COND
+                    ((|member| |fun| |$localVars|)
+                     (CONS (QUOTE SPADCALL) (APPEND |form| (CONS |fun| NIL))))
+                    ((QUOTE T)
+                     (CONS |fun| (APPEND |form| (CONS NIL NIL))))))
+                  ((QUOTE T)
+                   (CONS (QUOTE SPADCALL) (APPEND |form| (CONS |fun| NIL))))))
+                ((AND (PAIRP |dc|)
+                      (EQ (QCAR |dc|) (QUOTE |_FreeFunction_|))
+                      (PROGN (SPADLET |freeFun| (QCDR |dc|)) (QUOTE T)))
+                 (CONS (QUOTE SPADCALL) (APPEND |form| (CONS |freeFun| NIL))))
+                ((AND (PAIRP |fun|)
+                      (EQ (QCAR |fun|) (QUOTE XLAM))
+                      (PROGN
+                       (SPADLET |ISTMP#1| (QCDR |fun|))
+                       (AND
+                        (PAIRP |ISTMP#1|)
+                        (PROGN
+                         (SPADLET |xargs| (QCAR |ISTMP#1|))
+                         (SPADLET |xbody| (QCDR |ISTMP#1|))
+                         (QUOTE T)))))
+                 (SPADLET |rec| (CAR |form|))
+                 (COND 
+                  ((AND (PAIRP |xbody|)
+                        (EQ (QCDR |xbody|) NIL)
+                        (PROGN
+                         (SPADLET |ISTMP#1| (QCAR |xbody|))
+                         (AND
+                          (PAIRP |ISTMP#1|)
+                          (EQ (QCAR |ISTMP#1|) (QUOTE RECORDELT))
+                          (PROGN
+                           (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                           (AND
+                            (PAIRP |ISTMP#2|)
+                            (PROGN
+                             (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                             (AND
+                              (PAIRP |ISTMP#3|)
+                              (PROGN
+                               (SPADLET |ind| (QCAR |ISTMP#3|))
+                               (SPADLET |ISTMP#4| (QCDR |ISTMP#3|))
+                               (AND
+                                (PAIRP |ISTMP#4|)
+                                (EQ (QCDR |ISTMP#4|) NIL)
+                                (PROGN
+                                 (SPADLET |len| (QCAR |ISTMP#4|))
+                                 (QUOTE T)))))))))))
+                   (|optRECORDELT|
+                    (CONS
+                     (CAAR |xbody|)
+                     (CONS |rec| (CONS |ind| (CONS |len| NIL))))))
+                  ((AND (PAIRP |xbody|)
+                        (EQ (QCDR |xbody|) NIL)
+                        (PROGN
+                         (SPADLET |ISTMP#1| (QCAR |xbody|))
+                         (AND
+                          (PAIRP |ISTMP#1|)
+                          (EQ (QCAR |ISTMP#1|) (QUOTE SETRECORDELT))
+                          (PROGN
+                           (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                           (AND
+                            (PAIRP |ISTMP#2|)
+                            (PROGN
+                             (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                             (AND
+                              (PAIRP |ISTMP#3|)
+                              (PROGN
+                               (SPADLET |ind| (QCAR |ISTMP#3|))
+                               (SPADLET |ISTMP#4| (QCDR |ISTMP#3|))
+                               (AND
+                                (PAIRP |ISTMP#4|)
+                                (PROGN
+                                 (SPADLET |len| (QCAR |ISTMP#4|))
+                                 (SPADLET |ISTMP#5| (QCDR |ISTMP#4|))
+                                 (AND
+                                  (PAIRP |ISTMP#5|)
+                                  (EQ (QCDR |ISTMP#5|) NIL))))))))))))
+                   (|optSETRECORDELT|
+                    (CONS
+                     (CAAR |xbody|)
+                     (CONS |rec|
+                      (CONS |ind| (CONS |len| (CONS (CADDR |form|) NIL)))))))
+                  ((AND
+                    (PAIRP |xbody|)
+                    (EQ (QCDR |xbody|) NIL)
+                    (PROGN
+                     (SPADLET |ISTMP#1| (QCAR |xbody|))
+                     (AND
+                      (PAIRP |ISTMP#1|)
+                      (EQ (QCAR |ISTMP#1|) (QUOTE RECORDCOPY))
+                      (PROGN
+                       (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                       (AND
+                        (PAIRP |ISTMP#2|)
+                        (PROGN
+                         (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                         (AND
+                          (PAIRP |ISTMP#3|)
+                          (EQ (QCDR |ISTMP#3|) NIL)
+                          (PROGN
+                           (SPADLET |len| (QCAR |ISTMP#3|))
+                           (QUOTE T)))))))))
+                   (|optRECORDCOPY|
+                    (CONS
+                     (CAAR |xbody|)
+                     (CONS |rec| (CONS |len| NIL)))))
+                  ((QUOTE T)
+                   (CONS
+                    (QUOTE FUNCALL)
+                    (CONS
+                     (CONS
+                      (QUOTE |function|)
+                      (CONS (CONS (QUOTE LAMBDA) (CONS |xargs| |xbody|)) NIL))
+                     (TAKE (|#| |xargs|) |form|))))))
+                ((QUOTE T)
+                 (SPADLET |dcVector| (|evalDomain| |dc|))
+                 (SPADLET |fun0|
+                  (COND
+                   ((|newType?| (CAAR |mm|))
+                    (SPADLET |mm'| (CAR (|ncSigTransform| |mm|)))
+                    (|ncGetFunction| |opName| (CAR |mm'|) (CDR |mm'|)))
+                   ((QUOTE T)
+                    (|NRTcompileEvalForm| |opName| |fun| |dcVector|))))
+                 (COND
+                  ((NULL |fun0|)
+                   (|throwKeyedMsg| (QUOTE S2IE0008) (CONS |opName| NIL)))
+                  ((QUOTE T)
+                   (SPADLET |bpi| (CAR |fun0|))
+                   (SPADLET |domain| (CDR |fun0|))
+                   (COND
+                    ((EQ |bpi| (|function| |Undef|))
+                     (|sayKeyedMsg| (QUOTE S2IE0009)
+                      (CONS |opName|
+                       (CONS 
+                        (|formatSignature| (CDR |sig|))
+                        (CONS (CAR |sig|) NIL))))
+                     NIL)
+                    ((QUOTE T)
+                     (COND
+                      ((BOOT-EQUAL |$NRTmonitorIfTrue| (QUOTE T))
+                       (|sayBrightlyNT|
+                        (CONS "Applying "
+                         (CONS (CAR |fun0|) (CONS " to:" NIL))))
+                       (|pp|
+                        (PROG (#9=#:G166892)
+                         (SPADLET #9# NIL)
+                         (RETURN
+                          (DO ((#10=#:G166897 |form| (CDR #10#)) (|x| NIL))
+                              ((OR (ATOM #10#)
+                                   (PROGN (SETQ |x| (CAR #10#)) NIL))
+                                (NREVERSE0 #9#))
+                           (SEQ
+                            (EXIT
+                             (SETQ #9#
+                              (CONS (|devaluateDeeply| |x|) #9#))))))))))
+                     (SPADLET $ |domain|)
+                     (CONS
+                      (QUOTE SPADCALL)
+                      (APPEND |form| (CONS |fun0| NIL)))))))))))))))))))
+     (COND
+      ((NULL |form|) NIL)
+      ((BOOT-EQUAL |form| (QUOTE |interpOnly|))
+       (|rewriteMap| |op| |opName| |argl|))
+      ((QUOTE T)
+       (SPADLET |targetType| (CADR |sig|))
+       (COND
+        ((CONTAINED (QUOTE |#|) |targetType|)
+         (SPADLET |targetType| (|NRTtypeHack| |targetType|))))
+       (|evalFormMkValue| |op| |form| |targetType|)))))))) 
+
+;sideEffectedArg?(t,sig,opName) ==
+;  opString := SYMBOL_-NAME opName
+;  (opName ^= 'setelt) and (ELT(opString, #opString-1) ^= char '_!) => nil
+;  dc := first sig
+;  t = dc
+
+(DEFUN |sideEffectedArg?| (|t| |sig| |opName|)
+ (PROG (|opString| |dc|)
+  (RETURN
+   (PROGN
+    (SPADLET |opString| (SYMBOL-NAME |opName|))
+    (COND
+     ((AND (NEQUAL |opName| (QUOTE |setelt|))
+           (NEQUAL
+             (ELT |opString| (SPADDIFFERENCE (|#| |opString|) 1))
+             (|char| (QUOTE !))))
+      NIL)
+     ((QUOTE T) (SPADLET |dc| (CAR |sig|)) (BOOT-EQUAL |t| |dc|))))))) 
+
+;getArgValue(a, t) ==
+;  atom a and not VECP a =>
+;    t' := coerceOrRetract(getBasicObject a,t)
+;    t' and wrapped2Quote objVal t'
+;  v := getArgValue1(a, t) => v
+;  alt := altTypeOf(objMode getValue a, a, nil) =>
+;    t' := coerceInt(getValue a, alt)
+;    t' := coerceOrRetract(t',t)
+;    t' and wrapped2Quote objVal t'
+;  nil
+
+(DEFUN |getArgValue| (|a| |t|)
+ (PROG (|v| |alt| |t'|)
+  (RETURN
+   (COND
+    ((AND (ATOM |a|) (NULL (VECP |a|)))
+     (SPADLET |t'| (|coerceOrRetract| (|getBasicObject| |a|) |t|))
+     (AND |t'| (|wrapped2Quote| (|objVal| |t'|))))
+    ((SPADLET |v| (|getArgValue1| |a| |t|)) |v|)
+    ((SPADLET |alt| (|altTypeOf| (|objMode| (|getValue| |a|)) |a| NIL))
+     (SPADLET |t'| (|coerceInt| (|getValue| |a|) |alt|))
+     (SPADLET |t'| (|coerceOrRetract| |t'| |t|))
+     (AND |t'| (|wrapped2Quote| (|objVal| |t'|))))
+    ((QUOTE T) NIL))))) 
+
+;getArgValue1(a,t) ==
+;  -- creates a value for a, coercing to t
+;  t' := getValue(a) =>
+;    (m := getMode a) and (m is ['Mapping,:ml]) and (m = t) and
+;      objValUnwrap(t') is ['MAP,:.] =>
+;        getMappingArgValue(a,t,m)
+;    t' := coerceOrRetract(t',t)
+;    t' and wrapped2Quote objVal t'
+;  systemErrorHere '"getArgValue"
+
+(DEFUN |getArgValue1| (|a| |t|)
+ (PROG (|m| |ml| |ISTMP#1| |t'|)
+  (RETURN
+   (COND
+    ((SPADLET |t'| (|getValue| |a|))
+     (COND
+      ((AND
+        (SPADLET |m| (|getMode| |a|))
+        (PAIRP |m|)
+        (EQ (QCAR |m|) (QUOTE |Mapping|))
+        (PROGN (SPADLET |ml| (QCDR |m|)) (QUOTE T))
+        (BOOT-EQUAL |m| |t|)
+        (PROGN
+         (SPADLET |ISTMP#1| (|objValUnwrap| |t'|))
+         (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) (QUOTE MAP)))))
+       (|getMappingArgValue| |a| |t| |m|))
+      ((QUOTE T)
+       (SPADLET |t'| (|coerceOrRetract| |t'| |t|))
+       (AND |t'| (|wrapped2Quote| (|objVal| |t'|))))))
+    ((QUOTE T) (|systemErrorHere| (MAKESTRING "getArgValue"))))))) 
+
+;getArgValue2(a,t,se?,opName) ==
+;  se? and (objMode(getValue a) ^= t) =>
+;    throwKeyedMsg("S2IE0013", [opName, objMode(getValue a), t])
+;  getArgValue(a,t)
+
+(DEFUN |getArgValue2| (|a| |t| |se?| |opName|)
+ (COND
+  ((AND |se?| (NEQUAL (|objMode| (|getValue| |a|)) |t|))
+   (|throwKeyedMsg| (QUOTE S2IE0013)
+    (CONS |opName| (CONS (|objMode| (|getValue| |a|)) (CONS |t| NIL)))))
+  ((QUOTE T) (|getArgValue| |a| |t|)))) 
+
+;getArgValueOrThrow(x, type) ==
+;  getArgValue(x,type) or throwKeyedMsg("S2IC0007",[type])
+
+(DEFUN |getArgValueOrThrow| (|x| |type|)
+ (OR
+  (|getArgValue| |x| |type|)
+  (|throwKeyedMsg| (QUOTE S2IC0007) (CONS |type| NIL)))) 
+
+;getMappingArgValue(a,t,m is ['Mapping,:ml]) ==
+;  (una := getUnname a) in $localVars =>
+;    $genValue =>
+;      name := get(una,'name,$env)
+;      a.0 := name
+;      mmS := selectLocalMms(a,name,rest ml, nil)
+;      or/[mm for mm in mmS |
+;        (mm is [[., :ml1],oldName,:.] and ml=ml1)] => MKQ [oldName]
+;      NIL
+;    una
+;  mmS := selectLocalMms(a,una,rest ml, nil)
+;  or/[mm for mm in mmS |
+;    (mm is [[., :ml1],oldName,:.] and ml=ml1)] => MKQ [oldName]
+;  NIL
+
+(DEFUN |getMappingArgValue| (|a| |t| |m|)
+ (declare (ignore |t|))
+ (PROG (|ml| |una| |name| |mmS| |ISTMP#1| |ml1| |ISTMP#2| |oldName|)
+ (declare (special |$env| |$genValue| |$localVars|))
+  (RETURN
+   (SEQ
+    (PROGN
+     (SPADLET |ml| (CDR |m|))
+     (COND
+      ((|member| (SPADLET |una| (|getUnname| |a|)) |$localVars|)
+       (COND
+        (|$genValue|
+         (SPADLET |name| (|get| |una| (QUOTE |name|) |$env|))
+         (SETELT |a| 0 |name|)
+         (SPADLET |mmS| (|selectLocalMms| |a| |name| (CDR |ml|) NIL))
+         (COND
+          ((PROG (#0=#:G167025)
+            (SPADLET #0# NIL)
+            (RETURN
+             (DO ((#1=#:G167032 NIL #0#)
+                  (#2=#:G167033 |mmS| (CDR #2#))
+                  (|mm| NIL))
+                 ((OR #1# (ATOM #2#) (PROGN (SETQ |mm| (CAR #2#)) NIL)) #0#)
+              (SEQ
+               (EXIT
+                (COND
+                 ((AND
+                   (PAIRP |mm|)
+                   (PROGN
+                    (SPADLET |ISTMP#1| (QCAR |mm|))
+                    (AND
+                     (PAIRP |ISTMP#1|)
+                     (PROGN (SPADLET |ml1| (QCDR |ISTMP#1|)) (QUOTE T))))
+                   (PROGN
+                    (SPADLET |ISTMP#2| (QCDR |mm|))
+                    (AND (PAIRP |ISTMP#2|)
+                         (PROGN
+                          (SPADLET |oldName| (QCAR |ISTMP#2|))
+                          (QUOTE T))))
+                   (BOOT-EQUAL |ml| |ml1|))
+                  (SETQ #0# (OR #0# |mm|)))))))))
+           (MKQ (CONS |oldName| NIL)))
+          ((QUOTE T) NIL)))
+        ((QUOTE T) |una|)))
+      ((QUOTE T)
+       (SPADLET |mmS| (|selectLocalMms| |a| |una| (CDR |ml|) NIL))
+       (COND
+        ((PROG (#3=#:G167040)
+         (SPADLET #3# NIL)
+         (RETURN
+          (DO ((#4=#:G167047 NIL #3#)
+               (#5=#:G167048 |mmS| (CDR #5#))
+               (|mm| NIL))
+              ((OR #4# (ATOM #5#) (PROGN (SETQ |mm| (CAR #5#)) NIL)) #3#)
+           (SEQ
+            (EXIT
+             (COND
+              ((AND (PAIRP |mm|)
+                    (PROGN
+                     (SPADLET |ISTMP#1| (QCAR |mm|))
+                     (AND
+                      (PAIRP |ISTMP#1|)
+                      (PROGN (SPADLET |ml1| (QCDR |ISTMP#1|)) (QUOTE T))))
+                    (PROGN
+                     (SPADLET |ISTMP#2| (QCDR |mm|))
+                     (AND
+                      (PAIRP |ISTMP#2|)
+                      (PROGN (SPADLET |oldName| (QCAR |ISTMP#2|)) (QUOTE T))))
+                    (BOOT-EQUAL |ml| |ml1|))
+               (SETQ #3# (OR #3# |mm|)))))))))
+         (MKQ (CONS |oldName| NIL)))
+        ((QUOTE T) NIL))))))))) 
+
+;getArgValueComp2(arg, type, cond, se?, opName) ==
+;  se? and (objMode(getValue arg) ^= type) =>
+;    throwKeyedMsg("S2IE0013", [opName, objMode(getValue arg), type])
+;  getArgValueComp(arg, type, cond)
+
+(DEFUN |getArgValueComp2| (|arg| |type| |cond| |se?| |opName|)
+ (COND
+  ((AND |se?| (NEQUAL (|objMode| (|getValue| |arg|)) |type|))
+   (|throwKeyedMsg| (QUOTE S2IE0013)
+    (CONS |opName| (CONS (|objMode| (|getValue| |arg|)) (CONS |type| NIL)))))
+  ((QUOTE T)
+   (|getArgValueComp| |arg| |type| |cond|)))) 
+
+;getArgValueComp(arg,type,cond) ==
+;  -- getArgValue for compiled case.  if there is a condition then
+;  --  v must be data to verify that coerceInteractive succeeds.
+;  v:= getArgValue(arg,type)
+;  null v => nil
+;  null cond => v
+;  v is ['QUOTE,:.] or getBasicMode v => v
+;  n := getUnnameIfCan arg
+;  if num := isSharpVarWithNum n then
+;    not $compilingMap => n := 'unknownVar
+;    alias := get($mapName,'alias,$e)
+;    n := alias.(num - 1)
+;  keyedMsgCompFailure("S2IE0010",[n])
+
+(DEFUN |getArgValueComp| (|arg| |type| |cond|)
+ (PROG (|v| |num| |alias| |n|)
+ (declare (special |$e| |$mapName| |$compilingMap|))
+  (RETURN
+   (PROGN 
+    (SPADLET |v| (|getArgValue| |arg| |type|))
+    (COND
+     ((NULL |v|) NIL)
+     ((NULL |cond|) |v|)
+     ((OR (AND (PAIRP |v|) (EQ (QCAR |v|) (QUOTE QUOTE))) (|getBasicMode| |v|))
+      |v|)
+     ((QUOTE T)
+      (SPADLET |n| (|getUnnameIfCan| |arg|))
+      (COND
+       ((SPADLET |num| (|isSharpVarWithNum| |n|))
+        (COND
+         ((NULL |$compilingMap|) (SPADLET |n| (QUOTE |unknownVar|)))
+         ((QUOTE T)
+          (SPADLET |alias| (|get| |$mapName| (QUOTE |alias|) |$e|))
+          (SPADLET |n| (ELT |alias| (SPADDIFFERENCE |num| 1)))))))
+      (|keyedMsgCompFailure| (QUOTE S2IE0010) (CONS |n| NIL)))))))) 
+
+;evalFormMkValue(op,form,tm) ==
+;  val:=
+;    u:=
+;      $genValue => wrap timedEVALFUN form
+;      form
+;    objNew(u,tm)
+;--+
+;  if $NRTmonitorIfTrue = true then
+;    sayBrightlyNT ['"Value of ",op.0,'" ===> "]
+;    pp unwrap u
+;  putValue(op,val)
+;  [tm]
+
+(DEFUN |evalFormMkValue| (|op| |form| |tm|)
+ (PROG (|u| |val|)
+ (declare (special |$NRTmonitorIfTrue| |$genValue|))
+  (RETURN
+   (PROGN
+    (SPADLET |val|
+     (PROGN
+      (SPADLET |u|
+       (COND
+        (|$genValue| (|wrap| (|timedEVALFUN| |form|)))
+        ((QUOTE T) |form|)))
+      (|objNew| |u| |tm|)))
+    (COND
+     ((BOOT-EQUAL |$NRTmonitorIfTrue| (QUOTE T))
+      (|sayBrightlyNT|
+       (CONS "Value of "
+        (CONS (ELT |op| 0) (CONS " ===> " NIL)))) (|pp| (|unwrap| |u|))))
+    (|putValue| |op| |val|) (CONS |tm| NIL))))) 
+
+;failCheck x ==
+;  x = '"failed" =>
+;    stopTimingProcess peekTimedName()
+;    THROW('interpreter,objNewWrap('"failed",$String))
+;  x = $coerceFailure =>
+;    NIL
+;  x
+
+(DEFUN |failCheck| (|x|)
+ (declare (special |$coerceFailure| |$String|))
+ (COND
+  ((BOOT-EQUAL |x| (MAKESTRING "failed"))
+   (|stopTimingProcess| (|peekTimedName|))
+    (THROW (QUOTE |interpreter|) (|objNewWrap| "failed" |$String|)))
+  ((BOOT-EQUAL |x| |$coerceFailure|) NIL)
+  ((QUOTE T) |x|))) 
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

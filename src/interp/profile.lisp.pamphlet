@@ -1,0 +1,254 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp profile.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+(IN-PACKAGE "BOOT" )
+
+;--$profileCompiler := true
+;$profileAlist := nil
+
+(SPADLET |$profileAlist| NIL) 
+
+;profileWrite() ==  --called from finalizeLisplib
+;  outStream := MAKE_-OUTSTREAM CONCAT(LIBSTREAM_-DIRNAME $libFile,'"/info")
+;  _*PRINT_-PRETTY_* :local := 'T
+;  PRINT_-FULL(profileTran $profileAlist,outStream)
+;  SHUT outStream
+
+(DEFUN |profileWrite| ()
+  (PROG (|outStream| *PRINT-PRETTY*)
+  (declare (special *PRINT-PRETTY* |$profileAlist|))
+    (RETURN
+      (PROGN
+        (SPADLET |outStream|
+                 (MAKE-OUTSTREAM
+                     (CONCAT (LIBSTREAM-DIRNAME |$libFile|)
+                             (MAKESTRING "/info"))))
+        (SPADLET *PRINT-PRETTY* 'T)
+        (PRINT-FULL (|profileTran| |$profileAlist|) |outStream|)
+        (SHUT |outStream|)))))
+
+;profileTran alist ==
+;  $profileHash := MAKE_-HASH_-TABLE()
+;  for [opSig,:info] in alist repeat
+;    op := opOf opSig
+;    sig := KAR KDR opSig
+;    HPUT($profileHash,op,[[sig,:info],:HGET($profileHash,op)])
+;  [[key,:HGET($profileHash,key)] for key in mySort HKEYS $profileHash]
+
+(DEFUN |profileTran| (|alist|)
+  (PROG (|opSig| |info| |op| |sig|)
+  (declare (special |$profileHash|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$profileHash| (MAKE-HASH-TABLE))
+             (DO ((G166076 |alist| (CDR G166076)) (G166064 NIL))
+                 ((OR (ATOM G166076)
+                      (PROGN (SETQ G166064 (CAR G166076)) NIL)
+                      (PROGN
+                        (PROGN
+                          (SPADLET |opSig| (CAR G166064))
+                          (SPADLET |info| (CDR G166064))
+                          G166064)
+                        NIL))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |op| (|opOf| |opSig|))
+                            (SPADLET |sig| (KAR (KDR |opSig|)))
+                            (HPUT |$profileHash| |op|
+                                  (CONS (CONS |sig| |info|)
+                                        (HGET |$profileHash| |op|)))))))
+             (PROG (G166087)
+               (SPADLET G166087 NIL)
+               (RETURN
+                 (DO ((G166092 (|mySort| (HKEYS |$profileHash|))
+                          (CDR G166092))
+                      (|key| NIL))
+                     ((OR (ATOM G166092)
+                          (PROGN (SETQ |key| (CAR G166092)) NIL))
+                      (NREVERSE0 G166087))
+                   (SEQ (EXIT (SETQ G166087
+                                    (CONS
+                                     (CONS |key|
+                                      (HGET |$profileHash| |key|))
+                                     G166087))))))))))))
+
+;profileRecord(label,name,info) ==  --name: info is var: type or op: sig
+;--$profileAlist is ((op . alist1) ...) where
+;--  alist1      is ((label . alist2) ...) where
+;--    alist2    is ((name . info) ...)
+;  if $insideCapsuleFunctionIfTrue then
+;    op := $op
+;    argl := CDR $form
+;    opSig := [$op,$signatureOfForm]
+;  else
+;    op := 'constructor
+;    argl := nil
+;    opSig := [op]
+;  if label = 'locals and MEMQ(name,argl) then label := 'arguments
+;  alist1        := LASSOC(opSig,$profileAlist)
+;  alist2        := LASSOC(label,alist1)
+;  newAlist2     := insertAlist(name,info,alist2)
+;  newAlist1     := insertAlist(label,newAlist2,alist1)
+;  $profileAlist := insertAlist(opSig,newAlist1,$profileAlist)
+;  $profileAlist
+
+(DEFUN |profileRecord| (|label| |name| |info|)
+  (PROG (|op| |argl| |opSig| |alist1| |alist2| |newAlist2| |newAlist1|)
+  (declare (special |$profileAlist| |$signatureOfForm| |$op| |$form|))
+    (RETURN
+      (PROGN
+        (COND
+          (|$insideCapsuleFunctionIfTrue| (SPADLET |op| |$op|)
+              (SPADLET |argl| (CDR |$form|))
+              (SPADLET |opSig|
+                       (CONS |$op| (CONS |$signatureOfForm| NIL))))
+          ('T (SPADLET |op| '|constructor|) (SPADLET |argl| NIL)
+           (SPADLET |opSig| (CONS |op| NIL))))
+        (COND
+          ((AND (BOOT-EQUAL |label| '|locals|) (MEMQ |name| |argl|))
+           (SPADLET |label| '|arguments|)))
+        (SPADLET |alist1| (LASSOC |opSig| |$profileAlist|))
+        (SPADLET |alist2| (LASSOC |label| |alist1|))
+        (SPADLET |newAlist2| (|insertAlist| |name| |info| |alist2|))
+        (SPADLET |newAlist1|
+                 (|insertAlist| |label| |newAlist2| |alist1|))
+        (SPADLET |$profileAlist|
+                 (|insertAlist| |opSig| |newAlist1| |$profileAlist|))
+        |$profileAlist|))))
+
+;profileDisplay() ==
+;  profileDisplayOp('constructor,LASSOC('constructor,$profileAlist) )
+;  for [op,:alist1] in $profileAlist | op ^= 'constructor repeat
+;    profileDisplayOp(op,alist1)
+
+(DEFUN |profileDisplay| ()
+  (PROG (|op| |alist1|)
+  (declare (special |$profileAlist|))
+    (RETURN
+      (SEQ (PROGN
+             (|profileDisplayOp| '|constructor|
+                 (LASSOC '|constructor| |$profileAlist|))
+             (DO ((G166135 |$profileAlist| (CDR G166135))
+                  (G166125 NIL))
+                 ((OR (ATOM G166135)
+                      (PROGN (SETQ G166125 (CAR G166135)) NIL)
+                      (PROGN
+                        (PROGN
+                          (SPADLET |op| (CAR G166125))
+                          (SPADLET |alist1| (CDR G166125))
+                          G166125)
+                        NIL))
+                  NIL)
+               (SEQ (EXIT (COND
+                            ((NEQUAL |op| '|constructor|)
+                             (|profileDisplayOp| |op| |alist1|)))))))))))
+
+;profileDisplayOp(op,alist1) ==
+;  sayBrightly op
+;  if LASSOC('arguments,alist1) then
+;    sayBrightly '"  arguments"
+;    for [x,:t] in MSORT LASSOC('arguments,alist1) repeat
+;      sayBrightly concat('"     ",x,": ",prefix2String t)
+;  if LASSOC('locals,alist1) then
+;    sayBrightly '"  locals"
+;    for [x,:t] in MSORT LASSOC('locals,alist1) repeat
+;      sayBrightly concat('"     ",x,": ",prefix2String t)
+;  for [con,:alist2] in alist1 | not MEMQ(con,'(locals arguments)) repeat
+;    sayBrightly concat('"  ",prefix2String con)
+;    for [op1,:sig] in MSORT alist2 repeat
+;      sayBrightly ['"    ",:formatOpSignature(op1,sig)]
+
+(DEFUN |profileDisplayOp| (|op| |alist1|)
+  (PROG (|x| |t| |con| |alist2| |op1| |sig|)
+    (RETURN
+      (SEQ (PROGN
+             (|sayBrightly| |op|)
+             (COND
+               ((LASSOC '|arguments| |alist1|)
+                (|sayBrightly| (MAKESTRING "  arguments"))
+                (DO ((G166171 (MSORT (LASSOC '|arguments| |alist1|))
+                         (CDR G166171))
+                     (G166147 NIL))
+                    ((OR (ATOM G166171)
+                         (PROGN (SETQ G166147 (CAR G166171)) NIL)
+                         (PROGN
+                           (PROGN
+                             (SPADLET |x| (CAR G166147))
+                             (SPADLET |t| (CDR G166147))
+                             G166147)
+                           NIL))
+                     NIL)
+                  (SEQ (EXIT (|sayBrightly|
+                                 (|concat| (MAKESTRING "     ") |x|
+                                     '|: | (|prefix2String| |t|))))))))
+             (COND
+               ((LASSOC '|locals| |alist1|)
+                (|sayBrightly| (MAKESTRING "  locals"))
+                (DO ((G166182 (MSORT (LASSOC '|locals| |alist1|))
+                         (CDR G166182))
+                     (G166152 NIL))
+                    ((OR (ATOM G166182)
+                         (PROGN (SETQ G166152 (CAR G166182)) NIL)
+                         (PROGN
+                           (PROGN
+                             (SPADLET |x| (CAR G166152))
+                             (SPADLET |t| (CDR G166152))
+                             G166152)
+                           NIL))
+                     NIL)
+                  (SEQ (EXIT (|sayBrightly|
+                                 (|concat| (MAKESTRING "     ") |x|
+                                     '|: | (|prefix2String| |t|))))))))
+             (DO ((G166199 |alist1| (CDR G166199)) (G166162 NIL))
+                 ((OR (ATOM G166199)
+                      (PROGN (SETQ G166162 (CAR G166199)) NIL)
+                      (PROGN
+                        (PROGN
+                          (SPADLET |con| (CAR G166162))
+                          (SPADLET |alist2| (CDR G166162))
+                          G166162)
+                        NIL))
+                  NIL)
+               (SEQ (EXIT (COND
+                            ((NULL (MEMQ |con| '(|locals| |arguments|)))
+                             (PROGN
+                               (|sayBrightly|
+                                   (|concat| (MAKESTRING "  ")
+                                    (|prefix2String| |con|)))
+                               (DO ((G166210 (MSORT |alist2|)
+                                     (CDR G166210))
+                                    (G166157 NIL))
+                                   ((OR (ATOM G166210)
+                                     (PROGN
+                                       (SETQ G166157 (CAR G166210))
+                                       NIL)
+                                     (PROGN
+                                       (PROGN
+                                         (SPADLET |op1|
+                                          (CAR G166157))
+                                         (SPADLET |sig|
+                                          (CDR G166157))
+                                         G166157)
+                                       NIL))
+                                    NIL)
+                                 (SEQ (EXIT
+                                       (|sayBrightly|
+                                        (CONS (MAKESTRING "    ")
+                                         (|formatOpSignature| |op1|
+                                          |sig|)))))))))))))))))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

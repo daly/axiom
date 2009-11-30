@@ -1,0 +1,1170 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp modemap.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;--% EXTERNAL ROUTINES
+;
+;--These functions are called from outside this file to add a domain
+;--   or to get the current domains in scope;
+;
+;addDomain(domain,e) ==
+;  atom domain =>
+;    EQ(domain,"$EmptyMode") => e
+;    EQ(domain,"$NoValueMode") => e
+;    not IDENTP domain or 2<#(s:= STRINGIMAGE domain) and
+;      EQ(char "#",s.(0)) and EQ(char "#",s.(1)) => e
+;    MEMQ(domain,getDomainsInScope e) => e
+;    isLiteral(domain,e) => e
+;    addNewDomain(domain,e)
+;  (name:= first domain)='Category => e
+;  domainMember(domain,getDomainsInScope e) => e
+;  getmode(name,e) is ["Mapping",target,:.] and isCategoryForm(target,e)=>
+;      addNewDomain(domain,e)
+;    -- constructor? test needed for domains compiled with $bootStrapMode=true
+;  isFunctor name or constructor? name => addNewDomain(domain,e)
+;  if not isCategoryForm(domain,e) and
+;    not MEMBER(name,'(Mapping CATEGORY)) then
+;      unknownTypeError name
+;  e        --is not a functor
+
+(DEFUN |addDomain| (|domain| |e|)
+  (PROG (|s| |name| |ISTMP#1| |ISTMP#2| |target|)
+    (RETURN
+      (COND
+        ((ATOM |domain|)
+         (COND
+           ((EQ |domain| '|$EmptyMode|) |e|)
+           ((EQ |domain| '|$NoValueMode|) |e|)
+           ((OR (NULL (IDENTP |domain|))
+                (AND (QSLESSP 2
+                              (|#| (SPADLET |s| (STRINGIMAGE |domain|))))
+                     (EQ (|char| '|#|) (ELT |s| 0))
+                     (EQ (|char| '|#|) (ELT |s| 1))))
+            |e|)
+           ((MEMQ |domain| (|getDomainsInScope| |e|)) |e|)
+           ((|isLiteral| |domain| |e|) |e|)
+           ('T (|addNewDomain| |domain| |e|))))
+        ((BOOT-EQUAL (SPADLET |name| (CAR |domain|)) '|Category|) |e|)
+        ((|domainMember| |domain| (|getDomainsInScope| |e|)) |e|)
+        ((AND (PROGN
+                (SPADLET |ISTMP#1| (|getmode| |name| |e|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) '|Mapping|)
+                     (PROGN
+                       (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                       (AND (PAIRP |ISTMP#2|)
+                            (PROGN
+                              (SPADLET |target| (QCAR |ISTMP#2|))
+                              'T)))))
+              (|isCategoryForm| |target| |e|))
+         (|addNewDomain| |domain| |e|))
+        ((OR (|isFunctor| |name|) (|constructor?| |name|))
+         (|addNewDomain| |domain| |e|))
+        ('T
+         (COND
+           ((AND (NULL (|isCategoryForm| |domain| |e|))
+                 (NULL (|member| |name| '(|Mapping| CATEGORY))))
+            (|unknownTypeError| |name|)))
+         |e|)))))
+
+;domainMember(dom,domList) == or/[modeEqual(dom,d) for d in domList]
+
+(DEFUN |domainMember| (|dom| |domList|)
+  (PROG ()
+    (RETURN
+      (SEQ (PROG (G166077)
+             (SPADLET G166077 NIL)
+             (RETURN
+               (DO ((G166083 NIL G166077)
+                    (G166084 |domList| (CDR G166084)) (|d| NIL))
+                   ((OR G166083 (ATOM G166084)
+                        (PROGN (SETQ |d| (CAR G166084)) NIL))
+                    G166077)
+                 (SEQ (EXIT (SETQ G166077
+                                  (OR G166077
+                                      (|modeEqual| |dom| |d|))))))))))))
+
+;--% MODEMAP FUNCTIONS
+;
+;--getTargetMode(x is [op,:argl],e) ==
+;--  CASES(#(mml:= getModemapList(op,#argl,e)),
+;--    (1 =>
+;--    ([[.,target,:.],:.]:= first mml; substituteForFormalArguments(argl,target))
+;--      ; 0 => MOAN(x," has no modemap"); systemError [x," has duplicate modemaps"]))
+;
+;getModemap(x is [op,:.],e) ==
+;  for modemap in get(op,'modemap,e) repeat
+;    if u:= compApplyModemap(x,modemap,e,nil) then return
+;      ([.,.,sl]:= u; SUBLIS(sl,modemap))
+
+(DEFUN |getModemap| (|x| |e|)
+  (PROG (|op| |u| |sl|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |op| (CAR |x|))
+             (DO ((G166111 (|get| |op| '|modemap| |e|)
+                      (CDR G166111))
+                  (|modemap| NIL))
+                 ((OR (ATOM G166111)
+                      (PROGN (SETQ |modemap| (CAR G166111)) NIL))
+                  NIL)
+               (SEQ (EXIT (COND
+                            ((SPADLET |u|
+                                      (|compApplyModemap| |x| |modemap|
+                                       |e| NIL))
+                             (RETURN
+                               (PROGN
+                                 (SPADLET |sl| (CADDR |u|))
+                                 (SUBLIS |sl| |modemap|))))
+                            ('T NIL))))))))))
+
+;getUniqueSignature(form,e) ==
+;  [[.,:sig],:.]:= getUniqueModemap(first form,#rest form,e) or return nil
+;  sig
+
+(DEFUN |getUniqueSignature| (|form| |e|)
+  (PROG (|LETTMP#1| |sig|)
+    (RETURN
+      (PROGN
+        (SPADLET |LETTMP#1|
+                 (OR (|getUniqueModemap| (CAR |form|)
+                         (|#| (CDR |form|)) |e|)
+                     (RETURN NIL)))
+        (SPADLET |sig| (CDAR |LETTMP#1|))
+        |sig|))))
+
+;getUniqueModemap(op,numOfArgs,e) ==
+;  1=#(mml:= getModemapList(op,numOfArgs,e)) => first mml
+;  1<#mml =>
+;    stackWarning [numOfArgs,'" argument form of: ",op,
+;      '" has more than one modemap"]
+;    first mml
+;  nil
+
+(DEFUN |getUniqueModemap| (|op| |numOfArgs| |e|)
+  (PROG (|mml|)
+    (RETURN
+      (COND
+        ((EQL 1
+              (|#| (SPADLET |mml|
+                            (|getModemapList| |op| |numOfArgs| |e|))))
+         (CAR |mml|))
+        ((QSLESSP 1 (|#| |mml|))
+         (|stackWarning|
+             (CONS |numOfArgs|
+                   (CONS (MAKESTRING " argument form of: ")
+                         (CONS |op|
+                               (CONS (MAKESTRING
+                                      " has more than one modemap")
+                                     NIL)))))
+         (CAR |mml|))
+        ('T NIL)))))
+
+;getModemapList(op,numOfArgs,e) ==
+;  op is ['elt,D,op'] => getModemapListFromDomain(op',numOfArgs,D,e)
+;  [mm for
+;    (mm:= [[.,.,:sigl],:.]) in get(op,'modemap,e) | numOfArgs=#sigl]
+
+(DEFUN |getModemapList| (|op| |numOfArgs| |e|)
+  (PROG (|ISTMP#1| D |ISTMP#2| |op'| |sigl|)
+    (RETURN
+      (SEQ (COND
+             ((AND (PAIRP |op|) (EQ (QCAR |op|) '|elt|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |op|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET D (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |op'| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (|getModemapListFromDomain| |op'| |numOfArgs| D |e|))
+             ('T
+              (PROG (G166165)
+                (SPADLET G166165 NIL)
+                (RETURN
+                  (DO ((G166172 (|get| |op| '|modemap| |e|)
+                           (CDR G166172))
+                       (|mm| NIL))
+                      ((OR (ATOM G166172)
+                           (PROGN (SETQ |mm| (CAR G166172)) NIL)
+                           (PROGN
+                             (PROGN
+                               (SPADLET |sigl| (CDDAR |mm|))
+                               |mm|)
+                             NIL))
+                       (NREVERSE0 G166165))
+                    (SEQ (EXIT (COND
+                                 ((BOOT-EQUAL |numOfArgs| (|#| |sigl|))
+                                  (SETQ G166165
+                                        (CONS |mm| G166165)))))))))))))))
+
+;getModemapListFromDomain(op,numOfArgs,D,e) ==
+;  [mm
+;    for (mm:= [[dc,:sig],:.]) in get(op,'modemap,e) | dc=D and #rest sig=
+;      numOfArgs]
+
+(DEFUN |getModemapListFromDomain| (|op| |numOfArgs| D |e|)
+  (PROG (|dc| |sig|)
+    (RETURN
+      (SEQ (PROG (G166197)
+             (SPADLET G166197 NIL)
+             (RETURN
+               (DO ((G166204 (|get| |op| '|modemap| |e|)
+                        (CDR G166204))
+                    (|mm| NIL))
+                   ((OR (ATOM G166204)
+                        (PROGN (SETQ |mm| (CAR G166204)) NIL)
+                        (PROGN
+                          (PROGN
+                            (SPADLET |dc| (CAAR |mm|))
+                            (SPADLET |sig| (CDAR |mm|))
+                            |mm|)
+                          NIL))
+                    (NREVERSE0 G166197))
+                 (SEQ (EXIT (COND
+                              ((AND (BOOT-EQUAL |dc| D)
+                                    (BOOT-EQUAL (|#| (CDR |sig|))
+                                     |numOfArgs|))
+                              (SETQ G166197 (CONS |mm| G166197)))))))))))))
+
+;addModemapKnown(op,mc,sig,pred,fn,$e) ==
+;--  if knownInfo pred then pred:=true
+;--  that line is handled elsewhere
+;  $insideCapsuleFunctionIfTrue=true =>
+;    $CapsuleModemapFrame :=
+;      addModemap0(op,mc,sig,pred,fn,$CapsuleModemapFrame)
+;    $e
+;  addModemap0(op,mc,sig,pred,fn,$e)
+
+(DEFUN |addModemapKnown| (|op| |mc| |sig| |pred| |fn| |$e|)
+  (DECLARE (SPECIAL |$e| |$CapsuleModemapFrame| 
+                    |$insideCapsuleFunctionIfTrue|))
+  (COND
+    ((BOOT-EQUAL |$insideCapsuleFunctionIfTrue| 'T)
+     (SPADLET |$CapsuleModemapFrame|
+              (|addModemap0| |op| |mc| |sig| |pred| |fn|
+                  |$CapsuleModemapFrame|))
+     |$e|)
+    ('T (|addModemap0| |op| |mc| |sig| |pred| |fn| |$e|))))
+
+;addModemap0(op,mc,sig,pred,fn,e) ==
+;  --mc is the "mode of computation"; fn the "implementation"
+;  $functorForm is ['CategoryDefaults,:.] and mc="$" => e
+;    --don't put CD modemaps into environment
+;  --fn is ['Subsumed,:.] => e  -- don't skip subsumed modemaps
+;                               -- breaks -:($,$)->U($,failed) in DP
+;  op='elt or op='setelt => addEltModemap(op,mc,sig,pred,fn,e)
+;  addModemap1(op,mc,sig,pred,fn,e)
+
+(DEFUN |addModemap0| (|op| |mc| |sig| |pred| |fn| |e|)
+  (declare (special |$functorForm|))
+  (COND
+    ((AND (PAIRP |$functorForm|)
+          (EQ (QCAR |$functorForm|) '|CategoryDefaults|)
+          (BOOT-EQUAL |mc| '$))
+     |e|)
+    ((OR (BOOT-EQUAL |op| '|elt|) (BOOT-EQUAL |op| '|setelt|))
+     (|addEltModemap| |op| |mc| |sig| |pred| |fn| |e|))
+    ('T (|addModemap1| |op| |mc| |sig| |pred| |fn| |e|))))
+
+;addEltModemap(op,mc,sig,pred,fn,e) ==
+;   --hack to change selectors from strings to identifiers; and to
+;   --add flag identifiers as literals in the envir
+;  op='elt and sig is [:lt,sel] =>
+;    STRINGP sel =>
+;      id:= INTERN sel
+;      if $insideCapsuleFunctionIfTrue=true
+;         then $e:= makeLiteral(id,$e)
+;         else e:= makeLiteral(id,e)
+;      addModemap1(op,mc,[:lt,id],pred,fn,e)
+;    -- atom sel => systemErrorHere '"addEltModemap"
+;    addModemap1(op,mc,sig,pred,fn,e)
+;  op='setelt and sig is [:lt,sel,v] =>
+;    STRINGP sel =>
+;      id:= INTERN sel
+;      if $insideCapsuleFunctionIfTrue=true
+;         then $e:= makeLiteral(id,$e)
+;         else e:= makeLiteral(id,e)
+;      addModemap1(op,mc,[:lt,id,v],pred,fn,e)
+;    -- atom sel => systemError '"addEltModemap"
+;    addModemap1(op,mc,sig,pred,fn,e)
+;  systemErrorHere '"addEltModemap"
+
+(DEFUN |addEltModemap| (|op| |mc| |sig| |pred| |fn| |e|)
+  (PROG (|ISTMP#1| |v| |ISTMP#2| |sel| |lt| |id|)
+  (declare (special |$e| |$insideCapsuleFunctionIfTrue|))
+    (RETURN
+      (COND
+        ((AND (BOOT-EQUAL |op| '|elt|) (PAIRP |sig|)
+              (PROGN (SPADLET |ISTMP#1| (REVERSE |sig|)) 'T)
+              (PAIRP |ISTMP#1|)
+              (PROGN
+                (SPADLET |sel| (QCAR |ISTMP#1|))
+                (SPADLET |lt| (QCDR |ISTMP#1|))
+                'T)
+              (PROGN (SPADLET |lt| (NREVERSE |lt|)) 'T))
+         (COND
+           ((STRINGP |sel|) (SPADLET |id| (INTERN |sel|))
+            (COND
+              ((BOOT-EQUAL |$insideCapsuleFunctionIfTrue| 'T)
+               (SPADLET |$e| (|makeLiteral| |id| |$e|)))
+              ('T (SPADLET |e| (|makeLiteral| |id| |e|))))
+            (|addModemap1| |op| |mc| (APPEND |lt| (CONS |id| NIL))
+                |pred| |fn| |e|))
+           ('T (|addModemap1| |op| |mc| |sig| |pred| |fn| |e|))))
+        ((AND (BOOT-EQUAL |op| '|setelt|) (PAIRP |sig|)
+              (PROGN (SPADLET |ISTMP#1| (REVERSE |sig|)) 'T)
+              (PAIRP |ISTMP#1|)
+              (PROGN
+                (SPADLET |v| (QCAR |ISTMP#1|))
+                (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                (AND (PAIRP |ISTMP#2|)
+                     (PROGN
+                       (SPADLET |sel| (QCAR |ISTMP#2|))
+                       (SPADLET |lt| (QCDR |ISTMP#2|))
+                       'T)))
+              (PROGN (SPADLET |lt| (NREVERSE |lt|)) 'T))
+         (COND
+           ((STRINGP |sel|) (SPADLET |id| (INTERN |sel|))
+            (COND
+              ((BOOT-EQUAL |$insideCapsuleFunctionIfTrue| 'T)
+               (SPADLET |$e| (|makeLiteral| |id| |$e|)))
+              ('T (SPADLET |e| (|makeLiteral| |id| |e|))))
+            (|addModemap1| |op| |mc|
+                (APPEND |lt| (CONS |id| (CONS |v| NIL))) |pred| |fn|
+                |e|))
+           ('T (|addModemap1| |op| |mc| |sig| |pred| |fn| |e|))))
+        ('T (|systemErrorHere| (MAKESTRING "addEltModemap")))))))
+
+;addModemap1(op,mc,sig,pred,fn,e) ==
+;   --mc is the "mode of computation"; fn the "implementation"
+;  if mc='Rep then
+;--     if fn is [kind,'Rep,.] and
+;               -- save old sig for NRUNTIME
+;--       (kind = 'ELT or kind = 'CONST) then fn:=[kind,'Rep,sig]
+;     sig:= substitute("$",'Rep,sig)
+;  currentProplist:= getProplist(op,e) or nil
+;  newModemapList:=
+;    mkNewModemapList(mc,sig,pred,fn,LASSOC('modemap,currentProplist),e,nil)
+;  newProplist:= augProplist(currentProplist,'modemap,newModemapList)
+;  newProplist':= augProplist(newProplist,"FLUID",true)
+;  unErrorRef op
+;        --There may have been a warning about op having no value
+;  addBinding(op,newProplist',e)
+
+(DEFUN |addModemap1| (|op| |mc| |sig| |pred| |fn| |e|)
+  (PROG (|currentProplist| |newModemapList| |newProplist|
+            |newProplist'|)
+    (RETURN
+      (PROGN
+        (COND
+          ((BOOT-EQUAL |mc| '|Rep|)
+           (SPADLET |sig| (MSUBST '$ '|Rep| |sig|))))
+        (SPADLET |currentProplist| (OR (|getProplist| |op| |e|) NIL))
+        (SPADLET |newModemapList|
+                 (|mkNewModemapList| |mc| |sig| |pred| |fn|
+                     (LASSOC '|modemap| |currentProplist|) |e| NIL))
+        (SPADLET |newProplist|
+                 (|augProplist| |currentProplist| '|modemap|
+                     |newModemapList|))
+        (SPADLET |newProplist'|
+                 (|augProplist| |newProplist| 'FLUID 'T))
+        (|unErrorRef| |op|)
+        (|addBinding| |op| |newProplist'| |e|)))))
+
+;mkNewModemapList(mc,sig,pred,fn,curModemapList,e,filenameOrNil) ==
+;  entry:= [map:= [mc,:sig],[pred,fn],:filenameOrNil]
+;  MEMBER(entry,curModemapList) => curModemapList
+;  (oldMap:= ASSOC(map,curModemapList)) and oldMap is [.,[opred, =fn],:.] =>
+;    $forceAdd => mergeModemap(entry,curModemapList,e)
+;    opred=true => curModemapList
+;    if pred^=true and pred^=opred then pred:= ["OR",pred,opred]
+;    [if x=oldMap then [map,[pred,fn],:filenameOrNil] else x
+;
+;  --if new modemap less general, put at end; otherwise, at front
+;      for x in curModemapList]
+;  $InteractiveMode => insertModemap(entry,curModemapList)
+;  mergeModemap(entry,curModemapList,e)
+
+(DEFUN |mkNewModemapList|
+       (|mc| |sig| |pred| |fn| |curModemapList| |e| |filenameOrNil|)
+  (PROG (|map| |entry| |oldMap| |ISTMP#1| |ISTMP#2| |opred| |ISTMP#3|)
+  (declare (special |$InteractiveMode| |$forceAdd|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |entry|
+                      (CONS (SPADLET |map| (CONS |mc| |sig|))
+                            (CONS (CONS |pred| (CONS |fn| NIL))
+                                  |filenameOrNil|)))
+             (COND
+               ((|member| |entry| |curModemapList|) |curModemapList|)
+               ((AND (SPADLET |oldMap|
+                              (|assoc| |map| |curModemapList|))
+                     (PAIRP |oldMap|)
+                     (PROGN
+                       (SPADLET |ISTMP#1| (QCDR |oldMap|))
+                       (AND (PAIRP |ISTMP#1|)
+                            (PROGN
+                              (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                              (AND (PAIRP |ISTMP#2|)
+                                   (PROGN
+                                     (SPADLET |opred| (QCAR |ISTMP#2|))
+                                     (SPADLET |ISTMP#3|
+                                      (QCDR |ISTMP#2|))
+                                     (AND (PAIRP |ISTMP#3|)
+                                      (EQ (QCDR |ISTMP#3|) NIL)
+                                      (EQUAL (QCAR |ISTMP#3|) |fn|))))))))
+                (COND
+                  (|$forceAdd|
+                      (|mergeModemap| |entry| |curModemapList| |e|))
+                  ((BOOT-EQUAL |opred| 'T) |curModemapList|)
+                  ('T
+                   (COND
+                     ((AND (NEQUAL |pred| 'T) (NEQUAL |pred| |opred|))
+                      (SPADLET |pred|
+                               (CONS 'OR
+                                     (CONS |pred| (CONS |opred| NIL))))))
+                   (PROG (G166301)
+                     (SPADLET G166301 NIL)
+                     (RETURN
+                       (DO ((G166306 |curModemapList|
+                                (CDR G166306))
+                            (|x| NIL))
+                           ((OR (ATOM G166306)
+                                (PROGN (SETQ |x| (CAR G166306)) NIL))
+                            (NREVERSE0 G166301))
+                         (SEQ (EXIT (SETQ G166301
+                                     (CONS
+                                      (COND
+                                        ((BOOT-EQUAL |x| |oldMap|)
+                                         (CONS |map|
+                                          (CONS
+                                           (CONS |pred|
+                                            (CONS |fn| NIL))
+                                           |filenameOrNil|)))
+                                        ('T |x|))
+                                      G166301))))))))))
+               (|$InteractiveMode|
+                   (|insertModemap| |entry| |curModemapList|))
+               ('T (|mergeModemap| |entry| |curModemapList| |e|))))))))
+
+;mergeModemap(entry is [[mc,:sig],[pred,:.],:.],modemapList,e) ==
+;  for (mmtail:= [[[mc',:sig'],[pred',:.],:.],:.]) in tails modemapList repeat
+;    mc=mc' or isSuperDomain(mc',mc,e) =>
+;      newmm:= nil
+;      mm:= modemapList
+;      while (not EQ(mm,mmtail)) repeat (newmm:= [first mm,:newmm]; mm:= rest mm)
+;      if (mc=mc') and (sig=sig') then
+;        --We only need one of these, unless the conditions are hairy
+;        not $forceAdd and TruthP pred' =>
+;          entry:=nil
+;              --the new predicate buys us nothing
+;          return modemapList
+;        TruthP pred => mmtail:=rest mmtail
+;          --the thing we matched against is useless, by comparison
+;      modemapList:= NCONC(NREVERSE newmm,[entry,:mmtail])
+;      entry:= nil
+;      return modemapList
+;  if entry then [:modemapList,entry] else modemapList
+
+(DEFUN |mergeModemap| (|entry| |modemapList| |e|)
+  (PROG (|mc| |sig| |pred| |mc'| |sig'| |pred'| |newmm| |mm|)
+  (declare (special |$forceAdd|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |mc| (CAAR |entry|))
+             (SPADLET |sig| (CDAR |entry|))
+             (SPADLET |pred| (CAADR |entry|))
+             (SEQ (DO ((|mmtail| |modemapList| (CDR |mmtail|)))
+                      ((OR (ATOM |mmtail|)
+                           (PROGN
+                             (PROGN
+                               (SPADLET |mc'| (CAAAR |mmtail|))
+                               (SPADLET |sig'| (CDAAR |mmtail|))
+                               (SPADLET |pred'| (CAADAR |mmtail|))
+                               |mmtail|)
+                             NIL))
+                       NIL)
+                    (SEQ (EXIT (COND
+                                 ((OR (BOOT-EQUAL |mc| |mc'|)
+                                      (|isSuperDomain| |mc'| |mc| |e|))
+                                  (EXIT (PROGN
+                                          (SPADLET |newmm| NIL)
+                                          (SPADLET |mm| |modemapList|)
+                                          (DO ()
+                                           ((NULL
+                                             (NULL (EQ |mm| |mmtail|)))
+                                            NIL)
+                                            (SEQ
+                                             (EXIT
+                                              (PROGN
+                                                (SPADLET |newmm|
+                                                 (CONS (CAR |mm|)
+                                                  |newmm|))
+                                                (SPADLET |mm|
+                                                 (CDR |mm|))))))
+                                          (COND
+                                            ((AND
+                                              (BOOT-EQUAL |mc| |mc'|)
+                                              (BOOT-EQUAL |sig| |sig'|))
+                                             (COND
+                                               ((AND (NULL |$forceAdd|)
+                                                 (|TruthP| |pred'|))
+                                                (SPADLET |entry| NIL)
+                                                (RETURN |modemapList|))
+                                               ((|TruthP| |pred|)
+                                                (SPADLET |mmtail|
+                                                 (CDR |mmtail|))))))
+                                          (SPADLET |modemapList|
+                                           (NCONC (NREVERSE |newmm|)
+                                            (CONS |entry| |mmtail|)))
+                                          (SPADLET |entry| NIL)
+                                          (RETURN |modemapList|))))))))
+                  (COND
+                    (|entry| (APPEND |modemapList| (CONS |entry| NIL)))
+                    ('T |modemapList|))))))))
+
+;-- next definition RPLACs, and hence causes problems.
+;-- In ptic., SubResGcd in SparseUnivariatePolynomial is miscompiled
+;--mergeModemap(entry:=((mc,:sig),:.),modemapList,e) ==
+;--    for (mmtail:= (((mc',:sig'),:.),:.)) in tails modemapList do
+;--       mc=mc' or isSuperDomain(mc',mc,e)  =>
+;--         RPLACD(mmtail,(first mmtail,: rest mmtail))
+;--         RPLACA(mmtail,entry)
+;--         entry := nil
+;--         return modemapList
+;--     if entry then (:modemapList,entry) else modemapList
+;
+;isSuperDomain(domainForm,domainForm',e) ==
+;  isSubset(domainForm',domainForm,e) => true
+;  domainForm='Rep and domainForm'="$" => true --regard $ as a subdomain of Rep
+;  LASSOC(opOf domainForm',get(domainForm,"SubDomain",e))
+
+(DEFUN |isSuperDomain| (|domainForm| |domainForm'| |e|)
+  (COND
+    ((|isSubset| |domainForm'| |domainForm| |e|) 'T)
+    ((AND (BOOT-EQUAL |domainForm| '|Rep|)
+          (BOOT-EQUAL |domainForm'| '$))
+     'T)
+    ('T
+     (LASSOC (|opOf| |domainForm'|)
+             (|get| |domainForm| '|SubDomain| |e|)))))
+
+;--substituteForRep(entry is [[mc,:sig],:.],curModemapList) ==
+;--  --change 'Rep to "$" unless the resulting signature is already in $
+;--  MEMBER(entry':= substitute("$",'Rep,entry),curModemapList) =>
+;--    [entry,:curModemapList]
+;--  [entry,entry',:curModemapList]
+;
+;addNewDomain(domain,e) ==
+;  augModemapsFromDomain(domain,domain,e)
+
+(DEFUN |addNewDomain| (|domain| |e|)
+  (|augModemapsFromDomain| |domain| |domain| |e|))
+
+;augModemapsFromDomain(name,functorForm,e) ==
+;  MEMBER(KAR name or name,$DummyFunctorNames) => e
+;  name=$Category or isCategoryForm(name,e) => e
+;  MEMBER(name,curDomainsInScope:= getDomainsInScope e) => e
+;  if u:= GETDATABASE(opOf functorForm,'SUPERDOMAIN) then
+;    e:= addNewDomain(first u,e)
+;    --need code to handle parameterized SuperDomains
+;  if innerDom:= listOrVectorElementMode name then e:= addDomain(innerDom,e)
+;  if name is ["Union",:dl] then for d in stripUnionTags dl
+;                         repeat e:= addDomain(d,e)
+;  augModemapsFromDomain1(name,functorForm,e)
+
+(DEFUN |augModemapsFromDomain| (|name| |functorForm| |e|)
+  (PROG (|curDomainsInScope| |u| |innerDom| |dl|)
+  (declare (special |$Category| |$DummyFunctorNames|))
+    (RETURN
+      (SEQ (COND
+             ((|member| (OR (KAR |name|) |name|) |$DummyFunctorNames|)
+              |e|)
+             ((OR (BOOT-EQUAL |name| |$Category|)
+                  (|isCategoryForm| |name| |e|))
+              |e|)
+             ((|member| |name|
+                  (SPADLET |curDomainsInScope|
+                           (|getDomainsInScope| |e|)))
+              |e|)
+             ('T
+              (COND
+                ((SPADLET |u|
+                          (GETDATABASE (|opOf| |functorForm|)
+                              'SUPERDOMAIN))
+                 (SPADLET |e| (|addNewDomain| (CAR |u|) |e|))))
+              (COND
+                ((SPADLET |innerDom|
+                          (|listOrVectorElementMode| |name|))
+                 (SPADLET |e| (|addDomain| |innerDom| |e|))))
+              (COND
+                ((AND (PAIRP |name|) (EQ (QCAR |name|) '|Union|)
+                      (PROGN (SPADLET |dl| (QCDR |name|)) 'T))
+                 (DO ((G166400 (|stripUnionTags| |dl|)
+                          (CDR G166400))
+                      (|d| NIL))
+                     ((OR (ATOM G166400)
+                          (PROGN (SETQ |d| (CAR G166400)) NIL))
+                      NIL)
+                   (SEQ (EXIT (SPADLET |e| (|addDomain| |d| |e|)))))))
+              (|augModemapsFromDomain1| |name| |functorForm| |e|)))))))
+
+;     --see LISPLIB BOOT
+;
+;substituteCategoryArguments(argl,catform) ==
+;  argl:= substitute("$$","$",argl)
+;  arglAssoc:= [[INTERNL("#",STRINGIMAGE i),:a] for i in 1.. for a in argl]
+;  SUBLIS(arglAssoc,catform)
+
+(DEFUN |substituteCategoryArguments| (|argl| |catform|)
+  (PROG (|arglAssoc|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |argl| (MSUBST '$$ '$ |argl|))
+             (SPADLET |arglAssoc|
+                      (PROG (G166422)
+                        (SPADLET G166422 NIL)
+                        (RETURN
+                          (DO ((|i| 1 (QSADD1 |i|))
+                               (G166428 |argl| (CDR G166428))
+                               (|a| NIL))
+                              ((OR (ATOM G166428)
+                                   (PROGN
+                                     (SETQ |a| (CAR G166428))
+                                     NIL))
+                               (NREVERSE0 G166422))
+                            (SEQ (EXIT (SETQ G166422
+                                        (CONS
+                                         (CONS
+                                          (INTERNL '|#|
+                                           (STRINGIMAGE |i|))
+                                          |a|)
+                                         G166422))))))))
+             (SUBLIS |arglAssoc| |catform|))))))
+
+;         --Called, by compDefineFunctor, to add modemaps for $ that may
+;         --be equivalent to those of Rep. We must check that these
+;         --operations are not being redefined.
+;augModemapsFromCategoryRep(domainName,repDefn,functorBody,categoryForm,e) ==
+;  [fnAlist,e]:= evalAndSub(domainName,domainName,domainName,categoryForm,e)
+;  [repFnAlist,e]:= evalAndSub('Rep,'Rep,repDefn,getmode(repDefn,e),e)
+;  catform:= (isCategory categoryForm => categoryForm.(0); categoryForm)
+;  compilerMessage ["Adding ",domainName," modemaps"]
+;  e:= putDomainsInScope(domainName,e)
+;  $base:= 4
+;  for [lhs:=[op,sig,:.],cond,fnsel] in fnAlist repeat
+;    u:=ASSOC(SUBST('Rep,domainName,lhs),repFnAlist)
+;    u and not AMFCR_,redefinedList(op,functorBody) =>
+;      fnsel':=CADDR u
+;      e:= addModemap(op,domainName,sig,cond,fnsel',e)
+;    e:= addModemap(op,domainName,sig,cond,fnsel,e)
+;  e
+
+(DEFUN |augModemapsFromCategoryRep|
+       (|domainName| |repDefn| |functorBody| |categoryForm| |e|)
+  (PROG (|fnAlist| |LETTMP#1| |repFnAlist| |catform| |lhs| |op| |sig|
+            |cond| |fnsel| |u| |fnsel'|)
+  (declare (special |$base|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |LETTMP#1|
+                      (|evalAndSub| |domainName| |domainName|
+                          |domainName| |categoryForm| |e|))
+             (SPADLET |fnAlist| (CAR |LETTMP#1|))
+             (SPADLET |e| (CADR |LETTMP#1|))
+             (SPADLET |LETTMP#1|
+                      (|evalAndSub| '|Rep| '|Rep| |repDefn|
+                          (|getmode| |repDefn| |e|) |e|))
+             (SPADLET |repFnAlist| (CAR |LETTMP#1|))
+             (SPADLET |e| (CADR |LETTMP#1|))
+             (SPADLET |catform|
+                      (COND
+                        ((|isCategory| |categoryForm|)
+                         (ELT |categoryForm| 0))
+                        ('T |categoryForm|)))
+             (|compilerMessage|
+                 (CONS '|Adding |
+                       (CONS |domainName| (CONS '| modemaps| NIL))))
+             (SPADLET |e| (|putDomainsInScope| |domainName| |e|))
+             (SPADLET |$base| 4)
+             (DO ((G166471 |fnAlist| (CDR G166471))
+                  (G166457 NIL))
+                 ((OR (ATOM G166471)
+                      (PROGN (SETQ G166457 (CAR G166471)) NIL)
+                      (PROGN
+                        (PROGN
+                          (SPADLET |lhs| (CAR G166457))
+                          (SPADLET |op| (CAAR G166457))
+                          (SPADLET |sig| (CADAR G166457))
+                          (SPADLET |cond| (CADR G166457))
+                          (SPADLET |fnsel| (CADDR G166457))
+                          G166457)
+                        NIL))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |u|
+                                     (|assoc|
+                                      (MSUBST '|Rep| |domainName|
+                                       |lhs|)
+                                      |repFnAlist|))
+                            (COND
+                              ((AND |u|
+                                    (NULL
+                                     (|AMFCR,redefinedList| |op|
+                                      |functorBody|)))
+                               (SPADLET |fnsel'| (CADDR |u|))
+                               (SPADLET |e|
+                                        (|addModemap| |op| |domainName|
+                                         |sig| |cond| |fnsel'| |e|)))
+                              ('T
+                               (SPADLET |e|
+                                        (|addModemap| |op| |domainName|
+                                         |sig| |cond| |fnsel| |e|))))))))
+             |e|)))))
+
+;AMFCR_,redefinedList(op,l) == "OR"/[AMFCR_,redefined(op,u) for u in l]
+
+(DEFUN |AMFCR,redefinedList| (|op| |l|)
+  (PROG ()
+    (RETURN
+      (SEQ (PROG (G166499)
+             (SPADLET G166499 NIL)
+             (RETURN
+               (DO ((G166505 NIL G166499)
+                    (G166506 |l| (CDR G166506)) (|u| NIL))
+                   ((OR G166505 (ATOM G166506)
+                        (PROGN (SETQ |u| (CAR G166506)) NIL))
+                    G166499)
+                 (SEQ (EXIT (SETQ G166499
+                                  (OR G166499
+                                      (|AMFCR,redefined| |op| |u|))))))))))))
+
+;AMFCR_,redefined(opname,u) ==
+;  not(u is [op,:l]) => nil
+;  op = 'DEF => opname = CAAR l
+;  MEMQ(op,'(PROGN SEQ)) => AMFCR_,redefinedList(opname,l)
+;  op = 'COND => "OR"/[AMFCR_,redefinedList(opname,CDR u) for u in l]
+
+(DEFUN |AMFCR,redefined| (|opname| |u|)
+  (PROG (|op| |l|)
+    (RETURN
+      (SEQ (COND
+             ((NULL (AND (PAIRP |u|)
+                         (PROGN
+                           (SPADLET |op| (QCAR |u|))
+                           (SPADLET |l| (QCDR |u|))
+                           'T)))
+              NIL)
+             ((BOOT-EQUAL |op| 'DEF) (BOOT-EQUAL |opname| (CAAR |l|)))
+             ((MEMQ |op| '(PROGN SEQ))
+              (|AMFCR,redefinedList| |opname| |l|))
+             ((BOOT-EQUAL |op| 'COND)
+              (PROG (G166521)
+                (SPADLET G166521 NIL)
+                (RETURN
+                  (DO ((G166527 NIL G166521)
+                       (G166528 |l| (CDR G166528)) (|u| NIL))
+                      ((OR G166527 (ATOM G166528)
+                           (PROGN (SETQ |u| (CAR G166528)) NIL))
+                       G166521)
+                    (SEQ (EXIT (SETQ G166521
+                                     (OR G166521
+                                      (|AMFCR,redefinedList| |opname|
+                                       (CDR |u|)))))))))))))))
+
+;augModemapsFromCategory(domainName,domainView,functorForm,categoryForm,e) ==
+;  [fnAlist,e]:= evalAndSub(domainName,domainView,functorForm,categoryForm,e)
+;  --  catform:= (isCategory categoryForm => categoryForm.(0); categoryForm)
+;  -- catform appears not to be used, so why set it?
+;  --if ^$InteractiveMode then
+;  compilerMessage ["Adding ",domainName," modemaps"]
+;  e:= putDomainsInScope(domainName,e)
+;  $base:= 4
+;  condlist:=[]
+;  for [[op,sig,:.],cond,fnsel] in fnAlist repeat
+;--  e:= addModemap(op,domainName,sig,cond,fnsel,e)
+;---------next 5 lines commented out to avoid wasting time checking knownInfo on
+;---------conditions attached to each modemap being added, takes a very long time
+;---------instead conditions will be checked when maps are actually used
+;  --v:=ASSOC(cond,condlist) =>
+;  --  e:= addModemapKnown(op,domainName,sig,CDR v,fnsel,e)
+;  --$e:local := e  -- $e is used by knownInfo
+;  --if knownInfo cond then cond1:=true else cond1:=cond
+;  --condlist:=[[cond,:cond1],:condlist]
+;    e:= addModemapKnown(op,domainName,sig,cond,fnsel,e) -- cond was cond1
+;--  for u in sig | (not MEMBER(u,$DomainsInScope)) and
+;--                   (not atom u) and
+;--                     (not isCategoryForm(u,e)) do
+;--     e:= addNewDomain(u,e)
+;  e
+
+(DEFUN |augModemapsFromCategory|
+       (|domainName| |domainView| |functorForm| |categoryForm| |e|)
+  (PROG (|LETTMP#1| |fnAlist| |condlist| |op| |sig| |cond| |fnsel|)
+  (declare (special |$base|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |LETTMP#1|
+                      (|evalAndSub| |domainName| |domainView|
+                          |functorForm| |categoryForm| |e|))
+             (SPADLET |fnAlist| (CAR |LETTMP#1|))
+             (SPADLET |e| (CADR |LETTMP#1|))
+             (|compilerMessage|
+                 (CONS '|Adding |
+                       (CONS |domainName| (CONS '| modemaps| NIL))))
+             (SPADLET |e| (|putDomainsInScope| |domainName| |e|))
+             (SPADLET |$base| 4)
+             (SPADLET |condlist| NIL)
+             (DO ((G166559 |fnAlist| (CDR G166559))
+                  (G166548 NIL))
+                 ((OR (ATOM G166559)
+                      (PROGN (SETQ G166548 (CAR G166559)) NIL)
+                      (PROGN
+                        (PROGN
+                          (SPADLET |op| (CAAR G166548))
+                          (SPADLET |sig| (CADAR G166548))
+                          (SPADLET |cond| (CADR G166548))
+                          (SPADLET |fnsel| (CADDR G166548))
+                          G166548)
+                        NIL))
+                  NIL)
+               (SEQ (EXIT (SPADLET |e|
+                                   (|addModemapKnown| |op| |domainName|
+                                    |sig| |cond| |fnsel| |e|)))))
+             |e|)))))
+
+;--subCatParametersInto(domainForm,catForm,e) ==
+;--  -- JHD 08/08/84 perhaps we are fortunate that it is not used
+;--  --this is particularly dirty and should be cleaned up, say, by wrapping
+;--  -- an appropriate lambda expression around mapping forms
+;--  domainForm is [op,:l] and l =>
+;--    get(op,'modemap,e) is [[[mc,:.],:.]] => SUBLIS(PAIR(rest mc,l),catForm)
+;--  catForm
+;
+;evalAndSub(domainName,viewName,functorForm,form,$e) ==
+;  $lhsOfColon: local:= domainName
+;  isCategory form => [substNames(domainName,viewName,functorForm,form.(1)),$e]
+;  --next lines necessary-- see MPOLY for which $ is actual arg. --- RDJ 3/83
+;  if CONTAINED("$$",form) then $e:= put("$$","mode",get("$","mode",$e),$e)
+;  opAlist:= getOperationAlist(domainName,functorForm,form)
+;  substAlist:= substNames(domainName,viewName,functorForm,opAlist)
+;  [substAlist,$e]
+
+(DEFUN |evalAndSub| (|domainName| |viewName| |functorForm| |form| |$e|)
+  (DECLARE (SPECIAL |$e|))
+  (PROG (|$lhsOfColon| |opAlist| |substAlist|)
+    (DECLARE (SPECIAL |$lhsOfColon|))
+    (RETURN
+      (PROGN
+        (SPADLET |$lhsOfColon| |domainName|)
+        (COND
+          ((|isCategory| |form|)
+           (CONS (|substNames| |domainName| |viewName| |functorForm|
+                     (ELT |form| 1))
+                 (CONS |$e| NIL)))
+          ('T
+           (COND
+             ((CONTAINED '$$ |form|)
+              (SPADLET |$e|
+                       (|put| '$$ '|mode| (|get| '$ '|mode| |$e|) |$e|))))
+           (SPADLET |opAlist|
+                    (|getOperationAlist| |domainName| |functorForm|
+                        |form|))
+           (SPADLET |substAlist|
+                    (|substNames| |domainName| |viewName| |functorForm|
+                        |opAlist|))
+           (CONS |substAlist| (CONS |$e| NIL))))))))
+
+;getOperationAlist(name,functorForm,form) ==
+;  if atom name and GETDATABASE(name,'NILADIC) then functorForm:= [functorForm]
+;-- (null isConstructorForm functorForm) and (u:= isFunctor functorForm)
+;  (u:= isFunctor functorForm) and not
+;    ($insideFunctorIfTrue and first functorForm=first $functorForm) => u
+;  $insideFunctorIfTrue and name="$" =>
+;    ($domainShell => $domainShell.(1); systemError '"$ has no shell now")
+;  T:= compMakeCategoryObject(form,$e) => ([.,.,$e]:= T; T.expr.(1))
+;  stackMessage ["not a category form: ",form]
+
+(DEFUN |getOperationAlist| (|name| |functorForm| |form|)
+  (PROG (|u| T$)
+  (declare (special |$e| |$domainShell| |$insideFunctorIfTrue|
+                    |$functorForm|))
+    (RETURN
+      (PROGN
+        (COND
+          ((AND (ATOM |name|) (GETDATABASE |name| 'NILADIC))
+           (SPADLET |functorForm| (CONS |functorForm| NIL))))
+        (COND
+          ((AND (SPADLET |u| (|isFunctor| |functorForm|))
+                (NULL (AND |$insideFunctorIfTrue|
+                           (BOOT-EQUAL (CAR |functorForm|)
+                               (CAR |$functorForm|)))))
+           |u|)
+          ((AND |$insideFunctorIfTrue| (BOOT-EQUAL |name| '$))
+           (COND
+             (|$domainShell| (ELT |$domainShell| 1))
+             ('T (|systemError| (MAKESTRING "$ has no shell now")))))
+          ((SPADLET T$ (|compMakeCategoryObject| |form| |$e|))
+           (SPADLET |$e| (CADDR T$)) (ELT (CAR T$) 1))
+          ('T
+           (|stackMessage|
+               (CONS '|not a category form: | (CONS |form| NIL)))))))))
+
+;substNames(domainName,viewName,functorForm,opalist) ==
+;  functorForm := SUBSTQ("$$","$", functorForm)
+;  nameForDollar :=
+;    isCategoryPackageName functorForm => CADR functorForm
+;    domainName
+;       -- following calls to SUBSTQ must copy to save RPLAC's in
+;       -- putInLocalDomainReferences
+;  [[:SUBSTQ("$","$$",SUBSTQ(nameForDollar,"$",modemapform)),
+;       [sel, viewName,if domainName = "$" then pos else
+;                                         CADAR modemapform]]
+;     for [:modemapform,[sel,"$",pos]] in
+;          EQSUBSTLIST(KDR functorForm,$FormalMapVariableList, opalist)]
+
+(DEFUN |substNames| (|domainName| |viewName| |functorForm| |opalist|)
+  (PROG (|nameForDollar| |LETTMP#1| |sel| |pos| |modemapform|)
+  (declare (special |$FormalMapVariableList|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |functorForm| (SUBSTQ '$$ '$ |functorForm|))
+             (SPADLET |nameForDollar|
+                      (COND
+                        ((|isCategoryPackageName| |functorForm|)
+                         (CADR |functorForm|))
+                        ('T |domainName|)))
+             (PROG (G166616)
+               (SPADLET G166616 NIL)
+               (RETURN
+                 (DO ((G166622
+                          (EQSUBSTLIST (KDR |functorForm|)
+                              |$FormalMapVariableList| |opalist|)
+                          (CDR G166622))
+                      (G166604 NIL))
+                     ((OR (ATOM G166622)
+                          (PROGN (SETQ G166604 (CAR G166622)) NIL)
+                          (PROGN
+                            (PROGN
+                              (SPADLET |LETTMP#1| (REVERSE G166604))
+                              (SPADLET |sel| (CAAR |LETTMP#1|))
+                              (SPADLET |pos| (CADDAR |LETTMP#1|))
+                              (SPADLET |modemapform|
+                                       (NREVERSE (CDR |LETTMP#1|)))
+                              G166604)
+                            NIL))
+                      (NREVERSE0 G166616))
+                   (SEQ (EXIT (SETQ G166616
+                                    (CONS
+                                     (APPEND
+                                      (SUBSTQ '$ '$$
+                                       (SUBSTQ |nameForDollar| '$
+                                        |modemapform|))
+                                      (CONS
+                                       (CONS |sel|
+                                        (CONS |viewName|
+                                         (CONS
+                                          (COND
+                                            ((BOOT-EQUAL |domainName|
+                                              '$)
+                                             |pos|)
+                                            ('T (CADAR |modemapform|)))
+                                          NIL)))
+                                       NIL))
+                                     G166616))))))))))))
+
+;compCat(form is [functorName,:argl],m,e) ==
+;  fn:= GET(functorName,"makeFunctionList") or return nil
+;  [funList,e]:= FUNCALL(fn,form,form,e)
+;  catForm:=
+;    ["Join",'(SetCategory),["CATEGORY","domain",:
+;      [["SIGNATURE",op,sig] for [op,sig,.] in funList | op^="="]]]
+;  --RDJ: for coercion purposes, it necessary to know it's a Set; I'm not
+;  --sure if it uses any of the other signatures(see extendsCategoryForm)
+;  [form,catForm,e]
+
+(DEFUN |compCat| (|form| |m| |e|)
+  (declare (ignore |m|))
+  (PROG (|functorName| |argl| |fn| |LETTMP#1| |funList| |op| |sig|
+            |catForm|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |functorName| (CAR |form|))
+             (SPADLET |argl| (CDR |form|))
+             (SPADLET |fn|
+                      (OR (GETL |functorName| '|makeFunctionList|)
+                          (RETURN NIL)))
+             (SPADLET |LETTMP#1| (FUNCALL |fn| |form| |form| |e|))
+             (SPADLET |funList| (CAR |LETTMP#1|))
+             (SPADLET |e| (CADR |LETTMP#1|))
+             (SPADLET |catForm|
+                      (CONS '|Join|
+                            (CONS '(|SetCategory|)
+                                  (CONS (CONS 'CATEGORY
+                                         (CONS '|domain|
+                                          (PROG (G166672)
+                                            (SPADLET G166672 NIL)
+                                            (RETURN
+                                              (DO
+                                               ((G166679 |funList|
+                                                 (CDR G166679))
+                                                (G166646 NIL))
+                                               ((OR (ATOM G166679)
+                                                 (PROGN
+                                                   (SETQ G166646
+                                                    (CAR G166679))
+                                                   NIL)
+                                                 (PROGN
+                                                   (PROGN
+                                                     (SPADLET |op|
+                                                      (CAR G166646))
+                                                     (SPADLET |sig|
+                                                      (CADR G166646))
+                                                     G166646)
+                                                   NIL))
+                                                (NREVERSE0 G166672))
+                                                (SEQ
+                                                 (EXIT
+                                                  (COND
+                                                    ((NEQUAL |op| '=)
+                                                     (SETQ G166672
+                                                      (CONS
+                                                       (CONS 'SIGNATURE
+                                                        (CONS |op|
+                                                         (CONS |sig|
+                                                          NIL)))
+                                                       G166672)))))))))))
+                                        NIL))))
+             (CONS |form| (CONS |catForm| (CONS |e| NIL))))))))
+
+;addConstructorModemaps(name,form is [functorName,:.],e) ==
+;  $InteractiveMode: local:= nil
+;  e:= putDomainsInScope(name,e) --frame
+;  fn := GET(functorName,"makeFunctionList")
+;  [funList,e]:= FUNCALL(fn,name,form,e)
+;  for [op,sig,opcode] in funList repeat
+;    if opcode is [sel,dc,n] and sel='ELT then
+;          nsig := substitute("$$$",name,sig)
+;          nsig := substitute('$,"$$$",substitute("$$",'$,nsig))
+;          opcode := [sel,dc,nsig]
+;    e:= addModemap(op,name,sig,true,opcode,e)
+;  e
+
+(DEFUN |addConstructorModemaps| (|name| |form| |e|)
+  (PROG (|$InteractiveMode| |functorName| |fn| |LETTMP#1| |funList|
+            |op| |sig| |sel| |ISTMP#1| |dc| |ISTMP#2| |n| |nsig|
+            |opcode|)
+    (DECLARE (SPECIAL |$InteractiveMode|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |functorName| (CAR |form|))
+             (SPADLET |$InteractiveMode| NIL)
+             (SPADLET |e| (|putDomainsInScope| |name| |e|))
+             (SPADLET |fn| (GETL |functorName| '|makeFunctionList|))
+             (SPADLET |LETTMP#1| (FUNCALL |fn| |name| |form| |e|))
+             (SPADLET |funList| (CAR |LETTMP#1|))
+             (SPADLET |e| (CADR |LETTMP#1|))
+             (DO ((G166774 |funList| (CDR G166774))
+                  (G166732 NIL))
+                 ((OR (ATOM G166774)
+                      (PROGN (SETQ G166732 (CAR G166774)) NIL)
+                      (PROGN
+                        (PROGN
+                          (SPADLET |op| (CAR G166732))
+                          (SPADLET |sig| (CADR G166732))
+                          (SPADLET |opcode| (CADDR G166732))
+                          G166732)
+                        NIL))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (COND
+                              ((AND (PAIRP |opcode|)
+                                    (PROGN
+                                      (SPADLET |sel| (QCAR |opcode|))
+                                      (SPADLET |ISTMP#1|
+                                       (QCDR |opcode|))
+                                      (AND (PAIRP |ISTMP#1|)
+                                       (PROGN
+                                         (SPADLET |dc|
+                                          (QCAR |ISTMP#1|))
+                                         (SPADLET |ISTMP#2|
+                                          (QCDR |ISTMP#1|))
+                                         (AND (PAIRP |ISTMP#2|)
+                                          (EQ (QCDR |ISTMP#2|) NIL)
+                                          (PROGN
+                                            (SPADLET |n|
+                                             (QCAR |ISTMP#2|))
+                                            'T)))))
+                                    (BOOT-EQUAL |sel| 'ELT))
+                               (SPADLET |nsig|
+                                        (MSUBST '$$$ |name| |sig|))
+                               (SPADLET |nsig|
+                                        (MSUBST '$ '$$$
+                                         (MSUBST '$$ '$ |nsig|)))
+                               (SPADLET |opcode|
+                                        (CONS |sel|
+                                         (CONS |dc| (CONS |nsig| NIL))))))
+                            (SPADLET |e|
+                                     (|addModemap| |op| |name| |sig| 'T
+                                      |opcode| |e|))))))
+             |e|)))))
+
+;--The way XLAMs work:
+;--  ((XLAM ($1 $2 $3) (SETELT $1 0 $3)) X "c" V) ==> (SETELT X 0 V)
+;
+;getDomainsInScope e ==
+;  $insideCapsuleFunctionIfTrue=true => $CapsuleDomainsInScope
+;  get("$DomainsInScope","special",e)
+
+(DEFUN |getDomainsInScope| (|e|)
+  (declare (special |$CapsuleDomainsInScope| |$insideCapsuleFunctionIfTrue|))
+  (COND
+    ((BOOT-EQUAL |$insideCapsuleFunctionIfTrue| 'T)
+     |$CapsuleDomainsInScope|)
+    ('T (|get| '|$DomainsInScope| '|special| |e|))))
+
+;putDomainsInScope(x,e) ==
+;  l:= getDomainsInScope e
+;  if MEMBER(x,l) then SAY("****** Domain: ",x," already in scope")
+;  newValue:= [x,:DELETE(x,l)]
+;  $insideCapsuleFunctionIfTrue => ($CapsuleDomainsInScope:= newValue; e)
+;  put("$DomainsInScope","special",newValue,e)
+;
+
+(DEFUN |putDomainsInScope| (|x| |e|)
+  (PROG (|l| |newValue|)
+  (declare (special |$CapsuleDomainsInScope| |$insideCapsuleFunctionIfTrue|))
+    (RETURN
+      (PROGN
+        (SPADLET |l| (|getDomainsInScope| |e|))
+        (COND
+          ((|member| |x| |l|)
+           (SAY (MAKESTRING "****** Domain: ") |x|
+                (MAKESTRING " already in scope"))))
+        (SPADLET |newValue| (CONS |x| (|delete| |x| |l|)))
+        (COND
+          (|$insideCapsuleFunctionIfTrue|
+              (SPADLET |$CapsuleDomainsInScope| |newValue|) |e|)
+          ('T (|put| '|$DomainsInScope| '|special| |newValue| |e|)))))))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

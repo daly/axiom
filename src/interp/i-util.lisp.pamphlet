@@ -1,0 +1,745 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp i-util.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\begin{verbatim}
+Wrapping and Unwrapping Values
+ 
+A wrapped value represents something that need not be evaluated
+when code is generated.  This includes objects from domains or things
+that just happed to evaluate to themselves.  Typically generated
+lisp code is unwrapped.
+ 
+\end{verbatim}
+<<*>>=
+(IN-PACKAGE "BOOT" )
+
+;wrap x ==
+;  isWrapped x => x
+;  ['WRAPPED,:x]
+
+(DEFUN |wrap| (|x|)
+  (COND ((|isWrapped| |x|) |x|) ('T (CONS 'WRAPPED |x|))))
+
+;isWrapped x == x is ['WRAPPED,:.] or NUMBERP x or FLOATP x or CVECP x
+
+(DEFUN |isWrapped| (|x|)
+  (OR (AND (PAIRP |x|) (EQ (QCAR |x|) 'WRAPPED)) (NUMBERP |x|)
+      (FLOATP |x|) (CVECP |x|)))
+
+;unwrap x ==
+;  NUMBERP x or FLOATP x or CVECP x => x
+;  x is ["WRAPPED",:y] => y
+;  x
+
+(DEFUN |unwrap| (|x|)
+  (PROG (|y|)
+    (RETURN
+      (COND
+        ((OR (NUMBERP |x|) (FLOATP |x|) (CVECP |x|)) |x|)
+        ((AND (PAIRP |x|) (EQ (QCAR |x|) 'WRAPPED)
+              (PROGN (SPADLET |y| (QCDR |x|)) 'T))
+         |y|)
+        ('T |x|)))))
+
+;wrapped2Quote x ==
+;  x is ["WRAPPED",:y] => MKQ y
+;  x
+
+(DEFUN |wrapped2Quote| (|x|)
+  (PROG (|y|)
+    (RETURN
+      (COND
+        ((AND (PAIRP |x|) (EQ (QCAR |x|) 'WRAPPED)
+              (PROGN (SPADLET |y| (QCDR |x|)) 'T))
+         (MKQ |y|))
+        ('T |x|)))))
+
+;quote2Wrapped x ==
+;  x is ['QUOTE,y] => wrap y
+;  x
+
+(DEFUN |quote2Wrapped| (|x|)
+  (PROG (|ISTMP#1| |y|)
+    (RETURN
+      (COND
+        ((AND (PAIRP |x|) (EQ (QCAR |x|) 'QUOTE)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |x|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET |y| (QCAR |ISTMP#1|)) 'T))))
+         (|wrap| |y|))
+        ('T |x|)))))
+
+;removeQuote x ==
+;  x is ["QUOTE",y] => y
+;  x
+
+(DEFUN |removeQuote| (|x|)
+  (PROG (|ISTMP#1| |y|)
+    (RETURN
+      (COND
+        ((AND (PAIRP |x|) (EQ (QCAR |x|) 'QUOTE)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |x|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET |y| (QCAR |ISTMP#1|)) 'T))))
+         |y|)
+        ('T |x|)))))
+
+;-- addQuote x ==
+;--   NUMBERP x => x
+;--   ['QUOTE,x]
+;
+;--% The function for making prompts
+;
+;spadPrompt() ==
+;  SAY '"   AXIOM"
+;  sayNewLine()
+
+(DEFUN |spadPrompt| ()
+  (PROGN (SAY (MAKESTRING "   AXIOM")) (|sayNewLine|)))
+
+;inputPrompt str ==
+;  -- replaces older INPUT-PROMPT
+;  atom (x := $SCREENSIZE()) => NIL
+;  p := CAR(x) - 2
+;  y := $OLDLINE
+;  SETQ($OLDLINE,NIL)
+;  y => _$SHOWLINE(STRCONC(str,EBCDIC 19,y),p)
+;  0 = SIZE str => NIL
+;  _$SHOWLINE(STRCONC(str,EBCDIC 19),p)
+
+(DEFUN |inputPrompt| (|str|)
+  (PROG (|x| |p| |y|)
+  (declare (special $SHOWLINE $OLDLINE $SCREENSIZE))
+    (RETURN
+      (COND
+        ((ATOM (SPADLET |x| ($SCREENSIZE))) NIL)
+        ('T (SPADLET |p| (SPADDIFFERENCE (CAR |x|) 2))
+         (SPADLET |y| $OLDLINE) (SETQ $OLDLINE NIL)
+         (COND
+           (|y| ($SHOWLINE (STRCONC |str| (EBCDIC 19) |y|) |p|))
+           ((EQL 0 (SIZE |str|)) NIL)
+           ('T ($SHOWLINE (STRCONC |str| (EBCDIC 19)) |p|))))))))
+
+;protectedPrompt(:p) ==
+;  [str,:br] := p
+;  0 = SIZE str => inputPrompt str
+;  msg := EBCDIC 29                       -- start of field
+;  msg :=
+;    if br then STRCONC(msg,EBCDIC 232)   -- bright write protect
+;    else       STRCONC(msg,EBCDIC  96)   -- write protect
+;  msg := STRCONC(msg,str,EBCDIC 29,EBCDIC 64)  -- unprotect again
+;  inputPrompt msg
+
+(DEFUN |protectedPrompt| (&REST G166117 &AUX |p|)
+  (DSETQ |p| G166117)
+  (PROG (|str| |br| |msg|)
+    (RETURN
+      (PROGN
+        (SPADLET |str| (CAR |p|))
+        (SPADLET |br| (CDR |p|))
+        (COND
+          ((EQL 0 (SIZE |str|)) (|inputPrompt| |str|))
+          ('T (SPADLET |msg| (EBCDIC 29))
+           (SPADLET |msg|
+                    (COND
+                      (|br| (STRCONC |msg| (EBCDIC 232)))
+                      ('T (STRCONC |msg| (EBCDIC 96)))))
+           (SPADLET |msg|
+                    (STRCONC |msg| |str| (EBCDIC 29) (EBCDIC 64)))
+           (|inputPrompt| |msg|)))))))
+
+;--% Miscellaneous
+;
+;Zeros n ==
+;  BOUNDP '$ZeroVecCache and #$ZeroVecCache=n => $ZeroVecCache
+;  $ZeroVecCache:= MAKE_-VEC n
+;  for i in 0..n-1 repeat $ZeroVecCache.i:=0
+;  $ZeroVecCache
+
+(DEFUN |Zeros| (|n|)
+  (declare (special |$ZeroVecCache|))
+  (SEQ (COND
+         ((AND (BOUNDP '|$ZeroVecCache|)
+               (BOOT-EQUAL (|#| |$ZeroVecCache|) |n|))
+          |$ZeroVecCache|)
+         ('T (SPADLET |$ZeroVecCache| (MAKE-VEC |n|))
+          (DO ((G166122 (SPADDIFFERENCE |n| 1)) (|i| 0 (QSADD1 |i|)))
+              ((QSGREATERP |i| G166122) NIL)
+            (SEQ (EXIT (SETELT |$ZeroVecCache| |i| 0))))
+          |$ZeroVecCache|))))
+
+;LZeros n ==
+;  n < 1 => nil
+;  l := [0]
+;  for i in 2..n repeat l := [0, :l]
+;  l
+
+(DEFUN |LZeros| (|n|)
+  (PROG (|l|)
+    (RETURN
+      (SEQ (COND
+             ((> 1 |n|) NIL)
+             ('T (SPADLET |l| (CONS 0 NIL))
+              (DO ((|i| 2 (QSADD1 |i|))) ((QSGREATERP |i| |n|) NIL)
+                (SEQ (EXIT (SPADLET |l| (CONS 0 |l|)))))
+              |l|))))))
+
+;-- bpi2FunctionName x ==
+;--   s:= BPINAME x  => s
+;--   x
+;
+;-- subrToName x == BPINAME x
+;-- formerly in clammed.boot
+;isSubDomain(d1,d2) ==
+;  -- d1 and d2 are different domains
+;  subDomainList := '(Integer NonNegativeInteger PositiveInteger)
+;  ATOM d1 or ATOM d2 => nil
+;  l := MEMQ(CAR d2, subDomainList) =>
+;    MEMQ(CAR d1, CDR l)
+;  nil
+
+(DEFUN |isSubDomain| (|d1| |d2|)
+  (PROG (|subDomainList| |l|)
+    (RETURN
+      (PROGN
+        (SPADLET |subDomainList|
+                 '(|Integer| |NonNegativeInteger| |PositiveInteger|))
+        (COND
+          ((OR (ATOM |d1|) (ATOM |d2|)) NIL)
+          ((SPADLET |l| (MEMQ (CAR |d2|) |subDomainList|))
+           (MEMQ (CAR |d1|) (CDR |l|)))
+          ('T NIL))))))
+
+;$variableNumberAlist := nil
+
+(SPADLET |$variableNumberAlist| NIL) 
+
+;variableNumber(x) ==
+;  p := ASSQ(x, $variableNumberAlist)
+;  null p =>
+;    $variableNumberAlist := [[x,:0], :$variableNumberAlist]
+;    0
+;  RPLACD(p, 1+CDR p)
+;  CDR p
+
+(DEFUN |variableNumber| (|x|)
+  (PROG (|p|)
+  (declare (special |$variableNumberAlist|))
+    (RETURN
+      (PROGN
+        (SPADLET |p| (ASSQ |x| |$variableNumberAlist|))
+        (COND
+          ((NULL |p|)
+           (SPADLET |$variableNumberAlist|
+                    (CONS (CONS |x| 0) |$variableNumberAlist|))
+           0)
+          ('T (RPLACD |p| (PLUS 1 (CDR |p|))) (CDR |p|)))))))
+
+;newType? t == nil
+
+(DEFUN |newType?| (|t|)
+ (declare (ignore |t|))
+ nil) 
+
+;-- functions used at run-time which were formerly in the compiler files
+;Undef(:u) ==
+;  u':= LAST u
+;  [[domain,slot],op,sig]:= u'
+;  domain':=eval mkEvalable domain
+;  ^EQ(CAR ELT(domain',slot),Undef) =>
+;-- OK - thefunction is now defined
+;    [:u'',.]:=u
+;    if $reportBottomUpFlag then
+;      sayMessage concat ['"   Retrospective determination of slot",'%b,
+;        slot,'%d,'"of",'%b,:prefix2String domain,'%d]
+;    APPLY(CAR ELT(domain',slot),[:u'',CDR ELT(domain',slot)])
+;  throwKeyedMsg("S2IF0008",[formatOpSignature(op,sig),domain])
+
+(DEFUN |Undef| (&REST G166179 &AUX |u|)
+  (DSETQ |u| G166179)
+  (PROG (|u'| |domain| |slot| |op| |sig| |domain'| |LETTMP#1| |u''|)
+  (declare (special |$reportBottomUpFlag|))
+    (RETURN
+      (PROGN
+        (SPADLET |u'| (|last| |u|))
+        (SPADLET |domain| (CAAR |u'|))
+        (SPADLET |slot| (CADAR |u'|))
+        (SPADLET |op| (CADR |u'|))
+        (SPADLET |sig| (CADDR |u'|))
+        (SPADLET |domain'| (|eval| (|mkEvalable| |domain|)))
+        (COND
+          ((NULL (EQ (CAR (ELT |domain'| |slot|)) |Undef|))
+           (SPADLET |LETTMP#1| (REVERSE |u|))
+           (SPADLET |u''| (NREVERSE (CDR |LETTMP#1|)))
+           (COND
+             (|$reportBottomUpFlag|
+                 (|sayMessage|
+                     (|concat|
+                         (CONS (MAKESTRING
+                                   "   Retrospective determination of slot")
+                               (CONS '|%b|
+                                     (CONS |slot|
+                                      (CONS '|%d|
+                                       (CONS (MAKESTRING "of")
+                                        (CONS '|%b|
+                                         (APPEND
+                                          (|prefix2String| |domain|)
+                                          (CONS '|%d| NIL))))))))))))
+           (APPLY (CAR (ELT |domain'| |slot|))
+                  (APPEND |u''|
+                          (CONS (CDR (ELT |domain'| |slot|)) NIL))))
+          ('T
+           (|throwKeyedMsg| 'S2IF0008
+               (CONS (|formatOpSignature| |op| |sig|)
+                     (CONS |domain| NIL)))))))))
+
+;devaluate(d) ==
+;  isDomain d =>
+;      -- ?need a shortcut for old domains
+;      -- ELT(CAR d, 0) = 'oldAxiomDomain => ...
+;      -- FIXP(ELT(CAR d,0)) => d
+;      DNameToSExpr(SPADCALL(CDR d,CAR(d).1))
+;  not REFVECP d => d
+;  QSGREATERP(QVSIZE d,5) and QREFELT(d,3) is ['Category] => QREFELT(d,0)
+;  QSGREATERP(QVSIZE d,0) =>
+;    d':=QREFELT(d,0)
+;    isFunctor d' => d'
+;    d
+;  d
+
+(DEFUN |devaluate| (|d|)
+  (PROG (|ISTMP#1| |d'|)
+    (RETURN
+      (COND
+        ((|isDomain| |d|)
+         (|DNameToSExpr| (SPADCALL (CDR |d|) (ELT (CAR |d|) 1))))
+        ((NULL (REFVECP |d|)) |d|)
+        ((AND (QSGREATERP (QVSIZE |d|) 5)
+              (PROGN
+                (SPADLET |ISTMP#1| (QREFELT |d| 3))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (EQ (QCAR |ISTMP#1|) '|Category|))))
+         (QREFELT |d| 0))
+        ((QSGREATERP (QVSIZE |d|) 0) (SPADLET |d'| (QREFELT |d| 0))
+         (COND ((|isFunctor| |d'|) |d'|) ('T |d|)))
+        ('T |d|)))))
+
+;devaluateList l == [devaluate d for d in l]
+
+(DEFUN |devaluateList| (|l|)
+  (PROG ()
+    (RETURN
+      (SEQ (PROG (G166193)
+             (SPADLET G166193 NIL)
+             (RETURN
+               (DO ((G166198 |l| (CDR G166198)) (|d| NIL))
+                   ((OR (ATOM G166198)
+                        (PROGN (SETQ |d| (CAR G166198)) NIL))
+                    (NREVERSE0 G166193))
+                 (SEQ (EXIT (SETQ G166193
+                                  (CONS (|devaluate| |d|) G166193)))))))))))
+
+;--HasAttribute(domain,attrib) ==
+;---->
+;--  isNewWorldDomain domain => newHasAttribute(domain,attrib)
+;----+
+;--  (u := LASSOC(attrib,domain.2)) and lookupPred(first u,domain,domain)
+;
+;HasSignature(domain,[op,sig]) ==
+;  compiledLookup(op,sig,domain)
+
+(DEFUN |HasSignature| (|domain| G166208)
+  (PROG (|op| |sig|)
+    (RETURN
+      (PROGN
+        (SPADLET |op| (CAR G166208))
+        (SPADLET |sig| (CADR G166208))
+        (|compiledLookup| |op| |sig| |domain|)))))
+
+;--HasCategory(domain,catform') ==
+;--  catform' is ['SIGNATURE,:f] => HasSignature(domain,f)
+;--  catform' is ['ATTRIBUTE,f] => HasAttribute(domain,f)
+;--  catform:= devaluate catform'
+;--  domain0:=domain.0
+;--  isNewWorldDomain domain => newHasCategory(domain,catform)
+;--  slot4 := domain.4
+;--  catlist := slot4.1
+;--  member(catform,catlist) or
+;--   MEMQ(opOf(catform),'(Object Type)) or  --temporary hack
+;--    or/[compareSigEqual(catform,cat,domain0,domain) for cat in catlist]
+;
+;addModemap(op,mc,sig,pred,fn,$e) ==
+;  $InteractiveMode => $e
+;  if knownInfo pred then pred:=true
+;  $insideCapsuleFunctionIfTrue=true =>
+;    $CapsuleModemapFrame :=
+;      addModemap0(op,mc,sig,pred,fn,$CapsuleModemapFrame)
+;    $e
+;  addModemap0(op,mc,sig,pred,fn,$e)
+
+(DEFUN |addModemap| (|op| |mc| |sig| |pred| |fn| |$e|)
+  (DECLARE (SPECIAL |$e| |$CapsuleModemapFrame| |$InteractiveMode|
+                    |$insideCapsuleFunctionIfTrue|))
+  (COND
+    (|$InteractiveMode| |$e|)
+    ('T (COND ((|knownInfo| |pred|) (SPADLET |pred| 'T)))
+     (COND
+       ((BOOT-EQUAL |$insideCapsuleFunctionIfTrue| 'T)
+        (SPADLET |$CapsuleModemapFrame|
+                 (|addModemap0| |op| |mc| |sig| |pred| |fn|
+                     |$CapsuleModemapFrame|))
+        |$e|)
+       ('T (|addModemap0| |op| |mc| |sig| |pred| |fn| |$e|))))))
+
+;isCapitalWord x ==
+;  (y := PNAME x) and and/[UPPER_-CASE_-P y.i for i in 0..MAXINDEX y]
+
+(DEFUN |isCapitalWord| (|x|)
+  (PROG (|y|)
+    (RETURN
+      (SEQ (AND (SPADLET |y| (PNAME |x|))
+                (PROG (G166230)
+                  (SPADLET G166230 'T)
+                  (RETURN
+                    (DO ((G166236 NIL (NULL G166230))
+                         (G166237 (MAXINDEX |y|))
+                         (|i| 0 (QSADD1 |i|)))
+                        ((OR G166236 (QSGREATERP |i| G166237))
+                         G166230)
+                      (SEQ (EXIT (SETQ G166230
+                                   (AND G166230
+                                    (UPPER-CASE-P (ELT |y| |i|))))))))))))))
+
+;domainEqual(a,b) ==
+;  devaluate(a) = devaluate(b)
+
+(DEFUN |domainEqual| (|a| |b|)
+  (BOOT-EQUAL (|devaluate| |a|) (|devaluate| |b|)))
+
+;lispize x == first optimize [x]
+
+(DEFUN |lispize| (|x|) (CAR (|optimize| (CONS |x| NIL))))
+
+;$newCompilerUnionFlag := true
+
+(SPADLET |$newCompilerUnionFlag| 'T)
+
+;orderUnionEntries l ==
+;  $newCompilerUnionFlag => l
+;  first l is [":",.,.] => l  -- new style Unions
+;  [a,b]:=
+;    split(l,nil,nil) where
+;      split(l,a,b) ==
+;        l is [x,:l'] =>
+;          (STRINGP x => split(l',[x,:a],b); split(l',a,[x,:b]))
+;        [a,b]
+;  [:orderList a,:orderList b]
+
+(DEFUN |orderUnionEntries,split| (|l| |a| |b|)
+  (PROG (|x| |l'|)
+    (RETURN
+      (SEQ (IF (AND (PAIRP |l|)
+                    (PROGN
+                      (SPADLET |x| (QCAR |l|))
+                      (SPADLET |l'| (QCDR |l|))
+                      'T))
+               (EXIT (SEQ (IF (STRINGP |x|)
+                              (EXIT (|orderUnionEntries,split| |l'|
+                                     (CONS |x| |a|) |b|)))
+                          (EXIT (|orderUnionEntries,split| |l'| |a|
+                                    (CONS |x| |b|))))))
+           (EXIT (CONS |a| (CONS |b| NIL)))))))
+
+
+(DEFUN |orderUnionEntries| (|l|)
+  (PROG (|ISTMP#1| |ISTMP#2| |ISTMP#3| |LETTMP#1| |a| |b|)
+  (declare (special |$newCompilerUnionFlag|))
+    (RETURN
+      (COND
+        (|$newCompilerUnionFlag| |l|)
+        ((PROGN
+           (SPADLET |ISTMP#1| (CAR |l|))
+           (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) '|:|)
+                (PROGN
+                  (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                  (AND (PAIRP |ISTMP#2|)
+                       (PROGN
+                         (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                         (AND (PAIRP |ISTMP#3|)
+                              (EQ (QCDR |ISTMP#3|) NIL)))))))
+         |l|)
+        ('T
+         (SPADLET |LETTMP#1| (|orderUnionEntries,split| |l| NIL NIL))
+         (SPADLET |a| (CAR |LETTMP#1|)) (SPADLET |b| (CADR |LETTMP#1|))
+         (APPEND (|orderList| |a|) (|orderList| |b|)))))))
+
+;mkPredList listOfEntries ==
+;  $newCompilerUnionFlag =>
+;     [['EQCAR,"#1",i] for arg in listOfEntries for i in 0..]
+;  first listOfEntries is [":",.,.] =>   -- new Tagged Unions
+;     [['EQCAR,"#1",MKQ tag] for [.,tag,.] in listOfEntries]
+;  --1. generate list of type-predicate pairs from union specification
+;  initTypePredList:=
+;    [selTypePred for x in listOfEntries] where
+;      selTypePred() ==
+;        STRINGP x => [x,'EQUAL,"#1",x]
+;        [x,:GET(opOf x,"BasicPredicate")]
+;  typeList:= ASSOCLEFT initTypePredList
+;  initPredList:= ASSOCRIGHT initTypePredList
+;  hasDuplicatePredicate:=
+;    fn initPredList where
+;      fn x ==
+;        null x => false
+;        first x and MEMBER(first x,rest x) => true
+;        fn rest x
+;                                 --if duplicate predicate, kill them all
+;  if hasDuplicatePredicate then initPredList:= [nil for x in initPredList]
+;  nonEmptyPredList:= [p for p in initPredList | p^=nil]
+;  numberWithoutPredicate:= #listOfEntries-#nonEmptyPredList
+;  predList:=
+;    numberWithoutPredicate=0 and not hasDuplicatePredicate => initPredList
+;    numberWithoutPredicate=1 and null LAST initPredList and
+;      [STRINGP x for x in rest REVERSE listOfEntries] =>
+;        allButLast:= rest REVERSE initPredList
+;        NREVERSE [['NULL,MKPF(allButLast,"OR")],:allButLast]
+;  --otherwise, generate a tagged-union
+;  --we have made an even number of REVERSE operations, therefore
+;  --the original order is preserved.  JHD 25.Sept.1983
+;    tagPredList:= [["EQCAR","#1",i] for i in 1..numberWithoutPredicate]
+;    [addPredIfNecessary for p in initPredList] where
+;      addPredIfNecessary() ==
+;        p => p
+;        [u,:tagPredList]:= tagPredList
+;        u
+;  predList
+
+(DEFUN |mkPredList,fn| (|x|)
+  (SEQ (IF (NULL |x|) (EXIT NIL))
+       (IF (AND (CAR |x|) (|member| (CAR |x|) (CDR |x|))) (EXIT 'T))
+       (EXIT (|mkPredList,fn| (CDR |x|)))))
+
+
+(DEFUN |mkPredList| (|listOfEntries|)
+  (PROG (|ISTMP#1| |ISTMP#2| |ISTMP#3| |tag| |initTypePredList|
+            |typeList| |hasDuplicatePredicate| |initPredList|
+            |nonEmptyPredList| |numberWithoutPredicate| |allButLast|
+            |LETTMP#1| |u| |tagPredList| |predList|)
+  (declare (special |$newCompilerUnionFlag|))
+    (RETURN
+      (SEQ (COND
+             (|$newCompilerUnionFlag|
+                 (PROG (G166340)
+                   (SPADLET G166340 NIL)
+                   (RETURN
+                     (DO ((G166346 |listOfEntries| (CDR G166346))
+                          (|arg| NIL) (|i| 0 (QSADD1 |i|)))
+                         ((OR (ATOM G166346)
+                              (PROGN (SETQ |arg| (CAR G166346)) NIL))
+                          (NREVERSE0 G166340))
+                       (SEQ (EXIT (SETQ G166340
+                                        (CONS
+                                         (CONS 'EQCAR
+                                          (CONS '|#1| (CONS |i| NIL)))
+                                         G166340))))))))
+             ((PROGN
+                (SPADLET |ISTMP#1| (CAR |listOfEntries|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) '|:|)
+                     (PROGN
+                       (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                       (AND (PAIRP |ISTMP#2|)
+                            (PROGN
+                              (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                              (AND (PAIRP |ISTMP#3|)
+                                   (EQ (QCDR |ISTMP#3|) NIL)))))))
+              (PROG (G166357)
+                (SPADLET G166357 NIL)
+                (RETURN
+                  (DO ((G166363 |listOfEntries| (CDR G166363))
+                       (G166309 NIL))
+                      ((OR (ATOM G166363)
+                           (PROGN
+                             (SETQ G166309 (CAR G166363))
+                             NIL)
+                           (PROGN
+                             (PROGN
+                               (SPADLET |tag| (CADR G166309))
+                               G166309)
+                             NIL))
+                       (NREVERSE0 G166357))
+                    (SEQ (EXIT (SETQ G166357
+                                     (CONS
+                                      (CONS 'EQCAR
+                                       (CONS '|#1|
+                                        (CONS (MKQ |tag|) NIL)))
+                                      G166357))))))))
+             ('T
+              (SPADLET |initTypePredList|
+                       (PROG (G166374)
+                         (SPADLET G166374 NIL)
+                         (RETURN
+                           (DO ((G166379 |listOfEntries|
+                                    (CDR G166379))
+                                (|x| NIL))
+                               ((OR (ATOM G166379)
+                                    (PROGN
+                                      (SETQ |x| (CAR G166379))
+                                      NIL))
+                                (NREVERSE0 G166374))
+                             (SEQ (EXIT (SETQ G166374
+                                         (CONS
+                                          (COND
+                                            ((STRINGP |x|)
+                                             (CONS |x|
+                                              (CONS 'EQUAL
+                                               (CONS '|#1|
+                                                (CONS |x| NIL)))))
+                                            ('T
+                                             (CONS |x|
+                                              (GETL (|opOf| |x|)
+                                               '|BasicPredicate|))))
+                                          G166374))))))))
+              (SPADLET |typeList| (ASSOCLEFT |initTypePredList|))
+              (SPADLET |initPredList| (ASSOCRIGHT |initTypePredList|))
+              (SPADLET |hasDuplicatePredicate|
+                       (|mkPredList,fn| |initPredList|))
+              (COND
+                (|hasDuplicatePredicate|
+                    (SPADLET |initPredList|
+                             (PROG (G166389)
+                               (SPADLET G166389 NIL)
+                               (RETURN
+                                 (DO ((G166394 |initPredList|
+                                       (CDR G166394))
+                                      (|x| NIL))
+                                     ((OR (ATOM G166394)
+                                       (PROGN
+                                         (SETQ |x| (CAR G166394))
+                                         NIL))
+                                      (NREVERSE0 G166389))
+                                   (SEQ
+                                    (EXIT
+                                     (SETQ G166389
+                                      (CONS NIL G166389))))))))))
+              (SPADLET |nonEmptyPredList|
+                       (PROG (G166405)
+                         (SPADLET G166405 NIL)
+                         (RETURN
+                           (DO ((G166411 |initPredList|
+                                    (CDR G166411))
+                                (|p| NIL))
+                               ((OR (ATOM G166411)
+                                    (PROGN
+                                      (SETQ |p| (CAR G166411))
+                                      NIL))
+                                (NREVERSE0 G166405))
+                             (SEQ (EXIT (COND
+                                          ((NEQUAL |p| NIL)
+                                           (SETQ G166405
+                                            (CONS |p| G166405))))))))))
+              (SPADLET |numberWithoutPredicate|
+                       (SPADDIFFERENCE (|#| |listOfEntries|)
+                           (|#| |nonEmptyPredList|)))
+              (SPADLET |predList|
+                       (COND
+                         ((AND (EQL |numberWithoutPredicate| 0)
+                               (NULL |hasDuplicatePredicate|))
+                          |initPredList|)
+                         ((AND (EQL |numberWithoutPredicate| 1)
+                               (NULL (|last| |initPredList|))
+                               (PROG (G166421)
+                                 (SPADLET G166421 NIL)
+                                 (RETURN
+                                   (DO
+                                    ((G166426
+                                      (CDR (REVERSE |listOfEntries|))
+                                      (CDR G166426))
+                                     (|x| NIL))
+                                    ((OR (ATOM G166426)
+                                      (PROGN
+                                        (SETQ |x| (CAR G166426))
+                                        NIL))
+                                     (NREVERSE0 G166421))
+                                     (SEQ
+                                      (EXIT
+                                       (SETQ G166421
+                                        (CONS (STRINGP |x|) G166421))))))))
+                          (SPADLET |allButLast|
+                                   (CDR (REVERSE |initPredList|)))
+                          (NREVERSE
+                              (CONS (CONS 'NULL
+                                     (CONS (MKPF |allButLast| 'OR) NIL))
+                                    |allButLast|)))
+                         ('T
+                          (SPADLET |tagPredList|
+                                   (PROG (G166436)
+                                     (SPADLET G166436 NIL)
+                                     (RETURN
+                                       (DO ((|i| 1 (QSADD1 |i|)))
+                                        ((QSGREATERP |i|
+                                          |numberWithoutPredicate|)
+                                         (NREVERSE0 G166436))
+                                         (SEQ
+                                          (EXIT
+                                           (SETQ G166436
+                                            (CONS
+                                             (CONS 'EQCAR
+                                              (CONS '|#1|
+                                               (CONS |i| NIL)))
+                                             G166436))))))))
+                          (PROG (G166448)
+                            (SPADLET G166448 NIL)
+                            (RETURN
+                              (DO ((G166453 |initPredList|
+                                    (CDR G166453))
+                                   (|p| NIL))
+                                  ((OR (ATOM G166453)
+                                    (PROGN
+                                      (SETQ |p| (CAR G166453))
+                                      NIL))
+                                   (NREVERSE0 G166448))
+                                (SEQ (EXIT
+                                      (SETQ G166448
+                                       (CONS
+                                        (COND
+                                          (|p| |p|)
+                                          ('T
+                                           (SPADLET |LETTMP#1|
+                                            |tagPredList|)
+                                           (SPADLET |u|
+                                            (CAR |LETTMP#1|))
+                                           (SPADLET |tagPredList|
+                                            (CDR |LETTMP#1|))
+                                           |u|))
+                                        G166448))))))))))
+              |predList|))))))
+
+;TruthP x ==
+;    --True if x is a predicate that's always true
+;  x is nil => nil
+;  x=true => true
+;  x is ['QUOTE,:.] => true
+;  nil
+
+(DEFUN |TruthP| (|x|)
+  (COND
+    ((NULL |x|) NIL)
+    ((BOOT-EQUAL |x| 'T) 'T)
+    ((AND (PAIRP |x|) (EQ (QCAR |x|) 'QUOTE)) 'T)
+    ('T NIL)))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

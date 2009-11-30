@@ -1,0 +1,1629 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp g-util.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;PPtoFile(x, fname) ==
+;    stream := DEFIOSTREAM([['MODE, :'OUTPUT], ['FILE, :fname]], 80, 0)
+;    PRETTYPRINT(x, stream)
+;    SHUT stream
+;    x
+
+(DEFUN |PPtoFile| (|x| |fname|)
+  (PROG (|stream|)
+    (RETURN
+      (PROGN
+        (SPADLET |stream|
+                 (DEFIOSTREAM
+                     (CONS (CONS 'MODE 'OUTPUT)
+                           (CONS (CONS 'FILE |fname|) NIL))
+                     80 0))
+        (PRETTYPRINT |x| |stream|)
+        (SHUT |stream|)
+        |x|))))
+
+;bool x ==
+;    NULL NULL x
+
+(DEFUN |bool| (|x|) (NULL (NULL |x|))) 
+
+;Identity x == x
+
+(DEFUN |Identity| (|x|) |x|) 
+
+;length1? l == PAIRP l and not PAIRP QCDR l
+
+(DEFUN |length1?| (|l|) (AND (PAIRP |l|) (NULL (PAIRP (QCDR |l|))))) 
+
+;length2? l == PAIRP l and PAIRP (l := QCDR l) and not PAIRP QCDR l
+
+(DEFUN |length2?| (|l|)
+ (AND (PAIRP |l|) (PAIRP (SPADLET |l| (QCDR |l|))) (NULL (PAIRP (QCDR |l|))))) 
+
+;pairList(u,v) == [[x,:y] for x in u for y in v]
+
+(DEFUN |pairList| (|u| |v|)
+  (PROG ()
+    (RETURN
+      (SEQ (PROG (G1403)
+             (SPADLET G1403 NIL)
+             (RETURN
+               (DO ((G1404 |u| (CDR G1404)) (|x| NIL)
+                    (G1405 |v| (CDR G1405)) (|y| NIL))
+                   ((OR (ATOM G1404)
+                        (PROGN (SETQ |x| (CAR G1404)) NIL)
+                        (ATOM G1405)
+                        (PROGN (SETQ |y| (CAR G1405)) NIL))
+                    (NREVERSE0 G1403))
+                 (SEQ (EXIT (SETQ G1403
+                                  (CONS (CONS |x| |y|) G1403)))))))))))
+
+;GETALIST(alist,prop) == CDR assoc(prop,alist)
+
+(DEFUN GETALIST (|alist| |prop|) (CDR (|assoc| |prop| |alist|))) 
+
+;PUTALIST(alist,prop,val) ==
+;  null alist => [[prop,:val]]
+;  pair := assoc(prop,alist) =>
+;    CDR pair = val => alist
+;    -- else we fall over Lucid's read-only storage feature again
+;    QRPLACD(pair,val)
+;    alist
+;  QRPLACD(LASTPAIR alist,[[prop,:val]])
+;  alist
+
+(DEFUN PUTALIST (|alist| |prop| |val|)
+  (PROG (|pair|)
+    (RETURN
+      (COND
+        ((NULL |alist|) (CONS (CONS |prop| |val|) NIL))
+        ((SPADLET |pair| (|assoc| |prop| |alist|))
+         (COND
+           ((BOOT-EQUAL (CDR |pair|) |val|) |alist|)
+           ('T (QRPLACD |pair| |val|) |alist|)))
+        ('T (QRPLACD (LASTPAIR |alist|) (CONS (CONS |prop| |val|) NIL))
+         |alist|)))))
+
+;REMALIST(alist,prop) ==
+;  null alist => alist
+;  alist is [[ =prop,:.],:r] =>
+;    null r => NIL
+;    QRPLACA(alist,CAR r)
+;    QRPLACD(alist,CDR r)
+;    alist
+;  null rest alist => alist
+;  l := alist
+;  ok := true
+;  while ok repeat
+;    [.,[p,:.],:r] := l
+;    p = prop =>
+;      ok := NIL
+;      QRPLACD(l,r)
+;    if null (l := QCDR l) or null rest l then ok := NIL
+;  alist
+
+(DEFUN REMALIST (|alist| |prop|)
+  (PROG (|ISTMP#1| |p| |r| |l| |ok|)
+    (RETURN
+      (SEQ (COND
+             ((NULL |alist|) |alist|)
+             ((AND (PAIRP |alist|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCAR |alist|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (EQUAL (QCAR |ISTMP#1|) |prop|)))
+                   (PROGN (SPADLET |r| (QCDR |alist|)) 'T))
+              (COND
+                ((NULL |r|) NIL)
+                ('T (QRPLACA |alist| (CAR |r|))
+                 (QRPLACD |alist| (CDR |r|)) |alist|)))
+             ((NULL (CDR |alist|)) |alist|)
+             ('T (SPADLET |l| |alist|) (SPADLET |ok| 'T)
+              (DO () ((NULL |ok|) NIL)
+                (SEQ (EXIT (PROGN
+                             (SPADLET |p| (CAADR |l|))
+                             (SPADLET |r| (CDDR |l|))
+                             (COND
+                               ((BOOT-EQUAL |p| |prop|)
+                                (SPADLET |ok| NIL) (QRPLACD |l| |r|))
+                               ((OR (NULL (SPADLET |l| (QCDR |l|)))
+                                    (NULL (CDR |l|)))
+                                (SPADLET |ok| NIL))
+                               ('T NIL))))))
+              |alist|))))))
+
+;deleteLassoc(x,y) ==
+;  y is [[a,:.],:y'] =>
+;    EQ(x,a) => y'
+;    [first y,:deleteLassoc(x,y')]
+;  y
+
+(DEFUN |deleteLassoc| (|x| |y|)
+  (PROG (|ISTMP#1| |a| |y'|)
+    (RETURN
+      (COND
+        ((AND (PAIRP |y|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCAR |y|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN (SPADLET |a| (QCAR |ISTMP#1|)) 'T)))
+              (PROGN (SPADLET |y'| (QCDR |y|)) 'T))
+         (COND
+           ((EQ |x| |a|) |y'|)
+           ('T (CONS (CAR |y|) (|deleteLassoc| |x| |y'|)))))
+        ('T |y|)))))
+
+;deleteAssoc(x,y) ==
+;  y is [[a,:.],:y'] =>
+;   a=x => deleteAssoc(x,y')
+;   [first y,:deleteAssoc(x,y')]
+;  y
+
+(DEFUN |deleteAssoc| (|x| |y|)
+  (PROG (|ISTMP#1| |a| |y'|)
+    (RETURN
+      (COND
+        ((AND (PAIRP |y|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCAR |y|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN (SPADLET |a| (QCAR |ISTMP#1|)) 'T)))
+              (PROGN (SPADLET |y'| (QCDR |y|)) 'T))
+         (COND
+           ((BOOT-EQUAL |a| |x|) (|deleteAssoc| |x| |y'|))
+           ('T (CONS (CAR |y|) (|deleteAssoc| |x| |y'|)))))
+        ('T |y|)))))
+
+;deleteAssocWOC(x,y) ==
+;  null y => y
+;  [[a,:.],:t]:= y
+;  x=a => t
+;  (fn(x,y);y) where fn(x,y is [h,:t]) ==
+;    t is [[a,:.],:t1] =>
+;      x=a => RPLACD(y,t1)
+;      fn(x,t)
+;    nil
+
+(DEFUN |deleteAssocWOC,fn| (|x| |y|)
+  (PROG (|h| |t| |ISTMP#1| |a| |t1|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |h| (CAR |y|))
+             (SPADLET |t| (CDR |y|))
+             |y|
+             (SEQ (IF (AND (PAIRP |t|)
+                           (PROGN
+                             (SPADLET |ISTMP#1| (QCAR |t|))
+                             (AND (PAIRP |ISTMP#1|)
+                                  (PROGN
+                                    (SPADLET |a| (QCAR |ISTMP#1|))
+                                    'T)))
+                           (PROGN (SPADLET |t1| (QCDR |t|)) 'T))
+                      (EXIT (SEQ (IF (BOOT-EQUAL |x| |a|)
+                                     (EXIT (RPLACD |y| |t1|)))
+                                 (EXIT (|deleteAssocWOC,fn| |x| |t|)))))
+                  (EXIT NIL)))))))
+
+(DEFUN |deleteAssocWOC| (|x| |y|)
+  (PROG (|a| |t|)
+    (RETURN
+      (COND
+        ((NULL |y|) |y|)
+        ('T (SPADLET |a| (CAAR |y|)) (SPADLET |t| (CDR |y|))
+         (COND
+           ((BOOT-EQUAL |x| |a|) |t|)
+           ('T (|deleteAssocWOC,fn| |x| |y|) |y|)))))))
+
+;insertWOC(x,y) ==
+;  null y => [x]
+;  (fn(x,y); y) where fn(x,y is [h,:t]) ==
+;    x=h => nil
+;    null t =>
+;      RPLACD(y,[h,:t])
+;      RPLACA(y,x)
+;    fn(x,t)
+
+(DEFUN |insertWOC,fn| (|x| |y|)
+  (PROG (|h| |t|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |h| (CAR |y|))
+             (SPADLET |t| (CDR |y|))
+             |y|
+             (SEQ (IF (BOOT-EQUAL |x| |h|) (EXIT NIL))
+                  (IF (NULL |t|)
+                      (EXIT (SEQ (RPLACD |y| (CONS |h| |t|))
+                                 (EXIT (RPLACA |y| |x|)))))
+                  (EXIT (|insertWOC,fn| |x| |t|))))))))
+
+(DEFUN |insertWOC| (|x| |y|)
+  (COND ((NULL |y|) (CONS |x| NIL)) ('T (|insertWOC,fn| |x| |y|) |y|)))
+
+;fillerSpaces(n,:charPart) ==
+;  n <= 0 => '""
+;  MAKE_-FULL_-CVEC(n,IFCAR charPart or '" ")
+
+(DEFUN |fillerSpaces| (&REST G1406 &AUX |charPart| |n|)
+  (DSETQ (|n| . |charPart|) G1406)
+  (COND
+    ((<= |n| 0) (MAKESTRING ""))
+    ('T (MAKE-FULL-CVEC |n| (OR (IFCAR |charPart|) (MAKESTRING " "))))))
+
+;centerString(text,width,fillchar) ==
+;  wid := entryWidth text
+;  wid >= width => text
+;  f := DIVIDE(width - wid,2)
+;  fill1 := ""
+;  for i in 1..(f.0) repeat
+;    fill1 := STRCONC(fillchar,fill1)
+;  fill2:= fill1
+;  if f.1 ^= 0 then fill1 := STRCONC(fillchar,fill1)
+;  [fill1,text,fill2]
+
+(DEFUN |centerString| (|text| |width| |fillchar|)
+  (PROG (|wid| |f| |fill2| |fill1|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |wid| (|entryWidth| |text|))
+             (COND
+               ((>= |wid| |width|) |text|)
+               ('T
+                (SPADLET |f| (DIVIDE (SPADDIFFERENCE |width| |wid|) 2))
+                (SPADLET |fill1| '||)
+                (DO ((G1407 (ELT |f| 0)) (|i| 1 (QSADD1 |i|)))
+                    ((QSGREATERP |i| G1407) NIL)
+                  (SEQ (EXIT (SPADLET |fill1|
+                                      (STRCONC |fillchar| |fill1|)))))
+                (SPADLET |fill2| |fill1|)
+                (COND
+                  ((NEQUAL (ELT |f| 1) 0)
+                   (SPADLET |fill1| (STRCONC |fillchar| |fill1|))))
+                (CONS |fill1| (CONS |text| (CONS |fill2| NIL))))))))))
+
+;stringPrefix?(pref,str) ==
+;  -- sees if the first #pref letters of str are pref
+;  -- replaces STRINGPREFIXP
+;  null (STRINGP(pref) and STRINGP(str)) => NIL
+;  (lp := QCSIZE pref) = 0 => true
+;  lp > QCSIZE str => NIL
+;  ok := true
+;  i := 0
+;  while ok and (i < lp) repeat
+;    not EQ(SCHAR(pref,i),SCHAR(str,i)) => ok := NIL
+;    i := i + 1
+;  ok
+
+(DEFUN |stringPrefix?| (|pref| |str|)
+  (PROG (|lp| |ok| |i|)
+    (RETURN
+      (SEQ (COND
+             ((NULL (AND (STRINGP |pref|) (STRINGP |str|))) NIL)
+             ((EQL (SPADLET |lp| (QCSIZE |pref|)) 0) 'T)
+             ((> |lp| (QCSIZE |str|)) NIL)
+             ('T (SPADLET |ok| 'T) (SPADLET |i| 0)
+              (DO () ((NULL (AND |ok| (> |lp| |i|))) NIL)
+                (SEQ (EXIT (COND
+                             ((NULL (EQ (SCHAR |pref| |i|)
+                                     (SCHAR |str| |i|)))
+                              (SPADLET |ok| NIL))
+                             ('T (SPADLET |i| (PLUS |i| 1)))))))
+              |ok|))))))
+
+;stringChar2Integer(str,pos) ==
+;  -- replaces GETSTRINGDIGIT in UT LISP
+;  -- returns small integer represented by character in position pos
+;  -- in string str. Returns NIL if not a digit or other error.
+;  if IDENTP str then str := PNAME str
+;  null (STRINGP(str) and
+;    INTEGERP(pos) and (pos >= 0) and (pos < QCSIZE(str))) => NIL
+;  not DIGITP(d := SCHAR(str,pos)) => NIL
+;  DIG2FIX d
+
+(DEFUN |stringChar2Integer| (|str| |pos|)
+  (PROG (|d|)
+    (RETURN
+      (PROGN
+        (COND ((IDENTP |str|) (SPADLET |str| (PNAME |str|))))
+        (COND
+          ((NULL (AND (STRINGP |str|) (INTEGERP |pos|) (>= |pos| 0)
+                      (> (QCSIZE |str|) |pos|)))
+           NIL)
+          ((NULL (DIGITP (SPADLET |d| (SCHAR |str| |pos|)))) NIL)
+          ('T (DIG2FIX |d|)))))))
+
+;dropLeadingBlanks str ==
+;  str := object2String str
+;  l := QCSIZE str
+;  nb := NIL
+;  i := 0
+;  while (i < l) and not nb repeat
+;    if SCHAR(str,i) ^= " " then nb := i
+;    else i := i + 1
+;  nb = 0 => str
+;  nb => SUBSTRING(str,nb,NIL)
+;  '""
+
+(DEFUN |dropLeadingBlanks| (|str|)
+  (PROG (|l| |nb| |i|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |str| (|object2String| |str|))
+             (SPADLET |l| (QCSIZE |str|))
+             (SPADLET |nb| NIL)
+             (SPADLET |i| 0)
+             (DO () ((NULL (AND (> |l| |i|) (NULL |nb|))) NIL)
+               (SEQ (EXIT (COND
+                            ((NEQUAL (SCHAR |str| |i|) '| |)
+                             (SPADLET |nb| |i|))
+                            ('T (SPADLET |i| (PLUS |i| 1)))))))
+             (COND
+               ((EQL |nb| 0) |str|)
+               (|nb| (SUBSTRING |str| |nb| NIL))
+               ('T (MAKESTRING ""))))))))
+
+;concat(:l) == concatList l
+
+(DEFUN |concat| (&REST G1408 &AUX |l|)
+  (DSETQ |l| G1408)
+  (|concatList| |l|))
+
+;concatList [x,:y] ==
+;  null y => x
+;  null x => concatList y
+;  concat1(x,concatList y)
+
+(DEFUN |concatList| (G1409)
+  (PROG (|x| |y|)
+    (RETURN
+      (PROGN
+        (SPADLET |x| (CAR G1409))
+        (SPADLET |y| (CDR G1409))
+        (COND
+          ((NULL |y|) |x|)
+          ((NULL |x|) (|concatList| |y|))
+          ('T (|concat1| |x| (|concatList| |y|))))))))
+
+;concat1(x,y) ==
+;  null x => y
+;  atom x => (null y => x; atom y => [x,y]; [x,:y])
+;  null y => x
+;  atom y => [:x,y]
+;  [:x,:y]
+
+(DEFUN |concat1| (|x| |y|)
+  (COND
+    ((NULL |x|) |y|)
+    ((ATOM |x|)
+     (COND
+       ((NULL |y|) |x|)
+       ((ATOM |y|) (CONS |x| (CONS |y| NIL)))
+       ('T (CONS |x| |y|))))
+    ((NULL |y|) |x|)
+    ((ATOM |y|) (APPEND |x| (CONS |y| NIL)))
+    ('T (APPEND |x| |y|))))
+
+;ravel a == a
+
+(DEFUN |ravel| (|a|) |a|) 
+
+;reshape(a,b) == a
+
+(DEFUN |reshape| (|a| |b|)
+ (declare (ignore |b|))
+ |a|) 
+
+;boolODDP x == ODDP x
+
+(DEFUN |boolODDP| (|x|) (ODDP |x|)) 
+
+;freeOfSharpVars x ==
+;  atom x => not isSharpVarWithNum x
+;  freeOfSharpVars first x and freeOfSharpVars rest x
+
+(DEFUN |freeOfSharpVars| (|x|)
+  (COND
+    ((ATOM |x|) (NULL (|isSharpVarWithNum| |x|)))
+    ('T
+     (AND (|freeOfSharpVars| (CAR |x|)) (|freeOfSharpVars| (CDR |x|))))))
+
+;listOfSharpVars x ==
+;  atom x => (isSharpVarWithNum x => LIST x; nil)
+;  setUnion(listOfSharpVars first x,listOfSharpVars rest x)
+
+(DEFUN |listOfSharpVars| (|x|)
+  (COND
+    ((ATOM |x|) (COND ((|isSharpVarWithNum| |x|) (LIST |x|)) ('T NIL)))
+    ('T
+     (|union| (|listOfSharpVars| (CAR |x|))
+              (|listOfSharpVars| (CDR |x|))))))
+
+;listOfPatternIds x ==
+;  isPatternVar x => [x]
+;  atom x => nil
+;  x is ['QUOTE,:.] => nil
+;  UNIONQ(listOfPatternIds first x,listOfPatternIds rest x)
+
+(DEFUN |listOfPatternIds| (|x|)
+  (COND
+    ((|isPatternVar| |x|) (CONS |x| NIL))
+    ((ATOM |x|) NIL)
+    ((AND (PAIRP |x|) (EQ (QCAR |x|) 'QUOTE)) NIL)
+    ('T
+     (UNIONQ (|listOfPatternIds| (CAR |x|))
+             (|listOfPatternIds| (CDR |x|))))))
+
+;isPatternVar v ==
+;  -- a pattern variable consists of a star followed by a star or digit(s)
+;  IDENTP(v) and MEMQ(v,'(_*_* _*1 _*2 _*3 _*4 _*5 _*6 _*7 _*8 _*9 _*10
+;    _*11 _*12 _*13 _*14 _*15 _*16 _*17 _*18 _*19 _*20)) and true
+
+(DEFUN |isPatternVar| (|v|)
+  (AND (IDENTP |v|)
+       (MEMQ |v|
+             '(** *1 *2 *3 *4 *5 *6 *7 *8 *9 *10 *11 *12 *13 *14 *15
+                  *16 *17 *18 *19 *20))
+       'T))
+
+;removeZeroOne x ==
+;  -- replace all occurrences of (Zero) and (One) with
+;  -- 0 and 1
+;  x = $Zero => 0
+;  x = $One => 1
+;  atom x => x
+;  [removeZeroOne first x,:removeZeroOne rest x]
+
+(DEFUN |removeZeroOne| (|x|)
+  (DECLARE (SPECIAL |$One| |$Zero|))
+  (COND
+    ((BOOT-EQUAL |x| |$Zero|) 0)
+    ((BOOT-EQUAL |x| |$One|) 1)
+    ((ATOM |x|) |x|)
+    ('T (CONS (|removeZeroOne| (CAR |x|)) (|removeZeroOne| (CDR |x|))))))
+
+;removeZeroOneDestructively t ==
+;  -- replace all occurrences of (Zero) and (One) with
+;  -- 0 and 1 destructively
+;  t = $Zero => 0
+;  t = $One => 1
+;  atom t => t
+;  RPLNODE(t,removeZeroOneDestructively first t,
+;    removeZeroOneDestructively rest t)
+
+(DEFUN |removeZeroOneDestructively| (|t|)
+  (DECLARE (SPECIAL |$One| |$Zero|))
+  (COND
+    ((BOOT-EQUAL |t| |$Zero|) 0)
+    ((BOOT-EQUAL |t| |$One|) 1)
+    ((ATOM |t|) |t|)
+    ('T
+     (RPLNODE |t| (|removeZeroOneDestructively| (CAR |t|))
+              (|removeZeroOneDestructively| (CDR |t|))))))
+
+;flattenSexpr s ==
+;  null s => s
+;  ATOM s => s
+;  [f,:r] := s
+;  ATOM f => [f,:flattenSexpr r]
+;  [:flattenSexpr f,:flattenSexpr r]
+
+(DEFUN |flattenSexpr| (|s|)
+  (PROG (|f| |r|)
+    (RETURN
+      (COND
+        ((NULL |s|) |s|)
+        ((ATOM |s|) |s|)
+        ('T (SPADLET |f| (CAR |s|)) (SPADLET |r| (CDR |s|))
+         (COND
+           ((ATOM |f|) (CONS |f| (|flattenSexpr| |r|)))
+           ('T (APPEND (|flattenSexpr| |f|) (|flattenSexpr| |r|)))))))))
+
+;isLowerCaseLetter c == charRangeTest CHAR2NUM c
+
+(DEFUN |isLowerCaseLetter| (|c|) (|charRangeTest| (CHAR2NUM |c|))) 
+
+;isUpperCaseLetter c == charRangeTest QSDIFFERENCE(CHAR2NUM c,64)
+
+(DEFUN |isUpperCaseLetter| (|c|)
+ (|charRangeTest| (QSDIFFERENCE (CHAR2NUM |c|) 64))) 
+
+;isLetter c ==
+;  n:= CHAR2NUM c
+;  charRangeTest n or charRangeTest QSDIFFERENCE(CHAR2NUM c,64)
+
+(DEFUN |isLetter| (|c|)
+ (PROG (|n|)
+  (RETURN
+   (PROGN
+    (SPADLET |n| (CHAR2NUM |c|))
+    (OR
+     (|charRangeTest| |n|)
+     (|charRangeTest| (QSDIFFERENCE (CHAR2NUM |c|) 64))))))) 
+
+;charRangeTest n ==
+;  QSLESSP(153,n) =>
+;    QSLESSP(169,n) => false
+;    QSLESSP(161,n) => true
+;    false
+;  QSLESSP(128,n) =>
+;    QSLESSP(144,n) => true
+;    QSLESSP(138,n) => false
+;    true
+;  false
+
+(DEFUN |charRangeTest| (|n|)
+  (COND
+    ((QSLESSP 153 |n|)
+     (COND ((QSLESSP 169 |n|) NIL) ((QSLESSP 161 |n|) 'T) ('T NIL)))
+    ((QSLESSP 128 |n|)
+     (COND ((QSLESSP 144 |n|) 'T) ((QSLESSP 138 |n|) NIL) ('T 'T)))
+    ('T NIL)))
+
+;update() ==
+;  OBEY
+;    STRCONC('"SPADEDIT ",STRINGIMAGE _/VERSION,'" ",STRINGIMAGE _/WSNAME,'" A")
+;  _/UPDATE()
+
+(DEFUN |update| ()
+  (declare (special /VERSION /WSNAME))
+  (PROGN
+    (OBEY (STRCONC "SPADEDIT " (STRINGIMAGE /VERSION) " "
+                   (STRINGIMAGE /WSNAME) " A"))
+    (/UPDATE)))
+
+;listSort(pred,list,:optional) ==
+;   NOT functionp pred => error "listSort: first arg must be a function"
+;   NOT LISTP list => error "listSort: second argument must be a list"
+;   NULL optional => mergeSort(pred,function Identity,list,LENGTH list)
+;   key := CAR optional
+;   NOT functionp key => error "listSort: last arg must be a function"
+;   mergeSort(pred,key,list,LENGTH list)
+
+(DEFUN |listSort| (&REST G1410 &AUX |optional| LIST |pred|)
+  (DSETQ (|pred| LIST . |optional|) G1410)
+  (PROG (|key|)
+    (RETURN
+      (COND
+        ((NULL (|functionp| |pred|))
+         (|error| '|listSort: first arg must be a function|))
+        ((NULL (LISTP LIST))
+         (|error| '|listSort: second argument must be a list|))
+        ((NULL |optional|)
+         (|mergeSort| |pred| (|function| |Identity|) LIST
+             (LENGTH LIST)))
+        ('T (SPADLET |key| (CAR |optional|))
+         (COND
+           ((NULL (|functionp| |key|))
+            (|error| '|listSort: last arg must be a function|))
+           ('T (|mergeSort| |pred| |key| LIST (LENGTH LIST)))))))))
+
+;MSORT list == listSort(function GLESSEQP, COPY_-LIST list)
+
+(DEFUN MSORT (LIST)
+ (|listSort| (|function| GLESSEQP) (COPY-LIST LIST))) 
+
+;NMSORT list == listSort(function GLESSEQP, list)
+
+(DEFUN NMSORT (LIST) (|listSort| (|function| GLESSEQP) LIST)) 
+
+;orderList l == listSort(function _?ORDER, COPY_-LIST l)
+
+(DEFUN |orderList| (|l|) (|listSort| (|function| ?ORDER) (COPY-LIST |l|))) 
+
+;mergeInPlace(f,g,p,q) ==
+;   if NULL p then return p
+;   if NULL q then return q
+;   if FUNCALL(f,FUNCALL(g, QCAR p),FUNCALL(g, QCAR q))
+;   then (r := t := p; p := QCDR p)
+;   else (r := t := q; q := QCDR q)
+;   while not NULL p and not NULL q repeat
+;      if FUNCALL(f,FUNCALL(g,QCAR p),FUNCALL(g,QCAR q))
+;      then (QRPLACD(t,p); t := p; p := QCDR p)
+;      else (QRPLACD(t,q); t := q; q := QCDR q)
+;   if NULL p then QRPLACD(t,q) else QRPLACD(t,p)
+;   r
+
+(DEFUN |mergeInPlace| (|f| |g| |p| |q|)
+  (PROG (|r| |t|)
+    (RETURN
+      (SEQ (PROGN
+             (COND ((NULL |p|) (RETURN |p|)))
+             (COND ((NULL |q|) (RETURN |q|)))
+             (COND
+               ((FUNCALL |f| (FUNCALL |g| (QCAR |p|))
+                         (FUNCALL |g| (QCAR |q|)))
+                (SPADLET |r| (SPADLET |t| |p|))
+                (SPADLET |p| (QCDR |p|)))
+               ('T (SPADLET |r| (SPADLET |t| |q|))
+                (SPADLET |q| (QCDR |q|))))
+             (DO ()
+                 ((NULL (AND (NULL (NULL |p|)) (NULL (NULL |q|)))) NIL)
+               (SEQ (EXIT (COND
+                            ((FUNCALL |f| (FUNCALL |g| (QCAR |p|))
+                                      (FUNCALL |g| (QCAR |q|)))
+                             (QRPLACD |t| |p|) (SPADLET |t| |p|)
+                             (SPADLET |p| (QCDR |p|)))
+                            ('T (QRPLACD |t| |q|) (SPADLET |t| |q|)
+                             (SPADLET |q| (QCDR |q|)))))))
+             (COND
+               ((NULL |p|) (QRPLACD |t| |q|))
+               ('T (QRPLACD |t| |p|)))
+             |r|)))))
+
+;mergeSort(f,g,p,n) ==
+;   if EQ(n,2) and FUNCALL(f,FUNCALL(g,QCADR p),FUNCALL(g,QCAR p)) then
+;      t := p
+;      p := QCDR p
+;      QRPLACD(p,t)
+;      QRPLACD(t,NIL)
+;   if QSLESSP(n,3) then return p
+;   -- split the list p into p and q of equal length
+;   l := QSQUOTIENT(n,2)
+;   t := p
+;   for i in 1..l-1 repeat t := QCDR t
+;   q := rest t
+;   QRPLACD(t,NIL)
+;   p := mergeSort(f,g,p,l)
+;   q := mergeSort(f,g,q,QSDIFFERENCE(n,l))
+;   mergeInPlace(f,g,p,q)
+
+(DEFUN |mergeSort| (|f| |g| |p| |n|)
+  (PROG (|l| |t| |q|)
+    (RETURN
+      (SEQ (PROGN
+             (COND
+               ((AND (EQ |n| 2)
+                     (FUNCALL |f| (FUNCALL |g| (QCADR |p|))
+                              (FUNCALL |g| (QCAR |p|))))
+                (SPADLET |t| |p|) (SPADLET |p| (QCDR |p|))
+                (QRPLACD |p| |t|) (QRPLACD |t| NIL)))
+             (COND ((QSLESSP |n| 3) (RETURN |p|)))
+             (SPADLET |l| (QSQUOTIENT |n| 2))
+             (SPADLET |t| |p|)
+             (DO ((G1411 (SPADDIFFERENCE |l| 1))
+                  (|i| 1 (QSADD1 |i|)))
+                 ((QSGREATERP |i| G1411) NIL)
+               (SEQ (EXIT (SPADLET |t| (QCDR |t|)))))
+             (SPADLET |q| (CDR |t|))
+             (QRPLACD |t| NIL)
+             (SPADLET |p| (|mergeSort| |f| |g| |p| |l|))
+             (SPADLET |q|
+                      (|mergeSort| |f| |g| |q| (QSDIFFERENCE |n| |l|)))
+             (|mergeInPlace| |f| |g| |p| |q|))))))
+
+;spadThrow() ==
+;  if $interpOnly and $mapName then
+;    putHist($mapName,'localModemap, nil, $e)
+;  THROW("SPAD__READER",nil)
+
+(DEFUN |spadThrow| ()
+  (DECLARE (SPECIAL |$e| |$mapName| |$interpOnly|))
+  (PROGN
+    (COND
+      ((AND |$interpOnly| |$mapName|)
+       (|putHist| |$mapName| '|localModemap| NIL |$e|)))
+    (THROW 'SPAD_READER NIL)))
+
+;spadThrowBrightly x ==
+;  sayBrightly x
+;  spadThrow()
+
+(DEFUN |spadThrowBrightly| (|x|) (PROGN (|sayBrightly| |x|) (|spadThrow|))) 
+
+;formatUnabbreviatedSig sig ==
+;  null sig => ["() -> ()"]
+;  [target,:args] := sig
+;  target := formatUnabbreviated target
+;  null args => ['"() -> ",:target]
+;  null rest args => [:formatUnabbreviated QCAR args,'" -> ",:target]
+;  args := formatUnabbreviatedTuple args
+;  ['"(",:args,'") -> ",:target]
+
+(DEFUN |formatUnabbreviatedSig| (|sig|)
+  (PROG (|target| |args|)
+    (RETURN
+      (COND
+        ((NULL |sig|) (CONS '|() -> ()| NIL))
+        ('T (SPADLET |target| (CAR |sig|)) (SPADLET |args| (CDR |sig|))
+         (SPADLET |target| (|formatUnabbreviated| |target|))
+         (COND
+           ((NULL |args|) (CONS (MAKESTRING "() -> ") |target|))
+           ((NULL (CDR |args|))
+            (APPEND (|formatUnabbreviated| (QCAR |args|))
+                    (CONS (MAKESTRING " -> ") |target|)))
+           ('T (SPADLET |args| (|formatUnabbreviatedTuple| |args|))
+            (CONS (MAKESTRING "(")
+                  (APPEND |args| (CONS (MAKESTRING ") -> ") |target|))))))))))
+
+;formatUnabbreviatedTuple t ==
+;  -- t is a list of types
+;  null t => t
+;  atom t => [t]
+;  t0 := formatUnabbreviated QCAR t
+;  null rest t => t0
+;  [:t0,'",",:formatUnabbreviatedTuple QCDR t]
+
+;;;     ***       |formatUnabbreviatedTuple| REDEFINED
+
+(DEFUN |formatUnabbreviatedTuple| (|t|)
+  (PROG (|t0|)
+    (RETURN
+      (COND
+        ((NULL |t|) |t|)
+        ((ATOM |t|) (CONS |t| NIL))
+        ('T (SPADLET |t0| (|formatUnabbreviated| (QCAR |t|)))
+         (COND
+           ((NULL (CDR |t|)) |t0|)
+           ('T
+            (APPEND |t0|
+                    (CONS "," (|formatUnabbreviatedTuple| (QCDR |t|)))))))))))
+
+;formatUnabbreviated t ==
+;  atom t =>
+;    [t]
+;  null t =>
+;    ['"()"]
+;  t is [p,sel,arg] and p in '(_: ":") =>
+;    [sel,'": ",:formatUnabbreviated arg]
+;  t is ['Union,:args] =>
+;    ['Union,'"(",:formatUnabbreviatedTuple args,'")"]
+;  t is ['Mapping,:args] =>
+;    formatUnabbreviatedSig args
+;  t is ['Record,:args] =>
+;    ['Record,'"(",:formatUnabbreviatedTuple args,'")"]
+;  t is [arg] =>
+;    t
+;  t is [arg,arg1] =>
+;    [arg,'" ",:formatUnabbreviated arg1]
+;  t is [arg,:args] =>
+;    [arg,'"(",:formatUnabbreviatedTuple args,'")"]
+;  t
+
+(DEFUN |formatUnabbreviated| (|t|)
+  (PROG (|p| |sel| |ISTMP#2| |ISTMP#1| |arg1| |arg| |args|)
+    (RETURN
+      (COND
+        ((ATOM |t|) (CONS |t| NIL))
+        ((NULL |t|) (CONS (MAKESTRING "()") NIL))
+        ((AND (PAIRP |t|)
+              (PROGN
+                (SPADLET |p| (QCAR |t|))
+                (SPADLET |ISTMP#1| (QCDR |t|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN
+                       (SPADLET |sel| (QCAR |ISTMP#1|))
+                       (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                       (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL)
+                            (PROGN
+                              (SPADLET |arg| (QCAR |ISTMP#2|))
+                              'T)))))
+              (|member| |p| '(|:| ":")))
+         (CONS |sel|
+               (CONS (MAKESTRING ": ") (|formatUnabbreviated| |arg|))))
+        ((AND (PAIRP |t|) (EQ (QCAR |t|) '|Union|)
+              (PROGN (SPADLET |args| (QCDR |t|)) 'T))
+         (CONS '|Union|
+               (CONS "("
+                     (APPEND (|formatUnabbreviatedTuple| |args|)
+                             (CONS ")" NIL)))))
+        ((AND (PAIRP |t|) (EQ (QCAR |t|) '|Mapping|)
+              (PROGN (SPADLET |args| (QCDR |t|)) 'T))
+         (|formatUnabbreviatedSig| |args|))
+        ((AND (PAIRP |t|) (EQ (QCAR |t|) '|Record|)
+              (PROGN (SPADLET |args| (QCDR |t|)) 'T))
+         (CONS '|Record|
+               (CONS "("
+                     (APPEND (|formatUnabbreviatedTuple| |args|)
+                             (CONS ")" NIL)))))
+        ((AND (PAIRP |t|) (EQ (QCDR |t|) NIL)
+              (PROGN (SPADLET |arg| (QCAR |t|)) 'T))
+         |t|)
+        ((AND (PAIRP |t|)
+              (PROGN
+                (SPADLET |arg| (QCAR |t|))
+                (SPADLET |ISTMP#1| (QCDR |t|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET |arg1| (QCAR |ISTMP#1|)) 'T))))
+         (CONS |arg|
+               (CONS (MAKESTRING " ") (|formatUnabbreviated| |arg1|))))
+        ((AND (PAIRP |t|)
+              (PROGN
+                (SPADLET |arg| (QCAR |t|))
+                (SPADLET |args| (QCDR |t|))
+                'T))
+         (CONS |arg|
+               (CONS "("
+                     (APPEND (|formatUnabbreviatedTuple| |args|)
+                             (CONS ")" NIL)))))
+        ('T |t|)))))
+
+;sublisNQ(al,e) ==
+;  atom al => e
+;  fn(al,e) where fn(al,e) ==
+;    atom e =>
+;      for x in al repeat
+;        EQ(first x,e) => return (e := rest x)
+;      e
+;    EQ(a := first e,'QUOTE) => e
+;    u := fn(al,a)
+;    v := fn(al,rest e)
+;    EQ(a,u) and EQ(rest e,v) => e
+;    [u,:v]
+
+(DEFUN |sublisNQ,fn| (|al| |e|)
+  (PROG (|a| |u| |v|)
+    (RETURN
+      (SEQ (IF (ATOM |e|)
+               (EXIT (SEQ (DO ((G1412 |al| (CDR G1412)) (|x| NIL))
+                              ((OR (ATOM G1412)
+                                   (PROGN
+                                     (SETQ |x| (CAR G1412))
+                                     NIL))
+                               NIL)
+                            (SEQ (EXIT (IF (EQ (CAR |x|) |e|)
+                                        (EXIT
+                                         (RETURN
+                                           (SPADLET |e| (CDR |x|))))))))
+                          (EXIT |e|))))
+           (IF (EQ (SPADLET |a| (CAR |e|)) 'QUOTE) (EXIT |e|))
+           (SPADLET |u| (|sublisNQ,fn| |al| |a|))
+           (SPADLET |v| (|sublisNQ,fn| |al| (CDR |e|)))
+           (IF (AND (EQ |a| |u|) (EQ (CDR |e|) |v|)) (EXIT |e|))
+           (EXIT (CONS |u| |v|))))))
+
+(DEFUN |sublisNQ| (|al| |e|)
+  (COND ((ATOM |al|) |e|) ('T (|sublisNQ,fn| |al| |e|))))
+
+;str2Outform s ==
+;  parse := ncParseFromString s or systemError '"String for TeX will not parse"
+;  parse2Outform parse
+
+(DEFUN |str2Outform| (|s|)
+  (PROG (|parse|)
+    (RETURN
+      (PROGN
+        (SPADLET |parse|
+                 (OR (|ncParseFromString| |s|)
+                     (|systemError|
+                         (MAKESTRING "String for TeX will not parse"))))
+        (|parse2Outform| |parse|)))))
+
+;parse2Outform x ==
+;  x is [op,:argl] =>
+;    nargl := [parse2Outform y for y in argl]
+;    op = 'construct => ['BRACKET,['ARGLST,:[parse2Outform y for y in argl]]]
+;    op = 'brace and nargl is [[BRACKET,:r]] => ['BRACE,:r]
+;    [op,:nargl]
+;  x
+
+(DEFUN |parse2Outform| (|x|)
+  (PROG (|op| |argl| |nargl| |ISTMP#1| BRACKET |r|)
+    (RETURN
+      (SEQ (COND
+             ((AND (PAIRP |x|)
+                   (PROGN
+                     (SPADLET |op| (QCAR |x|))
+                     (SPADLET |argl| (QCDR |x|))
+                     'T))
+              (SPADLET |nargl|
+                       (PROG (G1413)
+                         (SPADLET G1413 NIL)
+                         (RETURN
+                           (DO ((G1414 |argl| (CDR G1414))
+                                (|y| NIL))
+                               ((OR (ATOM G1414)
+                                    (PROGN
+                                      (SETQ |y| (CAR G1414))
+                                      NIL))
+                                (NREVERSE0 G1413))
+                             (SEQ (EXIT (SETQ G1413
+                                         (CONS (|parse2Outform| |y|)
+                                          G1413))))))))
+              (COND
+                ((BOOT-EQUAL |op| '|construct|)
+                 (CONS 'BRACKET
+                       (CONS (CONS 'ARGLST
+                                   (PROG (G1415)
+                                     (SPADLET G1415 NIL)
+                                     (RETURN
+                                       (DO
+                                        ((G1416 |argl| (CDR G1416))
+                                         (|y| NIL))
+                                        ((OR (ATOM G1416)
+                                          (PROGN
+                                            (SETQ |y| (CAR G1416))
+                                            NIL))
+                                         (NREVERSE0 G1415))
+                                         (SEQ
+                                          (EXIT
+                                           (SETQ G1415
+                                            (CONS (|parse2Outform| |y|)
+                                             G1415))))))))
+                             NIL)))
+                ((AND (BOOT-EQUAL |op| '|brace|) (PAIRP |nargl|)
+                      (EQ (QCDR |nargl|) NIL)
+                      (PROGN
+                        (SPADLET |ISTMP#1| (QCAR |nargl|))
+                        (AND (PAIRP |ISTMP#1|)
+                             (PROGN
+                               (SPADLET BRACKET (QCAR |ISTMP#1|))
+                               (SPADLET |r| (QCDR |ISTMP#1|))
+                               'T))))
+                 (CONS 'BRACE |r|))
+                ('T (CONS |op| |nargl|))))
+             ('T |x|))))))
+
+;str2Tex s ==
+;  outf := str2Outform s
+;  val := coerceInt(mkObj(wrap outf, '(OutputForm)), '(TexFormat))
+;  val := objValUnwrap val
+;  CAR val.1
+
+(DEFUN |str2Tex| (|s|)
+  (PROG (|outf| |val|)
+    (RETURN
+      (PROGN
+        (SPADLET |outf| (|str2Outform| |s|))
+        (SPADLET |val|
+                 (|coerceInt| (|mkObj| (|wrap| |outf|) '(|OutputForm|))
+                     '(|TexFormat|)))
+        (SPADLET |val| (|objValUnwrap| |val|))
+        (CAR (ELT |val| 1))))))
+
+;opOf x ==
+;  atom x => x
+;  first x
+
+(DEFUN |opOf| (|x|) (COND ((ATOM |x|) |x|) ('T (CAR |x|))))
+
+;getProplist(x,E) ==
+;  not atom x => getProplist(first x,E)
+;  u:= search(x,E) => u
+;  --$InteractiveMode => nil
+;  --$InteractiveMode and (u:= search(x,$InteractiveFrame)) => u
+;  (pl:=search(x,$CategoryFrame)) =>
+;    pl
+
+(DEFUN |getProplist| (|x| E)
+  (PROG (|u| |pl|)
+    (DECLARE (SPECIAL |$CategoryFrame|))
+    (RETURN
+      (COND
+        ((NULL (ATOM |x|)) (|getProplist| (CAR |x|) E))
+        ((SPADLET |u| (|search| |x| E)) |u|)
+        ((SPADLET |pl| (|search| |x| |$CategoryFrame|)) |pl|)))))
+
+;--  (pl:=PROPLIST x) => pl
+;-- Above line commented out JHD/BMT 2.Aug.90
+;search(x,e is [curEnv,:tailEnv]) ==
+;  searchCurrentEnv(x,curEnv) or searchTailEnv(x,tailEnv)
+
+(DEFUN |search| (|x| |e|)
+  (PROG (|curEnv| |tailEnv|)
+    (RETURN
+      (PROGN
+        (SPADLET |curEnv| (CAR |e|))
+        (SPADLET |tailEnv| (CDR |e|))
+        (OR (|searchCurrentEnv| |x| |curEnv|)
+            (|searchTailEnv| |x| |tailEnv|))))))
+
+;searchCurrentEnv(x,currentEnv) ==
+;  for contour in currentEnv repeat
+;    if u:= ASSQ(x,contour) then return (signal:= u)
+;  KDR signal
+
+(DEFUN |searchCurrentEnv| (|x| |currentEnv|)
+  (PROG (|u| |signal|)
+    (RETURN
+      (SEQ (PROGN
+             (DO ((G1417 |currentEnv| (CDR G1417)) (|contour| NIL))
+                 ((OR (ATOM G1417)
+                      (PROGN (SETQ |contour| (CAR G1417)) NIL))
+                  NIL)
+               (SEQ (EXIT (COND
+                            ((SPADLET |u| (ASSQ |x| |contour|))
+                             (RETURN (SPADLET |signal| |u|)))
+                            ('T NIL)))))
+             (KDR |signal|))))))
+
+;searchTailEnv(x,e) ==
+;  for env in e repeat
+;    signal:=
+;      for contour in env repeat
+;        if (u:= ASSQ(x,contour)) and ASSQ("FLUID",u) then return (signal:= u)
+;      if signal then return signal
+;  KDR signal
+
+(DEFUN |searchTailEnv| (|x| |e|)
+  (PROG (|u| |signal|)
+    (RETURN
+      (SEQ (PROGN
+             (DO ((G1418 |e| (CDR G1418)) (|env| NIL))
+                 ((OR (ATOM G1418)
+                      (PROGN (SETQ |env| (CAR G1418)) NIL))
+                  NIL)
+               (SEQ (EXIT (SPADLET |signal|
+                                   (PROGN
+                                     (DO
+                                      ((G1419 |env| (CDR G1419))
+                                       (|contour| NIL))
+                                      ((OR (ATOM G1419)
+                                        (PROGN
+                                          (SETQ |contour|
+                                           (CAR G1419))
+                                          NIL))
+                                       NIL)
+                                       (SEQ
+                                        (EXIT
+                                         (COND
+                                           ((AND
+                                             (SPADLET |u|
+                                              (ASSQ |x| |contour|))
+                                             (ASSQ 'FLUID |u|))
+                                            (RETURN
+                                              (SPADLET |signal| |u|)))
+                                           ('T NIL)))))
+                                     (COND
+                                       (|signal| (RETURN |signal|))
+                                       ('T NIL)))))))
+             (KDR |signal|))))))
+
+;augProplist(proplist,prop,val) ==
+;  $InteractiveMode => augProplistInteractive(proplist,prop,val)
+;  while (proplist is [[ =prop,:.],:proplist']) repeat proplist:= proplist'
+;  val=(u:= LASSOC(prop,proplist)) => proplist
+;  null val =>
+;    null u => proplist
+;    DELLASOS(prop,proplist)
+;  [[prop,:val],:proplist]
+
+(DEFUN |augProplist| (|proplist| |prop| |val|)
+  (PROG (|ISTMP#1| |proplist'| |u|)
+    (DECLARE (SPECIAL |$InteractiveMode|))
+    (RETURN
+      (SEQ (COND
+             (|$InteractiveMode|
+                 (|augProplistInteractive| |proplist| |prop| |val|))
+             ('T
+              (DO ()
+                  ((NULL (AND (PAIRP |proplist|)
+                              (PROGN
+                                (SPADLET |ISTMP#1| (QCAR |proplist|))
+                                (AND (PAIRP |ISTMP#1|)
+                                     (EQUAL (QCAR |ISTMP#1|) |prop|)))
+                              (PROGN
+                                (SPADLET |proplist'| (QCDR |proplist|))
+                                'T)))
+                   NIL)
+                (SEQ (EXIT (SPADLET |proplist| |proplist'|))))
+              (COND
+                ((BOOT-EQUAL |val|
+                     (SPADLET |u| (LASSOC |prop| |proplist|)))
+                 |proplist|)
+                ((NULL |val|)
+                 (COND
+                   ((NULL |u|) |proplist|)
+                   ('T (DELLASOS |prop| |proplist|))))
+                ('T (CONS (CONS |prop| |val|) |proplist|)))))))))
+
+;augProplistOf(var,prop,val,e) ==
+;  proplist:= getProplist(var,e)
+;  semchkProplist(var,proplist,prop,val)
+;  augProplist(proplist,prop,val)
+
+(DEFUN |augProplistOf| (|var| |prop| |val| |e|)
+  (PROG (|proplist|)
+    (RETURN
+      (PROGN
+        (SPADLET |proplist| (|getProplist| |var| |e|))
+        (|semchkProplist| |var| |proplist| |prop| |val|)
+        (|augProplist| |proplist| |prop| |val|)))))
+
+;semchkProplist(x,proplist,prop,val) ==
+;  prop="isLiteral" =>
+;    LASSOC("value",proplist) or LASSOC("mode",proplist) => warnLiteral x
+;  MEMQ(prop,'(mode value)) =>
+;    LASSOC("isLiteral",proplist) => warnLiteral x
+
+;;;     ***       |semchkProplist| REDEFINED
+
+(DEFUN |semchkProplist| (|x| |proplist| |prop| |val|)
+  (declare (special |val|))
+  (SEQ (COND
+         ((BOOT-EQUAL |prop| '|isLiteral|)
+          (COND
+            ((OR (LASSOC '|value| |proplist|)
+                 (LASSOC '|mode| |proplist|))
+             (EXIT (|warnLiteral| |x|)))))
+         ((MEMQ |prop| '(|mode| |value|))
+          (COND
+            ((LASSOC '|isLiteral| |proplist|)
+             (EXIT (|warnLiteral| |x|))))))))
+
+;DEFPARAMETER($envHashTable,nil)
+
+(DEFPARAMETER |$envHashTable| NIL) 
+
+;addBinding(var,proplist,e is [[curContour,:tailContour],:tailEnv]) ==
+;  EQ(proplist,getProplist(var,e)) => e
+;  if $envHashTable then
+;   for u in proplist repeat
+;    HPUT($envHashTable,[var, CAR u],true)
+;  $InteractiveMode => addBindingInteractive(var,proplist,e)
+;  if curContour is [[ =var,:.],:.] then curContour:= rest curContour
+;                 --Previous line should save some space
+;  [[[lx,:curContour],:tailContour],:tailEnv] where lx:= [var,:proplist]
+
+;;;     ***       |addBinding| REDEFINED
+
+(DEFUN |addBinding| (|var| |proplist| |e|)
+  (PROG (|tailContour| |tailEnv| |ISTMP#1| |curContour| |lx|)
+    (DECLARE (SPECIAL |$InteractiveMode| |$envHashTable|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |curContour| (CAAR |e|))
+             (SPADLET |tailContour| (CDAR |e|))
+             (SPADLET |tailEnv| (CDR |e|))
+             (COND
+               ((EQ |proplist| (|getProplist| |var| |e|)) |e|)
+               ('T
+                (COND
+                  (|$envHashTable|
+                      (DO ((G1420 |proplist| (CDR G1420))
+                           (|u| NIL))
+                          ((OR (ATOM G1420)
+                               (PROGN (SETQ |u| (CAR G1420)) NIL))
+                           NIL)
+                        (SEQ (EXIT (HPUT |$envHashTable|
+                                    (CONS |var| (CONS (CAR |u|) NIL))
+                                    'T))))))
+                (COND
+                  (|$InteractiveMode|
+                      (|addBindingInteractive| |var| |proplist| |e|))
+                  ('T
+                   (COND
+                     ((AND (PAIRP |curContour|)
+                           (PROGN
+                             (SPADLET |ISTMP#1| (QCAR |curContour|))
+                             (AND (PAIRP |ISTMP#1|)
+                                  (EQUAL (QCAR |ISTMP#1|) |var|))))
+                      (SPADLET |curContour| (CDR |curContour|))))
+                   (SPADLET |lx| (CONS |var| |proplist|))
+                   (CONS (CONS (CONS |lx| |curContour|) |tailContour|)
+                         |tailEnv|))))))))))
+
+;position(x,l) ==
+;  posn(x,l,0) where
+;    posn(x,l,n) ==
+;      null l => -1
+;      x=first l => n
+;      posn(x,rest l,n+1)
+
+(DEFUN |position,posn| (|x| |l| |n|)
+  (SEQ (IF (NULL |l|) (EXIT (SPADDIFFERENCE 1)))
+       (IF (BOOT-EQUAL |x| (CAR |l|)) (EXIT |n|))
+       (EXIT (|position,posn| |x| (CDR |l|) (PLUS |n| 1)))))
+
+(DEFUN |position| (|x| |l|) (|position,posn| |x| |l| 0)) 
+
+;insert(x,y) ==
+;  MEMBER(x,y) => y
+;  [x,:y]
+
+(DEFUN |insert| (|x| |y|)
+  (COND ((|member| |x| |y|) |y|) ('T (CONS |x| |y|))))
+
+;after(u,v) ==
+;  r:= u
+;  for x in u for y in v repeat r:= rest r
+;  r
+
+(DEFUN |after| (|u| |v|)
+  (PROG (|r|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |r| |u|)
+             (DO ((G1421 |u| (CDR G1421)) (|x| NIL)
+                  (G1422 |v| (CDR G1422)) (|y| NIL))
+                 ((OR (ATOM G1421)
+                      (PROGN (SETQ |x| (CAR G1421)) NIL)
+                      (ATOM G1422)
+                      (PROGN (SETQ |y| (CAR G1422)) NIL))
+                  NIL)
+               (SEQ (EXIT (SPADLET |r| (CDR |r|)))))
+             |r|)))))
+
+;$blank := char ('_ )
+
+(SPADLET |$blank| (|char| '| |))
+
+;trimString s ==
+;  leftTrim rightTrim s
+
+(DEFUN |trimString| (|s|) (|leftTrim| (|rightTrim| |s|)))
+
+;leftTrim s ==
+;  k := MAXINDEX s
+;  k < 0 => s
+;  s.0 = $blank =>
+;    for i in 0..k while s.i = $blank repeat (j := i)
+;    SUBSTRING(s,j + 1,nil)
+;  s
+
+(DEFUN |leftTrim| (|s|)
+  (PROG (|k| |j|)
+    (DECLARE (SPECIAL |$blank|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |k| (MAXINDEX |s|))
+             (COND
+               ((MINUSP |k|) |s|)
+               ((BOOT-EQUAL (ELT |s| 0) |$blank|)
+                (DO ((|i| 0 (QSADD1 |i|)))
+                    ((OR (QSGREATERP |i| |k|)
+                         (NULL (BOOT-EQUAL (ELT |s| |i|) |$blank|)))
+                     NIL)
+                  (SEQ (EXIT (SPADLET |j| |i|))))
+                (SUBSTRING |s| (PLUS |j| 1) NIL))
+               ('T |s|)))))))
+
+;rightTrim s ==  -- assumed a non-empty string
+;  k := MAXINDEX s
+;  k < 0 => s
+;  s.k = $blank =>
+;    for i in k..0 by -1 while s.i = $blank repeat (j := i)
+;    SUBSTRING(s,0,j)
+;  s
+
+(DEFUN |rightTrim| (|s|)
+  (PROG (|k| |j|)
+    (DECLARE (SPECIAL |$blank|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |k| (MAXINDEX |s|))
+             (COND
+               ((MINUSP |k|) |s|)
+               ((BOOT-EQUAL (ELT |s| |k|) |$blank|)
+                (DO ((G1423 (SPADDIFFERENCE 1))
+                     (|i| |k| (+ |i| G1423)))
+                    ((OR (IF (MINUSP G1423) (< |i| 0) (> |i| 0))
+                         (NULL (BOOT-EQUAL (ELT |s| |i|) |$blank|)))
+                     NIL)
+                  (SEQ (EXIT (SPADLET |j| |i|))))
+                (SUBSTRING |s| 0 |j|))
+               ('T |s|)))))))
+
+;pp x ==
+;  PRETTYPRINT x
+;  x
+
+(DEFUN |pp| (|x|) (PROGN (PRETTYPRINT |x|) |x|)) 
+
+;pr x ==
+;  F_,PRINT_-ONE x
+;  nil
+
+(DEFUN |pr| (|x|) (PROGN (|F,PRINT-ONE| |x|) NIL)) 
+
+;quickAnd(a,b) ==
+;  a = true => b
+;  b = true => a
+;  a = false or b = false => false
+;  simpBool ['AND,a,b]
+
+(DEFUN |quickAnd| (|a| |b|)
+  (COND
+    ((BOOT-EQUAL |a| 'T) |b|)
+    ((BOOT-EQUAL |b| 'T) |a|)
+    ((OR (NULL |a|) (NULL |b|)) NIL)
+    ('T (|simpBool| (CONS 'AND (CONS |a| (CONS |b| NIL)))))))
+
+;quickOr(a,b) ==
+;  a = true or b = true => true
+;  b = false => a
+;  a = false => b
+;  simpCatPredicate simpBool ['OR,a,b]
+
+(DEFUN |quickOr| (|a| |b|)
+  (COND
+    ((OR (BOOT-EQUAL |a| 'T) (BOOT-EQUAL |b| 'T)) 'T)
+    ((NULL |b|) |a|)
+    ((NULL |a|) |b|)
+    ('T
+     (|simpCatPredicate|
+         (|simpBool| (CONS 'OR (CONS |a| (CONS |b| NIL))))))))
+
+;intern x ==
+;  STRINGP x =>
+;    DIGITP x.0 => string2Integer x
+;    INTERN x
+;  x
+
+(DEFUN |intern| (|x|)
+  (COND
+    ((STRINGP |x|)
+     (COND
+       ((DIGITP (ELT |x| 0)) (|string2Integer| |x|))
+       ('T (INTERN |x|))))
+    ('T |x|)))
+
+;isDomain a ==
+;  PAIRP a and VECP(CAR a) and
+;    MEMBER(CAR(a).0, $domainTypeTokens)
+
+(DEFUN |isDomain| (|a|)
+  (DECLARE (SPECIAL |$domainTypeTokens|))
+  (AND (PAIRP |a|) (VECP (CAR |a|))
+       (|member| (ELT (CAR |a|) 0) |$domainTypeTokens|)))
+
+;$htHash      := MAKE_-HASH_-TABLE()
+
+(SPADLET |$htHash| (MAKE-HASH-TABLE)) 
+
+;$glossHash   := MAKE_-HASH_-TABLE()
+
+(SPADLET |$glossHash| (MAKE-HASH-TABLE)) 
+
+;$lispHash    := MAKE_-HASH_-TABLE()
+
+(SPADLET |$lispHash| (MAKE-HASH-TABLE)) 
+
+;$sysHash     := MAKE_-HASH_-TABLE()
+
+(SPADLET |$sysHash| (MAKE-HASH-TABLE)) 
+
+;$htSystemCommands := '(
+; (boot . development) clear display (fin . development) edit help
+; frame history load quit read set show synonym system
+; trace what )
+
+(SPADLET |$htSystemCommands|
+         '((|boot| . |development|) |clear| |display|
+           (|fin| . |development|) |edit| |help| |frame| |history|
+           |load| |quit| |read| |set| |show| |synonym| |system| |trace|
+           |what|))
+
+;$currentSysList := [opOf x for x in $htSystemCommands] --see ht-root
+
+(SPADLET |$currentSysList|
+  (COLLECT (IN |x| |$htSystemCommands|) (|opOf| |x|))) 
+
+;$outStream   := nil
+
+(SPADLET |$outStream| NIL) 
+
+;$recheckingFlag    := false     --see transformAndRecheckComments
+
+(SPADLET |$recheckingFlag| NIL) 
+
+;$exposeFlag        := false     --if true, messages go to $outStream
+
+(SPADLET |$exposeFlag| NIL) 
+
+;$exposeFlagHeading := false     --see htcheck.boot
+
+(SPADLET |$exposeFlagHeading| NIL) 
+
+;$checkingXmptex? := false       --see htcheck.boot
+
+(SPADLET |$checkingXmptex?| NIL) 
+
+;$exposeDocHeading:= nil         --see htcheck.boot
+
+(SPADLET |$exposeDocHeading| NIL) 
+
+;$charPlus := char '_+
+
+(SPADLET |$charPlus| (|char| '+))
+
+;$charBlank:= (char '_ )
+
+(SPADLET |$charBlank| (|char| '| |))
+
+;$charLbrace:= char '_{
+
+(SPADLET |$charLbrace| (|char| '{))
+
+;$charRbrace:= char '_}
+
+(SPADLET |$charRbrace| (|char| '}))
+
+;$charBack := char '_\
+
+(SPADLET |$charBack| (|char| '|\\|))
+
+;$charDash := char '_-
+
+(SPADLET |$charDash| (|char| '-))
+
+;$charTab            := CODE_-CHAR(9)
+
+(SPADLET |$charTab| (CODE-CHAR 9)) 
+
+;$charNewline        := CODE_-CHAR(10)
+
+(SPADLET |$charNewline| (CODE-CHAR 10)) 
+
+;$charFauxNewline    := CODE_-CHAR(25)
+
+(SPADLET |$charFauxNewline| (CODE-CHAR 25)) 
+
+;$stringNewline      := PNAME CODE_-CHAR(10)
+
+(SPADLET |$stringNewline| (PNAME (CODE-CHAR 10))) 
+
+;$stringFauxNewline  := PNAME CODE_-CHAR(25)
+
+(SPADLET |$stringFauxNewline| (PNAME (CODE-CHAR 25))) 
+
+;$charExclusions := [char 'a, char 'A]
+
+(SPADLET |$charExclusions| (CONS (|char| '|a|) (CONS (|char| 'A) NIL)))
+
+;$charQuote := char '_'
+
+(SPADLET |$charQuote| (|char| '|'|))
+
+;$charSemiColon := char '_;
+
+(SPADLET |$charSemiColon| (|char| '|;|))
+
+;$charComma     := char '_,
+
+(SPADLET |$charComma| (|char| '|,|))
+
+;$charPeriod    := char '_.
+
+(SPADLET |$charPeriod| (|char| (INTERN "." "BOOT"))) 
+
+;$checkPrenAlist := [[char '_(,:char '_)],[char '_{,:char '_}],[char '_[,:char '_]]]
+
+(SPADLET |$checkPrenAlist|
+         (CONS (CONS (|char| '|(|) (|char| '|)|))
+               (CONS (CONS (|char| '{) (|char| '}))
+                     (CONS (CONS (|char| '[) (|char| '])) NIL))))
+
+;$charEscapeList:= [char '_%,char '_#,$charBack]
+
+(SPADLET |$charEscapeList|
+         (CONS (|char| '%) (CONS (|char| '|#|) (CONS |$charBack| NIL))))
+
+;$charIdentifierEndings := [char '__, char '_!, char '_?]
+
+(SPADLET |$charIdentifierEndings|
+         (CONS (|char| '_) (CONS (|char| '!) (CONS (|char| '?) NIL))))
+
+;$charSplitList := [$charComma,$charPeriod,char '_[, char '_],$charLbrace, $charRbrace, char '_(, char '_), char '_$, char '_%]
+
+(SPADLET |$charSplitList|
+         (CONS |$charComma|
+               (CONS |$charPeriod|
+                     (CONS (|char| '[)
+                           (CONS (|char| '])
+                                 (CONS |$charLbrace|
+                                       (CONS |$charRbrace|
+                                        (CONS (|char| '|(|)
+                                         (CONS (|char| '|)|)
+                                          (CONS (|char| '$)
+                                           (CONS (|char| '%) NIL)))))))))))
+
+;$charDelimiters := [$charBlank, char '_(, char '_), $charBack]
+
+(SPADLET |$charDelimiters|
+         (CONS |$charBlank|
+               (CONS (|char| '|(|)
+                     (CONS (|char| '|)|) (CONS |$charBack| NIL)))))
+
+;$HTspadmacros := '("\spadtype" "\spadcommand" "\spadop" "\spadfun" "\spadatt" "\spadsyscom" "\spad" "\s")
+
+(SPADLET |$HTspadmacros|
+         '("\\spadtype" "\\spadcommand" "\\spadop" "\\spadfun"
+           "\\spadatt" "\\spadsyscom" "\\spad" "\\s"))
+
+;$HTmacs := [
+;  ['"\beginmenu",$charRbrace,'"menu",$charLbrace,'"\begin"],
+;   ['"\endmenu",$charRbrace,'"menu",$charLbrace,'"\end"],
+;     ['"\beginitems",$charRbrace,'"items",$charLbrace,'"\begin"],
+;       ['"\enditems",$charRbrace,'"items",$charLbrace,'"\end"],
+;         ['"\beginscroll",$charRbrace,'"scroll",$charLbrace,'"\begin"],
+;           ['"\endscroll",$charRbrace,'"scroll",$charLbrace,'"\end"]]
+
+(SPADLET |$HTmacs|
+         (CONS (CONS (MAKESTRING "\\beginmenu")
+                     (CONS |$charRbrace|
+                           (CONS (MAKESTRING "menu")
+                                 (CONS |$charLbrace|
+                                       (CONS (MAKESTRING "\\begin")
+                                        NIL)))))
+               (CONS (CONS (MAKESTRING "\\endmenu")
+                           (CONS |$charRbrace|
+                                 (CONS (MAKESTRING "menu")
+                                       (CONS |$charLbrace|
+                                        (CONS (MAKESTRING "\\end") NIL)))))
+                     (CONS (CONS (MAKESTRING "\\beginitems")
+                                 (CONS |$charRbrace|
+                                       (CONS (MAKESTRING "items")
+                                        (CONS |$charLbrace|
+                                         (CONS (MAKESTRING "\\begin")
+                                          NIL)))))
+                           (CONS (CONS (MAKESTRING "\\enditems")
+                                       (CONS |$charRbrace|
+                                        (CONS (MAKESTRING "items")
+                                         (CONS |$charLbrace|
+                                          (CONS (MAKESTRING "\\end")
+                                           NIL)))))
+                                 (CONS (CONS
+                                        (MAKESTRING "\\beginscroll")
+                                        (CONS |$charRbrace|
+                                         (CONS (MAKESTRING "scroll")
+                                          (CONS |$charLbrace|
+                                           (CONS (MAKESTRING "\\begin")
+                                            NIL)))))
+                                       (CONS
+                                        (CONS
+                                         (MAKESTRING "\\endscroll")
+                                         (CONS |$charRbrace|
+                                          (CONS (MAKESTRING "scroll")
+                                           (CONS |$charLbrace|
+                                            (CONS (MAKESTRING "\\end")
+                                             NIL)))))
+                                        NIL)))))))
+
+;$HTlinks := '(
+;  "\downlink"
+;  "\menulink"
+;  "\menudownlink"
+;  "\menuwindowlink"
+;  "\menumemolink")
+
+(SPADLET |$HTlinks|
+         '("\\downlink" "\\menulink" "\\menudownlink"
+           "\\menuwindowlink" "\\menumemolink"))
+
+;$HTlisplinks := '(
+;  "\lispdownlink"
+;  "\menulispdownlink"
+;  "\menulispwindowlink"
+;  "\menulispmemolink"
+;  "\lispwindowlink"
+;  "\lispmemolink")
+
+(SPADLET |$HTlisplinks|
+         '("\\lispdownlink" "\\menulispdownlink" "\\menulispwindowlink"
+           "\\menulispmemolink" "\\lispwindowlink" "\\lispmemolink"))
+
+;$beginEndList := '(
+;  "page"
+;  "items"
+;  "menu"
+;  "scroll"
+;  "verbatim"
+;  "detail")
+
+(SPADLET |$beginEndList|
+         '("page" "items" "menu" "scroll" "verbatim" "detail"))
+
+;isDefaultPackageName x == (s := PNAME x).(MAXINDEX s) = char '_&
+
+(DEFUN |isDefaultPackageName| (|x|)
+  (PROG (|s|)
+    (RETURN
+      (BOOT-EQUAL (ELT (SPADLET |s| (PNAME |x|)) (MAXINDEX |s|))
+          (|char| '&)))))
+
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

@@ -1,0 +1,4258 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp i-map.boot}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;SETANDFILEQ($mapTarget,nil)
+
+(SETANDFILEQ |$mapTarget| NIL) 
+
+;SETANDFILEQ($mapReturnTypes,nil)
+
+(SETANDFILEQ |$mapReturnTypes| NIL) 
+
+;SETANDFILEQ($mapName,'noMapName)
+
+(SETANDFILEQ |$mapName| (QUOTE |noMapName|)) 
+
+;SETANDFILEQ($mapThrowCount, 0) -- times a "return" occurs in map
+
+(SETANDFILEQ |$mapThrowCount| 0) 
+
+;SETANDFILEQ($compilingMap, NIL)
+
+(SETANDFILEQ |$compilingMap| NIL) 
+
+;SETANDFILEQ($definingMap, NIL)
+
+(SETANDFILEQ |$definingMap| NIL) 
+
+;--% Generating internal names for functions
+;SETANDFILEQ($specialMapNameSuffix, NIL)
+
+(SETANDFILEQ |$specialMapNameSuffix| NIL) 
+
+;makeInternalMapName(userName,numArgs,numMms,extraPart) ==
+;  name := CONCAT('"*",STRINGIMAGE numArgs,'";",
+;    object2String userName,'";",STRINGIMAGE numMms,'";",
+;      object2String FRAMENAME first $interpreterFrameRing )
+;  if extraPart then name := CONCAT(name,'";",extraPart)
+;  if $specialMapNameSuffix then
+;    name := CONCAT(name,'";",$specialMapNameSuffix)
+;  INTERN name
+
+(DEFUN |makeInternalMapName|
+       (|userName| |numArgs| |numMms| |extraPart|)
+  (PROG (|name|)
+    (DECLARE (SPECIAL |$specialMapNameSuffix| |$interpreterFrameRing|))
+    (RETURN
+      (PROGN
+        (SPADLET |name|
+                 (CONCAT "*" (STRINGIMAGE |numArgs|) ";"
+                         (|object2String| |userName|) ";"
+                         (STRINGIMAGE |numMms|) ";"
+                         (|object2String|
+                             (FRAMENAME (CAR |$interpreterFrameRing|)))))
+        (COND
+          (|extraPart|
+              (SPADLET |name| (CONCAT |name| ";" |extraPart|))))
+        (COND
+          (|$specialMapNameSuffix|
+              (SPADLET |name|
+                       (CONCAT |name| ";" |$specialMapNameSuffix|))))
+        (INTERN |name|)))))
+
+
+;isInternalMapName name ==
+;  -- this only returns true or false as a "best guess"
+;  (not IDENTP(name)) or (name = "*") or (name = "**") => false
+;  sz := SIZE (name' := PNAME name)
+;  (sz < 7) or (char("*") ^= name'.0) => false
+;  null DIGITP name'.1 => false
+;  null STRPOS('"_;",name',1,NIL) => false
+;  -- good enough
+;  true
+
+(DEFUN |isInternalMapName| (|name|)
+  (PROG (|name'| |sz|)
+    (RETURN
+      (COND
+        ((OR (NULL (IDENTP |name|)) (BOOT-EQUAL |name| '*)
+             (BOOT-EQUAL |name| '**))
+         NIL)
+        ('T (SPADLET |sz| (SIZE (SPADLET |name'| (PNAME |name|))))
+         (COND
+           ((OR (> 7 |sz|) (NEQUAL (|char| '*) (ELT |name'| 0))) NIL)
+           ((NULL (DIGITP (ELT |name'| 1))) NIL)
+           ((NULL (STRPOS (MAKESTRING ";") |name'| 1 NIL)) NIL)
+           ('T 'T)))))))
+
+;makeInternalMapMinivectorName(name) ==
+;  STRINGP name =>
+;    INTERN STRCONC(name,'";MV")
+;  INTERN STRCONC(PNAME name,'";MV")
+
+(DEFUN |makeInternalMapMinivectorName| (|name|)
+  (COND
+    ((STRINGP |name|) (INTERN (STRCONC |name| (MAKESTRING ";MV"))))
+    ('T (INTERN (STRCONC (PNAME |name|) (MAKESTRING ";MV"))))))
+
+;mkCacheName(name) == INTERNL(STRINGIMAGE name,'";AL")
+
+(DEFUN |mkCacheName| (|name|)
+  (INTERNL (STRINGIMAGE |name|) (MAKESTRING ";AL")))
+
+;mkAuxiliaryName(name) == INTERNL(STRINGIMAGE name,'";AUX")
+
+(DEFUN |mkAuxiliaryName| (|name|)
+ (INTERNL (STRINGIMAGE |name|) (MAKESTRING ";AUX"))) 
+
+;--% Adding a function definition
+;isMapExpr x == x is ['MAP,:.]
+
+(DEFUN |isMapExpr| (|x|) (AND (PAIRP |x|) (EQ (QCAR |x|) 'MAP)))
+
+;isMap x ==
+;  y := get(x,'value,$InteractiveFrame) =>
+;    objVal y is ['MAP,:.] => x
+
+(DEFUN |isMap| (|x|)
+  (PROG (|y| |ISTMP#1|)
+    (DECLARE (SPECIAL |$InteractiveFrame|))
+    (RETURN
+      (SEQ (COND
+             ((SPADLET |y| (|get| |x| '|value| |$InteractiveFrame|))
+              (EXIT (COND
+                      ((PROGN
+                         (SPADLET |ISTMP#1| (|objVal| |y|))
+                         (AND (PAIRP |ISTMP#1|)
+                              (EQ (QCAR |ISTMP#1|) 'MAP)))
+                       (EXIT |x|))))))))))
+
+;addDefMap(['DEF,lhs,mapsig,.,rhs],pred) ==
+;  -- Create a new map, add to an existing one, or define a variable
+;  --   compute the dependencies for a map
+;  -- next check is for bad forms on the lhs of the ==, such as
+;  -- numbers, constants.
+;  if not PAIRP lhs then
+;    op := lhs
+;    putHist(op,'isInterpreterRule,true,$e)
+;    putHist(op,'isInterpreterFunction,false,$e)
+;    lhs := [lhs]
+;  else
+;    -- this is a function definition. If it has been declared
+;    -- previously, make sure it is Mapping.
+;    op := first lhs
+;    (oldMode := get(op,'mode,$e)) and oldMode isnt ['Mapping,:.] =>
+;      throwKeyedMsg("S2IM0001",[op,oldMode])
+;    putHist(op,'isInterpreterRule,false,$e)
+;    putHist(op,'isInterpreterFunction,true,$e)
+;  (NUMBERP(op) or op in '(true false nil % %%)) =>
+;    throwKeyedMsg("S2IM0002",[lhs])
+;  -- verify a constructor abbreviation is not used on the lhs
+;  op ^= (op' := unabbrev op) => throwKeyedMsg("S2IM0003",[op,op'])
+;  -- get the formal parameters. These should only be atomic symbols
+;  -- that are not numbers.
+;  parameters := [p for p in rest lhs | IDENTP(p)]
+;  -- see if a signature has been given. if anything in mapsig is NIL,
+;  -- then declaration was omitted.
+;  someDecs := nil
+;  allDecs := true
+;  mapmode := ['Mapping]
+;  $env:local := [[NIL]]
+;  $eval:local := true           --generate code-- don't just type analyze
+;  $genValue:local := true       --evaluate all generated code
+;  for d in mapsig repeat
+;    if d then
+;      someDecs := true
+;      d' := evaluateType unabbrev d
+;      isPartialMode d' => throwKeyedMsg("S2IM0004",NIL)
+;--      tree := mkAtree d'
+;--      null (d' := isType tree) => throwKeyedMsg("S2IM0005",[d])
+;      mapmode := [d',:mapmode]
+;    else allDecs := false
+;  if allDecs then
+;    mapmode := nreverse mapmode
+;    putHist(op,'mode,mapmode,$e)
+;    sayKeyedMsg("S2IM0006",[formatOpSignature(op,rest mapmode)])
+;  else if someDecs then throwKeyedMsg("S2IM0007",[op])
+;  -- if map is declared, check that signature arg count is the
+;  -- same as what is given.
+;  if get(op,'mode,$e) is ['Mapping,.,:mapargs] then
+;    EQCAR(rhs,'rules) =>
+;      0 ^= (numargs := # rest lhs) =>
+;        throwKeyedMsg("S2IM0027",[numargs,op])
+;    # rest lhs ^= # mapargs => throwKeyedMsg("S2IM0008",[op])
+;  --get all the user variables in the map definition.  This is a multi
+;  --step process as this should not include recursive calls to the map
+;  --itself, or the formal parameters
+;  userVariables1 := getUserIdentifiersIn rhs
+;  $freeVars: local := NIL
+;  $localVars: local := NIL
+;  for parm in parameters repeat mkLocalVar($mapName,parm)
+;  userVariables2 := setDifference(userVariables1,findLocalVars(op,rhs))
+;  userVariables3 := setDifference(userVariables2, parameters)
+;  userVariables4 := REMDUP setDifference (userVariables3, [op])
+;  --figure out the new dependencies for the new map (what it depends on)
+;  newDependencies := makeNewDependencies (op, userVariables4)
+;  putDependencies (op, newDependencies)
+;  clearDependencies(op,'T)
+;  addMap(lhs,rhs,pred)
+
+(DEFUN |addDefMap| (G166106 |pred|)
+  (PROG (|$env| |$eval| |$genValue| |$freeVars| |$localVars| |mapsig|
+                |rhs| |lhs| |op| |oldMode| |op'| |parameters|
+                |someDecs| |d'| |allDecs| |mapmode| |ISTMP#1| |ISTMP#2|
+                |mapargs| |numargs| |userVariables1| |userVariables2|
+                |userVariables3| |userVariables4| |newDependencies|)
+    (DECLARE (SPECIAL |$env| |$eval| |$genValue| |$freeVars|
+                      |$localVars| |$mapName| |$e|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |lhs| (CADR G166106))
+             (SPADLET |mapsig| (CADDR G166106))
+             (SPADLET |rhs| (CAR (CDDDDR G166106)))
+             (COND
+               ((NULL (PAIRP |lhs|)) (SPADLET |op| |lhs|)
+                (|putHist| |op| '|isInterpreterRule| 'T |$e|)
+                (|putHist| |op| '|isInterpreterFunction| NIL |$e|)
+                (SPADLET |lhs| (CONS |lhs| NIL)))
+               ('T (SPADLET |op| (CAR |lhs|))
+                (COND
+                  ((AND (SPADLET |oldMode| (|get| |op| '|mode| |$e|))
+                        (NULL (AND (PAIRP |oldMode|)
+                                   (EQ (QCAR |oldMode|) '|Mapping|))))
+                   (|throwKeyedMsg| 'S2IM0001
+                       (CONS |op| (CONS |oldMode| NIL))))
+                  ('T (|putHist| |op| '|isInterpreterRule| NIL |$e|)
+                   (|putHist| |op| '|isInterpreterFunction| 'T |$e|)))))
+             (COND
+               ((OR (NUMBERP |op|)
+                    (|member| |op| '(|true| |false| |nil| % %%)))
+                (|throwKeyedMsg| 'S2IM0002 (CONS |lhs| NIL)))
+               ((NEQUAL |op| (SPADLET |op'| (|unabbrev| |op|)))
+                (|throwKeyedMsg| 'S2IM0003
+                    (CONS |op| (CONS |op'| NIL))))
+               ('T
+                (SPADLET |parameters|
+                         (PROG (G166128)
+                           (SPADLET G166128 NIL)
+                           (RETURN
+                             (DO ((G166134 (CDR |lhs|)
+                                      (CDR G166134))
+                                  (|p| NIL))
+                                 ((OR (ATOM G166134)
+                                      (PROGN
+                                        (SETQ |p| (CAR G166134))
+                                        NIL))
+                                  (NREVERSE0 G166128))
+                               (SEQ (EXIT
+                                     (COND
+                                       ((IDENTP |p|)
+                                        (SETQ G166128
+                                         (CONS |p| G166128))))))))))
+                (SPADLET |someDecs| NIL) (SPADLET |allDecs| 'T)
+                (SPADLET |mapmode| (CONS '|Mapping| NIL))
+                (SPADLET |$env| (CONS (CONS NIL NIL) NIL))
+                (SPADLET |$eval| 'T) (SPADLET |$genValue| 'T)
+                (DO ((G166143 |mapsig| (CDR G166143)) (|d| NIL))
+                    ((OR (ATOM G166143)
+                         (PROGN (SETQ |d| (CAR G166143)) NIL))
+                     NIL)
+                  (SEQ (EXIT (COND
+                               (|d| (SPADLET |someDecs| 'T)
+                                    (SPADLET |d'|
+                                     (|evaluateType| (|unabbrev| |d|)))
+                                    (COND
+                                      ((|isPartialMode| |d'|)
+                                       (|throwKeyedMsg| 'S2IM0004 NIL))
+                                      ('T
+                                       (SPADLET |mapmode|
+                                        (CONS |d'| |mapmode|)))))
+                               ('T (SPADLET |allDecs| NIL))))))
+                (COND
+                  (|allDecs| (SPADLET |mapmode| (NREVERSE |mapmode|))
+                      (|putHist| |op| '|mode| |mapmode| |$e|)
+                      (|sayKeyedMsg| 'S2IM0006
+                          (CONS (|formatOpSignature| |op|
+                                    (CDR |mapmode|))
+                                NIL)))
+                  (|someDecs|
+                      (|throwKeyedMsg| 'S2IM0007 (CONS |op| NIL)))
+                  ('T NIL))
+                (COND
+                  ((PROGN
+                     (SPADLET |ISTMP#1| (|get| |op| '|mode| |$e|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (EQ (QCAR |ISTMP#1|) '|Mapping|)
+                          (PROGN
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (PROGN
+                                   (SPADLET |mapargs| (QCDR |ISTMP#2|))
+                                   'T)))))
+                   (SEQ (COND
+                          ((EQCAR |rhs| '|rules|)
+                           (COND
+                             ((NEQUAL 0
+                                      (SPADLET |numargs|
+                                       (|#| (CDR |lhs|))))
+                              (EXIT (|throwKeyedMsg| 'S2IM0027
+                                     (CONS |numargs| (CONS |op| NIL)))))))
+                          ((NEQUAL (|#| (CDR |lhs|)) (|#| |mapargs|))
+                           (|throwKeyedMsg| 'S2IM0008 (CONS |op| NIL)))))))
+                (SPADLET |userVariables1|
+                         (|getUserIdentifiersIn| |rhs|))
+                (SPADLET |$freeVars| NIL) (SPADLET |$localVars| NIL)
+                (DO ((G166152 |parameters| (CDR G166152))
+                     (|parm| NIL))
+                    ((OR (ATOM G166152)
+                         (PROGN (SETQ |parm| (CAR G166152)) NIL))
+                     NIL)
+                  (SEQ (EXIT (|mkLocalVar| |$mapName| |parm|))))
+                (SPADLET |userVariables2|
+                         (SETDIFFERENCE |userVariables1|
+                             (|findLocalVars| |op| |rhs|)))
+                (SPADLET |userVariables3|
+                         (SETDIFFERENCE |userVariables2| |parameters|))
+                (SPADLET |userVariables4|
+                         (REMDUP (SETDIFFERENCE |userVariables3|
+                                     (CONS |op| NIL))))
+                (SPADLET |newDependencies|
+                         (|makeNewDependencies| |op| |userVariables4|))
+                (|putDependencies| |op| |newDependencies|)
+                (|clearDependencies| |op| 'T)
+                (|addMap| |lhs| |rhs| |pred|))))))))
+
+;addMap(lhs,rhs,pred) ==
+;  [op,:argl] := lhs
+;  $sl: local:= nil
+;  formalArgList:= [mkFormalArg(makeArgumentIntoNumber x,s)
+;    for x in argl for s in $FormalMapVariableList]
+;  argList:=
+;    [fn for x in formalArgList] where
+;      fn ==
+;        if x is ["SUCHTHAT",s,p] then (predList:= [p,:predList]; x:= s)
+;        x
+;  mkMapAlias(op,argl)
+;  argPredList:= NREVERSE predList
+;  finalPred :=
+;-- handle g(a,T)==a+T confusion between pred=T and T variable
+;    MKPF((pred and (pred ^= 'T) => [:argPredList,SUBLISNQ($sl,pred)]; argPredList),"and")
+;  body:= SUBLISNQ($sl,rhs)
+;  oldMap :=
+;    (obj := get(op,'value,$InteractiveFrame)) => objVal obj
+;    NIL
+;  newMap := augmentMap(op,argList,finalPred,body,oldMap)
+;  null newMap =>
+;    sayRemoveFunctionOrValue op
+;    putHist(op,'alias,nil,$e)
+;    ""      -- clears value--- see return from addDefMap in tree2Atree1
+;  if get(op,'isInterpreterRule,$e) then type := ['RuleCalled,op]
+;  else type := ['FunctionCalled,op]
+;  recursive :=
+;    depthOfRecursion(op,newMap) = 0 => false
+;    true
+;  putHist(op,'recursive,recursive,$e)
+;  objNew(newMap,type)
+
+(DEFUN |addMap| (|lhs| |rhs| |pred|)
+  (PROG (|$sl| |op| |argl| |formalArgList| |ISTMP#1| |s| |ISTMP#2| |p|
+               |predList| |argList| |argPredList| |finalPred|
+               |body| |obj| |oldMap| |newMap| |type| |recursive|)
+    (DECLARE (SPECIAL |$sl| |$e| |$InteractiveFrame|
+                      |$FormalMapVariableList|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |op| (CAR |lhs|))
+             (SPADLET |argl| (CDR |lhs|))
+             (SPADLET |$sl| NIL)
+             (SPADLET |formalArgList|
+                      (PROG (G166242)
+                        (SPADLET G166242 NIL)
+                        (RETURN
+                          (DO ((G166248 |argl| (CDR G166248))
+                               (|x| NIL)
+                               (G166249 |$FormalMapVariableList|
+                                   (CDR G166249))
+                               (|s| NIL))
+                              ((OR (ATOM G166248)
+                                   (PROGN
+                                     (SETQ |x| (CAR G166248))
+                                     NIL)
+                                   (ATOM G166249)
+                                   (PROGN
+                                     (SETQ |s| (CAR G166249))
+                                     NIL))
+                               (NREVERSE0 G166242))
+                            (SEQ (EXIT (SETQ G166242
+                                        (CONS
+                                         (|mkFormalArg|
+                                          (|makeArgumentIntoNumber|
+                                           |x|)
+                                          |s|)
+                                         G166242))))))))
+             (SPADLET |argList|
+                      (PROG (G166271)
+                        (SPADLET G166271 NIL)
+                        (RETURN
+                          (DO ((G166285 |formalArgList|
+                                   (CDR G166285))
+                               (|x| NIL))
+                              ((OR (ATOM G166285)
+                                   (PROGN
+                                     (SETQ |x| (CAR G166285))
+                                     NIL))
+                               (NREVERSE0 G166271))
+                            (SEQ (EXIT (SETQ G166271
+                                        (CONS
+                                         (PROGN
+                                           (COND
+                                             ((AND (PAIRP |x|)
+                                               (EQ (QCAR |x|)
+                                                'SUCHTHAT)
+                                               (PROGN
+                                                 (SPADLET |ISTMP#1|
+                                                  (QCDR |x|))
+                                                 (AND (PAIRP |ISTMP#1|)
+                                                  (PROGN
+                                                    (SPADLET |s|
+                                                     (QCAR |ISTMP#1|))
+                                                    (SPADLET |ISTMP#2|
+                                                     (QCDR |ISTMP#1|))
+                                                    (AND
+                                                     (PAIRP |ISTMP#2|)
+                                                     (EQ
+                                                      (QCDR |ISTMP#2|)
+                                                      NIL)
+                                                     (PROGN
+                                                       (SPADLET |p|
+                                                        (QCAR
+                                                         |ISTMP#2|))
+                                                       'T))))))
+                                              (SPADLET |predList|
+                                               (CONS |p| |predList|))
+                                              (SPADLET |x| |s|)))
+                                           |x|)
+                                         G166271))))))))
+             (|mkMapAlias| |op| |argl|)
+             (SPADLET |argPredList| (NREVERSE |predList|))
+             (SPADLET |finalPred|
+                      (MKPF (COND
+                              ((AND |pred| (NEQUAL |pred| 'T))
+                               (APPEND |argPredList|
+                                       (CONS (SUBLISNQ |$sl| |pred|)
+                                        NIL)))
+                              ('T |argPredList|))
+                            '|and|))
+             (SPADLET |body| (SUBLISNQ |$sl| |rhs|))
+             (SPADLET |oldMap|
+                      (COND
+                        ((SPADLET |obj|
+                                  (|get| |op| '|value|
+                                         |$InteractiveFrame|))
+                         (|objVal| |obj|))
+                        ('T NIL)))
+             (SPADLET |newMap|
+                      (|augmentMap| |op| |argList| |finalPred| |body|
+                          |oldMap|))
+             (COND
+               ((NULL |newMap|) (|sayRemoveFunctionOrValue| |op|)
+                (|putHist| |op| '|alias| NIL |$e|) (INTERN "" "BOOT"))
+               ('T
+                (COND
+                  ((|get| |op| '|isInterpreterRule| |$e|)
+                   (SPADLET |type|
+                            (CONS '|RuleCalled| (CONS |op| NIL))))
+                  ('T
+                   (SPADLET |type|
+                            (CONS '|FunctionCalled| (CONS |op| NIL)))))
+                (SPADLET |recursive|
+                         (COND
+                           ((EQL (|depthOfRecursion| |op| |newMap|) 0)
+                            NIL)
+                           ('T 'T)))
+                (|putHist| |op| '|recursive| |recursive| |$e|)
+                (|objNew| |newMap| |type|))))))))
+
+;augmentMap(op,args,pred,body,oldMap) ==
+;  pattern:= makePattern(args,pred)
+;  newMap:=deleteMap(op,pattern,oldMap)
+;  body="" =>
+;    if newMap=oldMap then
+;      sayMSG ['"   Cannot find part of",:bright op,'"to delete."]
+;    newMap  --just delete rule if body is 
+;  entry:= [pattern,:body]
+;  resultMap:=
+;    newMap is ["MAP",:tail] => ["MAP",:tail,entry]
+;    ["MAP",entry]
+;  resultMap
+
+(DEFUN |augmentMap| (|op| |args| |pred| |body| |oldMap|)
+  (PROG (|pattern| |newMap| |entry| |tail| |resultMap|)
+    (RETURN
+      (PROGN
+        (SPADLET |pattern| (|makePattern| |args| |pred|))
+        (SPADLET |newMap| (|deleteMap| |op| |pattern| |oldMap|))
+        (COND
+          ((BOOT-EQUAL |body| (INTERN "" "BOOT"))
+           (COND
+             ((BOOT-EQUAL |newMap| |oldMap|)
+              (|sayMSG|
+                  (CONS "   Cannot find part of"
+                        (APPEND (|bright| |op|)
+                                (CONS "to delete." NIL))))))
+           |newMap|)
+          ('T (SPADLET |entry| (CONS |pattern| |body|))
+           (SPADLET |resultMap|
+                    (COND
+                      ((AND (PAIRP |newMap|) (EQ (QCAR |newMap|) 'MAP)
+                            (PROGN
+                              (SPADLET |tail| (QCDR |newMap|))
+                              'T))
+                       (CONS 'MAP (APPEND |tail| (CONS |entry| NIL))))
+                      ('T (CONS 'MAP (CONS |entry| NIL)))))
+           |resultMap|))))))
+
+;deleteMap(op,pattern,map) ==
+;  map is ["MAP",:tail] =>
+;    newMap:= ['MAP,:[x for x in tail | w]] where w ==
+;      x is [=pattern,:replacement] => sayDroppingFunctions(op,[x])
+;      true
+;    null rest newMap => nil
+;    newMap
+;  NIL
+
+(DEFUN |deleteMap| (|op| |pattern| |map|)
+  (PROG (|tail| |replacement| |newMap|)
+    (RETURN
+      (SEQ (COND
+             ((AND (PAIRP |map|) (EQ (QCAR |map|) 'MAP)
+                   (PROGN (SPADLET |tail| (QCDR |map|)) 'T))
+              (SPADLET |newMap|
+                       (CONS 'MAP
+                             (PROG (G166340)
+                               (SPADLET G166340 NIL)
+                               (RETURN
+                                 (DO ((G166346 |tail|
+                                       (CDR G166346))
+                                      (|x| NIL))
+                                     ((OR (ATOM G166346)
+                                       (PROGN
+                                         (SETQ |x| (CAR G166346))
+                                         NIL))
+                                      (NREVERSE0 G166340))
+                                   (SEQ
+                                    (EXIT
+                                     (COND
+                                       ((COND
+                                          ((AND (PAIRP |x|)
+                                            (EQUAL (QCAR |x|)
+                                             |pattern|)
+                                            (PROGN
+                                              (SPADLET |replacement|
+                                               (QCDR |x|))
+                                              'T))
+                                           (|sayDroppingFunctions| |op|
+                                            (CONS |x| NIL)))
+                                          ('T 'T))
+                                        (SETQ G166340
+                                         (CONS |x| G166340)))))))))))
+              (COND ((NULL (CDR |newMap|)) NIL) ('T |newMap|)))
+             ('T NIL))))))
+
+;getUserIdentifiersIn body ==
+;  null body => nil
+;  IDENTP body =>
+;    isSharpVarWithNum body => nil
+;    body="" => nil
+;    [body]
+;  body is ["WRAPPED",:.] => nil
+;  (body is ["COLLECT",:itl,body1]) or (body is ['REPEAT,:itl,body1]) =>
+;    userIds :=
+;      S_+(getUserIdentifiersInIterators itl,getUserIdentifiersIn body1)
+;    S_-(userIds,getIteratorIds itl)
+;  body is [op,:l] =>
+;    argIdList:= "append"/[getUserIdentifiersIn y for y in l]
+;    bodyIdList :=
+;      not (GET(op,'Nud) or GET(op,'Led) or GET(op,'up))=>
+;        NCONC(getUserIdentifiersIn op, argIdList)
+;      argIdList
+;    REMDUP bodyIdList
+
+(DEFUN |getUserIdentifiersIn| (|body|)
+  (PROG (|ISTMP#1| |ISTMP#2| |body1| |itl| |userIds| |op| |l|
+            |argIdList| |bodyIdList|)
+    (RETURN
+      (SEQ (COND
+             ((NULL |body|) NIL)
+             ((IDENTP |body|)
+              (COND
+                ((|isSharpVarWithNum| |body|) NIL)
+                ((BOOT-EQUAL |body| (INTERN "" "BOOT")) NIL)
+                ('T (CONS |body| NIL))))
+             ((AND (PAIRP |body|) (EQ (QCAR |body|) 'WRAPPED)) NIL)
+             ((OR (AND (PAIRP |body|) (EQ (QCAR |body|) 'COLLECT)
+                       (PROGN
+                         (SPADLET |ISTMP#1| (QCDR |body|))
+                         (AND (PAIRP |ISTMP#1|)
+                              (PROGN
+                                (SPADLET |ISTMP#2| (REVERSE |ISTMP#1|))
+                                'T)
+                              (PAIRP |ISTMP#2|)
+                              (PROGN
+                                (SPADLET |body1| (QCAR |ISTMP#2|))
+                                (SPADLET |itl| (QCDR |ISTMP#2|))
+                                'T)
+                              (PROGN
+                                (SPADLET |itl| (NREVERSE |itl|))
+                                'T))))
+                  (AND (PAIRP |body|) (EQ (QCAR |body|) 'REPEAT)
+                       (PROGN
+                         (SPADLET |ISTMP#1| (QCDR |body|))
+                         (AND (PAIRP |ISTMP#1|)
+                              (PROGN
+                                (SPADLET |ISTMP#2| (REVERSE |ISTMP#1|))
+                                'T)
+                              (PAIRP |ISTMP#2|)
+                              (PROGN
+                                (SPADLET |body1| (QCAR |ISTMP#2|))
+                                (SPADLET |itl| (QCDR |ISTMP#2|))
+                                'T)
+                              (PROGN
+                                (SPADLET |itl| (NREVERSE |itl|))
+                                'T)))))
+              (SPADLET |userIds|
+                       (S+ (|getUserIdentifiersInIterators| |itl|)
+                           (|getUserIdentifiersIn| |body1|)))
+              (S- |userIds| (|getIteratorIds| |itl|)))
+             ((AND (PAIRP |body|)
+                   (PROGN
+                     (SPADLET |op| (QCAR |body|))
+                     (SPADLET |l| (QCDR |body|))
+                     'T))
+              (PROGN
+                (SPADLET |argIdList|
+                         (PROG (G166391)
+                           (SPADLET G166391 NIL)
+                           (RETURN
+                             (DO ((G166396 |l| (CDR G166396))
+                                  (|y| NIL))
+                                 ((OR (ATOM G166396)
+                                      (PROGN
+                                        (SETQ |y| (CAR G166396))
+                                        NIL))
+                                  G166391)
+                               (SEQ (EXIT
+                                     (SETQ G166391
+                                      (APPEND G166391
+                                       (|getUserIdentifiersIn| |y|)))))))))
+                (SPADLET |bodyIdList|
+                         (COND
+                           ((NULL (OR (GETL |op| '|Nud|)
+                                      (GETL |op| '|Led|)
+                                      (GETL |op| '|up|)))
+                            (NCONC (|getUserIdentifiersIn| |op|)
+                                   |argIdList|))
+                           ('T |argIdList|)))
+                (REMDUP |bodyIdList|))))))))
+
+;getUserIdentifiersInIterators itl ==
+;  for x in itl repeat
+;    x is ["STEP",i,:l] =>
+;      varList:= [:"append"/[getUserIdentifiersIn y for y in l],:varList]
+;    x is ["IN",.,y]   => varList:= [:getUserIdentifiersIn y,:varList]
+;    x is ["ON",.,y]   => varList:= [:getUserIdentifiersIn y,:varList]
+;    x is [op,a] and op in '(_| WHILE UNTIL) =>
+;      varList:= [:getUserIdentifiersIn a,:varList]
+;    keyedSystemError("S2GE0016",['"getUserIdentifiersInIterators",
+;      '"unknown iterator construct"])
+;  REMDUP varList
+
+(DEFUN |getUserIdentifiersInIterators| (|itl|)
+  (PROG (|i| |l| |ISTMP#2| |y| |op| |ISTMP#1| |a| |varList|)
+    (RETURN
+      (SEQ (PROGN
+             (DO ((G166485 |itl| (CDR G166485)) (|x| NIL))
+                 ((OR (ATOM G166485)
+                      (PROGN (SETQ |x| (CAR G166485)) NIL))
+                  NIL)
+               (SEQ (EXIT (COND
+                            ((AND (PAIRP |x|) (EQ (QCAR |x|) 'STEP)
+                                  (PROGN
+                                    (SPADLET |ISTMP#1| (QCDR |x|))
+                                    (AND (PAIRP |ISTMP#1|)
+                                     (PROGN
+                                       (SPADLET |i| (QCAR |ISTMP#1|))
+                                       (SPADLET |l| (QCDR |ISTMP#1|))
+                                       'T))))
+                             (SPADLET |varList|
+                                      (APPEND
+                                       (PROG (G166491)
+                                         (SPADLET G166491 NIL)
+                                         (RETURN
+                                           (DO
+                                            ((G166496 |l|
+                                              (CDR G166496))
+                                             (|y| NIL))
+                                            ((OR (ATOM G166496)
+                                              (PROGN
+                                                (SETQ |y|
+                                                 (CAR G166496))
+                                                NIL))
+                                             G166491)
+                                             (SEQ
+                                              (EXIT
+                                               (SETQ G166491
+                                                (APPEND G166491
+                                                 (|getUserIdentifiersIn|
+                                                  |y|))))))))
+                                       |varList|)))
+                            ((AND (PAIRP |x|) (EQ (QCAR |x|) 'IN)
+                                  (PROGN
+                                    (SPADLET |ISTMP#1| (QCDR |x|))
+                                    (AND (PAIRP |ISTMP#1|)
+                                     (PROGN
+                                       (SPADLET |ISTMP#2|
+                                        (QCDR |ISTMP#1|))
+                                       (AND (PAIRP |ISTMP#2|)
+                                        (EQ (QCDR |ISTMP#2|) NIL)
+                                        (PROGN
+                                          (SPADLET |y|
+                                           (QCAR |ISTMP#2|))
+                                          'T))))))
+                             (SPADLET |varList|
+                                      (APPEND
+                                       (|getUserIdentifiersIn| |y|)
+                                       |varList|)))
+                            ((AND (PAIRP |x|) (EQ (QCAR |x|) 'ON)
+                                  (PROGN
+                                    (SPADLET |ISTMP#1| (QCDR |x|))
+                                    (AND (PAIRP |ISTMP#1|)
+                                     (PROGN
+                                       (SPADLET |ISTMP#2|
+                                        (QCDR |ISTMP#1|))
+                                       (AND (PAIRP |ISTMP#2|)
+                                        (EQ (QCDR |ISTMP#2|) NIL)
+                                        (PROGN
+                                          (SPADLET |y|
+                                           (QCAR |ISTMP#2|))
+                                          'T))))))
+                             (SPADLET |varList|
+                                      (APPEND
+                                       (|getUserIdentifiersIn| |y|)
+                                       |varList|)))
+                            ((AND (PAIRP |x|)
+                                  (PROGN
+                                    (SPADLET |op| (QCAR |x|))
+                                    (SPADLET |ISTMP#1| (QCDR |x|))
+                                    (AND (PAIRP |ISTMP#1|)
+                                     (EQ (QCDR |ISTMP#1|) NIL)
+                                     (PROGN
+                                       (SPADLET |a| (QCAR |ISTMP#1|))
+                                       'T)))
+                                  (|member| |op| '(|\|| WHILE UNTIL)))
+                             (SPADLET |varList|
+                                      (APPEND
+                                       (|getUserIdentifiersIn| |a|)
+                                       |varList|)))
+                            ('T
+                             (|keyedSystemError| 'S2GE0016
+                                 (CONS "getUserIdentifiersInIterators"
+                                       (CONS
+                                        "unknown iterator construct"
+                                        NIL))))))))
+             (REMDUP |varList|))))))
+
+;getIteratorIds itl ==
+;  for x in itl repeat
+;    x is ["STEP",i,:.] => varList:= [i,:varList]
+;    x is ["IN",y,:.]   => varList:= [y,:varList]
+;    x is ["ON",y,:.]   => varList:= [y,:varList]
+;    nil
+;  varList
+
+(DEFUN |getIteratorIds| (|itl|)
+  (PROG (|i| |ISTMP#1| |y| |varList|)
+    (RETURN
+      (SEQ (PROGN
+             (DO ((G166551 |itl| (CDR G166551)) (|x| NIL))
+                 ((OR (ATOM G166551)
+                      (PROGN (SETQ |x| (CAR G166551)) NIL))
+                  NIL)
+               (SEQ (EXIT (COND
+                            ((AND (PAIRP |x|) (EQ (QCAR |x|) 'STEP)
+                                  (PROGN
+                                    (SPADLET |ISTMP#1| (QCDR |x|))
+                                    (AND (PAIRP |ISTMP#1|)
+                                     (PROGN
+                                       (SPADLET |i| (QCAR |ISTMP#1|))
+                                       'T))))
+                             (SPADLET |varList| (CONS |i| |varList|)))
+                            ((AND (PAIRP |x|) (EQ (QCAR |x|) 'IN)
+                                  (PROGN
+                                    (SPADLET |ISTMP#1| (QCDR |x|))
+                                    (AND (PAIRP |ISTMP#1|)
+                                     (PROGN
+                                       (SPADLET |y| (QCAR |ISTMP#1|))
+                                       'T))))
+                             (SPADLET |varList| (CONS |y| |varList|)))
+                            ((AND (PAIRP |x|) (EQ (QCAR |x|) 'ON)
+                                  (PROGN
+                                    (SPADLET |ISTMP#1| (QCDR |x|))
+                                    (AND (PAIRP |ISTMP#1|)
+                                     (PROGN
+                                       (SPADLET |y| (QCAR |ISTMP#1|))
+                                       'T))))
+                             (SPADLET |varList| (CONS |y| |varList|)))
+                            ('T NIL)))))
+             |varList|)))))
+
+;makeArgumentIntoNumber x ==
+;  x=$Zero => 0
+;  x=$One => 1
+;  atom x => x
+;  x is ["-",n] and NUMBERP n => -n
+;  [removeZeroOne first x,:removeZeroOne rest x]
+
+(DEFUN |makeArgumentIntoNumber| (|x|)
+  (PROG (|ISTMP#1| |n|)
+    (DECLARE (SPECIAL |$One| |$Zero|))
+    (RETURN
+      (COND
+        ((BOOT-EQUAL |x| |$Zero|) 0)
+        ((BOOT-EQUAL |x| |$One|) 1)
+        ((ATOM |x|) |x|)
+        ((AND (PAIRP |x|) (EQ (QCAR |x|) '-)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |x|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET |n| (QCAR |ISTMP#1|)) 'T)))
+              (NUMBERP |n|))
+         (SPADDIFFERENCE |n|))
+        ('T
+         (CONS (|removeZeroOne| (CAR |x|)) (|removeZeroOne| (CDR |x|))))))))
+
+;mkMapAlias(op,argl) ==
+;  u:= mkAliasList argl
+;  newAlias :=
+;    alias:= get(op,"alias",$e) => [(y => y; x) for x in alias for y in u]
+;    u
+;  $e:= putHist(op,"alias",newAlias,$e)
+
+(DEFUN |mkMapAlias| (|op| |argl|)
+  (PROG (|u| |alias| |newAlias|)
+    (DECLARE (SPECIAL |$e|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |u| (|mkAliasList| |argl|))
+             (SPADLET |newAlias|
+                      (COND
+                        ((SPADLET |alias| (|get| |op| '|alias| |$e|))
+                         (PROG (G166587)
+                           (SPADLET G166587 NIL)
+                           (RETURN
+                             (DO ((G166593 |alias| (CDR G166593))
+                                  (|x| NIL)
+                                  (G166594 |u| (CDR G166594))
+                                  (|y| NIL))
+                                 ((OR (ATOM G166593)
+                                      (PROGN
+                                        (SETQ |x| (CAR G166593))
+                                        NIL)
+                                      (ATOM G166594)
+                                      (PROGN
+                                        (SETQ |y| (CAR G166594))
+                                        NIL))
+                                  (NREVERSE0 G166587))
+                               (SEQ (EXIT
+                                     (SETQ G166587
+                                      (CONS (COND (|y| |y|) ('T |x|))
+                                       G166587))))))))
+                        ('T |u|)))
+             (SPADLET |$e| (|putHist| |op| '|alias| |newAlias| |$e|)))))))
+
+;mkAliasList l == fn(l,nil) where fn(l,acc) ==
+;  null l => NREVERSE acc
+;  not IDENTP first l or first l in acc => fn(rest l,[nil,:acc])
+;  fn(rest l,[first l,:acc])
+
+(DEFUN |mkAliasList,fn| (|l| |acc|)
+  (SEQ (IF (NULL |l|) (EXIT (NREVERSE |acc|)))
+       (IF (OR (NULL (IDENTP (CAR |l|))) (|member| (CAR |l|) |acc|))
+           (EXIT (|mkAliasList,fn| (CDR |l|) (CONS NIL |acc|))))
+       (EXIT (|mkAliasList,fn| (CDR |l|) (CONS (CAR |l|) |acc|)))))
+
+
+(DEFUN |mkAliasList| (|l|) (|mkAliasList,fn| |l| NIL)) 
+
+;args2Tuple args ==
+;  args is [first,:rest] =>
+;    null rest => first
+;    ["Tuple",:args]
+;  nil
+
+(DEFUN |args2Tuple| (|args|)
+  (PROG (CAR CDR)
+    (RETURN
+      (COND
+        ((AND (PAIRP |args|)
+              (PROGN
+                (SPADLET CAR (QCAR |args|))
+                (SPADLET CDR (QCDR |args|))
+                'T))
+         (COND ((NULL CDR) CAR) ('T (CONS '|Tuple| |args|))))
+        ('T NIL)))))
+
+;makePattern(args,pred) ==
+;  nargs:= #args
+;  nargs = 1 =>
+;    pred is ["=","#1",n] => n
+;    addPatternPred("#1",pred)
+;  u:= canMakeTuple(nargs,pred) => u
+;  addPatternPred(["Tuple",:TAKE(nargs,$FormalMapVariableList)],pred)
+
+(DEFUN |makePattern| (|args| |pred|)
+  (PROG (|nargs| |ISTMP#1| |ISTMP#2| |n| |u|)
+    (DECLARE (SPECIAL |$FormalMapVariableList|))
+    (RETURN
+      (PROGN
+        (SPADLET |nargs| (|#| |args|))
+        (COND
+          ((EQL |nargs| 1)
+           (COND
+             ((AND (PAIRP |pred|) (EQ (QCAR |pred|) '=)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |pred|))
+                     (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) '|#1|)
+                          (PROGN
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |n| (QCAR |ISTMP#2|))
+                                   'T))))))
+              |n|)
+             ('T (|addPatternPred| '|#1| |pred|))))
+          ((SPADLET |u| (|canMakeTuple| |nargs| |pred|)) |u|)
+          ('T
+           (|addPatternPred|
+               (CONS '|Tuple| (TAKE |nargs| |$FormalMapVariableList|))
+               |pred|)))))))
+
+;addPatternPred(arg,pred) ==
+;  pred=true => arg
+;  ["|",arg,pred]
+
+(DEFUN |addPatternPred| (|arg| |pred|)
+  (COND
+    ((BOOT-EQUAL |pred| 'T) |arg|)
+    ('T (CONS '|\|| (CONS |arg| (CONS |pred| NIL))))))
+
+;canMakeTuple(nargs,pred) ==
+;  pred is ["and",:l] and nargs=#l and
+;    (u:= [(x is ["=",=y,a] => a; return nil)
+;      for y in $FormalMapVariableList for x in orderList l]) =>
+;        ["Tuple",:u]
+
+(DEFUN |canMakeTuple| (|nargs| |pred|)
+  (PROG (|l| |ISTMP#1| |ISTMP#2| |a| |u|)
+    (DECLARE (SPECIAL |$FormalMapVariableList|))
+    (RETURN
+      (SEQ (COND
+             ((AND (PAIRP |pred|) (EQ (QCAR |pred|) '|and|)
+                   (PROGN (SPADLET |l| (QCDR |pred|)) 'T)
+                   (BOOT-EQUAL |nargs| (|#| |l|))
+                   (SPADLET |u|
+                            (PROG (G166675)
+                              (SPADLET G166675 NIL)
+                              (RETURN
+                                (DO ((G166687
+                                      |$FormalMapVariableList|
+                                      (CDR G166687))
+                                     (|y| NIL)
+                                     (G166688 (|orderList| |l|)
+                                      (CDR G166688))
+                                     (|x| NIL))
+                                    ((OR (ATOM G166687)
+                                      (PROGN
+                                        (SETQ |y| (CAR G166687))
+                                        NIL)
+                                      (ATOM G166688)
+                                      (PROGN
+                                        (SETQ |x| (CAR G166688))
+                                        NIL))
+                                     (NREVERSE0 G166675))
+                                  (SEQ (EXIT
+                                        (SETQ G166675
+                                         (CONS
+                                          (COND
+                                            ((AND (PAIRP |x|)
+                                              (EQ (QCAR |x|) '=)
+                                              (PROGN
+                                                (SPADLET |ISTMP#1|
+                                                 (QCDR |x|))
+                                                (AND (PAIRP |ISTMP#1|)
+                                                 (EQUAL
+                                                  (QCAR |ISTMP#1|) |y|)
+                                                 (PROGN
+                                                   (SPADLET |ISTMP#2|
+                                                    (QCDR |ISTMP#1|))
+                                                   (AND
+                                                    (PAIRP |ISTMP#2|)
+                                                    (EQ
+                                                     (QCDR |ISTMP#2|)
+                                                     NIL)
+                                                    (PROGN
+                                                      (SPADLET |a|
+                                                       (QCAR |ISTMP#2|))
+                                                      'T))))))
+                                             |a|)
+                                            ('T (RETURN NIL)))
+                                          G166675)))))))))
+              (EXIT (CONS '|Tuple| |u|))))))))
+
+;sayRemoveFunctionOrValue x ==
+;  (obj := getValue x) and (md := objMode obj) =>
+;    md = $EmptyMode =>
+;      sayMessage ['"  ",:bright x,'"now has no function parts."]
+;    sayMessage ['"   value for",:bright x,'"has been removed."]
+;  sayMessage ['"  ",:bright x,'"has no value so this does nothing."]
+
+(DEFUN |sayRemoveFunctionOrValue| (|x|)
+  (PROG (|obj| |md|)
+    (DECLARE (SPECIAL |$EmptyMode|))
+    (RETURN
+      (COND
+        ((AND (SPADLET |obj| (|getValue| |x|))
+              (SPADLET |md| (|objMode| |obj|)))
+         (COND
+           ((BOOT-EQUAL |md| |$EmptyMode|)
+            (|sayMessage|
+                (CONS "  "
+                      (APPEND (|bright| |x|)
+                              (CONS "now has no function parts." NIL)))))
+           ('T
+            (|sayMessage|
+                (CONS "   value for"
+                      (APPEND (|bright| |x|)
+                              (CONS "has been removed." NIL)))))))
+        ('T
+         (|sayMessage|
+             (CONS "  "
+                   (APPEND (|bright| |x|)
+                           (CONS "has no value so this does nothing."
+                                 NIL)))))))))
+
+;sayDroppingFunctions(op,l) ==
+;  sayKeyedMsg("S2IM0017",[#l,op])
+;  if $displayDroppedMap then
+;    for [pattern,:replacement] in l repeat
+;      displaySingleRule(op,pattern,replacement)
+;  nil
+
+(DEFUN |sayDroppingFunctions| (|op| |l|)
+  (PROG (|pattern| |replacement|)
+    (DECLARE (SPECIAL |$displayDroppedMap|))
+    (RETURN
+      (SEQ (PROGN
+             (|sayKeyedMsg| 'S2IM0017 (CONS (|#| |l|) (CONS |op| NIL)))
+             (COND
+               (|$displayDroppedMap|
+                   (DO ((G166722 |l| (CDR G166722))
+                        (G166713 NIL))
+                       ((OR (ATOM G166722)
+                            (PROGN
+                              (SETQ G166713 (CAR G166722))
+                              NIL)
+                            (PROGN
+                              (PROGN
+                                (SPADLET |pattern| (CAR G166713))
+                                (SPADLET |replacement| (CDR G166713))
+                                G166713)
+                              NIL))
+                        NIL)
+                     (SEQ (EXIT (|displaySingleRule| |op| |pattern|
+                                    |replacement|))))))
+             NIL)))))
+
+;makeRuleForm(op,pattern)==
+;  pattern is ["Tuple",:l] => [op,:l]
+;  [op,:pattern]
+
+(DEFUN |makeRuleForm| (|op| |pattern|)
+  (PROG (|l|)
+    (RETURN
+      (COND
+        ((AND (PAIRP |pattern|) (EQ (QCAR |pattern|) '|Tuple|)
+              (PROGN (SPADLET |l| (QCDR |pattern|)) 'T))
+         (CONS |op| |l|))
+        ('T (CONS |op| |pattern|))))))
+
+;mkFormalArg(x,s) ==
+;  isConstantArgument x => ["SUCHTHAT",s,["=",s,x]]
+;  isPatternArgument x => ["SUCHTHAT",s,["is",s,x]]
+;  IDENTP x =>
+;    y:= LASSOC(x,$sl) => ["SUCHTHAT",s,["=",s,y]]
+;    $sl:= [[x,:s],:$sl]
+;    s
+;  ['SUCHTHAT,s,["=",s,x]]
+
+(DEFUN |mkFormalArg| (|x| |s|)
+  (PROG (|y|)
+    (DECLARE (SPECIAL |$sl|))
+    (RETURN
+      (COND
+        ((|isConstantArgument| |x|)
+         (CONS 'SUCHTHAT
+               (CONS |s|
+                     (CONS (CONS '= (CONS |s| (CONS |x| NIL))) NIL))))
+        ((|isPatternArgument| |x|)
+         (CONS 'SUCHTHAT
+               (CONS |s|
+                     (CONS (CONS '|is| (CONS |s| (CONS |x| NIL))) NIL))))
+        ((IDENTP |x|)
+         (COND
+           ((SPADLET |y| (LASSOC |x| |$sl|))
+            (CONS 'SUCHTHAT
+                  (CONS |s|
+                        (CONS (CONS '= (CONS |s| (CONS |y| NIL))) NIL))))
+           ('T (SPADLET |$sl| (CONS (CONS |x| |s|) |$sl|)) |s|)))
+        ('T
+         (CONS 'SUCHTHAT
+               (CONS |s|
+                     (CONS (CONS '= (CONS |s| (CONS |x| NIL))) NIL))))))))
+
+;isConstantArgument x ==
+;  NUMBERP x => x
+;  x is ["QUOTE",.] => x
+
+(DEFUN |isConstantArgument| (|x|)
+  (PROG (|ISTMP#1|)
+    (RETURN
+      (COND
+        ((NUMBERP |x|) |x|)
+        ((AND (PAIRP |x|) (EQ (QCAR |x|) 'QUOTE)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |x|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL))))
+         |x|)))))
+
+;isPatternArgument x == x is ["construct",:.]
+
+(DEFUN |isPatternArgument| (|x|)
+  (AND (PAIRP |x|) (EQ (QCAR |x|) '|construct|)))
+
+;--% Map dependencies
+;makeNewDependencies (op, userVariables) ==
+;  null userVariables => nil
+;  --add the new dependencies
+;  [[(first userVariables),op],
+;    :makeNewDependencies (op, rest userVariables)]
+
+(DEFUN |makeNewDependencies| (|op| |userVariables|)
+  (COND
+    ((NULL |userVariables|) NIL)
+    ('T
+     (CONS (CONS (CAR |userVariables|) (CONS |op| NIL))
+           (|makeNewDependencies| |op| (CDR |userVariables|))))))
+
+;putDependencies (op, dependencies) ==
+;  oldDependencies := getFlag "$dependencies"
+;  --remove the obsolete dependencies:  all those that applied to the
+;  --old definition, but may not apply here.  If they do, they'll be
+;  --in the list of new dependencies anyway
+;  oldDependencies := removeObsoleteDependencies (op, oldDependencies) where
+;    removeObsoleteDependencies (op, oldDep) ==
+;      null oldDep => nil
+;      op = rest first oldDep =>
+;        removeObsoleteDependencies (op, rest oldDep)
+;      [first oldDep,:removeObsoleteDependencies (op, rest oldDep)]
+;  --Create the list of dependencies to output.  This will be all the
+;  --old dependencies that are still applicable, and all the new ones
+;  --that have just been generated.  Remember that the list of
+;  --dependencies does not just include those for the map just being
+;  --defined, but includes those for all maps and variables that exist
+;  newDependencies := UNION (dependencies, oldDependencies)
+;  putFlag ("$dependencies", newDependencies)
+
+(DEFUN |putDependencies,removeObsoleteDependencies| (|op| |oldDep|)
+  (SEQ (IF (NULL |oldDep|) (EXIT NIL))
+       (IF (BOOT-EQUAL |op| (CDR (CAR |oldDep|)))
+           (EXIT (|putDependencies,removeObsoleteDependencies| |op|
+                     (CDR |oldDep|))))
+       (EXIT (CONS (CAR |oldDep|)
+                   (|putDependencies,removeObsoleteDependencies| |op|
+                       (CDR |oldDep|))))))
+
+(DEFUN |putDependencies| (|op| |dependencies|)
+  (PROG (|oldDependencies| |newDependencies|)
+    (RETURN
+      (PROGN
+        (SPADLET |oldDependencies| (|getFlag| '|$dependencies|))
+        (SPADLET |oldDependencies|
+                 (|putDependencies,removeObsoleteDependencies| |op|
+                     |oldDependencies|))
+        (SPADLET |newDependencies|
+                 (|union| |dependencies| |oldDependencies|))
+        (|putFlag| '|$dependencies| |newDependencies|)))))
+
+;clearDependencies(x,clearLocalModemapsIfTrue) ==
+;  $dependencies: local:= COPY getFlag "$dependencies"
+;  clearDep1(x,nil,nil,$dependencies)
+
+(DEFUN |clearDependencies| (|x| |clearLocalModemapsIfTrue|)
+  (declare (ignore  |clearLocalModemapsIfTrue|))
+  (PROG (|$dependencies|)
+    (DECLARE (SPECIAL |$dependencies|))
+    (RETURN
+      (PROGN
+        (SPADLET |$dependencies| (COPY (|getFlag| '|$dependencies|)))
+        (|clearDep1| |x| NIL NIL |$dependencies|)))))
+
+;clearDep1(x,toDoList,doneList,depList) ==
+;  x in doneList => nil
+;  clearCache x
+;  newDone:= [x,:doneList]
+;  until null a repeat
+;    a:= ASSQ(x,depList)
+;    a =>
+;      depList:= DELETE(a,depList)
+;      toDoList:= setUnion(toDoList,
+;        setDifference(CDR a,doneList))
+;  toDoList is [a,:res] => clearDep1(a,res,newDone,depList)
+;  'done
+
+(DEFUN |clearDep1| (|x| |toDoList| |doneList| |depList|)
+  (PROG (|newDone| |a| |res|)
+    (RETURN
+      (SEQ (COND
+             ((|member| |x| |doneList|) NIL)
+             ('T (|clearCache| |x|)
+              (SPADLET |newDone| (CONS |x| |doneList|))
+              (DO ((G166792 NIL (NULL |a|))) (G166792 NIL)
+                (SEQ (EXIT (PROGN
+                             (SPADLET |a| (ASSQ |x| |depList|))
+                             (COND
+                               (|a| (PROGN
+                                      (SPADLET |depList|
+                                       (|delete| |a| |depList|))
+                                      (SPADLET |toDoList|
+                                       (|union| |toDoList|
+                                        (SETDIFFERENCE (CDR |a|)
+                                         |doneList|))))))))))
+              (COND
+                ((AND (PAIRP |toDoList|)
+                      (PROGN
+                        (SPADLET |a| (QCAR |toDoList|))
+                        (SPADLET |res| (QCDR |toDoList|))
+                        'T))
+                 (|clearDep1| |a| |res| |newDone| |depList|))
+                ('T '|done|))))))))
+
+;--% Formatting and displaying maps
+;displayRule(op,rule) ==
+;  null rule => nil
+;  mathprint ["CONCAT","Definition:   ", rule]
+;  nil
+
+(DEFUN |displayRule| (|op| |rule|)
+  (declare (ignore |op|))
+  (COND
+    ((NULL |rule|) NIL)
+    ('T
+     (|mathprint|
+         (CONS 'CONCAT (CONS '|Definition:   | (CONS |rule| NIL))))
+     NIL)))
+
+;outputFormat(x,m) ==
+;  -- this is largely junk and is being phased out
+;  IDENTP m => x
+;  m=$OutputForm or m=$EmptyMode => x
+;  categoryForm?(m) => x
+;  isMapExpr x => x
+;  containsVars x => x
+;  atom(x) and CAR(m) = 'List => x
+;  (x is ['construct,:.]) and m = '(List (Expression)) => x
+;  T:= coerceInteractive(objNewWrap(x,maximalSuperType(m)),
+;    $OutputForm) or return x
+;  objValUnwrap T
+
+(DEFUN |outputFormat| (|x| |m|)
+  (PROG (T$)
+    (DECLARE (SPECIAL |$OutputForm| |$EmptyMode| |$OutputForm|))
+    (RETURN
+      (COND
+        ((IDENTP |m|) |x|)
+        ((OR (BOOT-EQUAL |m| |$OutputForm|)
+             (BOOT-EQUAL |m| |$EmptyMode|))
+         |x|)
+        ((|categoryForm?| |m|) |x|)
+        ((|isMapExpr| |x|) |x|)
+        ((|containsVars| |x|) |x|)
+        ((AND (ATOM |x|) (BOOT-EQUAL (CAR |m|) '|List|)) |x|)
+        ((AND (PAIRP |x|) (EQ (QCAR |x|) '|construct|)
+              (BOOT-EQUAL |m| '(|List| (|Expression|))))
+         |x|)
+        ('T
+         (SPADLET T$
+                  (OR (|coerceInteractive|
+                          (|objNewWrap| |x| (|maximalSuperType| |m|))
+                          |$OutputForm|)
+                      (RETURN |x|)))
+         (|objValUnwrap| T$))))))
+
+;displaySingleRule($op,pattern,replacement) ==
+;  mathprint ['MAP,[pattern,:replacement]]
+
+(DEFUN |displaySingleRule| (|$op| |pattern| |replacement|)
+  (DECLARE (SPECIAL |$op|))
+  (|mathprint| (CONS 'MAP (CONS (CONS |pattern| |replacement|) NIL))))
+
+;displayMap(headingIfTrue,$op,map) ==
+;  mathprint
+;    headingIfTrue => ['CONCAT,PNAME "value:  ",map]
+;    map
+
+(DEFUN |displayMap| (|headingIfTrue| |$op| |map|)
+  (DECLARE (SPECIAL |$op|))
+  (|mathprint|
+      (COND
+        (|headingIfTrue|
+            (CONS 'CONCAT (CONS (PNAME '|value:  |) (CONS |map| NIL))))
+        ('T |map|))))
+
+;simplifyMapPattern (x,alias) ==
+;  for a in alias
+;    for m in $FormalMapVariableList | a and ^CONTAINED(a,x) repeat
+;      x:= substitute(a,m,x)
+;  [lhs,:rhs]:= x
+;  rhs := simplifyMapConstructorRefs rhs
+;  x := [lhs,:rhs]
+;  lhs is ["|",y,pred] =>
+;    pred:= predTran pred
+;    sl:= getEqualSublis pred =>
+;      y':= SUBLIS(sl,y)
+;      pred:= unTrivialize SUBLIS(sl,pred) where unTrivialize x ==
+;        x is [op,:l] and op in '(_and _or) =>
+;          MKPF([unTrivialize y for y in l],op)
+;        x is [op,a,=a] and op in '(_= is)=> true
+;        x
+;      rhs':= SUBLIS(sl,rhs)
+;      pred=true => [y',:rhs']
+;      [["PAREN",["|",y',pred]],:rhs']
+;    pred=true => [y,:rhs]
+;    [["PAREN",["|",y,pred]],:rhs]
+;  lhs=true => ["true",:rhs]
+;  x
+
+(DEFUN |simplifyMapPattern,unTrivialize| (|x|)
+  (PROG (|l| |op| |ISTMP#1| |a| |ISTMP#2|)
+    (RETURN
+      (SEQ (IF (AND (AND (PAIRP |x|)
+                         (PROGN
+                           (SPADLET |op| (QCAR |x|))
+                           (SPADLET |l| (QCDR |x|))
+                           'T))
+                    (|member| |op| '(|and| |or|)))
+               (EXIT (MKPF (PROG (G166866)
+                             (SPADLET G166866 NIL)
+                             (RETURN
+                               (DO ((G166871 |l| (CDR G166871))
+                                    (|y| NIL))
+                                   ((OR (ATOM G166871)
+                                     (PROGN
+                                       (SETQ |y| (CAR G166871))
+                                       NIL))
+                                    (NREVERSE0 G166866))
+                                 (SEQ (EXIT
+                                       (SETQ G166866
+                                        (CONS
+                                         (|simplifyMapPattern,unTrivialize|
+                                          |y|)
+                                         G166866)))))))
+                           |op|)))
+           (IF (AND (AND (PAIRP |x|)
+                         (PROGN
+                           (SPADLET |op| (QCAR |x|))
+                           (SPADLET |ISTMP#1| (QCDR |x|))
+                           (AND (PAIRP |ISTMP#1|)
+                                (PROGN
+                                  (SPADLET |a| (QCAR |ISTMP#1|))
+                                  (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                                  (AND (PAIRP |ISTMP#2|)
+                                       (EQ (QCDR |ISTMP#2|) NIL)
+                                       (EQUAL (QCAR |ISTMP#2|) |a|))))))
+                    (|member| |op| '(= |is|)))
+               (EXIT 'T))
+           (EXIT |x|)))))
+
+(DEFUN |simplifyMapPattern| (|x| |alias|)
+  (PROG (|lhs| |rhs| |ISTMP#1| |y| |ISTMP#2| |sl| |y'| |pred| |rhs'|)
+    (DECLARE (SPECIAL |$FormalMapVariableList|))
+    (RETURN
+      (SEQ (PROGN
+             (DO ((G166896 |alias| (CDR G166896)) (|a| NIL)
+                  (G166897 |$FormalMapVariableList| (CDR G166897))
+                  (|m| NIL))
+                 ((OR (ATOM G166896)
+                      (PROGN (SETQ |a| (CAR G166896)) NIL)
+                      (ATOM G166897)
+                      (PROGN (SETQ |m| (CAR G166897)) NIL))
+                  NIL)
+               (SEQ (EXIT (COND
+                            ((AND |a| (NULL (CONTAINED |a| |x|)))
+                             (SPADLET |x| (MSUBST |a| |m| |x|)))))))
+             (SPADLET |lhs| (CAR |x|))
+             (SPADLET |rhs| (CDR |x|))
+             (SPADLET |rhs| (|simplifyMapConstructorRefs| |rhs|))
+             (SPADLET |x| (CONS |lhs| |rhs|))
+             (COND
+               ((AND (PAIRP |lhs|) (EQ (QCAR |lhs|) '|\||)
+                     (PROGN
+                       (SPADLET |ISTMP#1| (QCDR |lhs|))
+                       (AND (PAIRP |ISTMP#1|)
+                            (PROGN
+                              (SPADLET |y| (QCAR |ISTMP#1|))
+                              (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                              (AND (PAIRP |ISTMP#2|)
+                                   (EQ (QCDR |ISTMP#2|) NIL)
+                                   (PROGN
+                                     (SPADLET |pred| (QCAR |ISTMP#2|))
+                                     'T))))))
+                (SPADLET |pred| (|predTran| |pred|))
+                (COND
+                  ((SPADLET |sl| (|getEqualSublis| |pred|))
+                   (SPADLET |y'| (SUBLIS |sl| |y|))
+                   (SPADLET |pred|
+                            (|simplifyMapPattern,unTrivialize|
+                                (SUBLIS |sl| |pred|)))
+                   (SPADLET |rhs'| (SUBLIS |sl| |rhs|))
+                   (COND
+                     ((BOOT-EQUAL |pred| 'T) (CONS |y'| |rhs'|))
+                     ('T
+                      (CONS (CONS 'PAREN
+                                  (CONS (CONS '|\||
+                                         (CONS |y'| (CONS |pred| NIL)))
+                                        NIL))
+                            |rhs'|))))
+                  ((BOOT-EQUAL |pred| 'T) (CONS |y| |rhs|))
+                  ('T
+                   (CONS (CONS 'PAREN
+                               (CONS (CONS '|\||
+                                      (CONS |y| (CONS |pred| NIL)))
+                                     NIL))
+                         |rhs|))))
+               ((BOOT-EQUAL |lhs| 'T) (CONS '|true| |rhs|))
+               ('T |x|)))))))
+
+;simplifyMapConstructorRefs form ==
+;  -- try to linear format constructor names
+;  ATOM form => form
+;  [op,:args] := form
+;  op in '(exit SEQ) =>
+;    [op,:[simplifyMapConstructorRefs a for a in args]]
+;  op in '(REPEAT) =>
+;    [op,first args,:[simplifyMapConstructorRefs a for a in rest args]]
+;  op in '(_: _:_: _@) =>
+;    args is [obj,dom] =>
+;      dom' := prefix2String dom
+;      --if ATOM dom' then dom' := [dom']
+;      --[op,obj,APPLY('CONCAT,dom')]
+;      dom'' :=
+;          ATOM dom' => dom'
+;          NULL CDR dom' => CAR dom'
+;          APPLY('CONCAT, dom')
+;      [op,obj, dom'']
+;    form
+;  form
+
+(DEFUN |simplifyMapConstructorRefs| (|form|)
+  (PROG (|op| |args| |obj| |ISTMP#1| |dom| |dom'| |dom''|)
+    (RETURN
+      (SEQ (COND
+             ((ATOM |form|) |form|)
+             ('T (SPADLET |op| (CAR |form|))
+              (SPADLET |args| (CDR |form|))
+              (COND
+                ((|member| |op| '(|exit| SEQ))
+                 (CONS |op|
+                       (PROG (G166943)
+                         (SPADLET G166943 NIL)
+                         (RETURN
+                           (DO ((G166948 |args| (CDR G166948))
+                                (|a| NIL))
+                               ((OR (ATOM G166948)
+                                    (PROGN
+                                      (SETQ |a| (CAR G166948))
+                                      NIL))
+                                (NREVERSE0 G166943))
+                             (SEQ (EXIT (SETQ G166943
+                                         (CONS
+                                          (|simplifyMapConstructorRefs|
+                                           |a|)
+                                          G166943)))))))))
+                ((|member| |op| '(REPEAT))
+                 (CONS |op|
+                       (CONS (CAR |args|)
+                             (PROG (G166958)
+                               (SPADLET G166958 NIL)
+                               (RETURN
+                                 (DO ((G166963 (CDR |args|)
+                                       (CDR G166963))
+                                      (|a| NIL))
+                                     ((OR (ATOM G166963)
+                                       (PROGN
+                                         (SETQ |a| (CAR G166963))
+                                         NIL))
+                                      (NREVERSE0 G166958))
+                                   (SEQ
+                                    (EXIT
+                                     (SETQ G166958
+                                      (CONS
+                                       (|simplifyMapConstructorRefs|
+                                        |a|)
+                                       G166958))))))))))
+                ((|member| |op| '(|:| |::| @))
+                 (COND
+                   ((AND (PAIRP |args|)
+                         (PROGN
+                           (SPADLET |obj| (QCAR |args|))
+                           (SPADLET |ISTMP#1| (QCDR |args|))
+                           (AND (PAIRP |ISTMP#1|)
+                                (EQ (QCDR |ISTMP#1|) NIL)
+                                (PROGN
+                                  (SPADLET |dom| (QCAR |ISTMP#1|))
+                                  'T))))
+                    (SPADLET |dom'| (|prefix2String| |dom|))
+                    (SPADLET |dom''|
+                             (COND
+                               ((ATOM |dom'|) |dom'|)
+                               ((NULL (CDR |dom'|)) (CAR |dom'|))
+                               ('T (APPLY 'CONCAT |dom'|))))
+                    (CONS |op| (CONS |obj| (CONS |dom''| NIL))))
+                   ('T |form|)))
+                ('T |form|))))))))
+
+;predTran x ==
+;  x is ["IF",a,b,c] =>
+;    c = "false" => MKPF([predTran a,predTran b],"and")
+;    b = "true" => MKPF([predTran a,predTran c],"or")
+;    b = "false" and c = "true" => ["not",predTran a]
+;    x
+;  x
+
+(DEFUN |predTran| (|x|)
+  (PROG (|ISTMP#1| |a| |ISTMP#2| |b| |ISTMP#3| |c|)
+    (RETURN
+      (COND
+        ((AND (PAIRP |x|) (EQ (QCAR |x|) 'IF)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |x|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN
+                       (SPADLET |a| (QCAR |ISTMP#1|))
+                       (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                       (AND (PAIRP |ISTMP#2|)
+                            (PROGN
+                              (SPADLET |b| (QCAR |ISTMP#2|))
+                              (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                              (AND (PAIRP |ISTMP#3|)
+                                   (EQ (QCDR |ISTMP#3|) NIL)
+                                   (PROGN
+                                     (SPADLET |c| (QCAR |ISTMP#3|))
+                                     'T))))))))
+         (COND
+           ((BOOT-EQUAL |c| '|false|)
+            (MKPF (CONS (|predTran| |a|) (CONS (|predTran| |b|) NIL))
+                  '|and|))
+           ((BOOT-EQUAL |b| '|true|)
+            (MKPF (CONS (|predTran| |a|) (CONS (|predTran| |c|) NIL))
+                  '|or|))
+           ((AND (BOOT-EQUAL |b| '|false|) (BOOT-EQUAL |c| '|true|))
+            (CONS '|not| (CONS (|predTran| |a|) NIL)))
+           ('T |x|)))
+        ('T |x|)))))
+
+;getEqualSublis pred == fn(pred,nil) where fn(x,sl) ==
+;  (x:= SUBLIS(sl,x)) is [op,:l] and op in '(_and _or) =>
+;    for y in l repeat sl:= fn(y,sl)
+;    sl
+;  x is ["is",a,b] => [[a,:b],:sl]
+;  x is ["=",a,b] =>
+;    IDENTP a and not CONTAINED(a,b) => [[a,:b],:sl]
+;    IDENTP b and not CONTAINED(b,a) => [[b,:a],:sl]
+;    sl
+;  sl
+
+(DEFUN |getEqualSublis,fn| (|x| |sl|)
+  (PROG (|op| |l| |ISTMP#1| |a| |ISTMP#2| |b|)
+    (RETURN
+      (SEQ (IF (AND (PROGN
+                      (SPADLET |ISTMP#1|
+                               (SPADLET |x| (SUBLIS |sl| |x|)))
+                      (AND (PAIRP |ISTMP#1|)
+                           (PROGN
+                             (SPADLET |op| (QCAR |ISTMP#1|))
+                             (SPADLET |l| (QCDR |ISTMP#1|))
+                             'T)))
+                    (|member| |op| '(|and| |or|)))
+               (EXIT (SEQ (DO ((G167072 |l| (CDR G167072))
+                               (|y| NIL))
+                              ((OR (ATOM G167072)
+                                   (PROGN
+                                     (SETQ |y| (CAR G167072))
+                                     NIL))
+                               NIL)
+                            (SEQ (EXIT (SPADLET |sl|
+                                        (|getEqualSublis,fn| |y| |sl|)))))
+                          (EXIT |sl|))))
+           (IF (AND (PAIRP |x|) (EQ (QCAR |x|) '|is|)
+                    (PROGN
+                      (SPADLET |ISTMP#1| (QCDR |x|))
+                      (AND (PAIRP |ISTMP#1|)
+                           (PROGN
+                             (SPADLET |a| (QCAR |ISTMP#1|))
+                             (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                             (AND (PAIRP |ISTMP#2|)
+                                  (EQ (QCDR |ISTMP#2|) NIL)
+                                  (PROGN
+                                    (SPADLET |b| (QCAR |ISTMP#2|))
+                                    'T))))))
+               (EXIT (CONS (CONS |a| |b|) |sl|)))
+           (IF (AND (PAIRP |x|) (EQ (QCAR |x|) '=)
+                    (PROGN
+                      (SPADLET |ISTMP#1| (QCDR |x|))
+                      (AND (PAIRP |ISTMP#1|)
+                           (PROGN
+                             (SPADLET |a| (QCAR |ISTMP#1|))
+                             (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                             (AND (PAIRP |ISTMP#2|)
+                                  (EQ (QCDR |ISTMP#2|) NIL)
+                                  (PROGN
+                                    (SPADLET |b| (QCAR |ISTMP#2|))
+                                    'T))))))
+               (EXIT (SEQ (IF (AND (IDENTP |a|)
+                                   (NULL (CONTAINED |a| |b|)))
+                              (EXIT (CONS (CONS |a| |b|) |sl|)))
+                          (IF (AND (IDENTP |b|)
+                                   (NULL (CONTAINED |b| |a|)))
+                              (EXIT (CONS (CONS |b| |a|) |sl|)))
+                          (EXIT |sl|))))
+           (EXIT |sl|)))))
+
+(DEFUN |getEqualSublis| (|pred|) (|getEqualSublis,fn| |pred| NIL)) 
+
+;--% User function analysis
+;mapCatchName mapname ==
+;   INTERN STRCONC('"$",STRINGIMAGE mapname,'"CatchMapIdentifier$")
+
+(DEFUN |mapCatchName| (|mapname|)
+ (INTERN (STRCONC "$" (STRINGIMAGE |mapname|) "CatchMapIdentifier$"))) 
+
+;analyzeMap(op,argTypes,mapDef, tar) ==
+;  -- Top level enty point for map type analysis.  Sets up catch point
+;  --  for interpret-code mode.
+;  $compilingMap:local := true
+;  $definingMap:local := true
+;  $minivector     : local := nil   -- later becomes value of $minivectorName
+;  $mapThrowCount  : local := 0     -- number of "return"s encountered
+;  $mapReturnTypes : local := nil   -- list of types from returns
+;  $repeatLabel    : local := nil   -- for loops; see upREPEAT
+;  $breakCount     : local := 0     -- breaks from loops; ditto
+;  $mapTarget      : local := tar
+;  $interpOnly: local := NIL
+;  $mapName : local := op.0
+;  if get($mapName,'recursive,$e) then
+;    argTypes := [f t for t in argTypes] where
+;      f x ==
+;        isEqualOrSubDomain(x,$Integer) => $Integer
+;        x
+;  mapAndArgTypes := [$mapName,:argTypes]
+;  MEMBER(mapAndArgTypes,$analyzingMapList) =>
+;    -- if the map is declared, return the target type
+;    (getMode op) is ['Mapping,target,:.] => target
+;    throwKeyedMsg("S2IM0009",
+;      [$mapName,['" ", map for [map,:.] in $analyzingMapList]])
+;  PUSH(mapAndArgTypes,$analyzingMapList)
+;  mapDef := mapDefsWithCorrectArgCount(#argTypes, mapDef)
+;  null mapDef => (POP $analyzingMapList; nil)
+;  UNWIND_-PROTECT(x:=CATCH('mapCompiler,analyzeMap0(op,argTypes,mapDef)),
+;    POP $analyzingMapList)
+;  x='tryInterpOnly =>
+;    opName:=getUnname op
+;    fun := mkInterpFun(op,opName,argTypes)
+;    if getMode op isnt ['Mapping,:sig] then
+;      sig := [nil,:[nil for type in argTypes]]
+;    $e:=putHist(opName,'localModemap,
+;      [[['interpOnly,:sig],fun,NIL]],$e)
+;  x
+
+(DEFUN |analyzeMap,f| (|x|)
+  (DECLARE (SPECIAL |$Integer|))
+  (SEQ (IF (|isEqualOrSubDomain| |x| |$Integer|) (EXIT |$Integer|))
+       (EXIT |x|)))
+
+(DEFUN |analyzeMap| (|op| |argTypes| |mapDef| |tar|)
+  (PROG (|$compilingMap| |$definingMap| |$minivector| |$mapThrowCount|
+            |$mapReturnTypes| |$repeatLabel| |$breakCount| |$mapTarget|
+            |$interpOnly| |$mapName| |mapAndArgTypes| |ISTMP#2|
+            |target| |map| |x| |opName| |fun| |ISTMP#1| |sig|)
+    (DECLARE (SPECIAL |$compilingMap| |$definingMap| |$minivector| |$e|
+                      |$mapThrowCount| |$mapReturnTypes| |$repeatLabel|
+                      |$breakCount| |$mapTarget| |$interpOnly|
+                      |$mapName| |$analyzingMapList|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$compilingMap| 'T)
+             (SPADLET |$definingMap| 'T)
+             (SPADLET |$minivector| NIL)
+             (SPADLET |$mapThrowCount| 0)
+             (SPADLET |$mapReturnTypes| NIL)
+             (SPADLET |$repeatLabel| NIL)
+             (SPADLET |$breakCount| 0)
+             (SPADLET |$mapTarget| |tar|)
+             (SPADLET |$interpOnly| NIL)
+             (SPADLET |$mapName| (ELT |op| 0))
+             (COND
+               ((|get| |$mapName| '|recursive| |$e|)
+                (SPADLET |argTypes|
+                         (PROG (G167131)
+                           (SPADLET G167131 NIL)
+                           (RETURN
+                             (DO ((G167136 |argTypes|
+                                      (CDR G167136))
+                                  (|t| NIL))
+                                 ((OR (ATOM G167136)
+                                      (PROGN
+                                        (SETQ |t| (CAR G167136))
+                                        NIL))
+                                  (NREVERSE0 G167131))
+                               (SEQ (EXIT
+                                     (SETQ G167131
+                                      (CONS (|analyzeMap,f| |t|)
+                                       G167131))))))))))
+             (SPADLET |mapAndArgTypes| (CONS |$mapName| |argTypes|))
+             (COND
+               ((|member| |mapAndArgTypes| |$analyzingMapList|)
+                (COND
+                  ((PROGN
+                     (SPADLET |ISTMP#1| (|getMode| |op|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (EQ (QCAR |ISTMP#1|) '|Mapping|)
+                          (PROGN
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (PROGN
+                                   (SPADLET |target| (QCAR |ISTMP#2|))
+                                   'T)))))
+                   |target|)
+                  ('T
+                   (|throwKeyedMsg| 'S2IM0009
+                       (CONS |$mapName|
+                             (CONS (PROG (G167142)
+                                     (SPADLET G167142 NIL)
+                                     (RETURN
+                                       (DO
+                                        ((G167148 |$analyzingMapList|
+                                          (CDR G167148))
+                                         (G167116 NIL))
+                                        ((OR (ATOM G167148)
+                                          (PROGN
+                                            (SETQ G167116
+                                             (CAR G167148))
+                                            NIL)
+                                          (PROGN
+                                            (PROGN
+                                              (SPADLET |map|
+                                               (CAR G167116))
+                                              G167116)
+                                            NIL))
+                                         G167142)
+                                         (SEQ
+                                          (EXIT
+                                           (SETQ G167142
+                                            (APPEND G167142
+                                             (CONS (MAKESTRING " ")
+                                              (CONS |map| NIL)))))))))
+                                   NIL))))))
+               ('T (PUSH |mapAndArgTypes| |$analyzingMapList|)
+                (SPADLET |mapDef|
+                         (|mapDefsWithCorrectArgCount| (|#| |argTypes|)
+                             |mapDef|))
+                (COND
+                  ((NULL |mapDef|) (POP |$analyzingMapList|) NIL)
+                  ('T
+                   (UNWIND-PROTECT
+                     (SPADLET |x|
+                              (CATCH '|mapCompiler|
+                                (|analyzeMap0| |op| |argTypes|
+                                    |mapDef|)))
+                     (POP |$analyzingMapList|))
+                   (COND
+                     ((BOOT-EQUAL |x| '|tryInterpOnly|)
+                      (SPADLET |opName| (|getUnname| |op|))
+                      (SPADLET |fun|
+                               (|mkInterpFun| |op| |opName| |argTypes|))
+                      (COND
+                        ((NULL (PROGN
+                                 (SPADLET |ISTMP#1| (|getMode| |op|))
+                                 (AND (PAIRP |ISTMP#1|)
+                                      (EQ (QCAR |ISTMP#1|) '|Mapping|)
+                                      (PROGN
+                                        (SPADLET |sig|
+                                         (QCDR |ISTMP#1|))
+                                        'T))))
+                         (SPADLET |sig|
+                                  (CONS NIL
+                                        (PROG (G167159)
+                                          (SPADLET G167159 NIL)
+                                          (RETURN
+                                            (DO
+                                             ((G167164 |argTypes|
+                                               (CDR G167164))
+                                              (|type| NIL))
+                                             ((OR (ATOM G167164)
+                                               (PROGN
+                                                 (SETQ |type|
+                                                  (CAR G167164))
+                                                 NIL))
+                                              (NREVERSE0 G167159))
+                                              (SEQ
+                                               (EXIT
+                                                (SETQ G167159
+                                                 (CONS NIL G167159)))))))))))
+                      (SPADLET |$e|
+                               (|putHist| |opName| '|localModemap|
+                                   (CONS
+                                    (CONS (CONS '|interpOnly| |sig|)
+                                     (CONS |fun| (CONS NIL NIL)))
+                                    NIL)
+                                   |$e|)))
+                     ('T |x|)))))))))))
+
+;analyzeMap0(op,argTypes,mapDef) ==
+;  -- Type analyze and compile a map.  Returns the target type of the map.
+;  --  only called if there is no applicable compiled map
+;  $MapArgumentTypeList:local:= argTypes
+;  numMapArgs mapDef ^= #argTypes => nil
+;  ((m:=getMode op) is ['Mapping,:sig]) or (m and (sig:=[m])) =>
+;    -- op has mapping property only if user has declared the signature
+;    analyzeDeclaredMap(op,argTypes,sig,mapDef,$mapList)
+;  analyzeUndeclaredMap(getUnname op,argTypes,mapDef,$mapList)
+
+(DEFUN |analyzeMap0| (|op| |argTypes| |mapDef|)
+  (PROG (|$MapArgumentTypeList| |m| |ISTMP#1| |sig|)
+    (DECLARE (SPECIAL |$MapArgumentTypeList| |$mapList|))
+    (RETURN
+      (PROGN
+        (SPADLET |$MapArgumentTypeList| |argTypes|)
+        (COND
+          ((NEQUAL (|numMapArgs| |mapDef|) (|#| |argTypes|)) NIL)
+          ((OR (PROGN
+                 (SPADLET |ISTMP#1| (SPADLET |m| (|getMode| |op|)))
+                 (AND (PAIRP |ISTMP#1|)
+                      (EQ (QCAR |ISTMP#1|) '|Mapping|)
+                      (PROGN (SPADLET |sig| (QCDR |ISTMP#1|)) 'T)))
+               (AND |m| (SPADLET |sig| (CONS |m| NIL))))
+           (|analyzeDeclaredMap| |op| |argTypes| |sig| |mapDef|
+               |$mapList|))
+          ('T
+           (|analyzeUndeclaredMap| (|getUnname| |op|) |argTypes|
+               |mapDef| |$mapList|)))))))
+
+;compFailure msg ==
+;  -- Called when compilation fails in such a way that interpret-code
+;  --  mode might be of some use.
+;  not $useCoerceOrCroak =>    THROW('coerceOrCroaker, 'croaked)
+;  if $reportInterpOnly then
+;    sayMSG msg
+;    sayMSG '"   We will attempt to interpret the code."
+;  null $compilingMap => THROW('loopCompiler,'tryInterpOnly)
+;  THROW('mapCompiler,'tryInterpOnly)
+
+(DEFUN |compFailure| (|msg|)
+  (DECLARE (SPECIAL |$compilingMap| |$reportInterpOnly|
+                    |$useCoerceOrCroak|))
+  (COND
+    ((NULL |$useCoerceOrCroak|) (THROW '|coerceOrCroaker| '|croaked|))
+    ('T
+     (COND
+       (|$reportInterpOnly| (|sayMSG| |msg|)
+           (|sayMSG|
+               (MAKESTRING "   We will attempt to interpret the code."))))
+     (COND
+       ((NULL |$compilingMap|)
+        (THROW '|loopCompiler| '|tryInterpOnly|))
+       ('T (THROW '|mapCompiler| '|tryInterpOnly|))))))
+
+;mkInterpFun(op,opName,argTypes) ==
+;  -- creates a function form to put in fun slot of interp-only
+;  -- local modemaps
+;  getMode op isnt ['Mapping,:sig] => nil
+;  parms := [var for type in argTypes for var in $FormalMapVariableList]
+;  arglCode := ['LIST,:[argCode for type in argTypes
+;    for argName in parms]] where argCode ==
+;      ['putValueValue,['mkAtreeNode,MKQ argName],
+;        objNewCode(['wrap,argName],type)]
+;  funName := GENSYM()
+;  body:=['rewriteMap1,MKQ opName,arglCode,MKQ sig]
+;  putMapCode(opName,body,sig,funName,parms,false)
+;  genMapCode(opName,body,sig,funName,parms,false)
+;  funName
+
+(DEFUN |mkInterpFun| (|op| |opName| |argTypes|)
+  (PROG (|ISTMP#1| |sig| |parms| |arglCode| |funName| |body|)
+    (DECLARE (SPECIAL |$FormalMapVariableList|))
+    (RETURN
+      (SEQ (COND
+             ((NULL (PROGN
+                      (SPADLET |ISTMP#1| (|getMode| |op|))
+                      (AND (PAIRP |ISTMP#1|)
+                           (EQ (QCAR |ISTMP#1|) '|Mapping|)
+                           (PROGN (SPADLET |sig| (QCDR |ISTMP#1|)) 'T))))
+              NIL)
+             ('T
+              (SPADLET |parms|
+                       (PROG (G167251)
+                         (SPADLET G167251 NIL)
+                         (RETURN
+                           (DO ((G167257 |argTypes| (CDR G167257))
+                                (|type| NIL)
+                                (G167258 |$FormalMapVariableList|
+                                    (CDR G167258))
+                                (|var| NIL))
+                               ((OR (ATOM G167257)
+                                    (PROGN
+                                      (SETQ |type| (CAR G167257))
+                                      NIL)
+                                    (ATOM G167258)
+                                    (PROGN
+                                      (SETQ |var| (CAR G167258))
+                                      NIL))
+                                (NREVERSE0 G167251))
+                             (SEQ (EXIT (SETQ G167251
+                                         (CONS |var| G167251))))))))
+              (SPADLET |arglCode|
+                       (CONS 'LIST
+                             (PROG (G167272)
+                               (SPADLET G167272 NIL)
+                               (RETURN
+                                 (DO ((G167278 |argTypes|
+                                       (CDR G167278))
+                                      (|type| NIL)
+                                      (G167279 |parms|
+                                       (CDR G167279))
+                                      (|argName| NIL))
+                                     ((OR (ATOM G167278)
+                                       (PROGN
+                                         (SETQ |type| (CAR G167278))
+                                         NIL)
+                                       (ATOM G167279)
+                                       (PROGN
+                                         (SETQ |argName|
+                                          (CAR G167279))
+                                         NIL))
+                                      (NREVERSE0 G167272))
+                                   (SEQ
+                                    (EXIT
+                                     (SETQ G167272
+                                      (CONS
+                                       (CONS '|putValueValue|
+                                        (CONS
+                                         (CONS '|mkAtreeNode|
+                                          (CONS (MKQ |argName|) NIL))
+                                         (CONS
+                                          (|objNewCode|
+                                           (CONS '|wrap|
+                                            (CONS |argName| NIL))
+                                           |type|)
+                                          NIL)))
+                                       G167272)))))))))
+              (SPADLET |funName| (GENSYM))
+              (SPADLET |body|
+                       (CONS '|rewriteMap1|
+                             (CONS (MKQ |opName|)
+                                   (CONS |arglCode|
+                                    (CONS (MKQ |sig|) NIL)))))
+              (|putMapCode| |opName| |body| |sig| |funName| |parms|
+                  NIL)
+              (|genMapCode| |opName| |body| |sig| |funName| |parms|
+                  NIL)
+              |funName|))))))
+
+;rewriteMap(op,opName,argl) ==
+;  -- interpret-code handler for maps.  Recursively calls the interpreter
+;  --   on the body of the map.
+;  not $genValue =>
+;    get(opName,'mode,$e) isnt ['Mapping,:sig] =>
+;      compFailure  ['"   Cannot compile map:",:bright opName]
+;    arglCode := ['LIST,:[argCode for arg in argl for argName in
+;      $FormalMapVariableList]] where argCode ==
+;        ['putValueValue,['mkAtreeNode,MKQ argName],
+;          objNewCode(['wrap,wrapped2Quote(objVal getValue arg)],
+;            getMode arg)]
+;    putValue(op,objNew(['rewriteMap1,MKQ opName,arglCode,MKQ sig],
+;      CAR sig))
+;    putModeSet(op,[CAR sig])
+;  rewriteMap0(op,opName,argl)
+
+(DEFUN |rewriteMap| (|op| |opName| |argl|)
+  (PROG (|ISTMP#1| |sig| |arglCode|)
+    (DECLARE (SPECIAL |$FormalMapVariableList| |$e| |$genValue|))
+    (RETURN
+      (SEQ (COND
+             ((NULL |$genValue|)
+              (COND
+                ((NULL (PROGN
+                         (SPADLET |ISTMP#1|
+                                  (|get| |opName| '|mode| |$e|))
+                         (AND (PAIRP |ISTMP#1|)
+                              (EQ (QCAR |ISTMP#1|) '|Mapping|)
+                              (PROGN
+                                (SPADLET |sig| (QCDR |ISTMP#1|))
+                                'T))))
+                 (|compFailure|
+                     (CONS "   Cannot compile map:"
+                           (|bright| |opName|))))
+                ('T
+                 (SPADLET |arglCode|
+                          (CONS 'LIST
+                                (PROG (G167311)
+                                  (SPADLET G167311 NIL)
+                                  (RETURN
+                                    (DO
+                                     ((G167317 |argl|
+                                       (CDR G167317))
+                                      (|arg| NIL)
+                                      (G167318
+                                       |$FormalMapVariableList|
+                                       (CDR G167318))
+                                      (|argName| NIL))
+                                     ((OR (ATOM G167317)
+                                       (PROGN
+                                         (SETQ |arg| (CAR G167317))
+                                         NIL)
+                                       (ATOM G167318)
+                                       (PROGN
+                                         (SETQ |argName|
+                                          (CAR G167318))
+                                         NIL))
+                                      (NREVERSE0 G167311))
+                                      (SEQ
+                                       (EXIT
+                                        (SETQ G167311
+                                         (CONS
+                                          (CONS '|putValueValue|
+                                           (CONS
+                                            (CONS '|mkAtreeNode|
+                                             (CONS (MKQ |argName|) NIL))
+                                            (CONS
+                                             (|objNewCode|
+                                              (CONS '|wrap|
+                                               (CONS
+                                                (|wrapped2Quote|
+                                                 (|objVal|
+                                                  (|getValue| |arg|)))
+                                                NIL))
+                                              (|getMode| |arg|))
+                                             NIL)))
+                                          G167311)))))))))
+                 (|putValue| |op|
+                     (|objNew|
+                         (CONS '|rewriteMap1|
+                               (CONS (MKQ |opName|)
+                                     (CONS |arglCode|
+                                      (CONS (MKQ |sig|) NIL))))
+                         (CAR |sig|)))
+                 (|putModeSet| |op| (CONS (CAR |sig|) NIL)))))
+             ('T (|rewriteMap0| |op| |opName| |argl|)))))))
+
+;putBodyInEnv(opName, numArgs) ==
+;  val := get(opName, 'value, $e)
+;  val is [.,'MAP, :bod] =>
+;    $e := putHist(opName, 'mapBody, combineMapParts
+;      mapDefsWithCorrectArgCount(numArgs, bod), $e)
+;  'failed
+
+(DEFUN |putBodyInEnv| (|opName| |numArgs|)
+  (PROG (|val| |ISTMP#1| |bod|)
+    (DECLARE (SPECIAL |$e|))
+    (RETURN
+      (PROGN
+        (SPADLET |val| (|get| |opName| '|value| |$e|))
+        (COND
+          ((AND (PAIRP |val|)
+                (PROGN
+                  (SPADLET |ISTMP#1| (QCDR |val|))
+                  (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) 'MAP)
+                       (PROGN (SPADLET |bod| (QCDR |ISTMP#1|)) 'T))))
+           (SPADLET |$e|
+                    (|putHist| |opName| '|mapBody|
+                        (|combineMapParts|
+                            (|mapDefsWithCorrectArgCount| |numArgs|
+                                |bod|))
+                        |$e|)))
+          ('T '|failed|))))))
+
+;removeBodyFromEnv(opName) ==
+;  $e := putHist(opName, 'mapBody, nil, $e)
+
+(DEFUN |removeBodyFromEnv| (|opName|)
+  (DECLARE (SPECIAL |$e|))
+  (SPADLET |$e| (|putHist| |opName| '|mapBody| NIL |$e|)))
+
+;rewriteMap0(op,opName,argl) ==
+;  -- $genValue case of map rewriting
+;  putBodyInEnv(opName, #argl)
+;  if (s := get(opName,'mode,$e)) then
+;    tar := CADR s
+;    argTypes := CDDR s
+;  else
+;    tar:= nil
+;    argTypes:= nil
+;  get(opName,'mode,$e) is ['Mapping,tar,:argTypes]
+;  $env: local := [[NIL]]
+;  for arg in argl
+;    for var in $FormalMapVariableList repeat
+;      if argTypes then
+;        t := CAR argTypes
+;        argTypes:= CDR argTypes
+;        val :=
+;          t is ['Mapping,:.] => getValue arg
+;          coerceInteractive(getValue arg,t)
+;      else
+;        val:= getValue arg
+;      $env:=put(var,'value,val,$env)
+;      if VECP arg then $env := put(var,'name,getUnname arg,$env)
+;      (m := getMode arg) => $env := put(var,'mode,m,$env)
+;  null (val:= interpMap(opName,tar)) =>
+;    throwKeyedMsg("S2IM0010",[opName])
+;  putValue(op,val)
+;  removeBodyFromEnv(opName)
+;  ms := putModeSet(op,[objMode val])
+
+(DEFUN |rewriteMap0| (|op| |opName| |argl|)
+  (PROG (|$env| |s| |ISTMP#1| |ISTMP#2| |tar| |t| |argTypes| |m| |val|
+                |ms|)
+    (DECLARE (SPECIAL |$env| |$FormalMapVariableList| |$e|))
+    (RETURN
+      (SEQ (PROGN
+             (|putBodyInEnv| |opName| (|#| |argl|))
+             (COND
+               ((SPADLET |s| (|get| |opName| '|mode| |$e|))
+                (SPADLET |tar| (CADR |s|))
+                (SPADLET |argTypes| (CDDR |s|)))
+               ('T (SPADLET |tar| NIL) (SPADLET |argTypes| NIL)))
+             (SPADLET |ISTMP#1| (|get| |opName| '|mode| |$e|))
+             (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) '|Mapping|)
+                  (PROGN
+                    (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                    (AND (PAIRP |ISTMP#2|)
+                         (PROGN
+                           (SPADLET |tar| (QCAR |ISTMP#2|))
+                           (SPADLET |argTypes| (QCDR |ISTMP#2|))
+                           'T))))
+             (SPADLET |$env| (CONS (CONS NIL NIL) NIL))
+             (DO ((G167379 |argl| (CDR G167379)) (|arg| NIL)
+                  (G167380 |$FormalMapVariableList| (CDR G167380))
+                  (|var| NIL))
+                 ((OR (ATOM G167379)
+                      (PROGN (SETQ |arg| (CAR G167379)) NIL)
+                      (ATOM G167380)
+                      (PROGN (SETQ |var| (CAR G167380)) NIL))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (COND
+                              (|argTypes|
+                                  (SPADLET |t| (CAR |argTypes|))
+                                  (SPADLET |argTypes| (CDR |argTypes|))
+                                  (SPADLET |val|
+                                           (COND
+                                             ((AND (PAIRP |t|)
+                                               (EQ (QCAR |t|)
+                                                '|Mapping|))
+                                              (|getValue| |arg|))
+                                             ('T
+                                              (|coerceInteractive|
+                                               (|getValue| |arg|) |t|)))))
+                              ('T (SPADLET |val| (|getValue| |arg|))))
+                            (SPADLET |$env|
+                                     (|put| |var| '|value| |val|
+                                      |$env|))
+                            (COND
+                              ((VECP |arg|)
+                               (SPADLET |$env|
+                                        (|put| |var| '|name|
+                                         (|getUnname| |arg|) |$env|))))
+                            (COND
+                              ((SPADLET |m| (|getMode| |arg|))
+                               (SPADLET |$env|
+                                        (|put| |var| '|mode| |m|
+                                         |$env|))))))))
+             (COND
+               ((NULL (SPADLET |val| (|interpMap| |opName| |tar|)))
+                (|throwKeyedMsg| 'S2IM0010 (CONS |opName| NIL)))
+               ('T (|putValue| |op| |val|)
+                (|removeBodyFromEnv| |opName|)
+                (SPADLET |ms|
+                         (|putModeSet| |op|
+                             (CONS (|objMode| |val|) NIL))))))))))
+
+;rewriteMap1(opName,argl,sig) ==
+;  -- compiled case of map rewriting
+;  putBodyInEnv(opName, #argl)
+;  if sig then
+;    tar:= CAR sig
+;    argTypes:= CDR sig
+;  else
+;    tar:= nil
+;    argTypes:= nil
+;  evArgl := NIL
+;  for arg in reverse argl repeat
+;    v := getValue arg
+;    evArgl := [objNew(objVal v, objMode v),:evArgl]
+;  $env : local := [[NIL]]
+;  for arg in argl for evArg in evArgl
+;    for var in $FormalMapVariableList repeat
+;      if argTypes then
+;        t:=CAR argTypes
+;        argTypes:= CDR argTypes
+;        val :=
+;          t is ['Mapping,:.] => evArg
+;          coerceInteractive(evArg,t)
+;      else
+;        val:= evArg
+;      $env:=put(var,'value,val,$env)
+;      if VECP arg then $env := put(var,'name,getUnname arg,$env)
+;      (m := getMode arg) => $env := put(var,'mode,m,$env)
+;  val:= interpMap(opName,tar)
+;  removeBodyFromEnv(opName)
+;  objValUnwrap(val)
+
+(DEFUN |rewriteMap1| (|opName| |argl| |sig|)
+  (PROG (|$env| |tar| |v| |evArgl| |t| |argTypes| |m| |val|)
+    (DECLARE (SPECIAL |$env| |$FormalMapVariableList|))
+    (RETURN
+      (SEQ (PROGN
+             (|putBodyInEnv| |opName| (|#| |argl|))
+             (COND
+               (|sig| (SPADLET |tar| (CAR |sig|))
+                      (SPADLET |argTypes| (CDR |sig|)))
+               ('T (SPADLET |tar| NIL) (SPADLET |argTypes| NIL)))
+             (SPADLET |evArgl| NIL)
+             (DO ((G167426 (REVERSE |argl|) (CDR G167426))
+                  (|arg| NIL))
+                 ((OR (ATOM G167426)
+                      (PROGN (SETQ |arg| (CAR G167426)) NIL))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |v| (|getValue| |arg|))
+                            (SPADLET |evArgl|
+                                     (CONS
+                                      (|objNew| (|objVal| |v|)
+                                       (|objMode| |v|))
+                                      |evArgl|))))))
+             (SPADLET |$env| (CONS (CONS NIL NIL) NIL))
+             (DO ((G167441 |argl| (CDR G167441)) (|arg| NIL)
+                  (G167442 |evArgl| (CDR G167442)) (|evArg| NIL)
+                  (G167443 |$FormalMapVariableList| (CDR G167443))
+                  (|var| NIL))
+                 ((OR (ATOM G167441)
+                      (PROGN (SETQ |arg| (CAR G167441)) NIL)
+                      (ATOM G167442)
+                      (PROGN (SETQ |evArg| (CAR G167442)) NIL)
+                      (ATOM G167443)
+                      (PROGN (SETQ |var| (CAR G167443)) NIL))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (COND
+                              (|argTypes|
+                                  (SPADLET |t| (CAR |argTypes|))
+                                  (SPADLET |argTypes| (CDR |argTypes|))
+                                  (SPADLET |val|
+                                           (COND
+                                             ((AND (PAIRP |t|)
+                                               (EQ (QCAR |t|)
+                                                '|Mapping|))
+                                              |evArg|)
+                                             ('T
+                                              (|coerceInteractive|
+                                               |evArg| |t|)))))
+                              ('T (SPADLET |val| |evArg|)))
+                            (SPADLET |$env|
+                                     (|put| |var| '|value| |val|
+                                      |$env|))
+                            (COND
+                              ((VECP |arg|)
+                               (SPADLET |$env|
+                                        (|put| |var| '|name|
+                                         (|getUnname| |arg|) |$env|))))
+                            (COND
+                              ((SPADLET |m| (|getMode| |arg|))
+                               (SPADLET |$env|
+                                        (|put| |var| '|mode| |m|
+                                         |$env|))))))))
+             (SPADLET |val| (|interpMap| |opName| |tar|))
+             (|removeBodyFromEnv| |opName|)
+             (|objValUnwrap| |val|))))))
+
+;interpMap(opName,tar) ==
+;  -- call the interpreter recursively on map body
+;  $genValue : local:= true
+;  $interpMapTag : local := nil
+;  $interpOnly : local := true
+;  $localVars : local := NIL
+;  for lvar in get(opName,'localVars,$e) repeat mkLocalVar(opName,lvar)
+;  $mapName : local := opName
+;  $mapTarget : local := tar
+;  body:= get(opName,'mapBody,$e)
+;  savedTimerStack := COPY $timedNameStack
+;  catchName := mapCatchName $mapName
+;  c := CATCH(catchName, interpret1(body,tar,nil))
+;--  $interpMapTag and $interpMapTag ^= mapCatchName $mapName =>
+;--    THROW($interpMapTag,c)
+;  while savedTimerStack ^= $timedNameStack repeat
+;    stopTimingProcess peekTimedName()
+;  c  -- better be a triple
+
+(DEFUN |interpMap| (|opName| |tar|)
+  (PROG (|$genValue| |$interpMapTag| |$interpOnly| |$localVars|
+            |$mapName| |$mapTarget| |body| |savedTimerStack|
+            |catchName| |c|)
+    (DECLARE (SPECIAL |$genValue| |$interpMapTag| |$interpOnly|
+                      |$localVars| |$mapName| |$mapTarget|
+                      |$timedNameStack| |$e|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$genValue| 'T)
+             (SPADLET |$interpMapTag| NIL)
+             (SPADLET |$interpOnly| 'T)
+             (SPADLET |$localVars| NIL)
+             (DO ((G167481 (|get| |opName| '|localVars| |$e|)
+                      (CDR G167481))
+                  (|lvar| NIL))
+                 ((OR (ATOM G167481)
+                      (PROGN (SETQ |lvar| (CAR G167481)) NIL))
+                  NIL)
+               (SEQ (EXIT (|mkLocalVar| |opName| |lvar|))))
+             (SPADLET |$mapName| |opName|)
+             (SPADLET |$mapTarget| |tar|)
+             (SPADLET |body| (|get| |opName| '|mapBody| |$e|))
+             (SPADLET |savedTimerStack| (COPY |$timedNameStack|))
+             (SPADLET |catchName| (|mapCatchName| |$mapName|))
+             (SPADLET |c|
+                      (CATCH |catchName|
+                        (|interpret1| |body| |tar| NIL)))
+             (DO ()
+                 ((NULL (NEQUAL |savedTimerStack| |$timedNameStack|))
+                  NIL)
+               (SEQ (EXIT (|stopTimingProcess| (|peekTimedName|)))))
+             |c|)))))
+
+;analyzeDeclaredMap(op,argTypes,sig,mapDef,$mapList) ==
+;  -- analyzes and compiles maps with declared signatures.  argTypes
+;  -- is a list of types of the arguments, sig is the declared signature
+;  -- mapDef is the stored form of the map body.
+;  opName := getUnname op
+;  $mapList:=[opName,:$mapList]
+;  $mapTarget := CAR sig
+;  (mmS:= get(opName,'localModemap,$e)) and
+;    (mm:= or/[mm for (mm:=[[.,:mmSig],:.]) in mmS | mmSig=sig]) =>
+;      compileCoerceMap(opName,argTypes,mm)
+;  -- The declared map needs to be compiled
+;  compileDeclaredMap(opName,sig,mapDef)
+;  argTypes ^= CDR sig =>
+;    analyzeDeclaredMap(op,argTypes,sig,mapDef,$mapList)
+;  CAR sig
+
+(DEFUN |analyzeDeclaredMap| (|op| |argTypes| |sig| |mapDef| |$mapList|)
+  (DECLARE (SPECIAL |$mapList|))
+  (PROG (|opName| |mmS| |mmSig| |mm|)
+    (DECLARE (SPECIAL |$e| |$mapTarget|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |opName| (|getUnname| |op|))
+             (SPADLET |$mapList| (CONS |opName| |$mapList|))
+             (SPADLET |$mapTarget| (CAR |sig|))
+             (COND
+               ((AND (SPADLET |mmS|
+                              (|get| |opName| '|localModemap| |$e|))
+                     (SPADLET |mm|
+                              (PROG (G167521)
+                                (SPADLET G167521 NIL)
+                                (RETURN
+                                  (DO ((G167529 NIL G167521)
+                                       (G167530 |mmS|
+                                        (CDR G167530))
+                                       (|mm| NIL))
+                                      ((OR G167529 (ATOM G167530)
+                                        (PROGN
+                                          (SETQ |mm| (CAR G167530))
+                                          NIL)
+                                        (PROGN
+                                          (PROGN
+                                            (SPADLET |mmSig|
+                                             (CDAR |mm|))
+                                            |mm|)
+                                          NIL))
+                                       G167521)
+                                    (SEQ
+                                     (EXIT
+                                      (COND
+                                        ((BOOT-EQUAL |mmSig| |sig|)
+                                         (SETQ G167521
+                                          (OR G167521 |mm|)))))))))))
+                (|compileCoerceMap| |opName| |argTypes| |mm|))
+               ('T (|compileDeclaredMap| |opName| |sig| |mapDef|)
+                (COND
+                  ((NEQUAL |argTypes| (CDR |sig|))
+                   (|analyzeDeclaredMap| |op| |argTypes| |sig| |mapDef|
+                       |$mapList|))
+                  ('T (CAR |sig|))))))))))
+
+;compileDeclaredMap(op,sig,mapDef) ==
+;  -- Type analyzes and compiles a map with a declared signature.
+;  -- creates a local modemap and puts it into the environment
+;  $localVars: local := nil
+;  $freeVars: local := nil
+;  $env:local:= [[NIL]]
+;  parms:=[var for var in $FormalMapVariableList for m in CDR sig]
+;  for m in CDR sig for var in parms repeat
+;    $env:= put(var,'mode,m,$env)
+;  body:= getMapBody(op,mapDef)
+;  for lvar in parms repeat mkLocalVar($mapName,lvar)
+;  for lvar in getLocalVars(op,body) repeat mkLocalVar($mapName,lvar)
+;  name := makeLocalModemap(op,sig)
+;  val  := compileBody(body,CAR sig)
+;  isRecursive := (depthOfRecursion(op,body) > 0)
+;  putMapCode(op,objVal val,sig,name,parms,isRecursive)
+;  genMapCode(op,objVal val,sig,name,parms,isRecursive)
+;  CAR sig
+
+(DEFUN |compileDeclaredMap| (|op| |sig| |mapDef|)
+  (PROG (|$localVars| |$freeVars| |$env| |parms| |body| |name| |val|
+            |isRecursive|)
+    (DECLARE (SPECIAL |$localVars| |$freeVars| |$env| |$mapName|
+                      |$FormalMapVariableList|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$localVars| NIL)
+             (SPADLET |$freeVars| NIL)
+             (SPADLET |$env| (CONS (CONS NIL NIL) NIL))
+             (SPADLET |parms|
+                      (PROG (G167555)
+                        (SPADLET G167555 NIL)
+                        (RETURN
+                          (DO ((G167561 |$FormalMapVariableList|
+                                   (CDR G167561))
+                               (|var| NIL)
+                               (G167562 (CDR |sig|) (CDR G167562))
+                               (|m| NIL))
+                              ((OR (ATOM G167561)
+                                   (PROGN
+                                     (SETQ |var| (CAR G167561))
+                                     NIL)
+                                   (ATOM G167562)
+                                   (PROGN
+                                     (SETQ |m| (CAR G167562))
+                                     NIL))
+                               (NREVERSE0 G167555))
+                            (SEQ (EXIT (SETQ G167555
+                                        (CONS |var| G167555))))))))
+             (DO ((G167575 (CDR |sig|) (CDR G167575)) (|m| NIL)
+                  (G167576 |parms| (CDR G167576)) (|var| NIL))
+                 ((OR (ATOM G167575)
+                      (PROGN (SETQ |m| (CAR G167575)) NIL)
+                      (ATOM G167576)
+                      (PROGN (SETQ |var| (CAR G167576)) NIL))
+                  NIL)
+               (SEQ (EXIT (SPADLET |$env|
+                                   (|put| |var| '|mode| |m| |$env|)))))
+             (SPADLET |body| (|getMapBody| |op| |mapDef|))
+             (DO ((G167588 |parms| (CDR G167588)) (|lvar| NIL))
+                 ((OR (ATOM G167588)
+                      (PROGN (SETQ |lvar| (CAR G167588)) NIL))
+                  NIL)
+               (SEQ (EXIT (|mkLocalVar| |$mapName| |lvar|))))
+             (DO ((G167597 (|getLocalVars| |op| |body|)
+                      (CDR G167597))
+                  (|lvar| NIL))
+                 ((OR (ATOM G167597)
+                      (PROGN (SETQ |lvar| (CAR G167597)) NIL))
+                  NIL)
+               (SEQ (EXIT (|mkLocalVar| |$mapName| |lvar|))))
+             (SPADLET |name| (|makeLocalModemap| |op| |sig|))
+             (SPADLET |val| (|compileBody| |body| (CAR |sig|)))
+             (SPADLET |isRecursive|
+                      (> (|depthOfRecursion| |op| |body|) 0))
+             (|putMapCode| |op| (|objVal| |val|) |sig| |name| |parms|
+                 |isRecursive|)
+             (|genMapCode| |op| (|objVal| |val|) |sig| |name| |parms|
+                 |isRecursive|)
+             (CAR |sig|))))))
+
+;putMapCode(op,code,sig,name,parms,isRecursive) ==
+;  -- saves the generated code and some other information about the
+;  -- function
+;  codeInfo := VECTOR(op,code,sig,name,parms,isRecursive)
+;  allCode := [codeInfo,:get(op,'generatedCode,$e)]
+;  $e := putHist(op,'generatedCode,allCode,$e)
+;  op
+
+(DEFUN |putMapCode| (|op| |code| |sig| |name| |parms| |isRecursive|)
+  (PROG (|codeInfo| |allCode|)
+    (DECLARE (SPECIAL |$e|))
+    (RETURN
+      (PROGN
+        (SPADLET |codeInfo|
+                 (VECTOR |op| |code| |sig| |name| |parms|
+                         |isRecursive|))
+        (SPADLET |allCode|
+                 (CONS |codeInfo| (|get| |op| '|generatedCode| |$e|)))
+        (SPADLET |$e| (|putHist| |op| '|generatedCode| |allCode| |$e|))
+        |op|))))
+
+;makeLocalModemap(op,sig) ==
+;  -- create a local modemap for op with sig, and put it into $e
+;  if (currentMms := get(op,'localModemap,$e)) then
+;    untraceMapSubNames [CADAR currentMms]
+;  newName := makeInternalMapName(op,#sig-1,1+#currentMms,NIL)
+;  newMm := [['local,:sig],newName,nil]
+;  mms := [newMm,:currentMms]
+;  $e := putHist(op,'localModemap,mms,$e)
+;  newName
+
+(DEFUN |makeLocalModemap| (|op| |sig|)
+  (PROG (|currentMms| |newName| |newMm| |mms|)
+    (DECLARE (SPECIAL |$e|))
+    (RETURN
+      (PROGN
+        (COND
+          ((SPADLET |currentMms| (|get| |op| '|localModemap| |$e|))
+           (|untraceMapSubNames| (CONS (CADAR |currentMms|) NIL))))
+        (SPADLET |newName|
+                 (|makeInternalMapName| |op|
+                     (SPADDIFFERENCE (|#| |sig|) 1)
+                     (PLUS 1 (|#| |currentMms|)) NIL))
+        (SPADLET |newMm|
+                 (CONS (CONS '|local| |sig|)
+                       (CONS |newName| (CONS NIL NIL))))
+        (SPADLET |mms| (CONS |newMm| |currentMms|))
+        (SPADLET |$e| (|putHist| |op| '|localModemap| |mms| |$e|))
+        |newName|))))
+
+;genMapCode(op,body,sig,fnName,parms,isRecursive) ==
+;  -- calls the lisp compiler on the body of a map
+;  if lmm:= get(op,'localModemap,$InteractiveFrame) then
+;    untraceMapSubNames [CADAR lmm]
+;  op0 :=
+;    ( n := isSharpVarWithNum op ) => STRCONC('"<argument ",object2String n,'">")
+;    op
+;  if get(op,'isInterpreterRule,$e) then
+;    sayKeyedMsg("S2IM0014",[op0,(PAIRP sig =>prefix2String CAR sig;'"?")])
+;  else sayKeyedMsg("S2IM0015",[op0,formatSignature sig])
+;  $whereCacheList := [op,:$whereCacheList]
+;  -- RSS: 6-21-94
+;  -- The following code ensures that local variables really are local
+;  -- to a function. We will unnecessarily generate preliminary LETs for
+;  -- loop variables and variables that do have LET expressions, but that
+;  -- can be finessed later.
+;  locals := SETDIFFERENCE(COPY $localVars, parms)
+;  if locals then
+;    lets := [['LET, l, ''UNINITIALIZED__VARIABLE, op] for l in locals]
+;    body := ['PROGN, :lets, body]
+;  reportFunctionCompilation(op,fnName,parms,
+;    wrapMapBodyWithCatch flattenCOND body,isRecursive)
+
+(DEFUN |genMapCode| (|op| |body| |sig| |fnName| |parms| |isRecursive|)
+  (PROG (|lmm| |n| |op0| |locals| |lets|)
+    (DECLARE (SPECIAL |$localVars| |$whereCacheList| |$e|
+                      |$InteractiveFrame|))
+    (RETURN
+      (SEQ (PROGN
+             (COND
+               ((SPADLET |lmm|
+                         (|get| |op| '|localModemap|
+                                |$InteractiveFrame|))
+                (|untraceMapSubNames| (CONS (CADAR |lmm|) NIL))))
+             (SPADLET |op0|
+                      (COND
+                        ((SPADLET |n| (|isSharpVarWithNum| |op|))
+                         (STRCONC "<argument " (|object2String| |n|)
+                                  ">"))
+                        ('T |op|)))
+             (COND
+               ((|get| |op| '|isInterpreterRule| |$e|)
+                (|sayKeyedMsg| 'S2IM0014
+                    (CONS |op0|
+                          (CONS (COND
+                                  ((PAIRP |sig|)
+                                   (|prefix2String| (CAR |sig|)))
+                                  ('T (MAKESTRING "?")))
+                                NIL))))
+               ('T
+                (|sayKeyedMsg| 'S2IM0015
+                    (CONS |op0| (CONS (|formatSignature| |sig|) NIL)))))
+             (SPADLET |$whereCacheList| (CONS |op| |$whereCacheList|))
+             (SPADLET |locals|
+                      (SETDIFFERENCE (COPY |$localVars|) |parms|))
+             (COND
+               (|locals|
+                   (SPADLET |lets|
+                            (PROG (G167646)
+                              (SPADLET G167646 NIL)
+                              (RETURN
+                                (DO ((G167651 |locals|
+                                      (CDR G167651))
+                                     (|l| NIL))
+                                    ((OR (ATOM G167651)
+                                      (PROGN
+                                        (SETQ |l| (CAR G167651))
+                                        NIL))
+                                     (NREVERSE0 G167646))
+                                  (SEQ (EXIT
+                                        (SETQ G167646
+                                         (CONS
+                                          (CONS 'LET
+                                           (CONS |l|
+                                            (CONS
+                                             ''UNINITIALIZED_VARIABLE
+                                             (CONS |op| NIL))))
+                                          G167646))))))))
+                   (SPADLET |body|
+                            (CONS 'PROGN
+                                  (APPEND |lets| (CONS |body| NIL))))))
+             (|reportFunctionCompilation| |op| |fnName| |parms|
+                 (|wrapMapBodyWithCatch| (|flattenCOND| |body|))
+                 |isRecursive|))))))
+
+;compileBody(body,target) ==
+;  -- recursively calls the interpreter on the map body
+;  --  returns a triple with the LISP code for body in the value cell
+;  $insideCompileBodyIfTrue: local := true
+;  $genValue: local := false
+;  $declaredMode:local := target
+;  $eval:local:= true
+;  r := interpret1(body,target,nil)
+
+(DEFUN |compileBody| (|body| |target|)
+  (PROG (|$insideCompileBodyIfTrue| |$genValue| |$declaredMode| |$eval|
+            |r|)
+    (DECLARE (SPECIAL |$insideCompileBodyIfTrue| |$genValue|
+                      |$declaredMode| |$eval|))
+    (RETURN
+      (PROGN
+        (SPADLET |$insideCompileBodyIfTrue| 'T)
+        (SPADLET |$genValue| NIL)
+        (SPADLET |$declaredMode| |target|)
+        (SPADLET |$eval| 'T)
+        (SPADLET |r| (|interpret1| |body| |target| NIL))))))
+
+;compileCoerceMap(op,argTypes,mm) ==
+;  -- compiles call to user-declared map where the arguments need
+;  --  to be coerced. mm is the modemap for the declared map.
+;  $insideCompileBodyIfTrue: local := true
+;  $genValue: local := false
+;  [[.,:sig],imp,.]:= mm
+;  parms:= [var for var in $FormalMapVariableList for t in CDR sig]
+;  name:= makeLocalModemap(op,[CAR sig,:argTypes])
+;  argCode := [objVal(coerceInteractive(objNew(arg,t1),t2) or
+;    throwKeyedMsg("S2IC0001",[arg,$mapName,t1,t2]))
+;      for t1 in argTypes for t2 in CDR sig for arg in parms]
+;  $insideCompileBodyIfTrue := false
+;  parms:= [:parms,'envArg]
+;  body := ['SPADCALL,:argCode,['LIST,['function,imp]]]
+;  minivectorName := makeInternalMapMinivectorName(name)
+;  $minivectorNames := [[op,:minivectorName],:$minivectorNames]
+;  body := SUBST(minivectorName,"$$$",body)
+;  if $compilingInputFile then
+;    $minivectorCode := [:$minivectorCode,minivectorName]
+;  SET(minivectorName,LIST2REFVEC $minivector)
+;  compileInteractive [name,['LAMBDA,parms,body]]
+;  CAR sig
+
+(DEFUN |compileCoerceMap| (|op| |argTypes| |mm|)
+  (PROG (|$insideCompileBodyIfTrue| |$genValue| |sig| |imp| |name|
+            |argCode| |parms| |minivectorName| |body|)
+    (DECLARE (SPECIAL |$insideCompileBodyIfTrue| |$genValue|
+                      |$minivector| |$minivectorCode|
+                      |$compilingInputFile| |$minivectorNames|
+                      |$mapName| |$FormalMapVariableList|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$insideCompileBodyIfTrue| 'T)
+             (SPADLET |$genValue| NIL)
+             (SPADLET |sig| (CDAR |mm|))
+             (SPADLET |imp| (CADR |mm|))
+             (SPADLET |parms|
+                      (PROG (G167694)
+                        (SPADLET G167694 NIL)
+                        (RETURN
+                          (DO ((G167700 |$FormalMapVariableList|
+                                   (CDR G167700))
+                               (|var| NIL)
+                               (G167701 (CDR |sig|) (CDR G167701))
+                               (|t| NIL))
+                              ((OR (ATOM G167700)
+                                   (PROGN
+                                     (SETQ |var| (CAR G167700))
+                                     NIL)
+                                   (ATOM G167701)
+                                   (PROGN
+                                     (SETQ |t| (CAR G167701))
+                                     NIL))
+                               (NREVERSE0 G167694))
+                            (SEQ (EXIT (SETQ G167694
+                                        (CONS |var| G167694))))))))
+             (SPADLET |name|
+                      (|makeLocalModemap| |op|
+                          (CONS (CAR |sig|) |argTypes|)))
+             (SPADLET |argCode|
+                      (PROG (G167716)
+                        (SPADLET G167716 NIL)
+                        (RETURN
+                          (DO ((G167723 |argTypes| (CDR G167723))
+                               (|t1| NIL)
+                               (G167724 (CDR |sig|) (CDR G167724))
+                               (|t2| NIL)
+                               (G167725 |parms| (CDR G167725))
+                               (|arg| NIL))
+                              ((OR (ATOM G167723)
+                                   (PROGN
+                                     (SETQ |t1| (CAR G167723))
+                                     NIL)
+                                   (ATOM G167724)
+                                   (PROGN
+                                     (SETQ |t2| (CAR G167724))
+                                     NIL)
+                                   (ATOM G167725)
+                                   (PROGN
+                                     (SETQ |arg| (CAR G167725))
+                                     NIL))
+                               (NREVERSE0 G167716))
+                            (SEQ (EXIT (SETQ G167716
+                                        (CONS
+                                         (|objVal|
+                                          (OR
+                                           (|coerceInteractive|
+                                            (|objNew| |arg| |t1|) |t2|)
+                                           (|throwKeyedMsg| 'S2IC0001
+                                            (CONS |arg|
+                                             (CONS |$mapName|
+                                              (CONS |t1|
+                                               (CONS |t2| NIL)))))))
+                                         G167716))))))))
+             (SPADLET |$insideCompileBodyIfTrue| NIL)
+             (SPADLET |parms| (APPEND |parms| (CONS '|envArg| NIL)))
+             (SPADLET |body|
+                      (CONS 'SPADCALL
+                            (APPEND |argCode|
+                                    (CONS
+                                     (CONS 'LIST
+                                      (CONS
+                                       (CONS '|function|
+                                        (CONS |imp| NIL))
+                                       NIL))
+                                     NIL))))
+             (SPADLET |minivectorName|
+                      (|makeInternalMapMinivectorName| |name|))
+             (SPADLET |$minivectorNames|
+                      (CONS (CONS |op| |minivectorName|)
+                            |$minivectorNames|))
+             (SPADLET |body| (MSUBST |minivectorName| '$$$ |body|))
+             (COND
+               (|$compilingInputFile|
+                   (SPADLET |$minivectorCode|
+                            (APPEND |$minivectorCode|
+                                    (CONS |minivectorName| NIL)))))
+             (SET |minivectorName| (LIST2REFVEC |$minivector|))
+             (|compileInteractive|
+                 (CONS |name|
+                       (CONS (CONS 'LAMBDA
+                                   (CONS |parms| (CONS |body| NIL)))
+                             NIL)))
+             (CAR |sig|))))))
+
+;depthOfRecursion(opName,body) ==
+;  -- returns the "depth" of recursive calls of opName in body
+;  mapRecurDepth(opName,nil,body)
+
+(DEFUN |depthOfRecursion| (|opName| |body|)
+ (|mapRecurDepth| |opName| NIL |body|)) 
+
+;mapRecurDepth(opName,opList,body) ==
+;  -- walks over the map body counting depth of recursive calls
+;  --  expanding the bodies of maps called in body
+;  atom body => 0
+;  body is [op,:argl] =>
+;    argc:=
+;      atom argl => 0
+;      argl => "MAX"/[mapRecurDepth(opName,opList,x) for x in argl]
+;      0
+;    op in opList => argc
+;    op=opName => 1 + argc
+;    (obj := get(op,'value,$e)) and objVal obj is ['MAP,:mapDef] =>
+;      mapRecurDepth(opName,[op,:opList],getMapBody(op,mapDef))
+;        + argc
+;    argc
+;  keyedSystemError("S2GE0016",['"mapRecurDepth",
+;    '"unknown function form"])
+
+(DEFUN |mapRecurDepth| (|opName| |opList| |body|)
+  (PROG (|op| |argl| |argc| |obj| |ISTMP#1| |mapDef|)
+    (DECLARE (SPECIAL |$e|))
+    (RETURN
+      (SEQ (COND
+             ((ATOM |body|) 0)
+             ((AND (PAIRP |body|)
+                   (PROGN
+                     (SPADLET |op| (QCAR |body|))
+                     (SPADLET |argl| (QCDR |body|))
+                     'T))
+              (SPADLET |argc|
+                       (COND
+                         ((ATOM |argl|) 0)
+                         (|argl| (PROG (G167773)
+                                   (SPADLET G167773 -999999)
+                                   (RETURN
+                                     (DO
+                                      ((G167778 |argl|
+                                        (CDR G167778))
+                                       (|x| NIL))
+                                      ((OR (ATOM G167778)
+                                        (PROGN
+                                          (SETQ |x| (CAR G167778))
+                                          NIL))
+                                       G167773)
+                                       (SEQ
+                                        (EXIT
+                                         (SETQ G167773
+                                          (MAX G167773
+                                           (|mapRecurDepth| |opName|
+                                            |opList| |x|)))))))))
+                         ('T 0)))
+              (COND
+                ((|member| |op| |opList|) |argc|)
+                ((BOOT-EQUAL |op| |opName|) (PLUS 1 |argc|))
+                ((AND (SPADLET |obj| (|get| |op| '|value| |$e|))
+                      (PROGN
+                        (SPADLET |ISTMP#1| (|objVal| |obj|))
+                        (AND (PAIRP |ISTMP#1|)
+                             (EQ (QCAR |ISTMP#1|) 'MAP)
+                             (PROGN
+                               (SPADLET |mapDef| (QCDR |ISTMP#1|))
+                               'T))))
+                 (PLUS (|mapRecurDepth| |opName| (CONS |op| |opList|)
+                           (|getMapBody| |op| |mapDef|))
+                       |argc|))
+                ('T |argc|)))
+             ('T
+              (|keyedSystemError| 'S2GE0016
+                  (CONS "mapRecurDepth"
+                        (CONS "unknown function form" NIL)))))))))
+
+;analyzeUndeclaredMap(op,argTypes,mapDef,$mapList) ==
+;  -- Computes the signature of the map named op, and compiles the body
+;  $freeVars:local := NIL
+;  $localVars: local := NIL
+;  $env:local:= [[NIL]]
+;  $mapList := [op,:$mapList]
+;  parms:=[var for var in $FormalMapVariableList for m in argTypes]
+;  for m in argTypes for var in parms repeat
+;    put(var,'autoDeclare,'T,$env)
+;    put(var,'mode,m,$env)
+;  body:= getMapBody(op,mapDef)
+;  for lvar in parms repeat mkLocalVar($mapName,lvar)
+;  for lvar in getLocalVars(op,body) repeat mkLocalVar($mapName,lvar)
+;  (n:= depthOfRecursion(op,body)) = 0 =>
+;    analyzeNonRecursiveMap(op,argTypes,body,parms)
+;  analyzeRecursiveMap(op,argTypes,body,parms,n)
+
+(DEFUN |analyzeUndeclaredMap| (|op| |argTypes| |mapDef| |$mapList|)
+  (DECLARE (SPECIAL |$mapList|))
+  (PROG (|$freeVars| |$localVars| |$env| |parms| |body| |n|)
+    (DECLARE (SPECIAL |$freeVars| |$localVars| |$env| |$mapName|
+                      |$mapList| |$FormalMapVariableList|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$freeVars| NIL)
+             (SPADLET |$localVars| NIL)
+             (SPADLET |$env| (CONS (CONS NIL NIL) NIL))
+             (SPADLET |$mapList| (CONS |op| |$mapList|))
+             (SPADLET |parms|
+                      (PROG (G167801)
+                        (SPADLET G167801 NIL)
+                        (RETURN
+                          (DO ((G167807 |$FormalMapVariableList|
+                                   (CDR G167807))
+                               (|var| NIL)
+                               (G167808 |argTypes| (CDR G167808))
+                               (|m| NIL))
+                              ((OR (ATOM G167807)
+                                   (PROGN
+                                     (SETQ |var| (CAR G167807))
+                                     NIL)
+                                   (ATOM G167808)
+                                   (PROGN
+                                     (SETQ |m| (CAR G167808))
+                                     NIL))
+                               (NREVERSE0 G167801))
+                            (SEQ (EXIT (SETQ G167801
+                                        (CONS |var| G167801))))))))
+             (DO ((G167823 |argTypes| (CDR G167823)) (|m| NIL)
+                  (G167824 |parms| (CDR G167824)) (|var| NIL))
+                 ((OR (ATOM G167823)
+                      (PROGN (SETQ |m| (CAR G167823)) NIL)
+                      (ATOM G167824)
+                      (PROGN (SETQ |var| (CAR G167824)) NIL))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (|put| |var| '|autoDeclare| 'T |$env|)
+                            (|put| |var| '|mode| |m| |$env|)))))
+             (SPADLET |body| (|getMapBody| |op| |mapDef|))
+             (DO ((G167836 |parms| (CDR G167836)) (|lvar| NIL))
+                 ((OR (ATOM G167836)
+                      (PROGN (SETQ |lvar| (CAR G167836)) NIL))
+                  NIL)
+               (SEQ (EXIT (|mkLocalVar| |$mapName| |lvar|))))
+             (DO ((G167845 (|getLocalVars| |op| |body|)
+                      (CDR G167845))
+                  (|lvar| NIL))
+                 ((OR (ATOM G167845)
+                      (PROGN (SETQ |lvar| (CAR G167845)) NIL))
+                  NIL)
+               (SEQ (EXIT (|mkLocalVar| |$mapName| |lvar|))))
+             (COND
+               ((EQL (SPADLET |n| (|depthOfRecursion| |op| |body|)) 0)
+                (|analyzeNonRecursiveMap| |op| |argTypes| |body|
+                    |parms|))
+               ('T
+                (|analyzeRecursiveMap| |op| |argTypes| |body| |parms|
+                    |n|))))))))
+
+;analyzeNonRecursiveMap(op,argTypes,body,parms) ==
+;  -- analyze and compile a non-recursive map definition
+;  T := compileBody(body,$mapTarget)
+;  if $mapThrowCount > 0 then
+;    t := objMode T
+;    b := and/[(t = rt) for rt in $mapReturnTypes]
+;    not b =>
+;      t := resolveTypeListAny [t,:$mapReturnTypes]
+;      if not $mapTarget then $mapTarget := t
+;      T := compileBody(body,$mapTarget)
+;  sig := [objMode T,:argTypes]
+;  name:= makeLocalModemap(op,sig)
+;  putMapCode(op,objVal T,sig,name,parms,false)
+;  genMapCode(op,objVal T,sig,name,parms,false)
+;  objMode(T)
+
+(DEFUN |analyzeNonRecursiveMap| (|op| |argTypes| |body| |parms|)
+  (PROG (|b| |t| T$ |sig| |name|)
+    (DECLARE (SPECIAL |$mapTarget| |$mapReturnTypes| |$mapThrowCount|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET T$ (|compileBody| |body| |$mapTarget|))
+             (COND
+               ((> |$mapThrowCount| 0) (SPADLET |t| (|objMode| T$))
+                (SPADLET |b|
+                         (PROG (G167872)
+                           (SPADLET G167872 'T)
+                           (RETURN
+                             (DO ((G167878 NIL (NULL G167872))
+                                  (G167879 |$mapReturnTypes|
+                                      (CDR G167879))
+                                  (|rt| NIL))
+                                 ((OR G167878 (ATOM G167879)
+                                      (PROGN
+                                        (SETQ |rt| (CAR G167879))
+                                        NIL))
+                                  G167872)
+                               (SEQ (EXIT
+                                     (SETQ G167872
+                                      (AND G167872
+                                       (BOOT-EQUAL |t| |rt|)))))))))
+                (COND
+                  ((NULL |b|)
+                   (PROGN
+                     (SPADLET |t|
+                              (|resolveTypeListAny|
+                                  (CONS |t| |$mapReturnTypes|)))
+                     (COND
+                       ((NULL |$mapTarget|) (SPADLET |$mapTarget| |t|)))
+                     (SPADLET T$ (|compileBody| |body| |$mapTarget|)))))))
+             (SPADLET |sig| (CONS (|objMode| T$) |argTypes|))
+             (SPADLET |name| (|makeLocalModemap| |op| |sig|))
+             (|putMapCode| |op| (|objVal| T$) |sig| |name| |parms| NIL)
+             (|genMapCode| |op| (|objVal| T$) |sig| |name| |parms| NIL)
+             (|objMode| T$))))))
+
+;analyzeRecursiveMap(op,argTypes,body,parms,n) ==
+;  -- analyze and compile a non-recursive map definition
+;  --  makes guess at signature by analyzing non-recursive part of body
+;  --  then re-analyzes the entire body until the signature doesn't change
+;  localMapInfo := saveDependentMapInfo(op, CDR $mapList)
+;  tar := CATCH('interpreter,analyzeNonRecur(op,body,$localVars))
+;  for i in 0..n until not sigChanged repeat
+;    sigChanged:= false
+;    name := makeLocalModemap(op,sig:=[tar,:argTypes])
+;    code := compileBody(body,$mapTarget)
+;    objMode(code) ^= tar =>
+;      sigChanged:= true
+;      tar := objMode(code)
+;      restoreDependentMapInfo(op, CDR $mapList, localMapInfo)
+;  sigChanged => throwKeyedMsg("S2IM0011",[op])
+;  putMapCode(op,objVal code,sig,name,parms,true)
+;  genMapCode(op,objVal code,sig,name,parms,true)
+;  tar
+
+(DEFUN |analyzeRecursiveMap| (|op| |argTypes| |body| |parms| |n|)
+  (PROG (|localMapInfo| |sig| |name| |code| |sigChanged| |tar|)
+    (DECLARE (SPECIAL |$mapList| |$mapTarget| |$localVars|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |localMapInfo|
+                      (|saveDependentMapInfo| |op| (CDR |$mapList|)))
+             (SPADLET |tar|
+                      (CATCH '|interpreter|
+                        (|analyzeNonRecur| |op| |body| |$localVars|)))
+             (DO ((|i| 0 (QSADD1 |i|))
+                  (G167912 NIL (NULL |sigChanged|)))
+                 ((OR (QSGREATERP |i| |n|) G167912) NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |sigChanged| NIL)
+                            (SPADLET |name|
+                                     (|makeLocalModemap| |op|
+                                      (SPADLET |sig|
+                                       (CONS |tar| |argTypes|))))
+                            (SPADLET |code|
+                                     (|compileBody| |body|
+                                      |$mapTarget|))
+                            (COND
+                              ((NEQUAL (|objMode| |code|) |tar|)
+                               (PROGN
+                                 (SPADLET |sigChanged| 'T)
+                                 (SPADLET |tar| (|objMode| |code|))
+                                 (|restoreDependentMapInfo| |op|
+                                     (CDR |$mapList|) |localMapInfo|))))))))
+             (COND
+               (|sigChanged|
+                   (|throwKeyedMsg| 'S2IM0011 (CONS |op| NIL)))
+               ('T
+                (|putMapCode| |op| (|objVal| |code|) |sig| |name|
+                    |parms| 'T)
+                (|genMapCode| |op| (|objVal| |code|) |sig| |name|
+                    |parms| 'T)
+                |tar|)))))))
+
+;saveDependentMapInfo(op,opList) ==
+;  not (op in opList) =>
+;    lmml := [[op, :get(op, 'localModemap, $e)]]
+;    gcl := [[op, :get(op, 'generatedCode, $e)]]
+;    for [dep1,dep2] in getFlag("$dependencies") | dep1=op repeat
+;      [lmml', :gcl'] := saveDependentMapInfo(dep2, [op, :opList])
+;      lmms := nconc(lmml', lmml)
+;      gcl := nconc(gcl', gcl)
+;    [lmms, :gcl]
+;  nil
+
+(DEFUN |saveDependentMapInfo| (|op| |opList|)
+  (PROG (|lmml| |dep1| |dep2| |LETTMP#1| |lmml'| |gcl'| |lmms| |gcl|)
+    (DECLARE (SPECIAL |$dependencies| |$e|))
+    (RETURN
+      (SEQ (COND
+             ((NULL (|member| |op| |opList|))
+              (SPADLET |lmml|
+                       (CONS (CONS |op|
+                                   (|get| |op| '|localModemap| |$e|))
+                             NIL))
+              (SPADLET |gcl|
+                       (CONS (CONS |op|
+                                   (|get| |op| '|generatedCode| |$e|))
+                             NIL))
+              (DO ((G167952 (|getFlag| '|$dependencies|)
+                       (CDR G167952))
+                   (G167936 NIL))
+                  ((OR (ATOM G167952)
+                       (PROGN (SETQ G167936 (CAR G167952)) NIL)
+                       (PROGN
+                         (PROGN
+                           (SPADLET |dep1| (CAR G167936))
+                           (SPADLET |dep2| (CADR G167936))
+                           G167936)
+                         NIL))
+                   NIL)
+                (SEQ (EXIT (COND
+                             ((BOOT-EQUAL |dep1| |op|)
+                              (PROGN
+                                (SPADLET |LETTMP#1|
+                                         (|saveDependentMapInfo| |dep2|
+                                          (CONS |op| |opList|)))
+                                (SPADLET |lmml'| (CAR |LETTMP#1|))
+                                (SPADLET |gcl'| (CDR |LETTMP#1|))
+                                (SPADLET |lmms| (NCONC |lmml'| |lmml|))
+                                (SPADLET |gcl| (NCONC |gcl'| |gcl|))))))))
+              (CONS |lmms| |gcl|))
+             ('T NIL))))))
+
+;restoreDependentMapInfo(op, opList, [lmml,:gcl]) ==
+;  not (op in opList) =>
+;    clearDependentMaps(op,opList)
+;    for [op, :lmm] in lmml repeat
+;      $e := putHist(op,'localModemap,lmm,$e)
+;    for [op, :gc] in gcl repeat
+;      $e := putHist(op,'generatedCode,gc,$e)
+
+(DEFUN |restoreDependentMapInfo| (|op| |opList| G167980)
+  (PROG (|lmml| |gcl| |lmm| |gc|)
+    (DECLARE (SPECIAL |$e|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |lmml| (CAR G167980))
+             (SPADLET |gcl| (CDR G167980))
+             (COND
+               ((NULL (|member| |op| |opList|))
+                (PROGN
+                  (|clearDependentMaps| |op| |opList|)
+                  (DO ((G167999 |lmml| (CDR G167999))
+                       (G167971 NIL))
+                      ((OR (ATOM G167999)
+                           (PROGN
+                             (SETQ G167971 (CAR G167999))
+                             NIL)
+                           (PROGN
+                             (PROGN
+                               (SPADLET |op| (CAR G167971))
+                               (SPADLET |lmm| (CDR G167971))
+                               G167971)
+                             NIL))
+                       NIL)
+                    (SEQ (EXIT (SPADLET |$e|
+                                        (|putHist| |op| '|localModemap|
+                                         |lmm| |$e|)))))
+                  (DO ((G168010 |gcl| (CDR G168010))
+                       (G167975 NIL))
+                      ((OR (ATOM G168010)
+                           (PROGN
+                             (SETQ G167975 (CAR G168010))
+                             NIL)
+                           (PROGN
+                             (PROGN
+                               (SPADLET |op| (CAR G167975))
+                               (SPADLET |gc| (CDR G167975))
+                               G167975)
+                             NIL))
+                       NIL)
+                    (SEQ (EXIT (SPADLET |$e|
+                                        (|putHist| |op|
+                                        '|generatedCode| |gc| |$e|)))))))))))))
+
+;clearDependentMaps(op,opList) ==
+;  -- clears the local modemaps of all the maps that depend on op
+;  not (op in opList) =>
+;    $e := putHist(op,'localModemap,nil,$e)
+;    $e := putHist(op,'generatedCode,nil,$e)
+;    for [dep1,dep2] in getFlag("$dependencies") | dep1=op repeat
+;      clearDependentMaps(dep2,[op,:opList])
+
+(DEFUN |clearDependentMaps| (|op| |opList|)
+  (PROG (|dep1| |dep2|)
+    (DECLARE (SPECIAL |$dependencies| |$e|))
+    (RETURN
+      (SEQ (COND
+             ((NULL (|member| |op| |opList|))
+              (EXIT (PROGN
+                      (SPADLET |$e|
+                               (|putHist| |op| '|localModemap| NIL
+                                   |$e|))
+                      (SPADLET |$e|
+                               (|putHist| |op| '|generatedCode| NIL
+                                   |$e|))
+                      (DO ((G168038 (|getFlag| '|$dependencies|)
+                               (CDR G168038))
+                           (G168028 NIL))
+                          ((OR (ATOM G168038)
+                               (PROGN
+                                 (SETQ G168028 (CAR G168038))
+                                 NIL)
+                               (PROGN
+                                 (PROGN
+                                   (SPADLET |dep1| (CAR G168028))
+                                   (SPADLET |dep2| (CADR G168028))
+                                   G168028)
+                                 NIL))
+                           NIL)
+                        (SEQ (EXIT (COND
+                                     ((BOOT-EQUAL |dep1| |op|)
+                                      (|clearDependentMaps| |dep2|
+                                       (CONS |op| |opList|)))))))))))))))
+
+;analyzeNonRecur(op,body,$localVars) ==
+;  -- type analyze the non-recursive part of a map body
+;  nrp := nonRecursivePart(op,body)
+;  for lvar in findLocalVars(op,nrp) repeat mkLocalVar($mapName,lvar)
+;  objMode(compileBody(nrp,$mapTarget))
+
+(DEFUN |analyzeNonRecur| (|op| |body| |$localVars|)
+  (DECLARE (SPECIAL |$localVars|))
+  (PROG (|nrp|)
+    (DECLARE (SPECIAL |$mapTarget| |$mapName|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |nrp| (|nonRecursivePart| |op| |body|))
+             (DO ((G168056 (|findLocalVars| |op| |nrp|)
+                      (CDR G168056))
+                  (|lvar| NIL))
+                 ((OR (ATOM G168056)
+                      (PROGN (SETQ |lvar| (CAR G168056)) NIL))
+                  NIL)
+               (SEQ (EXIT (|mkLocalVar| |$mapName| |lvar|))))
+             (|objMode| (|compileBody| |nrp| |$mapTarget|)))))))
+
+;nonRecursivePart(opName, funBody) ==
+;  -- takes funBody, which is the parse tree of the definition of
+;  --  a function, and returns a list of the parts
+;  --  of the function which are not recursive in the name opName
+;  body:= expandRecursiveBody([opName], funBody)
+;  ((nrp:=nonRecursivePart1(opName, body)) ^= 'noMapVal) => nrp
+;  throwKeyedMsg("S2IM0012",[opName])
+
+(DEFUN |nonRecursivePart| (|opName| |funBody|)
+  (PROG (|body| |nrp|)
+    (RETURN
+      (PROGN
+        (SPADLET |body|
+                 (|expandRecursiveBody| (CONS |opName| NIL) |funBody|))
+        (COND
+          ((NEQUAL (SPADLET |nrp|
+                            (|nonRecursivePart1| |opName| |body|))
+                   '|noMapVal|)
+           |nrp|)
+          ('T (|throwKeyedMsg| 'S2IM0012 (CONS |opName| NIL))))))))
+
+;expandRecursiveBody(alreadyExpanded, body) ==
+;  -- replaces calls to other maps with their bodies
+;  atom body =>
+;    (obj := get(body,'value,$e)) and objVal obj is ['MAP,:mapDef] and
+;      ((numMapArgs mapDef) = 0) => getMapBody(body,mapDef)
+;    body
+;  body is [op,:argl] =>
+;    not (op in alreadyExpanded) =>
+;      (obj := get(op,'value,$e)) and objVal obj is ['MAP,:mapDef] =>
+;        newBody:= getMapBody(op,mapDef)
+;        for arg in argl for var in $FormalMapVariableList repeat
+;          newBody:=MSUBST(arg,var,newBody)
+;        expandRecursiveBody([op,:alreadyExpanded],newBody)
+;      [op,:[expandRecursiveBody(alreadyExpanded,arg) for arg in argl]]
+;    [op,:[expandRecursiveBody(alreadyExpanded,arg) for arg in argl]]
+;  keyedSystemError("S2GE0016",['"expandRecursiveBody",
+;    '"unknown form of function body"])
+
+(DEFUN |expandRecursiveBody| (|alreadyExpanded| |body|)
+  (PROG (|op| |argl| |obj| |ISTMP#1| |mapDef| |newBody|)
+    (DECLARE (SPECIAL |$FormalMapVariableList| |$e|))
+    (RETURN
+      (SEQ (COND
+             ((ATOM |body|)
+              (COND
+                ((AND (SPADLET |obj| (|get| |body| '|value| |$e|))
+                      (PROGN
+                        (SPADLET |ISTMP#1| (|objVal| |obj|))
+                        (AND (PAIRP |ISTMP#1|)
+                             (EQ (QCAR |ISTMP#1|) 'MAP)
+                             (PROGN
+                               (SPADLET |mapDef| (QCDR |ISTMP#1|))
+                               'T)))
+                      (EQL (|numMapArgs| |mapDef|) 0))
+                 (|getMapBody| |body| |mapDef|))
+                ('T |body|)))
+             ((AND (PAIRP |body|)
+                   (PROGN
+                     (SPADLET |op| (QCAR |body|))
+                     (SPADLET |argl| (QCDR |body|))
+                     'T))
+              (COND
+                ((NULL (|member| |op| |alreadyExpanded|))
+                 (COND
+                   ((AND (SPADLET |obj| (|get| |op| '|value| |$e|))
+                         (PROGN
+                           (SPADLET |ISTMP#1| (|objVal| |obj|))
+                           (AND (PAIRP |ISTMP#1|)
+                                (EQ (QCAR |ISTMP#1|) 'MAP)
+                                (PROGN
+                                  (SPADLET |mapDef| (QCDR |ISTMP#1|))
+                                  'T))))
+                    (SPADLET |newBody| (|getMapBody| |op| |mapDef|))
+                    (DO ((G168093 |argl| (CDR G168093)) (|arg| NIL)
+                         (G168094 |$FormalMapVariableList|
+                             (CDR G168094))
+                         (|var| NIL))
+                        ((OR (ATOM G168093)
+                             (PROGN (SETQ |arg| (CAR G168093)) NIL)
+                             (ATOM G168094)
+                             (PROGN (SETQ |var| (CAR G168094)) NIL))
+                         NIL)
+                      (SEQ (EXIT (SPADLET |newBody|
+                                          (MSUBST |arg| |var|
+                                           |newBody|)))))
+                    (|expandRecursiveBody|
+                        (CONS |op| |alreadyExpanded|) |newBody|))
+                   ('T
+                    (CONS |op|
+                          (PROG (G168107)
+                            (SPADLET G168107 NIL)
+                            (RETURN
+                              (DO ((G168112 |argl| (CDR G168112))
+                                   (|arg| NIL))
+                                  ((OR (ATOM G168112)
+                                    (PROGN
+                                      (SETQ |arg| (CAR G168112))
+                                      NIL))
+                                   (NREVERSE0 G168107))
+                                (SEQ (EXIT
+                                      (SETQ G168107
+                                       (CONS
+                                        (|expandRecursiveBody|
+                                         |alreadyExpanded| |arg|)
+                                        G168107)))))))))))
+                ('T
+                 (CONS |op|
+                       (PROG (G168122)
+                         (SPADLET G168122 NIL)
+                         (RETURN
+                           (DO ((G168127 |argl| (CDR G168127))
+                                (|arg| NIL))
+                               ((OR (ATOM G168127)
+                                    (PROGN
+                                      (SETQ |arg| (CAR G168127))
+                                      NIL))
+                                (NREVERSE0 G168122))
+                             (SEQ (EXIT (SETQ G168122
+                                         (CONS
+                                          (|expandRecursiveBody|
+                                           |alreadyExpanded| |arg|)
+                                          G168122)))))))))))
+             ('T
+              (|keyedSystemError| 'S2GE0016
+                  (CONS "expandRecursiveBody"
+                        (CONS "unknown form of function body" NIL)))))))))
+
+;nonRecursivePart1(opName, funBody) ==
+;  -- returns a function body which contains only the parts of funBody
+;  --  which do not call the function opName
+;  funBody is ['IF,a,b,c] =>
+;    nra:=nonRecursivePart1(opName,a)
+;    nra = 'noMapVal => 'noMapVal
+;    nrb:=nonRecursivePart1(opName,b)
+;    nrc:=nonRecursivePart1(opName,c)
+;    not (nrb in '(noMapVal noBranch)) => ['IF,nra,nrb,nrc]
+;    not (nrc in '(noMapVal noBranch)) => ['IF,['not,nra],nrc,nrb]
+;    'noMapVal
+;  not containsOp(funBody,'IF) =>
+;    notCalled(opName,funBody) => funBody
+;    'noMapVal
+;  funBody is [op,:argl] =>
+;    op=opName => 'noMapVal
+;    args:= [nonRecursivePart1(opName,arg) for arg in argl]
+;    MEMQ('noMapVal,args) => 'noMapVal
+;    [op,:args]
+;  funBody
+
+(DEFUN |nonRecursivePart1| (|opName| |funBody|)
+  (PROG (|ISTMP#1| |a| |ISTMP#2| |b| |ISTMP#3| |c| |nra| |nrb| |nrc|
+            |op| |argl| |args|)
+    (RETURN
+      (SEQ (COND
+             ((AND (PAIRP |funBody|) (EQ (QCAR |funBody|) 'IF)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |funBody|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                                   (AND (PAIRP |ISTMP#3|)
+                                    (EQ (QCDR |ISTMP#3|) NIL)
+                                    (PROGN
+                                      (SPADLET |c| (QCAR |ISTMP#3|))
+                                      'T))))))))
+              (SPADLET |nra| (|nonRecursivePart1| |opName| |a|))
+              (COND
+                ((BOOT-EQUAL |nra| '|noMapVal|) '|noMapVal|)
+                ('T (SPADLET |nrb| (|nonRecursivePart1| |opName| |b|))
+                 (SPADLET |nrc| (|nonRecursivePart1| |opName| |c|))
+                 (COND
+                   ((NULL (|member| |nrb| '(|noMapVal| |noBranch|)))
+                    (CONS 'IF
+                          (CONS |nra| (CONS |nrb| (CONS |nrc| NIL)))))
+                   ((NULL (|member| |nrc| '(|noMapVal| |noBranch|)))
+                    (CONS 'IF
+                          (CONS (CONS '|not| (CONS |nra| NIL))
+                                (CONS |nrc| (CONS |nrb| NIL)))))
+                   ('T '|noMapVal|)))))
+             ((NULL (|containsOp| |funBody| 'IF))
+              (COND
+                ((|notCalled| |opName| |funBody|) |funBody|)
+                ('T '|noMapVal|)))
+             ((AND (PAIRP |funBody|)
+                   (PROGN
+                     (SPADLET |op| (QCAR |funBody|))
+                     (SPADLET |argl| (QCDR |funBody|))
+                     'T))
+              (COND
+                ((BOOT-EQUAL |op| |opName|) '|noMapVal|)
+                ('T
+                 (SPADLET |args|
+                          (PROG (G168193)
+                            (SPADLET G168193 NIL)
+                            (RETURN
+                              (DO ((G168198 |argl| (CDR G168198))
+                                   (|arg| NIL))
+                                  ((OR (ATOM G168198)
+                                    (PROGN
+                                      (SETQ |arg| (CAR G168198))
+                                      NIL))
+                                   (NREVERSE0 G168193))
+                                (SEQ (EXIT
+                                      (SETQ G168193
+                                       (CONS
+                                        (|nonRecursivePart1| |opName|
+                                         |arg|)
+                                        G168193))))))))
+                 (COND
+                   ((MEMQ '|noMapVal| |args|) '|noMapVal|)
+                   ('T (CONS |op| |args|))))))
+             ('T |funBody|))))))
+
+;containsOp(body,op) ==
+;  -- true IFF body contains an op statement
+;  body is [ =op,:.] => true
+;  body is [.,:argl] => or/[containsOp(arg,op) for arg in argl]
+;  false
+
+(DEFUN |containsOp| (|body| |op|)
+  (PROG (|argl|)
+    (RETURN
+      (SEQ (COND
+             ((AND (PAIRP |body|) (EQUAL (QCAR |body|) |op|)) 'T)
+             ((AND (PAIRP |body|)
+                   (PROGN (SPADLET |argl| (QCDR |body|)) 'T))
+              (PROG (G168221)
+                (SPADLET G168221 NIL)
+                (RETURN
+                  (DO ((G168227 NIL G168221)
+                       (G168228 |argl| (CDR G168228)) (|arg| NIL))
+                      ((OR G168227 (ATOM G168228)
+                           (PROGN (SETQ |arg| (CAR G168228)) NIL))
+                       G168221)
+                    (SEQ (EXIT (SETQ G168221
+                                     (OR G168221
+                                      (|containsOp| |arg| |op|)))))))))
+             ('T NIL))))))
+
+;notCalled(opName,form) ==
+;  -- returns true if opName is not called in the form
+;  atom form => true
+;  form is [op,:argl] =>
+;    op=opName => false
+;    and/[notCalled(opName,x) for x in argl]
+;  keyedSystemError("S2GE0016",['"notCalled",
+;    '"unknown form of function body"])
+
+(DEFUN |notCalled| (|opName| |form|)
+  (PROG (|op| |argl|)
+    (RETURN
+      (SEQ (COND
+             ((ATOM |form|) 'T)
+             ((AND (PAIRP |form|)
+                   (PROGN
+                     (SPADLET |op| (QCAR |form|))
+                     (SPADLET |argl| (QCDR |form|))
+                     'T))
+              (COND
+                ((BOOT-EQUAL |op| |opName|) NIL)
+                ('T
+                 (PROG (G168245)
+                   (SPADLET G168245 'T)
+                   (RETURN
+                     (DO ((G168251 NIL (NULL G168245))
+                          (G168252 |argl| (CDR G168252)) (|x| NIL))
+                         ((OR G168251 (ATOM G168252)
+                              (PROGN (SETQ |x| (CAR G168252)) NIL))
+                          G168245)
+                       (SEQ (EXIT (SETQ G168245
+                                        (AND G168245
+                                         (|notCalled| |opName| |x|)))))))))))
+             ('T
+              (|keyedSystemError| 'S2GE0016
+                  (CONS "notCalled"
+                        (CONS "unknown form of function body" NIL)))))))))
+
+;mapDefsWithCorrectArgCount(n, mapDef) ==
+;  [def for def in mapDef | (numArgs CAR def) = n]
+
+(DEFUN |mapDefsWithCorrectArgCount| (|n| |mapDef|)
+  (PROG ()
+    (RETURN
+      (SEQ (PROG (G168270)
+             (SPADLET G168270 NIL)
+             (RETURN
+               (DO ((G168276 |mapDef| (CDR G168276)) (|def| NIL))
+                   ((OR (ATOM G168276)
+                        (PROGN (SETQ |def| (CAR G168276)) NIL))
+                    (NREVERSE0 G168270))
+                 (SEQ (EXIT (COND
+                              ((BOOT-EQUAL (|numArgs| (CAR |def|)) |n|)
+                             (SETQ G168270 (CONS |def| G168270)))))))))))))
+
+;numMapArgs(mapDef is [[args,:.],:.]) ==
+;  -- returns the number of arguemnts to the map whose body is mapDef
+;  numArgs args
+
+(DEFUN |numMapArgs| (|mapDef|)
+  (PROG (|args|)
+    (RETURN
+      (PROGN (SPADLET |args| (CAAR |mapDef|)) (|numArgs| |args|)))))
+
+;numArgs args ==
+;  args is ['_|,a,:.] => numArgs a
+;  args is ['Tuple,:argl] => #argl
+;  null args => 0
+;  1
+
+(DEFUN |numArgs| (|args|)
+  (PROG (|ISTMP#1| |a| |argl|)
+    (RETURN
+      (COND
+        ((AND (PAIRP |args|) (EQ (QCAR |args|) '|\||)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |args|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN (SPADLET |a| (QCAR |ISTMP#1|)) 'T))))
+         (|numArgs| |a|))
+        ((AND (PAIRP |args|) (EQ (QCAR |args|) '|Tuple|)
+              (PROGN (SPADLET |argl| (QCDR |args|)) 'T))
+         (|#| |argl|))
+        ((NULL |args|) 0)
+        ('T 1)))))
+
+;combineMapParts(mapTail) ==
+;  -- transforms a piece-wise function definition into an if-then-else
+;  --  statement.  Uses noBranch to indicate undefined branch
+;  null mapTail => 'noMapVal
+;  mapTail is [[cond,:part],:restMap] =>
+;    isSharpVarWithNum cond or (cond is ['Tuple,:args] and
+;      and/[isSharpVarWithNum arg for arg in args]) or (null cond) => part
+;    ['IF,mkMapPred cond,part,combineMapParts restMap]
+;  keyedSystemError("S2GE0016",['"combineMapParts",
+;    '"unknown function form"])
+
+(DEFUN |combineMapParts| (|mapTail|)
+  (PROG (|ISTMP#1| |cond| |part| |restMap| |args|)
+    (RETURN
+      (SEQ (COND
+             ((NULL |mapTail|) '|noMapVal|)
+             ((AND (PAIRP |mapTail|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCAR |mapTail|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |cond| (QCAR |ISTMP#1|))
+                            (SPADLET |part| (QCDR |ISTMP#1|))
+                            'T)))
+                   (PROGN (SPADLET |restMap| (QCDR |mapTail|)) 'T))
+              (COND
+                ((OR (|isSharpVarWithNum| |cond|)
+                     (AND (PAIRP |cond|) (EQ (QCAR |cond|) '|Tuple|)
+                          (PROGN (SPADLET |args| (QCDR |cond|)) 'T)
+                          (PROG (G168317)
+                            (SPADLET G168317 'T)
+                            (RETURN
+                              (DO ((G168323 NIL (NULL G168317))
+                                   (G168324 |args| (CDR G168324))
+                                   (|arg| NIL))
+                                  ((OR G168323 (ATOM G168324)
+                                    (PROGN
+                                      (SETQ |arg| (CAR G168324))
+                                      NIL))
+                                   G168317)
+                                (SEQ (EXIT
+                                      (SETQ G168317
+                                       (AND G168317
+                                        (|isSharpVarWithNum| |arg|)))))))))
+                     (NULL |cond|))
+                 |part|)
+                ('T
+                 (CONS 'IF
+                       (CONS (|mkMapPred| |cond|)
+                             (CONS |part|
+                                   (CONS (|combineMapParts| |restMap|)
+                                    NIL)))))))
+             ('T
+              (|keyedSystemError| 'S2GE0016
+                  (CONS "combineMapParts"
+                        (CONS "unknown function form" NIL)))))))))
+
+;mkMapPred cond ==
+;  -- create the predicate on map arguments, derived from "when" clauses
+;  cond is ['_|,args,pred] => mapPredTran pred
+;  cond is ['Tuple,:vals] =>
+;    mkValueCheck(vals,1)
+;  mkValCheck(cond,1)
+
+(DEFUN |mkMapPred| (|cond|)
+  (PROG (|ISTMP#1| |args| |ISTMP#2| |pred| |vals|)
+    (RETURN
+      (COND
+        ((AND (PAIRP |cond|) (EQ (QCAR |cond|) '|\||)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |cond|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN
+                       (SPADLET |args| (QCAR |ISTMP#1|))
+                       (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                       (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL)
+                            (PROGN
+                              (SPADLET |pred| (QCAR |ISTMP#2|))
+                              'T))))))
+         (|mapPredTran| |pred|))
+        ((AND (PAIRP |cond|) (EQ (QCAR |cond|) '|Tuple|)
+              (PROGN (SPADLET |vals| (QCDR |cond|)) 'T))
+         (|mkValueCheck| |vals| 1))
+        ('T (|mkValCheck| |cond| 1))))))
+
+;mkValueCheck(vals,i) ==
+;  -- creates predicate for specific value check (i.e f 1 == 1)
+;  vals is [val] => mkValCheck(val,i)
+;  ['and,mkValCheck(first vals,i),mkValueCheck(rest vals,i+1)]
+
+(DEFUN |mkValueCheck| (|vals| |i|)
+  (PROG (|val|)
+    (RETURN
+      (COND
+        ((AND (PAIRP |vals|) (EQ (QCDR |vals|) NIL)
+              (PROGN (SPADLET |val| (QCAR |vals|)) 'T))
+         (|mkValCheck| |val| |i|))
+        ('T
+         (CONS '|and|
+               (CONS (|mkValCheck| (CAR |vals|) |i|)
+                     (CONS (|mkValueCheck| (CDR |vals|) (PLUS |i| 1))
+                           NIL))))))))
+
+;mkValCheck(val,i) ==
+;  -- create equality check for map predicates
+;  isSharpVarWithNum val => 'true
+;  ['_=,mkSharpVar i,val]
+
+(DEFUN |mkValCheck| (|val| |i|)
+  (COND
+    ((|isSharpVarWithNum| |val|) '|true|)
+    ('T (CONS '= (CONS (|mkSharpVar| |i|) (CONS |val| NIL))))))
+
+;mkSharpVar i ==
+;  -- create #i
+;  INTERN CONCAT('"#",STRINGIMAGE i)
+
+(DEFUN |mkSharpVar| (|i|)
+  (INTERN (CONCAT (MAKESTRING "#") (STRINGIMAGE |i|))))
+
+;mapPredTran pred ==
+;  -- transforms "x in i..j" to "x>=i and x<=j"
+;  pred is ['in,var,['SEGMENT,lb]] => mkLessOrEqual(lb,var)
+;  pred is ['in,var,['SEGMENT,lb,ub]] =>
+;    null ub => mkLessOrEqual(lb,var)
+;    ['and,mkLessOrEqual(lb,var),mkLessOrEqual(var,ub)]
+;  pred
+
+(DEFUN |mapPredTran| (|pred|)
+  (PROG (|ISTMP#1| |var| |ISTMP#2| |ISTMP#3| |ISTMP#4| |lb| |ISTMP#5|
+            |ub|)
+    (RETURN
+      (COND
+        ((AND (PAIRP |pred|) (EQ (QCAR |pred|) '|in|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |pred|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN
+                       (SPADLET |var| (QCAR |ISTMP#1|))
+                       (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                       (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL)
+                            (PROGN
+                              (SPADLET |ISTMP#3| (QCAR |ISTMP#2|))
+                              (AND (PAIRP |ISTMP#3|)
+                                   (EQ (QCAR |ISTMP#3|) 'SEGMENT)
+                                   (PROGN
+                                     (SPADLET |ISTMP#4|
+                                      (QCDR |ISTMP#3|))
+                                     (AND (PAIRP |ISTMP#4|)
+                                      (EQ (QCDR |ISTMP#4|) NIL)
+                                      (PROGN
+                                        (SPADLET |lb| (QCAR |ISTMP#4|))
+                                        'T))))))))))
+         (|mkLessOrEqual| |lb| |var|))
+        ((AND (PAIRP |pred|) (EQ (QCAR |pred|) '|in|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |pred|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN
+                       (SPADLET |var| (QCAR |ISTMP#1|))
+                       (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                       (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL)
+                            (PROGN
+                              (SPADLET |ISTMP#3| (QCAR |ISTMP#2|))
+                              (AND (PAIRP |ISTMP#3|)
+                                   (EQ (QCAR |ISTMP#3|) 'SEGMENT)
+                                   (PROGN
+                                     (SPADLET |ISTMP#4|
+                                      (QCDR |ISTMP#3|))
+                                     (AND (PAIRP |ISTMP#4|)
+                                      (PROGN
+                                        (SPADLET |lb| (QCAR |ISTMP#4|))
+                                        (SPADLET |ISTMP#5|
+                                         (QCDR |ISTMP#4|))
+                                        (AND (PAIRP |ISTMP#5|)
+                                         (EQ (QCDR |ISTMP#5|) NIL)
+                                         (PROGN
+                                           (SPADLET |ub|
+                                            (QCAR |ISTMP#5|))
+                                           'T))))))))))))
+         (COND
+           ((NULL |ub|) (|mkLessOrEqual| |lb| |var|))
+           ('T
+            (CONS '|and|
+                  (CONS (|mkLessOrEqual| |lb| |var|)
+                        (CONS (|mkLessOrEqual| |var| |ub|) NIL))))))
+        ('T |pred|)))))
+
+;findLocalVars(op,form) ==
+;  -- analyzes form for local and free variables, and returns the list
+;  --  of locals
+;  findLocalVars1(op,form)
+;  $localVars
+
+(DEFUN |findLocalVars| (|op| |form|)
+  (DECLARE (SPECIAL |$localVars|))
+  (PROGN (|findLocalVars1| |op| |form|) |$localVars|))
+
+;findLocalVars1(op,form) ==
+;  -- sets the two lists $localVars and $freeVars
+;  atom form =>
+;    not IDENTP form or isSharpVarWithNum form => nil
+;    isLocalVar(form) or isFreeVar(form) => nil
+;    mkFreeVar($mapName,form)
+;  form is ['local, :vars] =>
+;    for x in vars repeat
+;      ATOM x => mkLocalVar(op, x)
+;  form is ['free, :vars] =>
+;    for x in vars repeat
+;      ATOM x => mkFreeVar(op, x)
+;  form is ['LET,a,b] =>
+;    (a is ['Tuple,:vars]) and (b is ['Tuple,:vals]) =>
+;      for var in vars for val in vals repeat
+;        findLocalVars1(op,['LET,var,val])
+;    a is ['construct,:pat] =>
+;      for var in listOfVariables pat repeat mkLocalVar(op,var)
+;      findLocalVars1(op,b)
+;    (atom a) or (a is ['_:,a,.]) =>
+;      mkLocalVar(op,a)
+;      findLocalVars1(op,b)
+;    findLocalVars(op,b)
+;    for x in a repeat findLocalVars1(op,x)
+;  form is ['_:,a,.] =>
+;    mkLocalVar(op,a)
+;  form is ['is,l,pattern] =>
+;    findLocalVars1(op,l)
+;    for var in listOfVariables CDR pattern repeat mkLocalVar(op,var)
+;  form is [oper,:itrl,body] and MEMQ(oper,'(REPEAT COLLECT)) =>
+;    findLocalsInLoop(op,itrl,body)
+;  form is [y,:argl] =>
+;    y is 'Record => nil
+;    for x in argl repeat findLocalVars1(op,x)
+;  keyedSystemError("S2IM0020",[op])
+
+(DEFUN |findLocalVars1| (|op| |form|)
+  (PROG (|b| |vars| |vals| |pat| |a| |l| |pattern| |oper| |ISTMP#1|
+             |ISTMP#2| |body| |itrl| |y| |argl|)
+    (DECLARE (SPECIAL |$mapName|))
+    (RETURN
+      (SEQ (COND
+             ((ATOM |form|)
+              (COND
+                ((OR (NULL (IDENTP |form|))
+                     (|isSharpVarWithNum| |form|))
+                 NIL)
+                ((OR (|isLocalVar| |form|) (|isFreeVar| |form|)) NIL)
+                ('T (|mkFreeVar| |$mapName| |form|))))
+             ((AND (PAIRP |form|) (EQ (QCAR |form|) '|local|)
+                   (PROGN (SPADLET |vars| (QCDR |form|)) 'T))
+              (DO ((G168587 |vars| (CDR G168587)) (|x| NIL))
+                  ((OR (ATOM G168587)
+                       (PROGN (SETQ |x| (CAR G168587)) NIL))
+                   NIL)
+                (SEQ (EXIT (COND
+                             ((ATOM |x|)
+                              (EXIT (|mkLocalVar| |op| |x|))))))))
+             ((AND (PAIRP |form|) (EQ (QCAR |form|) '|free|)
+                   (PROGN (SPADLET |vars| (QCDR |form|)) 'T))
+              (DO ((G168596 |vars| (CDR G168596)) (|x| NIL))
+                  ((OR (ATOM G168596)
+                       (PROGN (SETQ |x| (CAR G168596)) NIL))
+                   NIL)
+                (SEQ (EXIT (COND
+                             ((ATOM |x|) (EXIT (|mkFreeVar| |op| |x|))))))))
+             ((AND (PAIRP |form|) (EQ (QCAR |form|) 'LET)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |form|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |b| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (COND
+                ((AND (PAIRP |a|) (EQ (QCAR |a|) '|Tuple|)
+                      (PROGN (SPADLET |vars| (QCDR |a|)) 'T)
+                      (PAIRP |b|) (EQ (QCAR |b|) '|Tuple|)
+                      (PROGN (SPADLET |vals| (QCDR |b|)) 'T))
+                 (DO ((G168606 |vars| (CDR G168606)) (|var| NIL)
+                      (G168607 |vals| (CDR G168607)) (|val| NIL))
+                     ((OR (ATOM G168606)
+                          (PROGN (SETQ |var| (CAR G168606)) NIL)
+                          (ATOM G168607)
+                          (PROGN (SETQ |val| (CAR G168607)) NIL))
+                      NIL)
+                   (SEQ (EXIT (|findLocalVars1| |op|
+                                  (CONS 'LET
+                                        (CONS |var| (CONS |val| NIL))))))))
+                ((AND (PAIRP |a|) (EQ (QCAR |a|) '|construct|)
+                      (PROGN (SPADLET |pat| (QCDR |a|)) 'T))
+                 (DO ((G168619 (|listOfVariables| |pat|)
+                          (CDR G168619))
+                      (|var| NIL))
+                     ((OR (ATOM G168619)
+                          (PROGN (SETQ |var| (CAR G168619)) NIL))
+                      NIL)
+                   (SEQ (EXIT (|mkLocalVar| |op| |var|))))
+                 (|findLocalVars1| |op| |b|))
+                ((OR (ATOM |a|)
+                     (AND (PAIRP |a|) (EQ (QCAR |a|) '|:|)
+                          (PROGN
+                            (SPADLET |ISTMP#1| (QCDR |a|))
+                            (AND (PAIRP |ISTMP#1|)
+                                 (PROGN
+                                   (SPADLET |a| (QCAR |ISTMP#1|))
+                                   (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                                   (AND (PAIRP |ISTMP#2|)
+                                    (EQ (QCDR |ISTMP#2|) NIL)))))))
+                 (|mkLocalVar| |op| |a|) (|findLocalVars1| |op| |b|))
+                ('T (|findLocalVars| |op| |b|)
+                 (DO ((G168628 |a| (CDR G168628)) (|x| NIL))
+                     ((OR (ATOM G168628)
+                          (PROGN (SETQ |x| (CAR G168628)) NIL))
+                      NIL)
+                   (SEQ (EXIT (|findLocalVars1| |op| |x|)))))))
+             ((AND (PAIRP |form|) (EQ (QCAR |form|) '|:|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |form|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |a| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL))))))
+              (|mkLocalVar| |op| |a|))
+             ((AND (PAIRP |form|) (EQ (QCAR |form|) '|is|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |form|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |l| (QCAR |ISTMP#1|))
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |pattern| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (PROGN
+                (|findLocalVars1| |op| |l|)
+                (DO ((G168637 (|listOfVariables| (CDR |pattern|))
+                         (CDR G168637))
+                     (|var| NIL))
+                    ((OR (ATOM G168637)
+                         (PROGN (SETQ |var| (CAR G168637)) NIL))
+                     NIL)
+                  (SEQ (EXIT (|mkLocalVar| |op| |var|))))))
+             ((AND (PAIRP |form|)
+                   (PROGN
+                     (SPADLET |oper| (QCAR |form|))
+                     (SPADLET |ISTMP#1| (QCDR |form|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |ISTMP#2| (REVERSE |ISTMP#1|))
+                            'T)
+                          (PAIRP |ISTMP#2|)
+                          (PROGN
+                            (SPADLET |body| (QCAR |ISTMP#2|))
+                            (SPADLET |itrl| (QCDR |ISTMP#2|))
+                            'T)
+                          (PROGN
+                            (SPADLET |itrl| (NREVERSE |itrl|))
+                            'T)))
+                   (MEMQ |oper| '(REPEAT COLLECT)))
+              (|findLocalsInLoop| |op| |itrl| |body|))
+             ((AND (PAIRP |form|)
+                   (PROGN
+                     (SPADLET |y| (QCAR |form|))
+                     (SPADLET |argl| (QCDR |form|))
+                     'T))
+              (COND
+                ((EQ |y| '|Record|) NIL)
+                ('T
+                 (DO ((G168646 |argl| (CDR G168646)) (|x| NIL))
+                     ((OR (ATOM G168646)
+                          (PROGN (SETQ |x| (CAR G168646)) NIL))
+                      NIL)
+                   (SEQ (EXIT (|findLocalVars1| |op| |x|)))))))
+             ('T (|keyedSystemError| 'S2IM0020 (CONS |op| NIL))))))))
+
+;findLocalsInLoop(op,itrl,body) ==
+;  for it in itrl repeat
+;    it is ['STEP,index,lower,step,:upperList] =>
+;      mkLocalVar(op,index)
+;      findLocalVars1(op,lower)
+;      for up in upperList repeat findLocalVars1(op,up)
+;    it is ['IN,index,s] =>
+;      mkLocalVar(op,index) ; findLocalVars1(op,s)
+;    it is ['WHILE,b] =>
+;      findLocalVars1(op,b)
+;    it is ['_|,pred] =>
+;      findLocalVars1(op,pred)
+;  findLocalVars1(op,body)
+;  for it in itrl repeat
+;    it is [op,b] and (op in '(UNTIL)) =>
+;      findLocalVars1(op,b)
+
+(DEFUN |findLocalsInLoop| (|op| |itrl| |body|)
+  (PROG (|lower| |ISTMP#3| |step| |upperList| |index| |ISTMP#2| |s|
+                 |pred| |ISTMP#1| |b|)
+    (RETURN
+      (SEQ (PROGN
+             (DO ((G168789 |itrl| (CDR G168789)) (|it| NIL))
+                 ((OR (ATOM G168789)
+                      (PROGN (SETQ |it| (CAR G168789)) NIL))
+                  NIL)
+               (SEQ (EXIT (COND
+                            ((AND (PAIRP |it|) (EQ (QCAR |it|) 'STEP)
+                                  (PROGN
+                                    (SPADLET |ISTMP#1| (QCDR |it|))
+                                    (AND (PAIRP |ISTMP#1|)
+                                     (PROGN
+                                       (SPADLET |index|
+                                        (QCAR |ISTMP#1|))
+                                       (SPADLET |ISTMP#2|
+                                        (QCDR |ISTMP#1|))
+                                       (AND (PAIRP |ISTMP#2|)
+                                        (PROGN
+                                          (SPADLET |lower|
+                                           (QCAR |ISTMP#2|))
+                                          (SPADLET |ISTMP#3|
+                                           (QCDR |ISTMP#2|))
+                                          (AND (PAIRP |ISTMP#3|)
+                                           (PROGN
+                                             (SPADLET |step|
+                                              (QCAR |ISTMP#3|))
+                                             (SPADLET |upperList|
+                                              (QCDR |ISTMP#3|))
+                                             'T))))))))
+                             (|mkLocalVar| |op| |index|)
+                             (|findLocalVars1| |op| |lower|)
+                             (DO ((G168798 |upperList|
+                                      (CDR G168798))
+                                  (|up| NIL))
+                                 ((OR (ATOM G168798)
+                                      (PROGN
+                                        (SETQ |up| (CAR G168798))
+                                        NIL))
+                                  NIL)
+                               (SEQ (EXIT (|findLocalVars1| |op| |up|)))))
+                            ((AND (PAIRP |it|) (EQ (QCAR |it|) 'IN)
+                                  (PROGN
+                                    (SPADLET |ISTMP#1| (QCDR |it|))
+                                    (AND (PAIRP |ISTMP#1|)
+                                     (PROGN
+                                       (SPADLET |index|
+                                        (QCAR |ISTMP#1|))
+                                       (SPADLET |ISTMP#2|
+                                        (QCDR |ISTMP#1|))
+                                       (AND (PAIRP |ISTMP#2|)
+                                        (EQ (QCDR |ISTMP#2|) NIL)
+                                        (PROGN
+                                          (SPADLET |s|
+                                           (QCAR |ISTMP#2|))
+                                          'T))))))
+                             (|mkLocalVar| |op| |index|))
+                            ('T (|findLocalVars1| |op| |s|)
+                             (COND
+                               ((AND (PAIRP |it|)
+                                     (EQ (QCAR |it|) 'WHILE)
+                                     (PROGN
+                                       (SPADLET |ISTMP#1| (QCDR |it|))
+                                       (AND (PAIRP |ISTMP#1|)
+                                        (EQ (QCDR |ISTMP#1|) NIL)
+                                        (PROGN
+                                          (SPADLET |b|
+                                           (QCAR |ISTMP#1|))
+                                          'T))))
+                                (|findLocalVars1| |op| |b|))
+                               ((AND (PAIRP |it|)
+                                     (EQ (QCAR |it|) '|\||)
+                                     (PROGN
+                                       (SPADLET |ISTMP#1| (QCDR |it|))
+                                       (AND (PAIRP |ISTMP#1|)
+                                        (EQ (QCDR |ISTMP#1|) NIL)
+                                        (PROGN
+                                          (SPADLET |pred|
+                                           (QCAR |ISTMP#1|))
+                                          'T))))
+                                (|findLocalVars1| |op| |pred|))))))))
+             (|findLocalVars1| |op| |body|)
+             (SEQ (DO ((G168812 |itrl| (CDR G168812)) (|it| NIL))
+                      ((OR (ATOM G168812)
+                           (PROGN (SETQ |it| (CAR G168812)) NIL))
+                       NIL)
+                    (SEQ (EXIT (COND
+                                 ((AND (PAIRP |it|)
+                                       (PROGN
+                                         (SPADLET |op| (QCAR |it|))
+                                         (SPADLET |ISTMP#1|
+                                          (QCDR |it|))
+                                         (AND (PAIRP |ISTMP#1|)
+                                          (EQ (QCDR |ISTMP#1|) NIL)
+                                          (PROGN
+                                            (SPADLET |b|
+                                             (QCAR |ISTMP#1|))
+                                            'T)))
+                                       (|member| |op| '(UNTIL)))
+                                  (EXIT (|findLocalVars1| |op| |b|)))))))))))))
+
+;isLocalVar(var) == MEMBER(var,$localVars)
+
+(DEFUN |isLocalVar| (|var|)
+  (DECLARE (SPECIAL |$localVars|))
+  (|member| |var| |$localVars|))
+
+;mkLocalVar(op,var) ==
+;  -- add var to the local variable list
+;  isFreeVar(var) => $localVars
+;  $localVars:= insert(var,$localVars)
+
+(DEFUN |mkLocalVar| (|op| |var|)
+  (DECLARE (SPECIAL |$localVars|) (ignore |op|))
+  (COND
+    ((|isFreeVar| |var|) |$localVars|)
+    ('T (SPADLET |$localVars| (|insert| |var| |$localVars|)))))
+
+;isFreeVar(var) == MEMBER(var,$freeVars)
+
+(DEFUN |isFreeVar| (|var|)
+  (DECLARE (SPECIAL |$freeVars|))
+  (|member| |var| |$freeVars|))
+
+;mkFreeVar(op,var) ==
+;  -- op here for symmetry with mkLocalVar
+;  $freeVars:= insert(var,$freeVars)
+
+(DEFUN |mkFreeVar| (|op| |var|)
+  (DECLARE (SPECIAL |$freeVars|) (ignore |op|))
+  (SPADLET |$freeVars| (|insert| |var| |$freeVars|)))
+
+;listOfVariables pat ==
+;  -- return a list of the variables in pat, which is an "is" pattern
+;  IDENTP pat => (pat='_. => nil ; [pat])
+;  pat is ['_:,var] or pat is ['_=,var] =>
+;    (var='_. => NIL ; [var])
+;  PAIRP pat => REMDUP [:listOfVariables p for p in pat]
+;  nil
+
+(DEFUN |listOfVariables| (|pat|)
+  (PROG (|ISTMP#1| |var|)
+    (RETURN
+      (SEQ (COND
+             ((IDENTP |pat|)
+              (COND
+                ((BOOT-EQUAL |pat| (INTERN "." "BOOT")) NIL)
+                ('T (CONS |pat| NIL))))
+             ((OR (AND (PAIRP |pat|) (EQ (QCAR |pat|) '|:|)
+                       (PROGN
+                         (SPADLET |ISTMP#1| (QCDR |pat|))
+                         (AND (PAIRP |ISTMP#1|)
+                              (EQ (QCDR |ISTMP#1|) NIL)
+                              (PROGN
+                                (SPADLET |var| (QCAR |ISTMP#1|))
+                                'T))))
+                  (AND (PAIRP |pat|) (EQ (QCAR |pat|) '=)
+                       (PROGN
+                         (SPADLET |ISTMP#1| (QCDR |pat|))
+                         (AND (PAIRP |ISTMP#1|)
+                              (EQ (QCDR |ISTMP#1|) NIL)
+                              (PROGN
+                                (SPADLET |var| (QCAR |ISTMP#1|))
+                                'T)))))
+              (COND
+                ((BOOT-EQUAL |var| (INTERN "." "BOOT")) NIL)
+                ('T (CONS |var| NIL))))
+             ((PAIRP |pat|)
+              (REMDUP (PROG (G168865)
+                        (SPADLET G168865 NIL)
+                        (RETURN
+                          (DO ((G168870 |pat| (CDR G168870))
+                               (|p| NIL))
+                              ((OR (ATOM G168870)
+                                   (PROGN
+                                     (SETQ |p| (CAR G168870))
+                                     NIL))
+                               G168865)
+                            (SEQ (EXIT (SETQ G168865
+                                        (APPEND G168865
+                                         (|listOfVariables| |p|))))))))))
+             ('T NIL))))))
+
+;getMapBody(op,mapDef) ==
+;  -- looks in $e for a map body; if not found it computes then stores it
+;  get(op,'mapBody,$e) or
+;    combineMapParts mapDef
+
+(DEFUN |getMapBody| (|op| |mapDef|)
+  (DECLARE (SPECIAL |$e|))
+  (OR (|get| |op| '|mapBody| |$e|) (|combineMapParts| |mapDef|)))
+
+;--    $e:= putHist(op,'mapBody,body:= combineMapParts mapDef,$e)
+;--    body
+
+@
+\begin{verbatim}
+DO NOT BELIEVE ALL OF THE FOLLOWING (IT IS OLD)
+VARIABLES.  Variables may or may not have a mode property.  If
+present, any value which is assigned or generated by that variable
+is first coerced to that mode before being assigned or returned.
+
+Variables are given a triple [val,m,e] as a "value" property on
+its property list in the environment.  The expression val has the
+forms:
+
+      (WRAPPED . y)       --value of x is y (don't re-evaluate)
+      y --anything else   --value of x is obtained by evaluating y
+
+A wrapped expression is created by an assignment.  In the second
+case, y can never contain embedded wrapped expressions.  The mode
+part m of the triple is the type of y in the wrapped case and is
+consistent with the declared mode if given.  The mode part of an
+unwrapped value is always $EmptyMode.  The e part is usually NIL
+but may be used to hold a partial closure.
+
+Effect of changes.  A rule can be built up for a variable by
+successive rules involving conditional expressions.  However, once
+a value is assigned to the variable or an unconditional definition
+is given, any existing value is replaced by the new entry.  When
+the mode of a variable is declared, an wrapped value is coerced to
+the new mode; if this is not possible, the user is notified that
+the current value is discarded and why.  When the mode is
+redeclared and an upwrapped value is present, the value is
+retained; the only other effect is to coerce any cached values
+from the old mode to the new one.
+
+Caches.  When a variable x is evaluated and re-evaluation occurs,
+the triple produced by that evaluation is stored under "cache" on
+the property list of x. This cached triple is cleared whenever any
+of the variables which x's value depend upon change.  Dependencies
+are stored on $dependencies whose value has the form [ [a b ..] ..]
+to indicate that when a is changed, b .. must have all cached
+values destroyed.  In the case of parameterized forms which are
+represented by maps, we currently can cache values only when the
+compiler option is turned on by )on c s meaning "on compiler with
+the save option".  When f is compiled as f;1, it then has an alist
+f;1;AL which records these values.  If f depends globally on a's
+value, all cached values of all local functions defined for f have
+to be declared.  If a's mode should change, then all compilations
+of f must be thrown away.
+
+PARAMETERIZED FORMS.  These always have values [val,m,e] where val
+are "maps".
+
+The structure of maps:
+   (MAP (pattern . rewrite) ...)   where
+   pattern has forms:  arg-pattern
+                       (Tuple arg-pattern ...)
+   rewrite has forms:  (WRAPPED . value)      --don't re-evaluate
+                       computational object   --don't (bother to)
+                                                re-evaluate
+                       anything else          --yes, re-evaluate
+
+When assigning values to a map, each new value must have a type
+which is consistent with those already assigned.  Initially, type
+of MAP is $EmptyMode.  When the map is first assigned a value, the
+type of the MAP is RPLACDed to be (Mapping target source ..).
+When the map is next assigned, the type of both source and target
+is upgraded to be consistent with those values already computed.
+Of course, if new and old source and target are identical, nothing
+need happen to existing entries.  However, if the new and old are
+different, all existing entries of the map are coerce to the new
+data type.
+
+Mode analysis.  This is done on the bottomUp phase of the process.
+If a function has been given a mapping declaration, this map is
+placed in as the mode of the map under the "value" property of the
+variable.  Of course, these modes may be partial types in case a
+mode analysis is still necessary.  If no mapping declaration, a
+total mode analysis of the function, given its input arguments, is
+done.  This will result a signature involving types only.
+
+If the compiler is on, the function is then compiled given this
+signature involving types.  If the map is value of a variable f, a
+function is given name f;1, f is given a "localModemap" property
+with modemap ((dummy target source ..) (T f;1)) so that the next
+time f is applied to arguments which coerce to the source
+arguments of this local modemap, f;1 will be invoked.
+\end{verbatim}
+<<*>>=
+;getLocalVars(op,body) ==
+;  -- looks in $e for local vars; if not found, computes then stores them
+;  get(op,'localVars,$e) or
+;    $e:= putHist(op,'localVars,lv:=findLocalVars(op,body),$e)
+;    lv
+
+(DEFUN |getLocalVars| (|op| |body|)
+  (PROG (|lv|)
+    (DECLARE (SPECIAL |$e|))
+    (RETURN
+      (OR (|get| |op| '|localVars| |$e|)
+          (PROGN
+            (SPADLET |$e|
+                     (|putHist| |op| '|localVars|
+                         (SPADLET |lv| (|findLocalVars| |op| |body|))
+                         |$e|))
+            |lv|)))))
+
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

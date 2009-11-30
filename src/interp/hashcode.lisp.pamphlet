@@ -1,0 +1,224 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp hashcode.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+(IN-PACKAGE "BOOT" )
+
+;-- Type hasher for old compiler style type names which produces a hash code
+;-- compatible with the asharp compiler.  Takes a hard error if the type
+;-- is parameterized, but has no constructor modemap.
+;getDomainHash dom == SPADCALL(CDR dom, (CAR dom).4)
+
+(DEFUN |getDomainHash| (|dom|)
+  (SPADCALL (CDR |dom|) (ELT (CAR |dom|) 4)))
+
+;hashType(type, percentHash) ==
+;        SYMBOLP type  =>
+;           type = '$ => percentHash
+;           type = "%" => percentHash
+;           hashString SYMBOL_-NAME type
+;        STRINGP type  => hashCombine(hashString type,
+;                                        hashString('"Enumeration"))
+;        type is ['QUOTE, val] => hashType(val, percentHash)
+;        type is [dom] => hashString SYMBOL_-NAME dom
+;        type is ['_:, ., type2] => hashType(type2, percentHash)
+;        isDomain type => getDomainHash type
+;        [op, :args] := type
+;        hash := hashString SYMBOL_-NAME op
+;        op = 'Mapping =>
+;                hash := hashString '"->"
+;                [retType, :mapArgs] := args
+;                for arg in mapArgs repeat
+;                        hash := hashCombine(hashType(arg, percentHash), hash)
+;                retCode := hashType(retType, percentHash)
+;                EQL(retCode, $VoidHash) => hash
+;                hashCombine(retCode, hashCombine(32236,hash))
+;        op = 'Enumeration =>
+;                for arg in args repeat
+;                        hash := hashCombine(hashString(STRING arg), hash)
+;                hash
+;        op in $DomainsWithoutLisplibs =>
+;                for arg in args repeat
+;                        hash := hashCombine(hashType(arg, percentHash), hash)
+;                hash
+;        cmm :=   CDDAR getConstructorModemap(op)
+;        cosig := CDR   GETDATABASE(op, 'COSIG)
+;        for arg in args for c in cosig for ct in cmm repeat
+;                if c then
+;                        hash := hashCombine(hashType(arg, percentHash), hash)
+;                else
+;                        hash := hashCombine(7, hash)
+;--           !!!   If/when asharp hashes values using their type, use instead
+;--                      ctt := EQSUBSTLIST(args, $FormalMapVariableList, ct)
+;--                      hash := hashCombine(hashType(ctt, percentHash), hash)
+;        hash
+
+(DEFUN |hashType| (|type| |percentHash|)
+  (PROG (|val| |dom| |ISTMP#1| |ISTMP#2| |type2| |op| |args| |retType|
+               |mapArgs| |retCode| |cmm| |cosig| |hash|)
+  (declare (special |$DomainsWithoutLisplibs| |$VoidHash|))
+    (RETURN
+      (SEQ (COND
+             ((SYMBOLP |type|)
+              (COND
+                ((BOOT-EQUAL |type| '$) |percentHash|)
+                ((BOOT-EQUAL |type| '%) |percentHash|)
+                ('T (|hashString| (SYMBOL-NAME |type|)))))
+             ((STRINGP |type|)
+              (|hashCombine| (|hashString| |type|)
+                  (|hashString| (MAKESTRING "Enumeration"))))
+             ((AND (PAIRP |type|) (EQ (QCAR |type|) 'QUOTE)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |type|))
+                     (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                          (PROGN (SPADLET |val| (QCAR |ISTMP#1|)) 'T))))
+              (|hashType| |val| |percentHash|))
+             ((AND (PAIRP |type|) (EQ (QCDR |type|) NIL)
+                   (PROGN (SPADLET |dom| (QCAR |type|)) 'T))
+              (|hashString| (SYMBOL-NAME |dom|)))
+             ((AND (PAIRP |type|) (EQ (QCAR |type|) '|:|)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCDR |type|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |type2| (QCAR |ISTMP#2|))
+                                   'T))))))
+              (|hashType| |type2| |percentHash|))
+             ((|isDomain| |type|) (|getDomainHash| |type|))
+             ('T (SPADLET |op| (CAR |type|))
+              (SPADLET |args| (CDR |type|))
+              (SPADLET |hash| (|hashString| (SYMBOL-NAME |op|)))
+              (COND
+                ((BOOT-EQUAL |op| '|Mapping|)
+                 (SPADLET |hash| (|hashString| (MAKESTRING "->")))
+                 (SPADLET |retType| (CAR |args|))
+                 (SPADLET |mapArgs| (CDR |args|))
+                 (DO ((G166088 |mapArgs| (CDR G166088))
+                      (|arg| NIL))
+                     ((OR (ATOM G166088)
+                          (PROGN (SETQ |arg| (CAR G166088)) NIL))
+                      NIL)
+                   (SEQ (EXIT (SPADLET |hash|
+                                       (|hashCombine|
+                                        (|hashType| |arg|
+                                         |percentHash|)
+                                        |hash|)))))
+                 (SPADLET |retCode|
+                          (|hashType| |retType| |percentHash|))
+                 (COND
+                   ((EQL |retCode| |$VoidHash|) |hash|)
+                   ('T
+                    (|hashCombine| |retCode|
+                        (|hashCombine| 32236 |hash|)))))
+                ((BOOT-EQUAL |op| '|Enumeration|)
+                 (DO ((G166097 |args| (CDR G166097)) (|arg| NIL))
+                     ((OR (ATOM G166097)
+                          (PROGN (SETQ |arg| (CAR G166097)) NIL))
+                      NIL)
+                   (SEQ (EXIT (SPADLET |hash|
+                                       (|hashCombine|
+                                        (|hashString| (STRING |arg|))
+                                        |hash|)))))
+                 |hash|)
+                ((|member| |op| |$DomainsWithoutLisplibs|)
+                 (DO ((G166106 |args| (CDR G166106)) (|arg| NIL))
+                     ((OR (ATOM G166106)
+                          (PROGN (SETQ |arg| (CAR G166106)) NIL))
+                      NIL)
+                   (SEQ (EXIT (SPADLET |hash|
+                                       (|hashCombine|
+                                        (|hashType| |arg|
+                                         |percentHash|)
+                                        |hash|)))))
+                 |hash|)
+                ('T
+                 (SPADLET |cmm| (CDDAR (|getConstructorModemap| |op|)))
+                 (SPADLET |cosig| (CDR (GETDATABASE |op| 'COSIG)))
+                 (DO ((G166117 |args| (CDR G166117)) (|arg| NIL)
+                      (G166118 |cosig| (CDR G166118)) (|c| NIL)
+                      (G166119 |cmm| (CDR G166119)) (|ct| NIL))
+                     ((OR (ATOM G166117)
+                          (PROGN (SETQ |arg| (CAR G166117)) NIL)
+                          (ATOM G166118)
+                          (PROGN (SETQ |c| (CAR G166118)) NIL)
+                          (ATOM G166119)
+                          (PROGN (SETQ |ct| (CAR G166119)) NIL))
+                      NIL)
+                   (SEQ (EXIT (COND
+                                (|c| (SPADLET |hash|
+                                      (|hashCombine|
+                                       (|hashType| |arg| |percentHash|)
+                                       |hash|)))
+                                ('T
+                                 (SPADLET |hash|
+                                          (|hashCombine| 7 |hash|)))))))
+                 |hash|))))))))
+
+;--The following are in cfuns.lisp
+;$hashModulus := 1073741789                      -- largest 30-bit prime
+
+(SPADLET |$hashModulus| 1073741789)
+
+;-- Produce a 30-bit hash code.  This function must produce the same codes
+;-- as the asharp string hasher in src/strops.c
+;hashString str ==
+;        h := 0
+;        for i in 0..#str-1 repeat
+;                j := CHAR_-CODE char str.i
+;                h := LOGXOR(h, ASH(h, 8))
+;                h := h + j + 200041
+;                h := LOGAND(h, 1073741823)      -- 0x3FFFFFFF
+;        REM(h, $hashModulus)
+
+(DEFUN |hashString| (|str|)
+  (PROG (|j| |h|)
+  (declare (special |$hashModulus|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |h| 0)
+             (DO ((G166163 (SPADDIFFERENCE (|#| |str|) 1))
+                  (|i| 0 (QSADD1 |i|)))
+                 ((QSGREATERP |i| G166163) NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |j|
+                                     (CHAR-CODE
+                                      (|char| (ELT |str| |i|))))
+                            (SPADLET |h| (LOGXOR |h| (ASH |h| 8)))
+                            (SPADLET |h| (PLUS (PLUS |h| |j|) 200041))
+                            (SPADLET |h| (LOGAND |h| 1073741823))))))
+             (REM |h| |$hashModulus|))))))
+
+;-- Combine two hash codes to make a new one.  Must be the same as in
+;-- the hashCombine function in aslib/runtime.as in asharp.
+;hashCombine(hash1, hash2) ==
+;         MOD(ASH(LOGAND(hash2, 16777215), 6) + hash1, $hashModulus)
+
+(DEFUN |hashCombine| (|hash1| |hash2|)
+  (declare (special |$hashModulus|))
+  (MOD (PLUS (ASH (LOGAND |hash2| 16777215) 6) |hash1|) |$hashModulus|))
+
+;$VoidHash := hashString '"Void"
+;-- following two lines correct bad coSig properties due to SubsetCategory
+;--putConstructorProperty('LocalAlgebra,'coSig,'(NIL T T T))
+;--putConstructorProperty('Localize,'coSig,'(NIL T T T))
+
+(SPADLET |$VoidHash| (|hashString| (MAKESTRING "Void")))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

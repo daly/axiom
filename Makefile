@@ -1,8 +1,8 @@
-VERSION="Axiom (July 2009)"
-SPD=$(shell pwd)
-SYS=$(notdir $(AXIOM))
-SPAD=${SPD}/mnt/${SYS}
-LSP=${SPD}/lsp
+VERSION:="Axiom (November 2009)"
+SPD:=$(shell pwd)
+SYS:=$(notdir $(AXIOM))
+SPAD:=${SPD}/mnt/${SYS}
+LSP:=${SPD}/lsp
 #GCLVERSION=gcl-2.4.1
 #GCLVERSION=gcl-2.5
 #GCLVERSION=gcl-2.5.2
@@ -17,32 +17,32 @@ LSP=${SPD}/lsp
 #GCLVERSION=gcl-2.6.8pre
 #GCLVERSION=gcl-2.6.8pre2
 GCLVERSION=gcl-2.6.8pre3 
-AWK=gawk
-GCLDIR=${LSP}/${GCLVERSION}
-SRC=${SPD}/src
-INT=${SPD}/int
-OBJ=${SPD}/obj
-MNT=${SPD}/mnt
-ZIPS=${SPD}/zips
-BOOKS=${SPD}/books
-TMP=${OBJ}/tmp
-SPADBIN=${MNT}/${SYS}/bin
-INC=${SPD}/src/include
-CCLBASE=${OBJ}/${SYS}/ccl/ccllisp
-DESTDIR=/usr/local/axiom
-COMMAND=${DESTDIR}/mnt/${SYS}/bin/axiom
-DOCUMENT=${SPADBIN}/document
-TANGLE=${SPADBIN}/lib/notangle
-WEAVE=${SPADBIN}/lib/noweave
-NOISE="-o ${TMP}/trace"
-PATCH=patch
-UNCOMPRESS=gunzip
+AWK:=gawk
+GCLDIR:=${LSP}/${GCLVERSION}
+SRC:=${SPD}/src
+INT:=${SPD}/int
+OBJ:=${SPD}/obj
+MNT:=${SPD}/mnt
+ZIPS:=${SPD}/zips
+BOOKS:=${SPD}/books
+TMP:=${OBJ}/tmp
+SPADBIN:=${MNT}/${SYS}/bin
+INC:=${SPD}/src/include
+CCLBASE:=${OBJ}/${SYS}/ccl/ccllisp
+DESTDIR:=/usr/local/axiom
+COMMAND:=${DESTDIR}/mnt/${SYS}/bin/axiom
+DOCUMENT:=${SPADBIN}/document
+TANGLE:=${SPADBIN}/lib/notangle
+WEAVE:=${SPADBIN}/lib/noweave
+NOISE:="-o ${TMP}/trace"
+PATCH:=patch
+UNCOMPRESS:=gunzip
 
 PART=	cprogs
 SUBPART= everything
 
 
-ENV= SPAD=${SPAD} SYS=${SYS} SPD=${SPD} LSP=${LSP} GCLDIR=${GCLDIR} \
+ENV:= SPAD=${SPAD} SYS=${SYS} SPD=${SPD} LSP=${LSP} GCLDIR=${GCLDIR} \
      SRC=${SRC} INT=${INT} OBJ=${OBJ} MNT=${MNT} ZIPS=${ZIPS} TMP=${TMP} \
      SPADBIN=${SPADBIN} INC=${INC} CCLBASE=${CCLBASE} PART=${PART} \
      SUBPART=${SUBPART} NOISE=${NOISE} GCLVERSION=${GCLVERSION} \
@@ -50,18 +50,6 @@ ENV= SPAD=${SPAD} SYS=${SYS} SPD=${SPD} LSP=${LSP} GCLDIR=${GCLDIR} \
      WEAVE=${WEAVE} UNCOMPRESS=${UNCOMPRESS} BOOKS=${BOOKS}
 
 all: noweb ${MNT}/${SYS}/bin/document
-	@ echo 1 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
-	@ echo 2 Environment ${ENV}
-	@ ${TANGLE} -t8 -RMakefile.${SYS} Makefile.pamphlet >Makefile.${SYS}
-	@ ${DOCUMENT} Makefile
-	@ mkdir -p ${MNT}/${SYS}/doc/src
-	@ cp Makefile.dvi ${MNT}/${SYS}/doc/src/root.Makefile.dvi
-	@ ${ENV} $(MAKE) -f Makefile.${SYS} 
-	@echo 3 finished system build on `date` | tee >lastBuildDate
-
-start: noweb ${MNT}/${SYS}/bin/document
-
-parallel: noweb ${MNT}/${SYS}/bin/document
 	@ echo p1 making a parallel system build
 	@ echo 1 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
 	@ echo 2 Environment ${ENV}

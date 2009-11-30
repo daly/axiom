@@ -1,0 +1,2411 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp clam.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+
+(in-package "BOOT")
+
+;--% Cache Lambda Facility
+;-- for remembering previous values to functions
+;
+;--to CLAM a function f, there must be an entry on $clamList as follows:
+;--    (functionName  --the name of the function to be CLAMed (e.g. f)
+;--     kind          --"hash" or number of values to be stored in
+;--                     circular list
+;--     eqEtc         --the equal function to be used
+;--                     (EQ, EQUAL, UEQUAL,..)
+;--     "shift"       --(opt) for circular lists, shift most recently
+;--                      used to front
+;--     "count")      --(opt) use reference counts (see below)
+;--
+;-- Notes:
+;--   Functions with "hash" as kind must give EQ, CVEC, or UEQUAL
+;--   Functions with some other <identifier> as kind hashed as property
+;--   lists with eqEtc used to compare entries
+;--   Functions which have 0 arguments may only be CLAMmed when kind is
+;--   identifier other than hash (circular/private hashtable for no args
+;--   makes no sense)
+;--
+;--   Functions which have more than 1 argument must never be CLAMed with EQ
+;--     since arguments are cached as lists
+;--   For circular lists, "count" will do "shift"ing; entries with lowest
+;--     use count are replaced
+;--   For cache option without "count", all entries are cleared on garbage
+;--     collection; For cache option with "count",
+;--     entries have their use count set
+;--     to 0 on garbage collection; those with 0 use count at garbage collection
+;--     are cleared
+;-- see definition of COMP,2 in COMP LISP which calls clamComp below
+;
+;-- see SETQ LISP for initial def of $hashNode
+;
+;compClam(op,argl,body,$clamList) ==
+;  --similar to reportFunctionCompilation in SLAM BOOT
+;  if $InteractiveMode then startTimingProcess 'compilation
+;  if (u:= LASSQ(op,$clamList)) isnt [kind,eqEtc,:options]
+;    then keyedSystemError("S2GE0004",[op])
+;  $clamList:= nil            --clear to avoid looping
+;  if u:= S_-(options,'(shift count)) then
+;    keyedSystemError("S2GE0006",[op,:u])
+;  shiftFl := MEMQ('shift,options)
+;  countFl := MEMQ('count,options)
+;  if #argl > 1 and eqEtc= 'EQ then
+;    keyedSystemError("S2GE0007",[op])
+;  (not IDENTP kind) and (not INTEGERP kind or kind < 1) =>
+;    keyedSystemError("S2GE0005",[op])
+;  IDENTP kind =>
+;    shiftFl => keyedSystemError("S2GE0008",[op])
+;    compHash(op,argl,body,(kind='hash => nil; kind),eqEtc,countFl)
+;  cacheCount:= kind
+;  if null argl then keyedSystemError("S2GE0009",[op])
+;  phrase:=
+;    cacheCount=1 => ['"computed value only"]
+;    [:bright cacheCount,'"computed values"]
+;  sayBrightly [:bright op,'"will save last",:phrase]
+;  auxfn:= INTERNL(op,'";")
+;  g1:= GENSYM()  --argument or argument list
+;  [arg,computeValue] :=
+;    argl is [.] => [[g1],[auxfn,g1]]  --g1 is a parameter
+;    [g1,['APPLX,['function,auxfn],g1]]          --g1 is a parameter list
+;  cacheName:= INTERNL(op,'";AL")
+;  if $reportCounts=true then
+;    hitCounter:= INTERNL(op,'";hit")
+;    callCounter:= INTERNL(op,'";calls")
+;    SET(hitCounter,0)
+;    SET(callCounter,0)
+;    callCountCode:= [['SETQ,callCounter,['QSADD1,callCounter]]]
+;    hitCountCode:=  [['SETQ,hitCounter,['QSADD1,hitCounter]]]
+;  g2:= GENSYM()  --length of cache or arg-value pair
+;  g3:= GENSYM()  --value computed by calling function
+;  lookUpFunction:=
+;    shiftFl =>
+;      countFl => 'assocCacheShiftCount
+;      'assocCacheShift
+;    countFl => 'assocCacheCount
+;    'assocCache
+;  returnFoundValue:=
+;    countFl => ['CDDR,g3]
+;    ['CDR,g3]
+;  namePart:=
+;    countFl => cacheName
+;    MKQ cacheName
+;  secondPredPair:=
+;--   null argl => [cacheName]
+;    [['SETQ,g3,[lookUpFunction,g1,namePart,eqEtc]],
+;      :hitCountCode,
+;        returnFoundValue]
+;  resetCacheEntry:=
+;    countFl => ['CONS,1,g2]
+;    g2
+;  thirdPredPair:=
+;--   null argl => ['(QUOTE T),['SETQ,cacheName,computeValue]]
+;    ['(QUOTE T),
+;      ['SETQ,g2,computeValue],
+;        ['SETQ,g3,['CAR,cacheName]],
+;          ['RPLACA,g3,g1],
+;            ['RPLACD,g3,resetCacheEntry],
+;              g2]
+;  codeBody:= ['PROG,[g2,g3],
+;                :callCountCode,
+;                  ['RETURN,['COND,secondPredPair,thirdPredPair]]]
+;  lamex:= ['LAM,arg,codeBody]
+;  mainFunction:= [op,lamex]
+;  computeFunction:= [auxfn,['LAMBDA,argl,:body]]
+;
+;  -- compile generated function stub
+;  compileInteractive mainFunction
+;
+;  -- compile main body: this has already been compTran'ed
+;  if $reportCompilation then
+;    sayBrightlyI bright '"Generated LISP code for function:"
+;    pp computeFunction
+;  compileQuietly [computeFunction]
+;
+;  cacheType:= 'function
+;  cacheResetCode:= ['SETQ,cacheName,['initCache,cacheCount]]
+;  cacheCountCode:= ['countCircularAlist,cacheName,cacheCount]
+;  cacheVector:= mkCacheVec(op,cacheName,cacheType,
+;    cacheResetCode,cacheCountCode)
+;  LAM_,EVALANDFILEACTQ ['PUT, MKQ op, MKQ 'cacheInfo, MKQ cacheVector]
+;  LAM_,EVALANDFILEACTQ cacheResetCode
+;  if $InteractiveMode then stopTimingProcess 'compilation
+;  op
+
+;;;     ***       |compClam| REDEFINED
+
+(DEFUN |compClam| (|op| |argl| |body| |$clamList|)
+  (DECLARE (SPECIAL |$clamList|))
+  (PROG (|ISTMP#1| |kind| |ISTMP#2| |eqEtc| |options| |u| |shiftFl|
+            |countFl| |cacheCount| |phrase| |auxfn| |g1| |LETTMP#1|
+            |arg| |computeValue| |cacheName| |hitCounter| |callCounter|
+            |callCountCode| |hitCountCode| |g2| |g3| |lookUpFunction|
+            |returnFoundValue| |namePart| |secondPredPair|
+            |resetCacheEntry| |thirdPredPair| |codeBody| |lamex|
+            |mainFunction| |computeFunction| |cacheType|
+            |cacheResetCode| |cacheCountCode| |cacheVector|)
+    (DECLARE (SPECIAL |$InteractiveMode| |$reportCompilation|
+                      |$reportCounts| |$clamList|))
+    (RETURN
+      (PROGN
+        (COND
+          (|$InteractiveMode| (|startTimingProcess| '|compilation|)))
+        (COND
+          ((NULL (PROGN
+                   (SPADLET |ISTMP#1|
+                            (SPADLET |u| (LASSQ |op| |$clamList|)))
+                   (AND (PAIRP |ISTMP#1|)
+                        (PROGN
+                          (SPADLET |kind| (QCAR |ISTMP#1|))
+                          (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                          (AND (PAIRP |ISTMP#2|)
+                               (PROGN
+                                 (SPADLET |eqEtc| (QCAR |ISTMP#2|))
+                                 (SPADLET |options| (QCDR |ISTMP#2|))
+                                 'T))))))
+           (|keyedSystemError| 'S2GE0004 (CONS |op| NIL))))
+        (SPADLET |$clamList| NIL)
+        (COND
+          ((SPADLET |u| (S- |options| '(|shift| |count|)))
+           (|keyedSystemError| 'S2GE0006 (CONS |op| |u|))))
+        (SPADLET |shiftFl| (MEMQ '|shift| |options|))
+        (SPADLET |countFl| (MEMQ '|count| |options|))
+        (COND
+          ((AND (> (|#| |argl|) 1) (BOOT-EQUAL |eqEtc| 'EQ))
+           (|keyedSystemError| 'S2GE0007 (CONS |op| NIL))))
+        (COND
+          ((AND (NULL (IDENTP |kind|))
+                (OR (NULL (INTEGERP |kind|)) (> 1 |kind|)))
+           (|keyedSystemError| 'S2GE0005 (CONS |op| NIL)))
+          ((IDENTP |kind|)
+           (COND
+             (|shiftFl| (|keyedSystemError| 'S2GE0008 (CONS |op| NIL)))
+             ('T
+              (|compHash| |op| |argl| |body|
+                  (COND ((BOOT-EQUAL |kind| '|hash|) NIL) ('T |kind|))
+                  |eqEtc| |countFl|))))
+          ('T (SPADLET |cacheCount| |kind|)
+           (COND
+             ((NULL |argl|)
+              (|keyedSystemError| 'S2GE0009 (CONS |op| NIL))))
+           (SPADLET |phrase|
+                    (COND
+                      ((EQL |cacheCount| 1)
+                       (CONS (MAKESTRING "computed value only") NIL))
+                      ('T
+                       (APPEND (|bright| |cacheCount|)
+                               (CONS (MAKESTRING "computed values")
+                                     NIL)))))
+           (|sayBrightly|
+               (APPEND (|bright| |op|)
+                       (CONS (MAKESTRING "will save last") |phrase|)))
+           (SPADLET |auxfn| (INTERNL |op| (MAKESTRING ";")))
+           (SPADLET |g1| (GENSYM))
+           (SPADLET |LETTMP#1|
+                    (COND
+                      ((AND (PAIRP |argl|) (EQ (QCDR |argl|) NIL))
+                       (CONS (CONS |g1| NIL)
+                             (CONS (CONS |auxfn| (CONS |g1| NIL)) NIL)))
+                      ('T
+                       (CONS |g1|
+                             (CONS (CONS 'APPLX
+                                    (CONS
+                                     (CONS '|function|
+                                      (CONS |auxfn| NIL))
+                                     (CONS |g1| NIL)))
+                                   NIL)))))
+           (SPADLET |arg| (CAR |LETTMP#1|))
+           (SPADLET |computeValue| (CADR |LETTMP#1|))
+           (SPADLET |cacheName| (INTERNL |op| (MAKESTRING ";AL")))
+           (COND
+             ((BOOT-EQUAL |$reportCounts| 'T)
+              (SPADLET |hitCounter| (INTERNL |op| (MAKESTRING ";hit")))
+              (SPADLET |callCounter|
+                       (INTERNL |op| (MAKESTRING ";calls")))
+              (SET |hitCounter| 0) (SET |callCounter| 0)
+              (SPADLET |callCountCode|
+                       (CONS (CONS 'SETQ
+                                   (CONS |callCounter|
+                                    (CONS
+                                     (CONS 'QSADD1
+                                      (CONS |callCounter| NIL))
+                                     NIL)))
+                             NIL))
+              (SPADLET |hitCountCode|
+                       (CONS (CONS 'SETQ
+                                   (CONS |hitCounter|
+                                    (CONS
+                                     (CONS 'QSADD1
+                                      (CONS |hitCounter| NIL))
+                                     NIL)))
+                             NIL))))
+           (SPADLET |g2| (GENSYM)) (SPADLET |g3| (GENSYM))
+           (SPADLET |lookUpFunction|
+                    (COND
+                      (|shiftFl|
+                          (COND
+                            (|countFl| '|assocCacheShiftCount|)
+                            ('T '|assocCacheShift|)))
+                      (|countFl| '|assocCacheCount|)
+                      ('T '|assocCache|)))
+           (SPADLET |returnFoundValue|
+                    (COND
+                      (|countFl| (CONS 'CDDR (CONS |g3| NIL)))
+                      ('T (CONS 'CDR (CONS |g3| NIL)))))
+           (SPADLET |namePart|
+                    (COND
+                      (|countFl| |cacheName|)
+                      ('T (MKQ |cacheName|))))
+           (SPADLET |secondPredPair|
+                    (CONS (CONS 'SETQ
+                                (CONS |g3|
+                                      (CONS
+                                       (CONS |lookUpFunction|
+                                        (CONS |g1|
+                                         (CONS |namePart|
+                                          (CONS |eqEtc| NIL))))
+                                       NIL)))
+                          (APPEND |hitCountCode|
+                                  (CONS |returnFoundValue| NIL))))
+           (SPADLET |resetCacheEntry|
+                    (COND
+                      (|countFl| (CONS 'CONS (CONS 1 (CONS |g2| NIL))))
+                      ('T |g2|)))
+           (SPADLET |thirdPredPair|
+                    (CONS ''T
+                          (CONS (CONS 'SETQ
+                                      (CONS |g2|
+                                       (CONS |computeValue| NIL)))
+                                (CONS (CONS 'SETQ
+                                       (CONS |g3|
+                                        (CONS
+                                         (CONS 'CAR
+                                          (CONS |cacheName| NIL))
+                                         NIL)))
+                                      (CONS
+                                       (CONS 'RPLACA
+                                        (CONS |g3| (CONS |g1| NIL)))
+                                       (CONS
+                                        (CONS 'RPLACD
+                                         (CONS |g3|
+                                          (CONS |resetCacheEntry| NIL)))
+                                        (CONS |g2| NIL)))))))
+           (SPADLET |codeBody|
+                    (CONS 'PROG
+                          (CONS (CONS |g2| (CONS |g3| NIL))
+                                (APPEND |callCountCode|
+                                        (CONS
+                                         (CONS 'RETURN
+                                          (CONS
+                                           (CONS 'COND
+                                            (CONS |secondPredPair|
+                                             (CONS |thirdPredPair| NIL)))
+                                           NIL))
+                                         NIL)))))
+           (SPADLET |lamex|
+                    (CONS 'LAM (CONS |arg| (CONS |codeBody| NIL))))
+           (SPADLET |mainFunction| (CONS |op| (CONS |lamex| NIL)))
+           (SPADLET |computeFunction|
+                    (CONS |auxfn|
+                          (CONS (CONS 'LAMBDA (CONS |argl| |body|))
+                                NIL)))
+           (|compileInteractive| |mainFunction|)
+           (COND
+             (|$reportCompilation|
+                 (|sayBrightlyI|
+                     (|bright|
+                         (MAKESTRING
+                             "Generated LISP code for function:")))
+                 (|pp| |computeFunction|)))
+           (|compileQuietly| (CONS |computeFunction| NIL))
+           (SPADLET |cacheType| '|function|)
+           (SPADLET |cacheResetCode|
+                    (CONS 'SETQ
+                          (CONS |cacheName|
+                                (CONS (CONS '|initCache|
+                                       (CONS |cacheCount| NIL))
+                                      NIL))))
+           (SPADLET |cacheCountCode|
+                    (CONS '|countCircularAlist|
+                          (CONS |cacheName| (CONS |cacheCount| NIL))))
+           (SPADLET |cacheVector|
+                    (|mkCacheVec| |op| |cacheName| |cacheType|
+                        |cacheResetCode| |cacheCountCode|))
+           (|LAM,EVALANDFILEACTQ|
+               (CONS 'PUT
+                     (CONS (MKQ |op|)
+                           (CONS (MKQ '|cacheInfo|)
+                                 (CONS (MKQ |cacheVector|) NIL)))))
+           (|LAM,EVALANDFILEACTQ| |cacheResetCode|)
+           (COND
+             (|$InteractiveMode| (|stopTimingProcess| '|compilation|)))
+           |op|))))))
+
+;compHash(op,argl,body,cacheNameOrNil,eqEtc,countFl) ==
+;  --Note: when cacheNameOrNil^=nil, it names a global hashtable
+;
+;-- cacheNameOrNil => compHashGlobal(op,argl,body,cacheNameOrNil,eqEtc,countFl)
+;--   This branch to compHashGlobal is now omitted; as a result,
+;--   entries will be stored on the global hashtable in a uniform way:
+;--        (<argument list>, <reference count>,:<value>)
+;--   where the reference count is optional
+;
+;  if cacheNameOrNil and cacheNameOrNil^='_$ConstructorCache then
+;    keyedSystemError("S2GE0010",[op])
+;    --restriction due to omission of call to hputNewValue (see *** lines below)
+;
+;  if null argl then
+;    null cacheNameOrNil => keyedSystemError("S2GE0011",[op])
+;    nil
+;  (not cacheNameOrNil) and (not MEMQ(eqEtc,'(EQ CVEC UEQUAL))) =>
+;    keyedSystemError("S2GE0012",[op])
+;--withWithout := (countFl => "with"; "without")
+;--middle:=
+;--  cacheNameOrNil => ["on","%b",cacheNameOrNil,"%d"]
+;--  '"privately "
+;--sayBrightly
+;--  ["%b",op,"%d","hashes ",:middle,withWithout," reference counts"]
+;  auxfn:= INTERNL(op,'";")
+;  g1:= GENSYM()  --argument or argument list
+;  [arg,cacheArgKey,computeValue] :=
+;  --    arg: to be used as formal argument of lambda construction;
+;  --    cacheArgKey: the form used to look up the value in the cache
+;  --    computeValue: the form used to compute the value from arg
+;    null argl => [nil,nil,[auxfn]]
+;    argl is [.] =>
+;      key:= (cacheNameOrNil => ['devaluate,g1]; g1)
+;      [[g1],['LIST,key],[auxfn,g1]]  --g1 is a parameter
+;    key:= (cacheNameOrNil => ['devaluateList,g1] ; g1)
+;    [g1,key,['APPLY,['function,auxfn],g1]]   --g1 is a parameter list
+;  cacheName:= cacheNameOrNil or INTERNL(op,'";AL")
+;  if $reportCounts=true then
+;    hitCounter:= INTERNL(op,'";hit")
+;    callCounter:= INTERNL(op,'";calls")
+;    SET(hitCounter,0)
+;    SET(callCounter,0)
+;    callCountCode:= [['SETQ,callCounter,['QSADD1,callCounter]]]
+;    hitCountCode:=  [['SETQ,hitCounter,['QSADD1,hitCounter]]]
+;  g2:= GENSYM()  --value computed by calling function
+;  returnFoundValue:=
+;    null argl =>
+;    --  if we have a global hastable, functions with no arguments are
+;    --  stored in the same format as those with several arguments, e.g.
+;    --  to cache the value <val> given by f(), the structure
+;    --  ((nil <count> <val>)) is stored in the cache
+;      countFl => ['CDRwithIncrement,['CDAR,g2]]
+;      ['CDAR,g2]
+;    countFl => ['CDRwithIncrement,g2]
+;    g2
+;  getCode:=
+;    null argl => ['HGET,cacheName,MKQ op]
+;    cacheNameOrNil =>
+;      eqEtc^='EQUAL =>
+;        ['lassocShiftWithFunction,cacheArgKey,
+;          ['HGET,cacheNameOrNil,MKQ op],MKQ eqEtc]
+;      ['lassocShift,cacheArgKey,['HGET,cacheNameOrNil,MKQ op]]
+;    ['HGET,cacheName,g1]
+;  secondPredPair:= [['SETQ,g2,getCode],:hitCountCode,returnFoundValue]
+;  putCode:=
+;    null argl =>
+;      cacheNameOrNil =>
+;        countFl => ['CDDAR,['HPUT,cacheNameOrNil,MKQ op,
+;                      ['LIST,['CONS,nil,['CONS,1,computeValue]]]]]
+;        ['HPUT,cacheNameOrNil,MKQ op,['LIST,['CONS,nil,computeValue]]]
+;      systemError '"unexpected"
+;    cacheNameOrNil => computeValue
+;    --countFl => ['CDR,['hputNewProp,cacheNameOrNil,MKQ op,cacheArgKey, --***
+;    --             ['CONS,1,computeValue]]]                             --***
+;    --['hputNewProp,cacheNameOrNil,MKQ op,cacheArgKey,computeValue]    --***
+;    countFl => ['CDR,['HPUT,cacheName,g1,['CONS,1,computeValue]]]
+;    ['HPUT,cacheName,g1,computeValue]
+;  if cacheNameOrNil then putCode :=
+;     ['UNWIND_-PROTECT,['PROG1,putCode,['SETQ,g2,'T]],
+;                  ['COND,[['NOT,g2],['HREM,cacheName,MKQ op]]]]
+;  thirdPredPair:= ['(QUOTE T),putCode]
+;  codeBody:= ['PROG,[g2],
+;               :callCountCode,['RETURN,['COND,secondPredPair,thirdPredPair]]]
+;  lamex:= ['LAM,arg,codeBody]
+;  mainFunction:= [op,lamex]
+;  computeFunction:= [auxfn,['LAMBDA,argl,:body]]
+;
+;  -- compile generated function stub
+;  compileInteractive mainFunction
+;
+;  -- compile main body: this has already been compTran'ed
+;  if $reportCompilation then
+;    sayBrightlyI bright '"Generated LISP code for function:"
+;    pp computeFunction
+;  compileQuietly [computeFunction]
+;
+;  if null cacheNameOrNil then
+;    cacheType:=
+;      countFl => 'hash_-tableWithCounts
+;      'hash_-table
+;    weakStrong:= (countFl => 'STRONG; 'WEAK)
+;      --note: WEAK means that key/value pairs disappear at garbage collection
+;    cacheResetCode:=
+;      ['SETQ,cacheName,['MAKE_-HASHTABLE,MKQ eqEtc]]
+;    cacheCountCode:= ['hashCount,cacheName]
+;    cacheVector:=
+;      mkCacheVec(op,cacheName,cacheType,cacheResetCode,cacheCountCode)
+;    LAM_,EVALANDFILEACTQ ['PUT, MKQ op, MKQ 'cacheInfo, MKQ cacheVector]
+;    LAM_,EVALANDFILEACTQ cacheResetCode
+;  op
+
+;;;     ***       |compHash| REDEFINED
+
+(DEFUN |compHash|
+       (|op| |argl| |body| |cacheNameOrNil| |eqEtc| |countFl|)
+  (PROG (|auxfn| |g1| |key| |LETTMP#1| |arg| |cacheArgKey|
+                 |computeValue| |cacheName| |hitCounter| |callCounter|
+                 |callCountCode| |hitCountCode| |g2| |returnFoundValue|
+                 |getCode| |secondPredPair| |putCode| |thirdPredPair|
+                 |codeBody| |lamex| |mainFunction| |computeFunction|
+                 |cacheType| |weakStrong| |cacheResetCode|
+                 |cacheCountCode| |cacheVector|)
+    (DECLARE (SPECIAL |$reportCompilation| |$reportCounts|
+                      |$ConstructorCache|))
+    (RETURN
+      (PROGN
+        (COND
+          ((AND |cacheNameOrNil|
+                (NEQUAL |cacheNameOrNil| '|$ConstructorCache|))
+           (|keyedSystemError| 'S2GE0010 (CONS |op| NIL))))
+        (COND
+          ((NULL |argl|)
+           (COND
+             ((NULL |cacheNameOrNil|)
+              (|keyedSystemError| 'S2GE0011 (CONS |op| NIL)))
+             ('T NIL))))
+        (COND
+          ((AND (NULL |cacheNameOrNil|)
+                (NULL (MEMQ |eqEtc| '(EQ CVEC UEQUAL))))
+           (|keyedSystemError| 'S2GE0012 (CONS |op| NIL)))
+          ('T (SPADLET |auxfn| (INTERNL |op| (MAKESTRING ";")))
+           (SPADLET |g1| (GENSYM))
+           (SPADLET |LETTMP#1|
+                    (COND
+                      ((NULL |argl|)
+                       (CONS NIL
+                             (CONS NIL (CONS (CONS |auxfn| NIL) NIL))))
+                      ((AND (PAIRP |argl|) (EQ (QCDR |argl|) NIL))
+                       (SPADLET |key|
+                                (COND
+                                  (|cacheNameOrNil|
+                                      (CONS '|devaluate|
+                                       (CONS |g1| NIL)))
+                                  ('T |g1|)))
+                       (CONS (CONS |g1| NIL)
+                             (CONS (CONS 'LIST (CONS |key| NIL))
+                                   (CONS (CONS |auxfn| (CONS |g1| NIL))
+                                    NIL))))
+                      ('T
+                       (SPADLET |key|
+                                (COND
+                                  (|cacheNameOrNil|
+                                      (CONS '|devaluateList|
+                                       (CONS |g1| NIL)))
+                                  ('T |g1|)))
+                       (CONS |g1|
+                             (CONS |key|
+                                   (CONS
+                                    (CONS 'APPLY
+                                     (CONS
+                                      (CONS '|function|
+                                       (CONS |auxfn| NIL))
+                                      (CONS |g1| NIL)))
+                                    NIL))))))
+           (SPADLET |arg| (CAR |LETTMP#1|))
+           (SPADLET |cacheArgKey| (CADR |LETTMP#1|))
+           (SPADLET |computeValue| (CADDR |LETTMP#1|))
+           (SPADLET |cacheName|
+                    (OR |cacheNameOrNil|
+                        (INTERNL |op| (MAKESTRING ";AL"))))
+           (COND
+             ((BOOT-EQUAL |$reportCounts| 'T)
+              (SPADLET |hitCounter| (INTERNL |op| (MAKESTRING ";hit")))
+              (SPADLET |callCounter|
+                       (INTERNL |op| (MAKESTRING ";calls")))
+              (SET |hitCounter| 0) (SET |callCounter| 0)
+              (SPADLET |callCountCode|
+                       (CONS (CONS 'SETQ
+                                   (CONS |callCounter|
+                                    (CONS
+                                     (CONS 'QSADD1
+                                      (CONS |callCounter| NIL))
+                                     NIL)))
+                             NIL))
+              (SPADLET |hitCountCode|
+                       (CONS (CONS 'SETQ
+                                   (CONS |hitCounter|
+                                    (CONS
+                                     (CONS 'QSADD1
+                                      (CONS |hitCounter| NIL))
+                                     NIL)))
+                             NIL))))
+           (SPADLET |g2| (GENSYM))
+           (SPADLET |returnFoundValue|
+                    (COND
+                      ((NULL |argl|)
+                       (COND
+                         (|countFl|
+                             (CONS '|CDRwithIncrement|
+                                   (CONS (CONS 'CDAR (CONS |g2| NIL))
+                                    NIL)))
+                         ('T (CONS 'CDAR (CONS |g2| NIL)))))
+                      (|countFl|
+                          (CONS '|CDRwithIncrement| (CONS |g2| NIL)))
+                      ('T |g2|)))
+           (SPADLET |getCode|
+                    (COND
+                      ((NULL |argl|)
+                       (CONS 'HGET
+                             (CONS |cacheName| (CONS (MKQ |op|) NIL))))
+                      (|cacheNameOrNil|
+                          (COND
+                            ((NEQUAL |eqEtc| 'EQUAL)
+                             (CONS '|lassocShiftWithFunction|
+                                   (CONS |cacheArgKey|
+                                    (CONS
+                                     (CONS 'HGET
+                                      (CONS |cacheNameOrNil|
+                                       (CONS (MKQ |op|) NIL)))
+                                     (CONS (MKQ |eqEtc|) NIL)))))
+                            ('T
+                             (CONS '|lassocShift|
+                                   (CONS |cacheArgKey|
+                                    (CONS
+                                     (CONS 'HGET
+                                      (CONS |cacheNameOrNil|
+                                       (CONS (MKQ |op|) NIL)))
+                                     NIL))))))
+                      ('T
+                       (CONS 'HGET (CONS |cacheName| (CONS |g1| NIL))))))
+           (SPADLET |secondPredPair|
+                    (CONS (CONS 'SETQ (CONS |g2| (CONS |getCode| NIL)))
+                          (APPEND |hitCountCode|
+                                  (CONS |returnFoundValue| NIL))))
+           (SPADLET |putCode|
+                    (COND
+                      ((NULL |argl|)
+                       (COND
+                         (|cacheNameOrNil|
+                             (COND
+                               (|countFl|
+                                   (CONS 'CDDAR
+                                    (CONS
+                                     (CONS 'HPUT
+                                      (CONS |cacheNameOrNil|
+                                       (CONS (MKQ |op|)
+                                        (CONS
+                                         (CONS 'LIST
+                                          (CONS
+                                           (CONS 'CONS
+                                            (CONS NIL
+                                             (CONS
+                                              (CONS 'CONS
+                                               (CONS 1
+                                                (CONS |computeValue|
+                                                 NIL)))
+                                              NIL)))
+                                           NIL))
+                                         NIL))))
+                                     NIL)))
+                               ('T
+                                (CONS 'HPUT
+                                      (CONS |cacheNameOrNil|
+                                       (CONS (MKQ |op|)
+                                        (CONS
+                                         (CONS 'LIST
+                                          (CONS
+                                           (CONS 'CONS
+                                            (CONS NIL
+                                             (CONS |computeValue| NIL)))
+                                           NIL))
+                                         NIL)))))))
+                         ('T (|systemError| (MAKESTRING "unexpected")))))
+                      (|cacheNameOrNil| |computeValue|)
+                      (|countFl|
+                          (CONS 'CDR
+                                (CONS (CONS 'HPUT
+                                       (CONS |cacheName|
+                                        (CONS |g1|
+                                         (CONS
+                                          (CONS 'CONS
+                                           (CONS 1
+                                            (CONS |computeValue| NIL)))
+                                          NIL))))
+                                      NIL)))
+                      ('T
+                       (CONS 'HPUT
+                             (CONS |cacheName|
+                                   (CONS |g1|
+                                    (CONS |computeValue| NIL)))))))
+           (COND
+             (|cacheNameOrNil|
+                 (SPADLET |putCode|
+                          (CONS 'UNWIND-PROTECT
+                                (CONS (CONS 'PROG1
+                                       (CONS |putCode|
+                                        (CONS
+                                         (CONS 'SETQ
+                                          (CONS |g2| (CONS 'T NIL)))
+                                         NIL)))
+                                      (CONS
+                                       (CONS 'COND
+                                        (CONS
+                                         (CONS
+                                          (CONS 'NOT (CONS |g2| NIL))
+                                          (CONS
+                                           (CONS 'HREM
+                                            (CONS |cacheName|
+                                             (CONS (MKQ |op|) NIL)))
+                                           NIL))
+                                         NIL))
+                                       NIL))))))
+           (SPADLET |thirdPredPair| (CONS ''T (CONS |putCode| NIL)))
+           (SPADLET |codeBody|
+                    (CONS 'PROG
+                          (CONS (CONS |g2| NIL)
+                                (APPEND |callCountCode|
+                                        (CONS
+                                         (CONS 'RETURN
+                                          (CONS
+                                           (CONS 'COND
+                                            (CONS |secondPredPair|
+                                             (CONS |thirdPredPair| NIL)))
+                                           NIL))
+                                         NIL)))))
+           (SPADLET |lamex|
+                    (CONS 'LAM (CONS |arg| (CONS |codeBody| NIL))))
+           (SPADLET |mainFunction| (CONS |op| (CONS |lamex| NIL)))
+           (SPADLET |computeFunction|
+                    (CONS |auxfn|
+                          (CONS (CONS 'LAMBDA (CONS |argl| |body|))
+                                NIL)))
+           (|compileInteractive| |mainFunction|)
+           (COND
+             (|$reportCompilation|
+                 (|sayBrightlyI|
+                     (|bright|
+                         (MAKESTRING
+                             "Generated LISP code for function:")))
+                 (|pp| |computeFunction|)))
+           (|compileQuietly| (CONS |computeFunction| NIL))
+           (COND
+             ((NULL |cacheNameOrNil|)
+              (SPADLET |cacheType|
+                       (COND
+                         (|countFl| '|hash-tableWithCounts|)
+                         ('T '|hash-table|)))
+              (SPADLET |weakStrong|
+                       (COND (|countFl| 'STRONG) ('T 'WEAK)))
+              (SPADLET |cacheResetCode|
+                       (CONS 'SETQ
+                             (CONS |cacheName|
+                                   (CONS
+                                    (CONS 'MAKE-HASHTABLE
+                                     (CONS (MKQ |eqEtc|) NIL))
+                                    NIL))))
+              (SPADLET |cacheCountCode|
+                       (CONS '|hashCount| (CONS |cacheName| NIL)))
+              (SPADLET |cacheVector|
+                       (|mkCacheVec| |op| |cacheName| |cacheType|
+                           |cacheResetCode| |cacheCountCode|))
+              (|LAM,EVALANDFILEACTQ|
+                  (CONS 'PUT
+                        (CONS (MKQ |op|)
+                              (CONS (MKQ '|cacheInfo|)
+                                    (CONS (MKQ |cacheVector|) NIL)))))
+              (|LAM,EVALANDFILEACTQ| |cacheResetCode|)))
+           |op|))))))
+
+;compHashGlobal(op,argl,body,cacheName,eqEtc,countFl) ==
+;  --Note: when cacheNameOrNil^=nil, it names a global hashtable
+;
+;  if (not MEMQ(eqEtc,'(UEQUAL))) then
+;    sayBrightly "for hash option, only EQ, CVEC, and UEQUAL are allowed"
+;  auxfn:= INTERNL(op,'";")
+;  g1:= GENSYM()  --argument or argument list
+;  [arg,cacheArgKey,computeValue] :=
+;  --    arg: to be used as formal argument of lambda construction;
+;  --    cacheArgKey: the form used to look up the value in the cache
+;  --    computeValue: the form used to compute the value from arg
+;    application:=
+;      null argl => [auxfn]
+;      argl is [.] => [auxfn,g1]  --g1 is a parameter
+;      ['APPLX,['function,auxfn],g1]          --g1 is a parameter list
+;    [g1,['consForHashLookup,MKQ op,g1],application]
+;  g2:= GENSYM()  --value computed by calling function
+;  returnFoundValue:=
+;    countFl => ['CDRwithIncrement,g2]
+;    g2
+;  getCode:= ['HGET,cacheName,cacheArgKey]
+;  secondPredPair:= [['SETQ,g2,getCode],returnFoundValue]
+;  putForm:= ['CONS,MKQ op,g1]
+;  putCode:=
+;    countFl => ['HPUT,cacheName,putForm,['CONS,1,computeValue]]
+;    ['HPUT,cacheName,putForm,computeValue]
+;  thirdPredPair:= ['(QUOTE T),putCode]
+;  codeBody:= ['PROG,[g2], ['RETURN,['COND,secondPredPair,thirdPredPair]]]
+;  lamex:= ['LAM,arg,codeBody]
+;  mainFunction:= [op,lamex]
+;  computeFunction:= [auxfn,['LAMBDA,argl,:body]]
+;  compileInteractive mainFunction
+;  compileInteractive computeFunction
+;  op
+
+;;;     ***       |compHashGlobal| REDEFINED
+
+(DEFUN |compHashGlobal|
+       (|op| |argl| |body| |cacheName| |eqEtc| |countFl|)
+  (PROG (|auxfn| |g1| |application| |LETTMP#1| |arg| |cacheArgKey|
+                 |computeValue| |g2| |returnFoundValue| |getCode|
+                 |secondPredPair| |putForm| |putCode| |thirdPredPair|
+                 |codeBody| |lamex| |mainFunction| |computeFunction|)
+    (RETURN
+      (PROGN
+        (COND
+          ((NULL (MEMQ |eqEtc| '(UEQUAL)))
+           (|sayBrightly|
+               (MAKESTRING
+                   "for hash option, only EQ, CVEC, and UEQUAL are allowed"))))
+        (SPADLET |auxfn| (INTERNL |op| (MAKESTRING ";")))
+        (SPADLET |g1| (GENSYM))
+        (SPADLET |LETTMP#1|
+                 (PROGN
+                   (SPADLET |application|
+                            (COND
+                              ((NULL |argl|) (CONS |auxfn| NIL))
+                              ((AND (PAIRP |argl|)
+                                    (EQ (QCDR |argl|) NIL))
+                               (CONS |auxfn| (CONS |g1| NIL)))
+                              ('T
+                               (CONS 'APPLX
+                                     (CONS
+                                      (CONS '|function|
+                                       (CONS |auxfn| NIL))
+                                      (CONS |g1| NIL))))))
+                   (CONS |g1|
+                         (CONS (CONS '|consForHashLookup|
+                                     (CONS (MKQ |op|) (CONS |g1| NIL)))
+                               (CONS |application| NIL)))))
+        (SPADLET |arg| (CAR |LETTMP#1|))
+        (SPADLET |cacheArgKey| (CADR |LETTMP#1|))
+        (SPADLET |computeValue| (CADDR |LETTMP#1|))
+        (SPADLET |g2| (GENSYM))
+        (SPADLET |returnFoundValue|
+                 (COND
+                   (|countFl|
+                       (CONS '|CDRwithIncrement| (CONS |g2| NIL)))
+                   ('T |g2|)))
+        (SPADLET |getCode|
+                 (CONS 'HGET
+                       (CONS |cacheName| (CONS |cacheArgKey| NIL))))
+        (SPADLET |secondPredPair|
+                 (CONS (CONS 'SETQ (CONS |g2| (CONS |getCode| NIL)))
+                       (CONS |returnFoundValue| NIL)))
+        (SPADLET |putForm|
+                 (CONS 'CONS (CONS (MKQ |op|) (CONS |g1| NIL))))
+        (SPADLET |putCode|
+                 (COND
+                   (|countFl|
+                       (CONS 'HPUT
+                             (CONS |cacheName|
+                                   (CONS |putForm|
+                                    (CONS
+                                     (CONS 'CONS
+                                      (CONS 1
+                                       (CONS |computeValue| NIL)))
+                                     NIL)))))
+                   ('T
+                    (CONS 'HPUT
+                          (CONS |cacheName|
+                                (CONS |putForm|
+                                      (CONS |computeValue| NIL)))))))
+        (SPADLET |thirdPredPair| (CONS ''T (CONS |putCode| NIL)))
+        (SPADLET |codeBody|
+                 (CONS 'PROG
+                       (CONS (CONS |g2| NIL)
+                             (CONS (CONS 'RETURN
+                                    (CONS
+                                     (CONS 'COND
+                                      (CONS |secondPredPair|
+                                       (CONS |thirdPredPair| NIL)))
+                                     NIL))
+                                   NIL))))
+        (SPADLET |lamex|
+                 (CONS 'LAM (CONS |arg| (CONS |codeBody| NIL))))
+        (SPADLET |mainFunction| (CONS |op| (CONS |lamex| NIL)))
+        (SPADLET |computeFunction|
+                 (CONS |auxfn|
+                       (CONS (CONS 'LAMBDA (CONS |argl| |body|)) NIL)))
+        (|compileInteractive| |mainFunction|)
+        (|compileInteractive| |computeFunction|)
+        |op|))))
+
+;consForHashLookup(a,b) ==
+;  RPLACA($hashNode,a)
+;  RPLACD($hashNode,b)
+;  $hashNode
+
+;;;     ***       |consForHashLookup| REDEFINED
+
+(DEFUN |consForHashLookup| (|a| |b|)
+  (DECLARE (SPECIAL |$hashNode|))
+  (PROGN
+    (RPLACA |$hashNode| |a|)
+    (RPLACD |$hashNode| |b|)
+    |$hashNode|))
+
+;CDRwithIncrement x ==
+;  RPLACA(x,QSADD1 CAR x)
+;  CDR x
+
+;;;     ***       |CDRwithIncrement| REDEFINED
+
+(DEFUN |CDRwithIncrement| (|x|)
+  (PROGN (RPLACA |x| (QSADD1 (CAR |x|))) (CDR |x|)))
+
+;HGETandCount(hashTable,prop) ==
+;  u:= HGET(hashTable,prop) or return nil
+;  RPLACA(u,QSADD1 CAR u)
+;  u
+
+;;;     ***       |HGETandCount| REDEFINED
+
+(DEFUN |HGETandCount| (|hashTable| |prop|)
+  (PROG (|u|)
+    (RETURN
+      (PROGN
+        (SPADLET |u| (OR (HGET |hashTable| |prop|) (RETURN NIL)))
+        (RPLACA |u| (QSADD1 (CAR |u|)))
+        |u|))))
+
+;clearClams() ==
+;  for [fn,kind,:.] in $clamList | kind = 'hash or INTEGERP kind repeat
+;    clearClam fn
+
+;;;     ***       |clearClams| REDEFINED
+
+(DEFUN |clearClams| ()
+  (PROG (|fn| |kind|)
+    (DECLARE (SPECIAL |$clamList|))
+    (RETURN
+      (SEQ (DO ((G2474 |$clamList| (CDR G2474)) (G2465 NIL))
+               ((OR (ATOM G2474)
+                    (PROGN (SETQ G2465 (CAR G2474)) NIL)
+                    (PROGN
+                      (PROGN
+                        (SPADLET |fn| (CAR G2465))
+                        (SPADLET |kind| (CADR G2465))
+                        G2465)
+                      NIL))
+                NIL)
+             (SEQ (EXIT (COND
+                          ((OR (BOOT-EQUAL |kind| '|hash|)
+                               (INTEGERP |kind|))
+                           (|clearClam| |fn|))))))))))
+
+;clearClam fn ==
+;  infovec:= GET(fn,'cacheInfo) or keyedSystemError("S2GE0003",[fn])
+;  eval infovec.cacheReset
+
+;;;     ***       |clearClam| REDEFINED
+
+(DEFUN |clearClam| (|fn|)
+  (PROG (|infovec|)
+    (RETURN
+      (PROGN
+        (SPADLET |infovec|
+                 (OR (GETL |fn| '|cacheInfo|)
+                     (|keyedSystemError| 'S2GE0003 (CONS |fn| NIL))))
+        (|eval| (CADDDR |infovec|))))))
+
+;reportAndClearClams() ==
+;  cacheStats()
+;  clearClams()
+
+;;;     ***       |reportAndClearClams| REDEFINED
+
+(DEFUN |reportAndClearClams| () (PROGN (|cacheStats|) (|clearClams|)))
+
+;clearConstructorCaches() ==
+;  clearCategoryCaches()
+;  CLRHASH $ConstructorCache
+
+;;;     ***       |clearConstructorCaches| REDEFINED
+
+(DEFUN |clearConstructorCaches| ()
+  (DECLARE (SPECIAL |$ConstructorCache|))
+  (PROGN (|clearCategoryCaches|) (CLRHASH |$ConstructorCache|)))
+
+;clearConstructorCache(cname) ==
+;  (kind := GETDATABASE(cname,'CONSTRUCTORKIND)) =>
+;    kind = 'category => clearCategoryCache cname
+;    HREM($ConstructorCache,cname)
+
+;;;     ***       |clearConstructorCache| REDEFINED
+
+(DEFUN |clearConstructorCache| (|cname|)
+  (PROG (|kind|)
+    (DECLARE (SPECIAL |$ConstructorCache|))
+    (RETURN
+      (SEQ (COND
+             ((SPADLET |kind| (GETDATABASE |cname| 'CONSTRUCTORKIND))
+              (EXIT (COND
+                      ((BOOT-EQUAL |kind| '|category|)
+                       (|clearCategoryCache| |cname|))
+                      ('T (HREM |$ConstructorCache| |cname|))))))))))
+
+;clearConstructorAndLisplibCaches() ==
+;  clearClams()
+;  clearConstructorCaches()
+
+;;;     ***       |clearConstructorAndLisplibCaches| REDEFINED
+
+(DEFUN |clearConstructorAndLisplibCaches| ()
+ (PROGN (|clearClams|) (|clearConstructorCaches|)))
+
+;clearCategoryCaches() ==
+;  for name in allConstructors() repeat
+;    if GETDATABASE(name,'CONSTRUCTORKIND) = 'category then
+;      if BOUNDP(cacheName:= INTERNL STRCONC(PNAME name,'";AL"))
+;            then SET(cacheName,nil)
+;    if BOUNDP(cacheName:= INTERNL STRCONC(PNAME name,'";CAT"))
+;          then SET(cacheName,nil)
+
+;;;     ***       |clearCategoryCaches| REDEFINED
+
+(DEFUN |clearCategoryCaches| ()
+  (PROG (|cacheName|)
+    (RETURN
+      (SEQ (DO ((G2514 (|allConstructors|) (CDR G2514))
+                (|name| NIL))
+               ((OR (ATOM G2514)
+                    (PROGN (SETQ |name| (CAR G2514)) NIL))
+                NIL)
+             (SEQ (EXIT (PROGN
+                          (COND
+                            ((BOOT-EQUAL
+                                 (GETDATABASE |name| 'CONSTRUCTORKIND)
+                                 '|category|)
+                             (COND
+                               ((BOUNDP (SPADLET |cacheName|
+                                         (INTERNL
+                                          (STRCONC (PNAME |name|)
+                                           (MAKESTRING ";AL")))))
+                                (SET |cacheName| NIL))
+                               ('T NIL))))
+                          (COND
+                            ((BOUNDP (SPADLET |cacheName|
+                                      (INTERNL
+                                       (STRCONC (PNAME |name|)
+                                        (MAKESTRING ";CAT")))))
+                             (SET |cacheName| NIL))
+                            ('T NIL))))))))))
+
+;clearCategoryCache catName ==
+;  cacheName:= INTERNL STRCONC(PNAME catName,'";AL")
+;  SET(cacheName,nil)
+
+;;;     ***       |clearCategoryCache| REDEFINED
+
+(DEFUN |clearCategoryCache| (|catName|)
+  (PROG (|cacheName|)
+    (RETURN
+      (PROGN
+        (SPADLET |cacheName|
+                 (INTERNL (STRCONC (PNAME |catName|)
+                                   (MAKESTRING ";AL"))))
+        (SET |cacheName| NIL)))))
+
+;displayHashtable x ==
+;  l:= NREVERSE SORTBY('CAR,[[opOf HGET(x,key),key] for key in HKEYS x])
+;  for [a,b] in l repeat
+;    sayBrightlyNT ['%b,a,'%d]
+;    pp b
+
+;;;     ***       |displayHashtable| REDEFINED
+
+(DEFUN |displayHashtable| (|x|)
+  (PROG (|l| |a| |b|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |l|
+                      (NREVERSE
+                          (SORTBY 'CAR
+                                  (PROG (G2540)
+                                    (SPADLET G2540 NIL)
+                                    (RETURN
+                                      (DO
+                                       ((G2545 (HKEYS |x|)
+                                         (CDR G2545))
+                                        (|key| NIL))
+                                       ((OR (ATOM G2545)
+                                         (PROGN
+                                           (SETQ |key| (CAR G2545))
+                                           NIL))
+                                        (NREVERSE0 G2540))
+                                        (SEQ
+                                         (EXIT
+                                          (SETQ G2540
+                                           (CONS
+                                            (CONS
+                                             (|opOf| (HGET |x| |key|))
+                                             (CONS |key| NIL))
+                                            G2540))))))))))
+             (DO ((G2557 |l| (CDR G2557)) (G2531 NIL))
+                 ((OR (ATOM G2557)
+                      (PROGN (SETQ G2531 (CAR G2557)) NIL)
+                      (PROGN
+                        (PROGN
+                          (SPADLET |a| (CAR G2531))
+                          (SPADLET |b| (CADR G2531))
+                          G2531)
+                        NIL))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (|sayBrightlyNT|
+                                (CONS '|%b|
+                                      (CONS |a| (CONS '|%d| NIL))))
+                            (|pp| |b|))))))))))
+
+;cacheStats() ==
+;  for [fn,kind,:u] in $clamList repeat
+;    not MEMQ('count,u) =>
+;      sayBrightly ["%b",fn,"%d","does not keep reference counts"]
+;    INTEGERP kind => reportCircularCacheStats(fn,kind)
+;    kind = 'hash => reportHashCacheStats fn
+;    sayBrightly ["Unknown cache type for","%b",fn,"%d"]
+
+;;;     ***       |cacheStats| REDEFINED
+
+(DEFUN |cacheStats| ()
+  (PROG (|fn| |kind| |u|)
+    (DECLARE (SPECIAL |$clamList|))
+    (RETURN
+      (SEQ (DO ((G2581 |$clamList| (CDR G2581)) (G2572 NIL))
+               ((OR (ATOM G2581)
+                    (PROGN (SETQ G2572 (CAR G2581)) NIL)
+                    (PROGN
+                      (PROGN
+                        (SPADLET |fn| (CAR G2572))
+                        (SPADLET |kind| (CADR G2572))
+                        (SPADLET |u| (CDDR G2572))
+                        G2572)
+                      NIL))
+                NIL)
+             (SEQ (EXIT (COND
+                          ((NULL (MEMQ '|count| |u|))
+                           (|sayBrightly|
+                               (CONS (MAKESTRING "%b")
+                                     (CONS |fn|
+                                      (CONS (MAKESTRING "%d")
+                                       (CONS
+                                        (MAKESTRING
+                                         "does not keep reference counts")
+                                        NIL))))))
+                          ((INTEGERP |kind|)
+                           (|reportCircularCacheStats| |fn| |kind|))
+                          ((BOOT-EQUAL |kind| '|hash|)
+                           (|reportHashCacheStats| |fn|))
+                          ('T
+                           (|sayBrightly|
+                               (CONS (MAKESTRING
+                                      "Unknown cache type for")
+                                     (CONS (MAKESTRING "%b")
+                                      (CONS |fn|
+                                       (CONS (MAKESTRING "%d") NIL))))))))))))))
+
+;reportCircularCacheStats(fn,n) ==
+;  infovec:= GET(fn,'cacheInfo)
+;  circList:= eval infovec.cacheName
+;  numberUsed :=
+;    +/[1 for i in 1..n for x in circList while x isnt [='_$failed,:.]]
+;  sayBrightly ["%b",fn,"%d","has","%b",numberUsed,"%d","/ ",n," values cached"]
+;  displayCacheFrequency mkCircularCountAlist(circList,n)
+;  TERPRI()
+
+;;;     ***       |reportCircularCacheStats| REDEFINED
+
+(DEFUN |reportCircularCacheStats| (|fn| |n|)
+  (PROG (|infovec| |circList| |numberUsed|)
+    (DECLARE (SPECIAL |$failed|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |infovec| (GETL |fn| '|cacheInfo|))
+             (SPADLET |circList| (|eval| (CADR |infovec|)))
+             (SPADLET |numberUsed|
+                      (PROG (G2595)
+                        (SPADLET G2595 0)
+                        (RETURN
+                          (DO ((|i| 1 (QSADD1 |i|))
+                               (G2602 |circList| (CDR G2602))
+                               (|x| NIL))
+                              ((OR (QSGREATERP |i| |n|) (ATOM G2602)
+                                   (PROGN
+                                     (SETQ |x| (CAR G2602))
+                                     NIL)
+                                   (NULL
+                                    (NULL
+                                     (AND (PAIRP |x|)
+                                      (EQUAL (QCAR |x|) '|$failed|)))))
+                               G2595)
+                            (SEQ (EXIT (SETQ G2595 (PLUS G2595 1))))))))
+             (|sayBrightly|
+                 (CONS (MAKESTRING "%b")
+                       (CONS |fn|
+                             (CONS (MAKESTRING "%d")
+                                   (CONS (MAKESTRING "has")
+                                    (CONS (MAKESTRING "%b")
+                                     (CONS |numberUsed|
+                                      (CONS (MAKESTRING "%d")
+                                       (CONS (MAKESTRING "/ ")
+                                        (CONS |n|
+                                         (CONS
+                                          (MAKESTRING " values cached")
+                                          NIL)))))))))))
+             (|displayCacheFrequency|
+                 (|mkCircularCountAlist| |circList| |n|))
+             (TERPRI))))))
+
+;displayCacheFrequency al ==
+;  al := NREVERSE SORTBY('CAR,al)
+;  sayBrightlyNT "    #hits/#occurrences: "
+;  for [a,:b] in al repeat sayBrightlyNT [a,"/",b,"  "]
+;  TERPRI()
+
+;;;     ***       |displayCacheFrequency| REDEFINED
+
+(DEFUN |displayCacheFrequency| (|al|)
+  (PROG (|a| |b|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |al| (NREVERSE (SORTBY 'CAR |al|)))
+             (|sayBrightlyNT| '|    #hits/#occurrences: |)
+             (DO ((G2626 |al| (CDR G2626)) (G2617 NIL))
+                 ((OR (ATOM G2626)
+                      (PROGN (SETQ G2617 (CAR G2626)) NIL)
+                      (PROGN
+                        (PROGN
+                          (SPADLET |a| (CAR G2617))
+                          (SPADLET |b| (CDR G2617))
+                          G2617)
+                        NIL))
+                  NIL)
+               (SEQ (EXIT (|sayBrightlyNT|
+                              (CONS |a|
+                                    (CONS '/
+                                     (CONS |b| (CONS '|  | NIL))))))))
+             (TERPRI))))))
+
+;mkCircularCountAlist(cl,len) ==
+;  for [x,count,:.] in cl for i in 1..len while x ^= '_$failed repeat
+;    u:= ASSOC(count,al) => RPLACD(u,1 + CDR u)
+;    if INTEGERP $reportFavoritesIfNumber and count >= $reportFavoritesIfNumber then
+;      sayBrightlyNT ["   ",count,"  "]
+;      pp x
+;    al:= [[count,:1],:al]
+;  al
+
+;;;     ***       |mkCircularCountAlist| REDEFINED
+
+(DEFUN |mkCircularCountAlist| (|cl| |len|)
+  (PROG (|x| |count| |u| |al|)
+    (DECLARE (SPECIAL |$reportFavoritesIfNumber| |$failed|))
+    (RETURN
+      (SEQ (PROGN
+             (DO ((G2652 |cl| (CDR G2652)) (G2641 NIL)
+                  (|i| 1 (QSADD1 |i|)))
+                 ((OR (ATOM G2652)
+                      (PROGN (SETQ G2641 (CAR G2652)) NIL)
+                      (PROGN
+                        (PROGN
+                          (SPADLET |x| (CAR G2641))
+                          (SPADLET |count| (CADR G2641))
+                          G2641)
+                        NIL)
+                      (QSGREATERP |i| |len|)
+                      (NULL (NEQUAL |x| '|$failed|)))
+                  NIL)
+               (SEQ (EXIT (COND
+                            ((SPADLET |u| (|assoc| |count| |al|))
+                             (RPLACD |u| (PLUS 1 (CDR |u|))))
+                            ('T
+                             (COND
+                               ((AND (INTEGERP
+                                      |$reportFavoritesIfNumber|)
+                                     (>= |count|
+                                      |$reportFavoritesIfNumber|))
+                                (|sayBrightlyNT|
+                                    (CONS '|   |
+                                     (CONS |count| (CONS '|  | NIL))))
+                                (|pp| |x|)))
+                             (SPADLET |al|
+                                      (CONS (CONS |count| 1) |al|)))))))
+             |al|)))))
+
+;reportHashCacheStats fn ==
+;  infovec:= GET(fn,'cacheInfo)
+;  hashTable:= eval infovec.cacheName
+;  hashValues:= [HGET(hashTable,key) for key in HKEYS hashTable]
+;  sayBrightly [:bright fn,'"has",:bright(# hashValues),'"values cached."]
+;  displayCacheFrequency mkHashCountAlist hashValues
+;  TERPRI()
+
+;;;     ***       |reportHashCacheStats| REDEFINED
+
+(DEFUN |reportHashCacheStats| (|fn|)
+  (PROG (|infovec| |hashTable| |hashValues|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |infovec| (GETL |fn| '|cacheInfo|))
+             (SPADLET |hashTable| (|eval| (CADR |infovec|)))
+             (SPADLET |hashValues|
+                      (PROG (G2673)
+                        (SPADLET G2673 NIL)
+                        (RETURN
+                          (DO ((G2678 (HKEYS |hashTable|)
+                                        (CDR G2678))
+                               (|key| NIL))
+                              ((OR (ATOM G2678)
+                                   (PROGN
+                                     (SETQ |key| (CAR G2678))
+                                     NIL))
+                               (NREVERSE0 G2673))
+                            (SEQ (EXIT (SETQ G2673
+                                        (CONS (HGET |hashTable| |key|)
+                                         G2673))))))))
+             (|sayBrightly|
+                 (APPEND (|bright| |fn|)
+                         (CONS (MAKESTRING "has")
+                               (APPEND (|bright| (|#| |hashValues|))
+                                       (CONS
+                                        (MAKESTRING "values cached.")
+                                        NIL)))))
+             (|displayCacheFrequency|
+                 (|mkHashCountAlist| |hashValues|))
+             (TERPRI))))))
+
+;mkHashCountAlist vl ==
+;  for [count,:.] in vl repeat
+;    u:= ASSOC(count,al) => RPLACD(u,1 + CDR u)
+;    al:= [[count,:1],:al]
+;  al
+
+;;;     ***       |mkHashCountAlist| REDEFINED
+
+(DEFUN |mkHashCountAlist| (|vl|)
+  (PROG (|count| |u| |al|)
+    (RETURN
+      (SEQ (PROGN
+             (DO ((G2700 |vl| (CDR G2700)) (G2692 NIL))
+                 ((OR (ATOM G2700)
+                      (PROGN (SETQ G2692 (CAR G2700)) NIL)
+                      (PROGN
+                        (PROGN
+                          (SPADLET |count| (CAR G2692))
+                          G2692)
+                        NIL))
+                  NIL)
+               (SEQ (EXIT (COND
+                            ((SPADLET |u| (|assoc| |count| |al|))
+                             (RPLACD |u| (PLUS 1 (CDR |u|))))
+                            ('T
+                             (SPADLET |al|
+                                      (CONS (CONS |count| 1) |al|)))))))
+             |al|)))))
+
+;clearHashReferenceCounts() ==
+;  --free all cells with 0 reference counts; clear other counts to 0
+;  for x in $clamList repeat
+;    x.cacheType='hash_-tableWithCounts =>
+;      remHashEntriesWith0Count eval x.cacheName
+;    x.cacheType='hash_-table => CLRHASH eval x.cacheName
+
+;;;     ***       |clearHashReferenceCounts| REDEFINED
+
+(DEFUN |clearHashReferenceCounts| ()
+  (DECLARE (SPECIAL |$clamList|))
+  (SEQ (DO ((G2717 |$clamList| (CDR G2717)) (|x| NIL))
+           ((OR (ATOM G2717) (PROGN (SETQ |x| (CAR G2717)) NIL))
+            NIL)
+         (SEQ (EXIT (COND
+                      ((BOOT-EQUAL (CADDR |x|) '|hash-tableWithCounts|)
+                       (|remHashEntriesWith0Count| (|eval| (CADR |x|))))
+                      ((BOOT-EQUAL (CADDR |x|) '|hash-table|)
+                       (CLRHASH (|eval| (CADR |x|))))))))))
+
+;remHashEntriesWith0Count $hashTable ==
+;  MAPHASH(fn,$hashTable) where fn(key,obj) ==
+;    CAR obj = 0 => HREM($hashTable,key)  --free store
+;    nil
+
+;;;     ***       |remHashEntriesWith0Count,fn| REDEFINED
+
+(DEFUN |remHashEntriesWith0Count,fn| (|key| |obj|)
+  (DECLARE (SPECIAL |$hashTable|))
+  (SEQ (IF (EQL (CAR |obj|) 0) (EXIT (HREM |$hashTable| |key|)))
+       (EXIT NIL)))
+
+;;;     ***       |remHashEntriesWith0Count| REDEFINED
+
+(DEFUN |remHashEntriesWith0Count| (|$hashTable|)
+  (DECLARE (SPECIAL |$hashTable|))
+  (MAPHASH |remHashEntriesWith0Count,fn| |$hashTable|))
+
+;initCache n ==
+;  tail:= '(0 . $failed)
+;  l:= [[$failed,:tail] for i in 1..n]
+;  RPLACD(LASTNODE l,l)
+
+;;;     ***       |initCache| REDEFINED
+
+(DEFUN |initCache| (|n|)
+  (PROG (|tail| |l|)
+    (DECLARE (SPECIAL |$failed|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |tail| '(0 . |$failed|))
+             (SPADLET |l|
+                      (PROG (G2740)
+                        (SPADLET G2740 NIL)
+                        (RETURN
+                          (DO ((|i| 1 (QSADD1 |i|)))
+                              ((QSGREATERP |i| |n|)
+                               (NREVERSE0 G2740))
+                            (SEQ (EXIT (SETQ G2740
+                                        (CONS (CONS |$failed| |tail|)
+                                         G2740))))))))
+             (RPLACD (LASTNODE |l|) |l|))))))
+
+;assocCache(x,cacheName,fn) ==
+;  --fn=equality function; do not SHIFT or COUNT
+;  al:= eval cacheName
+;  forwardPointer:= al
+;  val:= nil
+;  until EQ(forwardPointer,al) repeat
+;    FUNCALL(fn,CAAR forwardPointer,x) => return (val:= CAR forwardPointer)
+;    backPointer:= forwardPointer
+;    forwardPointer:= CDR forwardPointer
+;  val => val
+;  SET(cacheName,backPointer)
+;  nil
+
+;;;     ***       |assocCache| REDEFINED
+
+(DEFUN |assocCache| (|x| |cacheName| |fn|)
+  (PROG (|al| |val| |backPointer| |forwardPointer|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |al| (|eval| |cacheName|))
+             (SPADLET |forwardPointer| |al|)
+             (SPADLET |val| NIL)
+             (DO ((G2759 NIL (EQ |forwardPointer| |al|)))
+                 (G2759 NIL)
+               (SEQ (EXIT (COND
+                            ((FUNCALL |fn| (CAAR |forwardPointer|) |x|)
+                             (RETURN
+                               (SPADLET |val| (CAR |forwardPointer|))))
+                            ('T
+                             (SPADLET |backPointer| |forwardPointer|)
+                             (SPADLET |forwardPointer|
+                                      (CDR |forwardPointer|)))))))
+             (COND
+               (|val| |val|)
+               ('T (SET |cacheName| |backPointer|) NIL)))))))
+
+;assocCacheShift(x,cacheName,fn) ==  --like ASSOC except that al is circular
+;  --fn=equality function; SHIFT but do not COUNT
+;  al:= eval cacheName
+;  forwardPointer:= al
+;  val:= nil
+;  until EQ(forwardPointer,al) repeat
+;    FUNCALL(fn, CAR (y:=CAR forwardPointer),x) =>
+;      if not EQ(forwardPointer,al) then   --shift referenced entry to front
+;        RPLACA(forwardPointer,CAR al)
+;        RPLACA(al,y)
+;      return (val:= y)
+;    backPointer := forwardPointer      --CAR is slot replaced on failure
+;    forwardPointer:= CDR forwardPointer
+;  val => val
+;  SET(cacheName,backPointer)
+;  nil
+
+;;;     ***       |assocCacheShift| REDEFINED
+
+(DEFUN |assocCacheShift| (|x| |cacheName| |fn|)
+  (PROG (|al| |y| |val| |backPointer| |forwardPointer|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |al| (|eval| |cacheName|))
+             (SPADLET |forwardPointer| |al|)
+             (SPADLET |val| NIL)
+             (DO ((G2779 NIL (EQ |forwardPointer| |al|)))
+                 (G2779 NIL)
+               (SEQ (EXIT (COND
+                            ((FUNCALL |fn|
+                                      (CAR
+                                       (SPADLET |y|
+                                        (CAR |forwardPointer|)))
+                                      |x|)
+                             (COND
+                               ((NULL (EQ |forwardPointer| |al|))
+                                (RPLACA |forwardPointer| (CAR |al|))
+                                (RPLACA |al| |y|)))
+                             (RETURN (SPADLET |val| |y|)))
+                            ('T
+                             (SPADLET |backPointer| |forwardPointer|)
+                             (SPADLET |forwardPointer|
+                                      (CDR |forwardPointer|)))))))
+             (COND
+               (|val| |val|)
+               ('T (SET |cacheName| |backPointer|) NIL)))))))
+
+;assocCacheShiftCount(x,al,fn) ==
+;  -- if x is found, entry containing x becomes first element of list; if
+;  -- x is not found, entry with smallest use count is shifted to front so
+;  -- as to be replaced
+;  --fn=equality function; COUNT and SHIFT
+;  forwardPointer:= al
+;  val:= nil
+;  minCount:= 10000 --preset minCount but not newFrontPointer here
+;  until EQ(forwardPointer,al) repeat
+;    FUNCALL(fn, CAR (y:=CAR forwardPointer),x) =>
+;      newFrontPointer := forwardPointer
+;      RPLAC(CADR y,QSADD1 CADR y)         --increment use count
+;      return (val:= y)
+;    if QSLESSP(c := CADR y,minCount) then --initial c is 1 so is true 1st time
+;      minCount := c
+;      newFrontPointer := forwardPointer   --CAR is slot replaced on failure
+;    forwardPointer:= CDR forwardPointer
+;  if not EQ(newFrontPointer,al) then       --shift referenced entry to front
+;    temp:= CAR newFrontPointer             --or entry with smallest count
+;    RPLACA(newFrontPointer,CAR al)
+;    RPLACA(al,temp)
+;  val
+
+;;;     ***       |assocCacheShiftCount| REDEFINED
+
+(DEFUN |assocCacheShiftCount| (|x| |al| |fn|)
+  (PROG (|y| |val| |c| |minCount| |newFrontPointer| |forwardPointer|
+             |temp|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |forwardPointer| |al|)
+             (SPADLET |val| NIL)
+             (SPADLET |minCount| 10000)
+             (DO ((G2801 NIL (EQ |forwardPointer| |al|)))
+                 (G2801 NIL)
+               (SEQ (EXIT (COND
+                            ((FUNCALL |fn|
+                                      (CAR
+                                       (SPADLET |y|
+                                        (CAR |forwardPointer|)))
+                                      |x|)
+                             (SPADLET |newFrontPointer|
+                                      |forwardPointer|)
+                             (RPLAC (CADR |y|) (QSADD1 (CADR |y|)))
+                             (RETURN (SPADLET |val| |y|)))
+                            ('T
+                             (COND
+                               ((QSLESSP (SPADLET |c| (CADR |y|))
+                                         |minCount|)
+                                (SPADLET |minCount| |c|)
+                                (SPADLET |newFrontPointer|
+                                         |forwardPointer|)))
+                             (SPADLET |forwardPointer|
+                                      (CDR |forwardPointer|)))))))
+             (COND
+               ((NULL (EQ |newFrontPointer| |al|))
+                (SPADLET |temp| (CAR |newFrontPointer|))
+                (RPLACA |newFrontPointer| (CAR |al|))
+                (RPLACA |al| |temp|)))
+             |val|)))))
+
+;clamStats() ==
+;  for [op,kind,:.] in $clamList repeat
+;    cacheVec:= GET(op,'cacheInfo) or systemErrorHere "clamStats"
+;    prefix:=
+;      $reportCounts^= true => nil
+;      hitCounter:= INTERNL(op,'";hit")
+;      callCounter:= INTERNL(op,'";calls")
+;      res:= ["%b",eval hitCounter,"/",eval callCounter,"%d","calls to "]
+;      SET(hitCounter,0)
+;      SET(callCounter,0)
+;      res
+;    postString:=
+;      cacheValue:= eval cacheVec.cacheName
+;      kind = 'hash => [" (","%b",HASH_-TABLE_-COUNT cacheValue,"%d","entries)"]
+;      empties:= numberOfEmptySlots eval cacheVec.cacheName
+;      empties = 0 => nil
+;      [" (","%b",kind-empties,"/",kind,"%d","slots used)"]
+;    sayBrightly
+;      [:prefix,op,:postString]
+
+;;;     ***       |clamStats| REDEFINED
+
+(DEFUN |clamStats| ()
+  (PROG (|op| |kind| |cacheVec| |hitCounter| |callCounter| |res|
+              |prefix| |cacheValue| |empties| |postString|)
+    (DECLARE (SPECIAL |$reportCounts| |$clamList|))
+    (RETURN
+      (SEQ (DO ((G2836 |$clamList| (CDR G2836)) (G2822 NIL))
+               ((OR (ATOM G2836)
+                    (PROGN (SETQ G2822 (CAR G2836)) NIL)
+                    (PROGN
+                      (PROGN
+                        (SPADLET |op| (CAR G2822))
+                        (SPADLET |kind| (CADR G2822))
+                        G2822)
+                      NIL))
+                NIL)
+             (SEQ (EXIT (PROGN
+                          (SPADLET |cacheVec|
+                                   (OR (GETL |op| '|cacheInfo|)
+                                    (|systemErrorHere| '|clamStats|)))
+                          (SPADLET |prefix|
+                                   (COND
+                                     ((NEQUAL |$reportCounts| 'T) NIL)
+                                     ('T
+                                      (SPADLET |hitCounter|
+                                       (INTERNL |op|
+                                        (MAKESTRING ";hit")))
+                                      (SPADLET |callCounter|
+                                       (INTERNL |op|
+                                        (MAKESTRING ";calls")))
+                                      (SPADLET |res|
+                                       (CONS '|%b|
+                                        (CONS (|eval| |hitCounter|)
+                                         (CONS '/
+                                          (CONS (|eval| |callCounter|)
+                                           (CONS '|%d|
+                                            (CONS '|calls to | NIL)))))))
+                                      (SET |hitCounter| 0)
+                                      (SET |callCounter| 0) |res|)))
+                          (SPADLET |postString|
+                                   (PROGN
+                                     (SPADLET |cacheValue|
+                                      (|eval| (CADR |cacheVec|)))
+                                     (COND
+                                       ((BOOT-EQUAL |kind| '|hash|)
+                                        (CONS '| (|
+                                         (CONS '|%b|
+                                          (CONS
+                                           (HASH-TABLE-COUNT
+                                            |cacheValue|)
+                                           (CONS '|%d|
+                                            (CONS '|entries)| NIL))))))
+                                       ('T
+                                        (SPADLET |empties|
+                                         (|numberOfEmptySlots|
+                                          (|eval| (CADR |cacheVec|))))
+                                        (COND
+                                          ((EQL |empties| 0) NIL)
+                                          ('T
+                                           (CONS '| (|
+                                            (CONS '|%b|
+                                             (CONS
+                                              (SPADDIFFERENCE |kind|
+                                               |empties|)
+                                              (CONS '/
+                                               (CONS |kind|
+                                                (CONS '|%d|
+                                                 (CONS '|slots used)|
+                                                  NIL)))))))))))))
+                          (|sayBrightly|
+                              (APPEND |prefix|
+                                      (CONS |op| |postString|)))))))))))
+
+;numberOfEmptySlots cache==
+;  count:= (CAAR cache ='$failed => 1; 0)
+;  for x in tails rest cache while NE(x,cache) repeat
+;    if CAAR x='$failed then count:= count+1
+;  count
+
+;;;     ***       |numberOfEmptySlots| REDEFINED
+
+(DEFUN |numberOfEmptySlots| (|cache|)
+  (PROG (|count|)
+    (DECLARE (SPECIAL |$failed|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |count|
+                      (COND
+                        ((BOOT-EQUAL (CAAR |cache|) '|$failed|) 1)
+                        ('T 0)))
+             (DO ((|x| (CDR |cache|) (CDR |x|)))
+                 ((OR (ATOM |x|) (NULL (NE |x| |cache|))) NIL)
+               (SEQ (EXIT (COND
+                            ((BOOT-EQUAL (CAAR |x|) '|$failed|)
+                             (SPADLET |count| (PLUS |count| 1)))
+                            ('T NIL)))))
+             |count|)))))
+
+;addToSlam([name,:argnames],shell) ==
+;  $mutableDomain => return nil
+;  null argnames => addToConstructorCache(name,nil,shell)
+;  args:= ['LIST,:[mkDevaluate a for a in argnames]]
+;  addToConstructorCache(name,args,shell)
+
+;;;     ***       |addToSlam| REDEFINED
+
+(DEFUN |addToSlam| (G2872 |shell|)
+  (PROG (|name| |argnames| |args|)
+    (DECLARE (SPECIAL |$mutableDomain|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |name| (CAR G2872))
+             (SPADLET |argnames| (CDR G2872))
+             (COND
+               (|$mutableDomain| (RETURN NIL))
+               ((NULL |argnames|)
+                (|addToConstructorCache| |name| NIL |shell|))
+               ('T
+                (SPADLET |args|
+                         (CONS 'LIST
+                               (PROG (G2885)
+                                 (SPADLET G2885 NIL)
+                                 (RETURN
+                                   (DO
+                                    ((G2890 |argnames| (CDR G2890))
+                                     (|a| NIL))
+                                    ((OR (ATOM G2890)
+                                      (PROGN
+                                        (SETQ |a| (CAR G2890))
+                                        NIL))
+                                     (NREVERSE0 G2885))
+                                     (SEQ
+                                      (EXIT
+                                       (SETQ G2885
+                                        (CONS (|mkDevaluate| |a|)
+                                         G2885)))))))))
+                (|addToConstructorCache| |name| |args| |shell|))))))))
+
+;addToConstructorCache(op,args,value) ==
+;  ['haddProp,'$ConstructorCache,MKQ op,args,['CONS,1,value]]
+
+;;;     ***       |addToConstructorCache| REDEFINED
+
+(DEFUN |addToConstructorCache| (|op| |args| |value|)
+  (DECLARE (SPECIAL |$ConstructorCache|))
+  (CONS '|haddProp|
+        (CONS '|$ConstructorCache|
+              (CONS (MKQ |op|)
+                    (CONS |args|
+                          (CONS (CONS 'CONS
+                                      (CONS 1 (CONS |value| NIL)))
+                                NIL))))))
+
+;haddProp(ht,op,prop,val) ==
+;  --called inside functors (except for union and record types ??)
+;  --presently, ht always = $ConstructorCache
+;  statRecordInstantiationEvent()
+;  if $reportInstantiations = true or $reportEachInstantiation = true then
+;    startTimingProcess 'debug
+;    recordInstantiation(op,prop,false)
+;    stopTimingProcess 'debug
+;  u:= HGET(ht,op) =>     --hope that one exists most of the time
+;    ASSOC(prop,u) => val     --value is already there--must = val; exit now
+;    RPLACD(u,[CAR u,:CDR u])
+;    RPLACA(u,[prop,:val])
+;    $op: local := op
+;    listTruncate(u,20)        --save at most 20 instantiations
+;    val
+;  HPUT(ht,op,[[prop,:val]])
+;  val
+
+;;;     ***       |haddProp| REDEFINED
+
+(DEFUN |haddProp| (|ht| |op| |prop| |val|)
+  (PROG (|$op| |u|)
+    (DECLARE (SPECIAL |$op| |$reportEachInstantiation|
+                      |$reportInstantiations|))
+    (RETURN
+      (PROGN
+        (|statRecordInstantiationEvent|)
+        (COND
+          ((OR (BOOT-EQUAL |$reportInstantiations| 'T)
+               (BOOT-EQUAL |$reportEachInstantiation| 'T))
+           (|startTimingProcess| '|debug|)
+           (|recordInstantiation| |op| |prop| NIL)
+           (|stopTimingProcess| '|debug|)))
+        (COND
+          ((SPADLET |u| (HGET |ht| |op|))
+           (COND
+             ((|assoc| |prop| |u|) |val|)
+             ('T (RPLACD |u| (CONS (CAR |u|) (CDR |u|)))
+              (RPLACA |u| (CONS |prop| |val|)) (SPADLET |$op| |op|)
+              (|listTruncate| |u| 20) |val|)))
+          ('T (HPUT |ht| |op| (CONS (CONS |prop| |val|) NIL)) |val|))))))
+
+;recordInstantiation(op,prop,dropIfTrue) ==
+;  startTimingProcess 'debug
+;  recordInstantiation1(op,prop,dropIfTrue)
+;  stopTimingProcess 'debug
+
+;;;     ***       |recordInstantiation| REDEFINED
+
+(DEFUN |recordInstantiation| (|op| |prop| |dropIfTrue|)
+  (PROGN
+    (|startTimingProcess| '|debug|)
+    (|recordInstantiation1| |op| |prop| |dropIfTrue|)
+    (|stopTimingProcess| '|debug|)))
+
+;recordInstantiation1(op,prop,dropIfTrue) ==
+;  op in '(CategoryDefaults RepeatedSquaring) => nil--ignore defaults for now
+;  if $reportEachInstantiation = true then
+;    trailer:= (dropIfTrue => '"  dropped"; '"  instantiated")
+;    if $insideCoerceInteractive= true then
+;      $instantCoerceCount:= 1+$instantCoerceCount
+;    if $insideCanCoerceFrom is [m1,m2] and null dropIfTrue then
+;      $instantCanCoerceCount:= 1+$instantCanCoerceCount
+;      xtra:=
+;        ['" for ",outputDomainConstructor m1,'"-->",outputDomainConstructor m2]
+;    if $insideEvalMmCondIfTrue = true and null dropIfTrue then
+;      $instantMmCondCount:= $instantMmCondCount + 1
+;    typeTimePrin ["CONCAT",outputDomainConstructor [op,:prop],trailer,:xtra]
+;  null $reportInstantiations => nil
+;  u:= HGET($instantRecord,op) =>     --hope that one exists most of the time
+;    v := LASSOC(prop,u) =>
+;      dropIfTrue => RPLAC(CDR v,1+CDR v)
+;      RPLAC(CAR v,1+CAR v)
+;    RPLACD(u,[CAR u,:CDR u])
+;    val :=
+;      dropIfTrue => [0,:1]
+;      [1,:0]
+;    RPLACA(u,[prop,:val])
+;  val :=
+;    dropIfTrue => [0,:1]
+;    [1,:0]
+;  HPUT($instantRecord,op,[[prop,:val]])
+
+;;;     ***       |recordInstantiation1| REDEFINED
+
+(DEFUN |recordInstantiation1| (|op| |prop| |dropIfTrue|)
+  (PROG (|trailer| |m1| |ISTMP#1| |m2| |xtra| |u| |v| |val|)
+    (DECLARE (SPECIAL |$instantRecord| |$reportInstantiations|
+                      |$instantMmCondCount| |$insideEvalMmCondIfTrue|
+                      |$instantCanCoerceCount| |$insideCanCoerceFrom|
+                      |$instantCoerceCount| |$insideCoerceInteractive|
+                      |$reportEachInstantiation|))
+    (RETURN
+      (COND
+        ((|member| |op| '(|CategoryDefaults| |RepeatedSquaring|)) NIL)
+        ('T
+         (COND
+           ((BOOT-EQUAL |$reportEachInstantiation| 'T)
+            (SPADLET |trailer|
+                     (COND
+                       (|dropIfTrue| (MAKESTRING "  dropped"))
+                       ('T (MAKESTRING "  instantiated"))))
+            (COND
+              ((BOOT-EQUAL |$insideCoerceInteractive| 'T)
+               (SPADLET |$instantCoerceCount|
+                        (PLUS 1 |$instantCoerceCount|))))
+            (COND
+              ((AND (PAIRP |$insideCanCoerceFrom|)
+                    (PROGN
+                      (SPADLET |m1| (QCAR |$insideCanCoerceFrom|))
+                      (SPADLET |ISTMP#1| (QCDR |$insideCanCoerceFrom|))
+                      (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                           (PROGN (SPADLET |m2| (QCAR |ISTMP#1|)) 'T)))
+                    (NULL |dropIfTrue|))
+               (SPADLET |$instantCanCoerceCount|
+                        (PLUS 1 |$instantCanCoerceCount|))
+               (SPADLET |xtra|
+                        (CONS (MAKESTRING " for ")
+                              (CONS (|outputDomainConstructor| |m1|)
+                                    (CONS (MAKESTRING "-->")
+                                     (CONS
+                                      (|outputDomainConstructor| |m2|)
+                                      NIL)))))))
+            (COND
+              ((AND (BOOT-EQUAL |$insideEvalMmCondIfTrue| 'T)
+                    (NULL |dropIfTrue|))
+               (SPADLET |$instantMmCondCount|
+                        (PLUS |$instantMmCondCount| 1))))
+            (|typeTimePrin|
+                (CONS 'CONCAT
+                      (CONS (|outputDomainConstructor|
+                                (CONS |op| |prop|))
+                            (CONS |trailer| |xtra|))))))
+         (COND
+           ((NULL |$reportInstantiations|) NIL)
+           ((SPADLET |u| (HGET |$instantRecord| |op|))
+            (COND
+              ((SPADLET |v| (LASSOC |prop| |u|))
+               (COND
+                 (|dropIfTrue| (RPLAC (CDR |v|) (PLUS 1 (CDR |v|))))
+                 ('T (RPLAC (CAR |v|) (PLUS 1 (CAR |v|))))))
+              ('T (RPLACD |u| (CONS (CAR |u|) (CDR |u|)))
+               (SPADLET |val|
+                        (COND
+                          (|dropIfTrue| (CONS 0 1))
+                          ('T (CONS 1 0))))
+               (RPLACA |u| (CONS |prop| |val|)))))
+           ('T
+            (SPADLET |val|
+                     (COND (|dropIfTrue| (CONS 0 1)) ('T (CONS 1 0))))
+            (HPUT |$instantRecord| |op| (CONS (CONS |prop| |val|) NIL)))))))))
+
+;reportInstantiations() ==
+;  --assumed to be a hashtable with reference counts
+;    conList:=
+;      [:[[n,m,[key,:argList]] for [argList,n,:m] in HGET($instantRecord,key)]
+;        for key in HKEYS $instantRecord]
+;    sayBrightly ['"# instantiated/# dropped/domain name",
+;      "%l",'"------------------------------------"]
+;    nTotal:= mTotal:= rTotal := nForms:= 0
+;    for [n,m,form] in NREVERSE SORTBY('CADDR,conList) repeat
+;      nTotal:= nTotal+n; mTotal:= mTotal+m
+;      if n > 1 then rTotal:= rTotal + n-1
+;      nForms:= nForms + 1
+;      typeTimePrin ['CONCATB,n,m,outputDomainConstructor form]
+;    sayBrightly ["%b",'"Totals:","%d",nTotal,'" instantiated","%l",
+;      '"         ",$instantCoerceCount,'" inside coerceInteractive","%l",
+;       '"         ",$instantCanCoerceCount,'" inside canCoerceFrom","%l",
+;        '"         ",$instantMmCondCount,'" inside evalMmCond","%l",
+;         '"         ",rTotal,'" reinstantiated","%l",
+;          '"         ",mTotal,'" dropped","%l",
+;           '"         ",nForms,'" distinct domains instantiated/dropped"]
+
+;;;     ***       |reportInstantiations| REDEFINED
+
+(DEFUN |reportInstantiations| ()
+  (PROG (|argList| |conList| |n| |m| |form| |nTotal| |mTotal| |rTotal|
+            |nForms|)
+    (DECLARE (SPECIAL |$instantMmCondCount| |$instantCanCoerceCount|
+                      |$instantCoerceCount| |$instantRecord|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |conList|
+                      (PROG (G2964)
+                        (SPADLET G2964 NIL)
+                        (RETURN
+                          (DO ((G2973 (HKEYS |$instantRecord|)
+                                        (CDR G2973))
+                               (|key| NIL))
+                              ((OR (ATOM G2973)
+                                   (PROGN
+                                     (SETQ |key| (CAR G2973))
+                                     NIL))
+                               G2964)
+                            (SEQ (EXIT (SETQ G2964
+                                        (APPEND G2964
+                                         (PROG (G2984)
+                                           (SPADLET G2984 NIL)
+                                           (RETURN
+                                             (DO
+                                              ((G2990
+                                                (HGET |$instantRecord|
+                                                 |key|)
+                                                (CDR G2990))
+                                               (G2952 NIL))
+                                              ((OR (ATOM G2990)
+                                                (PROGN
+                                                  (SETQ G2952
+                                                   (CAR G2990))
+                                                  NIL)
+                                                (PROGN
+                                                  (PROGN
+                                                    (SPADLET |argList|
+                                                     (CAR G2952))
+                                                    (SPADLET |n|
+                                                     (CADR G2952))
+                                                    (SPADLET |m|
+                                                     (CDDR G2952))
+                                                    G2952)
+                                                  NIL))
+                                               (NREVERSE0 G2984))
+                                               (SEQ
+                                                (EXIT
+                                                 (SETQ G2984
+                                                  (CONS
+                                                   (CONS |n|
+                                                    (CONS |m|
+                                                     (CONS
+                                                      (CONS |key|
+                                                       |argList|)
+                                                      NIL)))
+                                                   G2984)))))))))))))))
+             (|sayBrightly|
+                 (CONS (MAKESTRING
+                           "# instantiated/# dropped/domain name")
+                       (CONS (MAKESTRING "%l")
+                             (CONS (MAKESTRING
+                                    "------------------------------------")
+                                   NIL))))
+             (SPADLET |nTotal|
+                      (SPADLET |mTotal|
+                               (SPADLET |rTotal| (SPADLET |nForms| 0))))
+             (DO ((G3006 (NREVERSE (SORTBY 'CADDR |conList|))
+                           (CDR G3006))
+                  (G2958 NIL))
+                 ((OR (ATOM G3006)
+                      (PROGN (SETQ G2958 (CAR G3006)) NIL)
+                      (PROGN
+                        (PROGN
+                          (SPADLET |n| (CAR G2958))
+                          (SPADLET |m| (CADR G2958))
+                          (SPADLET |form| (CADDR G2958))
+                          G2958)
+                        NIL))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |nTotal| (PLUS |nTotal| |n|))
+                            (SPADLET |mTotal| (PLUS |mTotal| |m|))
+                            (COND
+                              ((> |n| 1)
+                               (SPADLET |rTotal|
+                                        (SPADDIFFERENCE
+                                         (PLUS |rTotal| |n|) 1))))
+                            (SPADLET |nForms| (PLUS |nForms| 1))
+                            (|typeTimePrin|
+                                (CONS 'CONCATB
+                                      (CONS |n|
+                                       (CONS |m|
+                                        (CONS
+                                         (|outputDomainConstructor|
+                                          |form|)
+                                         NIL)))))))))
+             (|sayBrightly|
+                 (CONS (MAKESTRING "%b")
+                       (CONS (MAKESTRING "Totals:")
+                             (CONS (MAKESTRING "%d")
+                                   (CONS |nTotal|
+                                    (CONS (MAKESTRING " instantiated")
+                                     (CONS (MAKESTRING "%l")
+                                      (CONS (MAKESTRING "         ")
+                                       (CONS |$instantCoerceCount|
+                                        (CONS
+                                         (MAKESTRING
+                                          " inside coerceInteractive")
+                                         (CONS (MAKESTRING "%l")
+                                          (CONS
+                                           (MAKESTRING "         ")
+                                           (CONS
+                                            |$instantCanCoerceCount|
+                                            (CONS
+                                             (MAKESTRING
+                                              " inside canCoerceFrom")
+                                             (CONS (MAKESTRING "%l")
+                                              (CONS
+                                               (MAKESTRING "         ")
+                                               (CONS
+                                                |$instantMmCondCount|
+                                                (CONS
+                                                 (MAKESTRING
+                                                  " inside evalMmCond")
+                                                 (CONS
+                                                  (MAKESTRING "%l")
+                                                  (CONS
+                                                   (MAKESTRING
+                                                    "         ")
+                                                   (CONS |rTotal|
+                                                    (CONS
+                                                     (MAKESTRING
+                                                      " reinstantiated")
+                                                     (CONS
+                                                      (MAKESTRING "%l")
+                                                      (CONS
+                                                       (MAKESTRING
+                                                        "         ")
+                                                       (CONS |mTotal|
+                                                        (CONS
+                                                         (MAKESTRING
+                                                          " dropped")
+                                                         (CONS
+                                                          (MAKESTRING
+                                                           "%l")
+                                                          (CONS
+                                                           (MAKESTRING
+                                                            "         ")
+                                                           (CONS
+                                                            |nForms|
+                                                            (CONS
+                                                             (MAKESTRING
+                                      " distinct domains instantiated/dropped")
+                                         NIL)))))))))))))))))))))))))))))))))))
+
+;hputNewProp(ht,op,argList,val) ==
+;  --NOTE: obselete if lines *** are commented out
+;  -- Warning!!!  This function should only be called for
+;  -- $ConstructorCache slamming --- since it maps devaluate onto prop, an
+;  -- argument list
+;  --
+;  -- This function may be called when property is already there; for
+;  -- example, Polynomial applied to '(Integer), not finding it in the
+;  -- cache will invoke Polynomial to compute it; inside of Polynomial is
+;  -- a call to this function which will hputNewProp the property onto the
+;  -- cache so that when this function is called by the outer Polynomial,
+;  -- the value will always be there
+;
+;  prop:= [devaluate x for x in argList]
+;  haddProp(ht,op,prop,val)
+
+;;;     ***       |hputNewProp| REDEFINED
+
+(DEFUN |hputNewProp| (|ht| |op| |argList| |val|)
+  (PROG (|prop|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |prop|
+                      (PROG (G3038)
+                        (SPADLET G3038 NIL)
+                        (RETURN
+                          (DO ((G3043 |argList| (CDR G3043))
+                               (|x| NIL))
+                              ((OR (ATOM G3043)
+                                   (PROGN
+                                     (SETQ |x| (CAR G3043))
+                                     NIL))
+                               (NREVERSE0 G3038))
+                            (SEQ (EXIT (SETQ G3038
+                                        (CONS (|devaluate| |x|)
+                                         G3038))))))))
+             (|haddProp| |ht| |op| |prop| |val|))))))
+
+;listTruncate(l,n) ==
+;  u:= l
+;  n:= QSSUB1 n
+;  while NEQ(n,0) and null atom u repeat
+;    n:= QSSUB1 n
+;    u:= QCDR u
+;  if null atom u then
+;    if null atom rest u and $reportInstantiations = true then
+;      recordInstantiation($op,CAADR u,true)
+;    RPLACD(u,nil)
+;  l
+
+;;;     ***       |listTruncate| REDEFINED
+
+(DEFUN |listTruncate| (|l| |n|)
+  (PROG (|u|)
+    (DECLARE (SPECIAL |$op| |$reportInstantiations|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |u| |l|)
+             (SPADLET |n| (QSSUB1 |n|))
+             (DO () ((NULL (AND (NEQ |n| 0) (NULL (ATOM |u|)))) NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |n| (QSSUB1 |n|))
+                            (SPADLET |u| (QCDR |u|))))))
+             (COND
+               ((NULL (ATOM |u|))
+                (COND
+                  ((AND (NULL (ATOM (CDR |u|)))
+                        (BOOT-EQUAL |$reportInstantiations| 'T))
+                   (|recordInstantiation| |$op| (CAADR |u|) 'T)))
+                (RPLACD |u| NIL)))
+             |l|)))))
+
+;lassocShift(x,l) ==
+;  y:= l
+;  while not atom y repeat
+;    EQUAL(x,CAR QCAR y) => return (result := QCAR y)
+;    y:= QCDR y
+;  result =>
+;    if NEQ(y,l) then
+;      QRPLACA(y,CAR l)
+;      QRPLACA(l,result)
+;    QCDR result
+;  nil
+
+;;;     ***       |lassocShift| REDEFINED
+
+(DEFUN |lassocShift| (|x| |l|)
+  (PROG (|result| |y|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |y| |l|)
+             (DO () ((NULL (NULL (ATOM |y|))) NIL)
+               (SEQ (EXIT (COND
+                            ((BOOT-EQUAL |x| (CAR (QCAR |y|)))
+                             (RETURN (SPADLET |result| (QCAR |y|))))
+                            ('T (SPADLET |y| (QCDR |y|)))))))
+             (COND
+               (|result| (COND
+                           ((NEQ |y| |l|) (QRPLACA |y| (CAR |l|))
+                            (QRPLACA |l| |result|)))
+                         (QCDR |result|))
+               ('T NIL)))))))
+
+;lassocShiftWithFunction(x,l,fn) ==
+;  y:= l
+;  while not atom y repeat
+;    FUNCALL(fn,x,CAR QCAR y) => return (result := QCAR y)
+;    y:= QCDR y
+;  result =>
+;    if NEQ(y,l) then
+;      QRPLACA(y,CAR l)
+;      QRPLACA(l,result)
+;    QCDR result
+;  nil
+
+;;;     ***       |lassocShiftWithFunction| REDEFINED
+
+(DEFUN |lassocShiftWithFunction| (|x| |l| |fn|)
+  (PROG (|result| |y|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |y| |l|)
+             (DO () ((NULL (NULL (ATOM |y|))) NIL)
+               (SEQ (EXIT (COND
+                            ((FUNCALL |fn| |x| (CAR (QCAR |y|)))
+                             (RETURN (SPADLET |result| (QCAR |y|))))
+                            ('T (SPADLET |y| (QCDR |y|)))))))
+             (COND
+               (|result| (COND
+                           ((NEQ |y| |l|) (QRPLACA |y| (CAR |l|))
+                            (QRPLACA |l| |result|)))
+                         (QCDR |result|))
+               ('T NIL)))))))
+
+;lassocShiftQ(x,l) ==
+;  y:= l
+;  while not atom y repeat
+;    EQ(x,CAR CAR y) => return (result := CAR y)
+;    y:= CDR y
+;  result =>
+;    if NEQ(y,l) then
+;      RPLACA(y,CAR l)
+;      RPLACA(l,result)
+;    CDR result
+;  nil
+
+;;;     ***       |lassocShiftQ| REDEFINED
+
+(DEFUN |lassocShiftQ| (|x| |l|)
+  (PROG (|result| |y|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |y| |l|)
+             (DO () ((NULL (NULL (ATOM |y|))) NIL)
+               (SEQ (EXIT (COND
+                            ((EQ |x| (CAR (CAR |y|)))
+                             (RETURN (SPADLET |result| (CAR |y|))))
+                            ('T (SPADLET |y| (CDR |y|)))))))
+             (COND
+               (|result| (COND
+                           ((NEQ |y| |l|) (RPLACA |y| (CAR |l|))
+                            (RPLACA |l| |result|)))
+                         (CDR |result|))
+               ('T NIL)))))))
+
+;-- rassocShiftQ(x,l) ==
+;--   y:= l
+;--   while not atom y repeat
+;--     EQ(x,CDR CAR y) => return (result := CAR y)
+;--     y:= CDR y
+;--   result =>
+;--     if NEQ(y,l) then
+;--       RPLACA(y,CAR l)
+;--       RPLACA(l,result)
+;--     CAR result
+;--   nil
+;
+;globalHashtableStats(x,sortFn) ==
+;  --assumed to be a hashtable with reference counts
+;  keys:= HKEYS x
+;  for key in keys repeat
+;    u:= HGET(x,key)
+;    for [argList,n,:.] in u repeat
+;      not INTEGERP n =>   keyedSystemError("S2GE0013",[x])
+;      argList1:= [constructor2ConstructorForm x for x in argList]
+;      reportList:= [[n,key,argList1],:reportList]
+;  sayBrightly ["%b","  USE  NAME ARGS","%d"]
+;  for [n,fn,args] in NREVERSE SORTBY(sortFn,reportList) repeat
+;    sayBrightlyNT [:rightJustifyString(n,6),"  ",fn,": "]
+;    pp args
+
+;;;     ***       |globalHashtableStats| REDEFINED
+
+(DEFUN |globalHashtableStats| (|x| |sortFn|)
+  (PROG (|keys| |u| |argList| |argList1| |reportList| |n| |fn| |args|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |keys| (HKEYS |x|))
+             (DO ((G3141 |keys| (CDR G3141)) (|key| NIL))
+                 ((OR (ATOM G3141)
+                      (PROGN (SETQ |key| (CAR G3141)) NIL))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |u| (HGET |x| |key|))
+                            (DO ((G3151 |u| (CDR G3151))
+                                 (G3121 NIL))
+                                ((OR (ATOM G3151)
+                                     (PROGN
+                                       (SETQ G3121 (CAR G3151))
+                                       NIL)
+                                     (PROGN
+                                       (PROGN
+                                         (SPADLET |argList|
+                                          (CAR G3121))
+                                         (SPADLET |n| (CADR G3121))
+                                         G3121)
+                                       NIL))
+                                 NIL)
+                              (SEQ (EXIT
+                                    (COND
+                                      ((NULL (INTEGERP |n|))
+                                       (|keyedSystemError| 'S2GE0013
+                                        (CONS |x| NIL)))
+                                      ('T
+                                       (SPADLET |argList1|
+                                        (PROG (G3162)
+                                          (SPADLET G3162 NIL)
+                                          (RETURN
+                                            (DO
+                                             ((G3167 |argList|
+                                               (CDR G3167))
+                                              (|x| NIL))
+                                             ((OR (ATOM G3167)
+                                               (PROGN
+                                                 (SETQ |x|
+                                                  (CAR G3167))
+                                                 NIL))
+                                              (NREVERSE0 G3162))
+                                              (SEQ
+                                               (EXIT
+                                                (SETQ G3162
+                                                 (CONS
+                                                  (|constructor2ConstructorForm|
+                                                   |x|)
+                                                  G3162))))))))
+                                       (SPADLET |reportList|
+                                        (CONS
+                                         (CONS |n|
+                                          (CONS |key|
+                                           (CONS |argList1| NIL)))
+                                         |reportList|)))))))))))
+             (|sayBrightly|
+                 (CONS (MAKESTRING "%b")
+                       (CONS (MAKESTRING "  USE  NAME ARGS")
+                             (CONS (MAKESTRING "%d") NIL))))
+             (DO ((G3179 (NREVERSE (SORTBY |sortFn| |reportList|))
+                           (CDR G3179))
+                  (G3127 NIL))
+                 ((OR (ATOM G3179)
+                      (PROGN (SETQ G3127 (CAR G3179)) NIL)
+                      (PROGN
+                        (PROGN
+                          (SPADLET |n| (CAR G3127))
+                          (SPADLET |fn| (CADR G3127))
+                          (SPADLET |args| (CADDR G3127))
+                          G3127)
+                        NIL))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (|sayBrightlyNT|
+                                (APPEND (|rightJustifyString| |n| 6)
+                                        (CONS '|  |
+                                         (CONS |fn| (CONS '|: | NIL)))))
+                            (|pp| |args|))))))))))
+
+;constructor2ConstructorForm x ==
+;  VECP x => x.0
+;  x
+
+;;;     ***       |constructor2ConstructorForm| REDEFINED
+
+(DEFUN |constructor2ConstructorForm| (|x|)
+  (COND ((VECP |x|) (ELT |x| 0)) ('T |x|)))
+
+;rightJustifyString(x,maxWidth) ==
+;  size:= entryWidth x
+;  size > maxWidth => keyedSystemError("S2GE0014",[x])
+;  [fillerSpaces(maxWidth-size," "),x]
+
+;;;     ***       |rightJustifyString| REDEFINED
+
+(DEFUN |rightJustifyString| (|x| |maxWidth|)
+  (PROG (SIZE)
+    (RETURN
+      (PROGN
+        (SPADLET SIZE (|entryWidth| |x|))
+        (COND
+          ((> SIZE |maxWidth|)
+           (|keyedSystemError| 'S2GE0014 (CONS |x| NIL)))
+          ('T
+           (CONS (|fillerSpaces| (SPADDIFFERENCE |maxWidth| SIZE) '| |)
+                 (CONS |x| NIL))))))))
+
+;domainEqualList(argl1,argl2) ==
+;  --function used to match argument lists of constructors
+;  while argl1 and argl2 repeat
+;    item1:= devaluate CAR argl1
+;    item2:= CAR argl2
+;    partsMatch:=
+;      item1 = item2 => true
+;      false
+;    null partsMatch => return nil
+;    argl1:= rest argl1; argl2 := rest argl2
+;  argl1 or argl2 => nil
+;  true
+
+;;;     ***       |domainEqualList| REDEFINED
+
+(DEFUN |domainEqualList| (|argl1| |argl2|)
+  (PROG (|item1| |item2| |partsMatch|)
+    (RETURN
+      (SEQ (PROGN
+             (DO () ((NULL (AND |argl1| |argl2|)) NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |item1|
+                                     (|devaluate| (CAR |argl1|)))
+                            (SPADLET |item2| (CAR |argl2|))
+                            (SPADLET |partsMatch|
+                                     (COND
+                                       ((BOOT-EQUAL |item1| |item2|)
+                                        'T)
+                                       ('T NIL)))
+                            (COND
+                              ((NULL |partsMatch|) (RETURN NIL))
+                              ('T (SPADLET |argl1| (CDR |argl1|))
+                               (SPADLET |argl2| (CDR |argl2|))))))))
+             (COND ((OR |argl1| |argl2|) NIL) ('T 'T)))))))
+
+;removeAllClams() ==
+;  for [fun,:.] in $clamList repeat
+;    sayBrightly ['"Un-clamming function",'%b,fun,'%d]
+;    SET(fun,eval INTERN STRCONC(STRINGIMAGE fun,'";"))
+
+;;;     ***       |removeAllClams| REDEFINED
+
+(DEFUN |removeAllClams| ()
+  (PROG (|fun|)
+    (DECLARE (SPECIAL |$clamList|))
+    (RETURN
+      (SEQ (DO ((G3239 |$clamList| (CDR G3239)) (G3230 NIL))
+               ((OR (ATOM G3239)
+                    (PROGN (SETQ G3230 (CAR G3239)) NIL)
+                    (PROGN
+                      (PROGN (SPADLET |fun| (CAR G3230)) G3230)
+                      NIL))
+                NIL)
+             (SEQ (EXIT (PROGN
+                          (|sayBrightly|
+                              (CONS (MAKESTRING "Un-clamming function")
+                                    (CONS '|%b|
+                                     (CONS |fun| (CONS '|%d| NIL)))))
+                          (SET |fun|
+                               (|eval| (INTERN
+                                        (STRCONC (STRINGIMAGE |fun|)
+                                         (MAKESTRING ";")))))))))))))
+
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

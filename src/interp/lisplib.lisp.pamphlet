@@ -1,0 +1,2263 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp lisplib.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+<<*>>=
+(IN-PACKAGE "BOOT" )
+
+;--% Standard Library Creation Functions
+;
+;readLib(fn,ft) == readLib1(fn,ft,"*")
+
+(DEFUN |readLib| (|fn| |ft|) (|readLib1| |fn| |ft| '*))
+
+;readLib1(fn,ft,fm) ==
+;  -- see if it exists first
+;  p := pathname [fn,ft,fm]
+;  readLibPathFast p
+
+(DEFUN |readLib1| (|fn| |ft| |fm|)
+  (PROG (|p|)
+    (RETURN
+      (PROGN
+        (SPADLET |p|
+                 (|pathname| (CONS |fn| (CONS |ft| (CONS |fm| NIL)))))
+        (|readLibPathFast| |p|)))))
+
+;readLibPathFast p ==
+;  -- assumes 1) p is a valid pathname
+;  --         2) file has already been checked for existence
+;  RDEFIOSTREAM([['FILE,:p], '(MODE . INPUT)],false)
+
+(DEFUN |readLibPathFast| (|p|)
+  (RDEFIOSTREAM (CONS (CONS 'FILE |p|) (CONS '(MODE . INPUT) NIL)) NIL))
+
+;writeLib(fn,ft) == writeLib1(fn,ft,"*")
+
+(DEFUN |writeLib| (|fn| |ft|) (|writeLib1| |fn| |ft| '*))
+
+;writeLib1(fn,ft,fm) == RDEFIOSTREAM [['FILE,fn,ft,fm],'(MODE . OUTPUT)]
+
+(DEFUN |writeLib1| (|fn| |ft| |fm|)
+  (RDEFIOSTREAM
+      (CONS (CONS 'FILE (CONS |fn| (CONS |ft| (CONS |fm| NIL))))
+            (CONS '(MODE . OUTPUT) NIL))))
+
+;putFileProperty(fn,ft,id,val) ==
+;  fnStream:= writeLib1(fn,ft,"*")
+;  val:= rwrite( id,val,fnStream)
+;  RSHUT fnStream
+;  val
+
+(DEFUN |putFileProperty| (|fn| |ft| |id| |val|)
+  (PROG (|fnStream|)
+    (RETURN
+      (PROGN
+        (SPADLET |fnStream| (|writeLib1| |fn| |ft| '*))
+        (SPADLET |val| (|rwrite| |id| |val| |fnStream|))
+        (RSHUT |fnStream|)
+        |val|))))
+
+;lisplibWrite(prop,val,filename) ==
+;  -- this may someday not write NIL keys, but it will now
+;  if $LISPLIB then
+;     rwrite128(prop,val,filename)
+
+(DEFUN |lisplibWrite| (|prop| |val| |filename|)
+  (declare (special $LISPLIB))
+  (COND ($LISPLIB (|rwrite128| |prop| |val| |filename|)) ('T NIL)))
+
+;rwrite128(key,value,stream) ==
+;  rwrite(key,value,stream)
+
+(DEFUN |rwrite128| (|key| |value| |stream|)
+  (|rwrite| |key| |value| |stream|))
+
+;evalAndRwriteLispForm(key,form) ==
+;  eval form
+;  rwriteLispForm(key,form)
+
+(DEFUN |evalAndRwriteLispForm| (|key| |form|)
+  (PROGN (|eval| |form|) (|rwriteLispForm| |key| |form|)))
+
+;rwriteLispForm(key,form) ==
+;  if $LISPLIB then
+;    rwrite( key,form,$libFile)
+;    LAM_,FILEACTQ(key,form)
+
+(DEFUN |rwriteLispForm| (|key| |form|)
+  (declare (special |$libFile| $LISPLIB))
+  (COND
+    ($LISPLIB (|rwrite| |key| |form| |$libFile|)
+        (|LAM,FILEACTQ| |key| |form|))
+    ('T NIL)))
+
+;getLisplib(name,id) ==
+;  -- this version does cache the returned value
+;  getFileProperty(name,$spadLibFT,id,true)
+
+(DEFUN |getLisplib| (|name| |id|)
+  (declare (special |$spadLibFT|))
+  (|getFileProperty| |name| |$spadLibFT| |id| 'T))
+
+;getLisplibNoCache(name,id) ==
+;  -- this version does not cache the returned value
+;  getFileProperty(name,$spadLibFT,id,false)
+
+(DEFUN |getLisplibNoCache| (|name| |id|)
+  (declare (special |$spadLibFT|))
+  (|getFileProperty| |name| |$spadLibFT| |id| NIL))
+
+;getFileProperty(fn,ft,id,cache) ==
+;  fn in '(DOMAIN SUBDOM MODE) => nil
+;  p := pathname [fn,ft,'"*"]
+;  cache => hasFileProperty(p,id,fn)
+;  hasFilePropertyNoCache(p,id,fn)
+
+(DEFUN |getFileProperty| (|fn| |ft| |id| |cache|)
+  (PROG (|p|)
+    (RETURN
+      (COND
+        ((|member| |fn| '(DOMAIN SUBDOM MODE)) NIL)
+        ('T
+         (SPADLET |p|
+                  (|pathname|
+                      (CONS |fn|
+                            (CONS |ft| (CONS (MAKESTRING "*") NIL)))))
+         (COND
+           (|cache| (|hasFileProperty| |p| |id| |fn|))
+           ('T (|hasFilePropertyNoCache| |p| |id| |fn|))))))))
+
+;hasFilePropertyNoCache(p,id,abbrev) ==
+;  -- it is assumed that the file exists and is a proper pathname
+;  -- startTimingProcess 'diskread
+;  fnStream:= readLibPathFast p
+;  NULL fnStream => NIL
+;  -- str:= object2String id
+;  val:= rread(id,fnStream, nil)
+;  RSHUT fnStream
+;  -- stopTimingProcess 'diskread
+;  val
+
+(DEFUN |hasFilePropertyNoCache| (|p| |id| |abbrev|)
+  (declare (ignore |abbrev|))
+  (PROG (|fnStream| |val|)
+    (RETURN
+      (PROGN
+        (SPADLET |fnStream| (|readLibPathFast| |p|))
+        (COND
+          ((NULL |fnStream|) NIL)
+          ('T (SPADLET |val| (|rread| |id| |fnStream| NIL))
+           (RSHUT |fnStream|) |val|))))))
+
+;--% Uninstantiating
+;
+;unInstantiate(clist) ==
+;  for c in clist repeat
+;    clearConstructorCache(c)
+;  killNestedInstantiations(clist)
+
+(DEFUN |unInstantiate| (|clist|)
+  (SEQ (PROGN
+         (DO ((G166115 |clist| (CDR G166115)) (|c| NIL))
+             ((OR (ATOM G166115)
+                  (PROGN (SETQ |c| (CAR G166115)) NIL))
+              NIL)
+           (SEQ (EXIT (|clearConstructorCache| |c|))))
+         (|killNestedInstantiations| |clist|))))
+
+;killNestedInstantiations(deps) ==
+;  for key in HKEYS($ConstructorCache)
+;    repeat
+;      for [arg,count,:inst] in HGET($ConstructorCache,key) repeat
+;        isNestedInstantiation(inst.0,deps) =>
+;          HREMPROP($ConstructorCache,key,arg)
+
+(DEFUN |killNestedInstantiations| (|deps|)
+  (PROG (|arg| |count| |inst|)
+  (declare (special |$ConstructorCache|))
+    (RETURN
+      (SEQ (DO ((G166136 (HKEYS |$ConstructorCache|) (CDR G166136))
+                (|key| NIL))
+               ((OR (ATOM G166136)
+                    (PROGN (SETQ |key| (CAR G166136)) NIL))
+                NIL)
+             (SEQ (EXIT (DO ((G166146
+                                 (HGET |$ConstructorCache| |key|)
+                                 (CDR G166146))
+                             (G166124 NIL))
+                            ((OR (ATOM G166146)
+                                 (PROGN
+                                   (SETQ G166124 (CAR G166146))
+                                   NIL)
+                                 (PROGN
+                                   (PROGN
+                                     (SPADLET |arg| (CAR G166124))
+                                     (SPADLET |count| (CADR G166124))
+                                     (SPADLET |inst| (CDDR G166124))
+                                     G166124)
+                                   NIL))
+                             NIL)
+                          (SEQ (EXIT (COND
+                                       ((|isNestedInstantiation|
+                                         (ELT |inst| 0) |deps|)
+                                        (EXIT
+                                         (HREMPROP |$ConstructorCache|
+                                          |key| |arg|))))))))))))))
+
+;isNestedInstantiation(form,deps) ==
+;  form is [op,:argl] =>
+;    op in deps => true
+;    or/[isNestedInstantiation(x,deps) for x in argl]
+;  false
+
+(DEFUN |isNestedInstantiation| (|form| |deps|)
+  (PROG (|op| |argl|)
+    (RETURN
+      (SEQ (COND
+             ((AND (PAIRP |form|)
+                   (PROGN
+                     (SPADLET |op| (QCAR |form|))
+                     (SPADLET |argl| (QCDR |form|))
+                     'T))
+              (COND
+                ((|member| |op| |deps|) 'T)
+                ('T
+                 (PROG (G166164)
+                   (SPADLET G166164 NIL)
+                   (RETURN
+                     (DO ((G166170 NIL G166164)
+                          (G166171 |argl| (CDR G166171)) (|x| NIL))
+                         ((OR G166170 (ATOM G166171)
+                              (PROGN (SETQ |x| (CAR G166171)) NIL))
+                          G166164)
+                       (SEQ (EXIT (SETQ G166164
+                                        (OR G166164
+                                         (|isNestedInstantiation| |x|
+                                          |deps|)))))))))))
+             ('T NIL))))))
+
+;--% Loading
+;
+;loadLibIfNotLoaded libName ==
+;  -- replaces old SpadCondLoad
+;  -- loads is library is not already loaded
+;  $PrintOnly = 'T => NIL
+;  GET(libName,'LOADED) => NIL
+;  loadLib libName
+
+(DEFUN |loadLibIfNotLoaded| (|libName|)
+  (declare (special |$PrintOnly|))
+  (COND
+    ((BOOT-EQUAL |$PrintOnly| 'T) NIL)
+    ((GETL |libName| 'LOADED) NIL)
+    ('T (|loadLib| |libName|))))
+
+;loadLib cname ==
+;  startTimingProcess 'load
+;  fullLibName := GETDATABASE(cname,'OBJECT) or return nil
+;  systemdir? := isSystemDirectory(pathnameDirectory fullLibName)
+;  update? := $forceDatabaseUpdate or not systemdir?
+;  not update? =>
+;     loadLibNoUpdate(cname, cname, fullLibName)
+;  kind := GETDATABASE(cname,'CONSTRUCTORKIND)
+;  if $printLoadMsgs then
+;    sayKeyedMsg("S2IL0002",[namestring fullLibName,kind,cname])
+;  LOAD(fullLibName)
+;  clearConstructorCache cname
+;  updateDatabase(cname,cname,systemdir?)
+;  installConstructor(cname,kind)
+;  u := GETDATABASE(cname, 'CONSTRUCTORMODEMAP)
+;  updateCategoryTable(cname,kind)
+;  coSig :=
+;      u =>
+;          [[.,:sig],:.] := u
+;          CONS(NIL,[categoryForm?(x) for x in CDR sig])
+;      NIL
+;  -- in following, add property value false or NIL to possibly clear
+;  -- old value
+;  if null CDR GETDATABASE(cname,'CONSTRUCTORFORM) then
+;      MAKEPROP(cname,'NILADIC,'T)
+;    else
+;      REMPROP(cname,'NILADIC)
+;  MAKEPROP(cname,'LOADED,fullLibName)
+;  if $InteractiveMode then $CategoryFrame := [[nil]]
+;  stopTimingProcess 'load
+;  'T
+
+(DEFUN |loadLib| (|cname|)
+  (PROG (|fullLibName| |systemdir?| |update?| |kind| |u| |sig| |coSig|)
+  (declare (special |$CategoryFrame| |$InteractiveMode| |$printLoadMsgs|
+                    |$forceDatabaseUpdate|))
+    (RETURN
+      (SEQ (PROGN
+             (|startTimingProcess| '|load|)
+             (SPADLET |fullLibName|
+                      (OR (GETDATABASE |cname| 'OBJECT) (RETURN NIL)))
+             (SPADLET |systemdir?|
+                      (|isSystemDirectory|
+                          (|pathnameDirectory| |fullLibName|)))
+             (SPADLET |update?|
+                      (OR |$forceDatabaseUpdate| (NULL |systemdir?|)))
+             (COND
+               ((NULL |update?|)
+                (|loadLibNoUpdate| |cname| |cname| |fullLibName|))
+               ('T
+                (SPADLET |kind| (GETDATABASE |cname| 'CONSTRUCTORKIND))
+                (COND
+                  (|$printLoadMsgs|
+                      (|sayKeyedMsg| 'S2IL0002
+                          (CONS (|namestring| |fullLibName|)
+                                (CONS |kind| (CONS |cname| NIL))))))
+                (LOAD |fullLibName|) (|clearConstructorCache| |cname|)
+                (|updateDatabase| |cname| |cname| |systemdir?|)
+                (|installConstructor| |cname| |kind|)
+                (SPADLET |u| (GETDATABASE |cname| 'CONSTRUCTORMODEMAP))
+                (|updateCategoryTable| |cname| |kind|)
+                (SPADLET |coSig|
+                         (COND
+                           (|u| (SPADLET |sig| (CDAR |u|))
+                                (CONS NIL
+                                      (PROG (G166197)
+                                        (SPADLET G166197 NIL)
+                                        (RETURN
+                                          (DO
+                                           ((G166202 (CDR |sig|)
+                                             (CDR G166202))
+                                            (|x| NIL))
+                                           ((OR (ATOM G166202)
+                                             (PROGN
+                                               (SETQ |x|
+                                                (CAR G166202))
+                                               NIL))
+                                            (NREVERSE0 G166197))
+                                            (SEQ
+                                             (EXIT
+                                              (SETQ G166197
+                                               (CONS
+                                                (|categoryForm?| |x|)
+                                                G166197)))))))))
+                           ('T NIL)))
+                (COND
+                  ((NULL (CDR (GETDATABASE |cname| 'CONSTRUCTORFORM)))
+                   (MAKEPROP |cname| 'NILADIC 'T))
+                  ('T (REMPROP |cname| 'NILADIC)))
+                (MAKEPROP |cname| 'LOADED |fullLibName|)
+                (COND
+                  (|$InteractiveMode|
+                      (SPADLET |$CategoryFrame|
+                               (CONS (CONS NIL NIL) NIL))))
+                (|stopTimingProcess| '|load|) 'T)))))))
+
+;loadLibNoUpdate(cname, libName, fullLibName) ==
+;  kind := GETDATABASE(cname,'CONSTRUCTORKIND)
+;  if $printLoadMsgs then
+;    sayKeyedMsg("S2IL0002",[namestring fullLibName,kind,cname])
+;  if CATCH('VERSIONCHECK,LOAD(fullLibName)) = -1
+;    then
+;      PRINC('"   wrong library version...recompile ")
+;      PRINC(fullLibName)
+;      TERPRI()
+;      TOPLEVEL()
+;    else
+;     clearConstructorCache cname
+;     installConstructor(cname,kind)
+;     MAKEPROP(cname,'LOADED,fullLibName)
+;     if $InteractiveMode then $CategoryFrame := [[nil]]
+;     stopTimingProcess 'load
+;  'T
+
+(DEFUN |loadLibNoUpdate| (|cname| |libName| |fullLibName|)
+  (declare (ignore |libName|))
+  (PROG (|kind|)
+  (declare (special |$CategoryFrame| |$InteractiveMode| |$printLoadMsgs|))
+    (RETURN
+      (PROGN
+        (SPADLET |kind| (GETDATABASE |cname| 'CONSTRUCTORKIND))
+        (COND
+          (|$printLoadMsgs|
+              (|sayKeyedMsg| 'S2IL0002
+                  (CONS (|namestring| |fullLibName|)
+                        (CONS |kind| (CONS |cname| NIL))))))
+        (COND
+          ((BOOT-EQUAL (CATCH 'VERSIONCHECK (LOAD |fullLibName|))
+               (SPADDIFFERENCE 1))
+           (PRINC (MAKESTRING "   wrong library version...recompile "))
+           (PRINC |fullLibName|) (TERPRI) (TOPLEVEL))
+          ('T (|clearConstructorCache| |cname|)
+           (|installConstructor| |cname| |kind|)
+           (MAKEPROP |cname| 'LOADED |fullLibName|)
+           (COND
+             (|$InteractiveMode|
+                 (SPADLET |$CategoryFrame| (CONS (CONS NIL NIL) NIL))))
+           (|stopTimingProcess| '|load|)))
+        'T))))
+
+;loadIfNecessary u == loadLibIfNecessary(u,true)
+
+(DEFUN |loadIfNecessary| (|u|) (|loadLibIfNecessary| |u| 'T))
+
+;loadIfNecessaryAndExists u == loadLibIfNecessary(u,nil)
+
+(DEFUN |loadIfNecessaryAndExists| (|u|)
+  (|loadLibIfNecessary| |u| NIL))
+
+;loadLibIfNecessary(u,mustExist) ==
+;  u = '$EmptyMode => u
+;  null atom u => loadLibIfNecessary(first u,mustExist)
+;  value:=
+;    functionp(u) or macrop(u) => u
+;    GET(u,'LOADED) => u
+;    loadLib u => u
+;  null $InteractiveMode and ((null (y:= getProplist(u,$CategoryFrame)))
+;    or (null LASSOC('isFunctor,y)) and (null LASSOC('isCategory,y))) =>
+;      y:= GETDATABASE(u,'CONSTRUCTORKIND) =>
+;         y = 'category =>
+;            updateCategoryFrameForCategory u
+;         updateCategoryFrameForConstructor u
+;      throwKeyedMsg("S2IL0005",[u])
+;  value
+
+(DEFUN |loadLibIfNecessary| (|u| |mustExist|)
+  (PROG (|value| |y|)
+  (declare (special |$CategoryFrame| |$InteractiveMode|))
+    (RETURN
+      (COND
+        ((BOOT-EQUAL |u| '|$EmptyMode|) |u|)
+        ((NULL (ATOM |u|))
+         (|loadLibIfNecessary| (CAR |u|) |mustExist|))
+        ('T
+         (SPADLET |value|
+                  (COND
+                    ((OR (|functionp| |u|) (|macrop| |u|)) |u|)
+                    ((GETL |u| 'LOADED) |u|)
+                    ((|loadLib| |u|) |u|)))
+         (COND
+           ((AND (NULL |$InteractiveMode|)
+                 (OR (NULL (SPADLET |y|
+                                    (|getProplist| |u|
+                                     |$CategoryFrame|)))
+                     (AND (NULL (LASSOC '|isFunctor| |y|))
+                          (NULL (LASSOC '|isCategory| |y|)))))
+            (COND
+              ((SPADLET |y| (GETDATABASE |u| 'CONSTRUCTORKIND))
+               (COND
+                 ((BOOT-EQUAL |y| '|category|)
+                  (|updateCategoryFrameForCategory| |u|))
+                 ('T (|updateCategoryFrameForConstructor| |u|))))
+              ('T (|throwKeyedMsg| 'S2IL0005 (CONS |u| NIL)))))
+           ('T |value|)))))))
+
+;convertOpAlist2compilerInfo(opalist) ==
+;   "append"/[[formatSig(op,sig) for sig in siglist]
+;                for [op,:siglist] in opalist] where
+;      formatSig(op, [typelist, slot,:stuff]) ==
+;          pred := if stuff then first stuff else 'T
+;          impl := if CDR stuff then CADR stuff else 'ELT -- handles 'CONST
+;          [[op, typelist], pred, [impl, '$, slot]]
+
+(DEFUN |convertOpAlist2compilerInfo,formatSig| (|op| G166245)
+  (PROG (|typelist| |slot| |stuff| |pred| |impl|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |typelist| (CAR G166245))
+             (SPADLET |slot| (CADR G166245))
+             (SPADLET |stuff| (CDDR G166245))
+             G166245
+             (SEQ (SPADLET |pred| (IF |stuff| (CAR |stuff|) 'T))
+                  (SPADLET |impl|
+                           (IF (CDR |stuff|) (CADR |stuff|) 'ELT))
+                  (EXIT (CONS (CONS |op| (CONS |typelist| NIL))
+                              (CONS |pred|
+                                    (CONS
+                                     (CONS |impl|
+                                      (CONS '$ (CONS |slot| NIL)))
+                                     NIL))))))))))
+
+
+(DEFUN |convertOpAlist2compilerInfo| (|opalist|)
+  (PROG (|op| |siglist|)
+    (RETURN
+      (SEQ (PROG (G166272)
+             (SPADLET G166272 NIL)
+             (RETURN
+               (DO ((G166278 |opalist| (CDR G166278))
+                    (G166264 NIL))
+                   ((OR (ATOM G166278)
+                        (PROGN (SETQ G166264 (CAR G166278)) NIL)
+                        (PROGN
+                          (PROGN
+                            (SPADLET |op| (CAR G166264))
+                            (SPADLET |siglist| (CDR G166264))
+                            G166264)
+                          NIL))
+                    G166272)
+                 (SEQ (EXIT (SETQ G166272
+                                  (APPEND G166272
+                                          (PROG (G166289)
+                                            (SPADLET G166289 NIL)
+                                            (RETURN
+                                              (DO
+                                               ((G166294 |siglist|
+                                                 (CDR G166294))
+                                                (|sig| NIL))
+                                               ((OR (ATOM G166294)
+                                                 (PROGN
+                                                   (SETQ |sig|
+                                                    (CAR G166294))
+                                                   NIL))
+                                                (NREVERSE0 G166289))
+                                                (SEQ
+                                                 (EXIT
+                                                  (SETQ G166289
+                                                   (CONS
+                                       (|convertOpAlist2compilerInfo,formatSig|
+                                                     |op| |sig|)
+                                                    G166289))))))))))))))))))
+
+;updateCategoryFrameForConstructor(constructor) ==
+;   opAlist := GETDATABASE(constructor, 'OPERATIONALIST)
+;   [[dc,:sig],[pred,impl]] := GETDATABASE(constructor, 'CONSTRUCTORMODEMAP)
+;   $CategoryFrame := put(constructor,'isFunctor,
+;       convertOpAlist2compilerInfo(opAlist),
+;       addModemap(constructor, dc, sig, pred, impl,
+;           put(constructor, 'mode, ['Mapping,:sig], $CategoryFrame)))
+
+(DEFUN |updateCategoryFrameForConstructor| (|constructor|)
+  (PROG (|opAlist| |LETTMP#1| |dc| |sig| |pred| |impl|)
+  (declare (special |$CategoryFrame|))
+    (RETURN
+      (PROGN
+        (SPADLET |opAlist| (GETDATABASE |constructor| 'OPERATIONALIST))
+        (SPADLET |LETTMP#1|
+                 (GETDATABASE |constructor| 'CONSTRUCTORMODEMAP))
+        (SPADLET |dc| (CAAR |LETTMP#1|))
+        (SPADLET |sig| (CDAR |LETTMP#1|))
+        (SPADLET |pred| (CAADR |LETTMP#1|))
+        (SPADLET |impl| (CADADR |LETTMP#1|))
+        (SPADLET |$CategoryFrame|
+                 (|put| |constructor| '|isFunctor|
+                        (|convertOpAlist2compilerInfo| |opAlist|)
+                        (|addModemap| |constructor| |dc| |sig| |pred|
+                            |impl|
+                            (|put| |constructor| '|mode|
+                                   (CONS '|Mapping| |sig|)
+                                   |$CategoryFrame|))))))))
+
+;updateCategoryFrameForCategory(category) ==
+;   [[dc,:sig],[pred,impl]] := GETDATABASE(category, 'CONSTRUCTORMODEMAP)
+;   $CategoryFrame :=
+;     put(category, 'isCategory, 'T,
+;         addModemap(category, dc, sig, pred, impl, $CategoryFrame))
+
+(DEFUN |updateCategoryFrameForCategory| (|category|)
+  (PROG (|LETTMP#1| |dc| |sig| |pred| |impl|)
+  (declare (special |$CategoryFrame|))
+    (RETURN
+      (PROGN
+        (SPADLET |LETTMP#1|
+                 (GETDATABASE |category| 'CONSTRUCTORMODEMAP))
+        (SPADLET |dc| (CAAR |LETTMP#1|))
+        (SPADLET |sig| (CDAR |LETTMP#1|))
+        (SPADLET |pred| (CAADR |LETTMP#1|))
+        (SPADLET |impl| (CADADR |LETTMP#1|))
+        (SPADLET |$CategoryFrame|
+                 (|put| |category| '|isCategory| 'T
+                        (|addModemap| |category| |dc| |sig| |pred|
+                            |impl| |$CategoryFrame|)))))))
+
+;loadFunctor u ==
+;  null atom u => loadFunctor first u
+;  loadLibIfNotLoaded u
+;  u
+
+(DEFUN |loadFunctor| (|u|)
+  (COND
+    ((NULL (ATOM |u|)) (|loadFunctor| (CAR |u|)))
+    ('T (|loadLibIfNotLoaded| |u|) |u|)))
+
+;makeConstructorsAutoLoad() ==
+;  for cnam in allConstructors() repeat
+;    REMPROP(cnam,'LOADED)
+;--    fn:=GETDATABASE(cnam,'ABBREVIATION)
+;    if GETDATABASE(cnam,'NILADIC)
+;     then PUT(cnam,'NILADIC,'T)
+;     else REMPROP(cnam,'NILADIC)
+;    systemDependentMkAutoload(cnam,cnam)
+
+(DEFUN |makeConstructorsAutoLoad| ()
+  (SEQ (DO ((G166361 (|allConstructors|) (CDR G166361))
+            (|cnam| NIL))
+           ((OR (ATOM G166361)
+                (PROGN (SETQ |cnam| (CAR G166361)) NIL))
+            NIL)
+         (SEQ (EXIT (PROGN
+                      (REMPROP |cnam| 'LOADED)
+                      (COND
+                        ((GETDATABASE |cnam| 'NILADIC)
+                         (PUT |cnam| 'NILADIC 'T))
+                        ('T (REMPROP |cnam| 'NILADIC)))
+                      (|systemDependentMkAutoload| |cnam| |cnam|)))))))
+
+;systemDependentMkAutoload(fn,cnam) ==
+;    FBOUNDP(cnam) => "next"
+;    asharpName := GETDATABASE(cnam, 'ASHARP?) =>
+;         kind := GETDATABASE(cnam, 'CONSTRUCTORKIND)
+;         cosig := GETDATABASE(cnam, 'COSIG)
+;         file := GETDATABASE(cnam, 'OBJECT)
+;         SET_-LIB_-FILE_-GETTER(file, cnam)
+;         kind = 'category =>
+;              ASHARPMKAUTOLOADCATEGORY(file, cnam, asharpName, cosig)
+;         ASHARPMKAUTOLOADFUNCTOR(file, cnam, asharpName, cosig)
+;    SETF(SYMBOL_-FUNCTION cnam,mkAutoLoad(fn, cnam))
+
+(DEFUN |systemDependentMkAutoload| (|fn| |cnam|)
+  (PROG (|asharpName| |kind| |cosig| |file|)
+    (RETURN
+      (COND
+        ((FBOUNDP |cnam|) '|next|)
+        ((SPADLET |asharpName| (GETDATABASE |cnam| 'ASHARP?))
+         (SPADLET |kind| (GETDATABASE |cnam| 'CONSTRUCTORKIND))
+         (SPADLET |cosig| (GETDATABASE |cnam| 'COSIG))
+         (SPADLET |file| (GETDATABASE |cnam| 'OBJECT))
+         (SET-LIB-FILE-GETTER |file| |cnam|)
+         (COND
+           ((BOOT-EQUAL |kind| '|category|)
+            (ASHARPMKAUTOLOADCATEGORY |file| |cnam| |asharpName|
+                |cosig|))
+           ('T
+            (ASHARPMKAUTOLOADFUNCTOR |file| |cnam| |asharpName|
+                |cosig|))))
+        ('T (SETF (SYMBOL-FUNCTION |cnam|) (|mkAutoLoad| |fn| |cnam|)))))))
+
+;autoLoad(abb,cname) ==
+;  if not GET(cname,'LOADED) then loadLib cname
+;  SYMBOL_-FUNCTION cname
+
+(DEFUN |autoLoad| (|abb| |cname|)
+  (declare (ignore |abb|))
+  (PROGN
+    (COND ((NULL (GETL |cname| 'LOADED)) (|loadLib| |cname|)))
+    (SYMBOL-FUNCTION |cname|)))
+
+;setAutoLoadProperty(name) ==
+;--  abb := constructor? name
+;  REMPROP(name,'LOADED)
+;  SETF(SYMBOL_-FUNCTION name,mkAutoLoad(name, name))
+
+(DEFUN |setAutoLoadProperty| (|name|)
+  (PROGN
+    (REMPROP |name| 'LOADED)
+    (SETF (SYMBOL-FUNCTION |name|) (|mkAutoLoad| |name| |name|))))
+
+;--% Compilation
+;
+;compileConstructorLib(l,op,editFlag,traceFlag) ==
+;  --this file corresponds to /C,1
+;  MEMQ('_?,l) => return editFile '(_/C TELL _*)
+;  optionList:= _/OPTIONS l
+;  funList:= TRUNCLIST(l,optionList) or [_/FN]
+;  options:= [[UPCASE CAR x,:CDR x] for x in optionList]
+;  infile:=  _/MKINFILENAM _/GETOPTION(options,'FROM_=)
+;  outfile:= _/MKINFILENAM _/GETOPTION(options,'TO_=)
+;  res:= [compConLib1(fn,infile,outfile,op,editFlag,traceFlag)
+;               for fn in funList]
+;  SHUT INPUTSTREAM
+;  res
+
+(DEFUN |compileConstructorLib| (|l| |op| |editFlag| |traceFlag|)
+  (PROG (|optionList| |funList| |options| |infile| |outfile| |res|)
+  (declare (special /FN))
+    (RETURN
+      (SEQ (COND
+             ((MEMQ '? |l|) (RETURN (|editFile| '(/C TELL *))))
+             ('T (SPADLET |optionList| (/OPTIONS |l|))
+              (SPADLET |funList|
+                       (OR (TRUNCLIST |l| |optionList|) (CONS /FN NIL)))
+              (SPADLET |options|
+                       (PROG (G166392)
+                         (SPADLET G166392 NIL)
+                         (RETURN
+                           (DO ((G166397 |optionList|
+                                    (CDR G166397))
+                                (|x| NIL))
+                               ((OR (ATOM G166397)
+                                    (PROGN
+                                      (SETQ |x| (CAR G166397))
+                                      NIL))
+                                (NREVERSE0 G166392))
+                             (SEQ (EXIT (SETQ G166392
+                                         (CONS
+                                          (CONS (UPCASE (CAR |x|))
+                                           (CDR |x|))
+                                          G166392))))))))
+              (SPADLET |infile|
+                       (/MKINFILENAM (/GETOPTION |options| 'FROM=)))
+              (SPADLET |outfile|
+                       (/MKINFILENAM (/GETOPTION |options| 'TO=)))
+              (SPADLET |res|
+                       (PROG (G166407)
+                         (SPADLET G166407 NIL)
+                         (RETURN
+                           (DO ((G166412 |funList| (CDR G166412))
+                                (|fn| NIL))
+                               ((OR (ATOM G166412)
+                                    (PROGN
+                                      (SETQ |fn| (CAR G166412))
+                                      NIL))
+                                (NREVERSE0 G166407))
+                             (SEQ (EXIT (SETQ G166407
+                                         (CONS
+                                          (|compConLib1| |fn| |infile|
+                                           |outfile| |op| |editFlag|
+                                           |traceFlag|)
+                                          G166407))))))))
+              (SHUT INPUTSTREAM) |res|))))))
+
+;compConLib1(fun,infileOrNil,outfileOrNil,auxOp,editFlag,traceFlag) ==
+;  $PRETTYPRINT: local := 'T
+;  $LISPLIB: local := 'T
+;  $lisplibAttributes: local := NIL
+;  $lisplibPredicates: local := NIL
+;  $lisplibForm: local := NIL
+;  $lisplibAbbreviation: local := NIL
+;  $lisplibParents: local := NIL
+;  $lisplibAncestors: local := NIL
+;  $lisplibKind: local := NIL
+;  $lisplibModemap: local := NIL
+;  $lisplibModemapAlist: local := NIL
+;  $lisplibCategoriesExtended: local := NIL -- this is always nil. why? (tpd)
+;  $lisplibSlot1 : local := NIL   --used by NRT mechanisms
+;  $lisplibOperationAlist: local := NIL
+;  $lisplibOpAlist: local:= NIL
+;  $lisplibSuperDomain: local := NIL
+;  $libFile: local := NIL
+;  $lisplibVariableAlist: local := NIL
+;  $lisplibSignatureAlist: local := NIL
+;  if null atom fun and null CDR fun then fun:= CAR fun -- unwrap nullary
+;  libName:= getConstructorAbbreviation fun
+;  infile:= infileOrNil or getFunctionSourceFile fun or
+;    throwKeyedMsg("S2IL0004",[fun])
+;  SETQ(_/EDITFILE,infile)
+;  outfile := outfileOrNil or
+;    [libName,'OUTPUT,$listingDirectory]   --always QUIET
+;  _$ERASE(libName,'OUTPUT,$listingDirectory)
+;  outstream:= DEFSTREAM(outfile,'OUTPUT)
+;  val:= _/D_,2_,LIB(fun,infile,outstream,auxOp,editFlag,traceFlag)
+;  val
+
+(DEFUN |compConLib1|
+       (|fun| |infileOrNil| |outfileOrNil| |auxOp| |editFlag|
+              |traceFlag|)
+  (PROG ($PRETTYPRINT $LISPLIB |$lisplibAttributes|
+            |$lisplibPredicates| |$lisplibForm| |$lisplibAbbreviation|
+            |$lisplibParents| |$lisplibAncestors| |$lisplibKind|
+            |$lisplibModemap| |$lisplibModemapAlist|
+            |$lisplibCategoriesExtended| |$lisplibSlot1|
+            |$lisplibOperationAlist| |$lisplibOpAlist|
+            |$lisplibSuperDomain| |$libFile| |$lisplibVariableAlist|
+            |$lisplibSignatureAlist| |libName| |infile| |outfile|
+            |outstream| |val|)
+    (DECLARE (SPECIAL $PRETTYPRINT $LISPLIB |$lisplibAttributes|
+                      |$lisplibPredicates| |$lisplibForm|
+                      |$lisplibAbbreviation| |$lisplibParents|
+                      |$lisplibAncestors| |$lisplibKind|
+                      |$lisplibModemap| |$lisplibModemapAlist|
+                      |$lisplibCategoriesExtended| |$lisplibSlot1|
+                      |$lisplibOperationAlist| |$lisplibOpAlist|
+                      |$lisplibSuperDomain| |$libFile|
+                      |$lisplibVariableAlist| |$lisplibSignatureAlist|
+                      |$listingDirectory| $ERASE /EDITFILE))
+    (RETURN
+      (PROGN
+        (SPADLET $PRETTYPRINT 'T)
+        (SPADLET $LISPLIB 'T)
+        (SPADLET |$lisplibAttributes| NIL)
+        (SPADLET |$lisplibPredicates| NIL)
+        (SPADLET |$lisplibForm| NIL)
+        (SPADLET |$lisplibAbbreviation| NIL)
+        (SPADLET |$lisplibParents| NIL)
+        (SPADLET |$lisplibAncestors| NIL)
+        (SPADLET |$lisplibKind| NIL)
+        (SPADLET |$lisplibModemap| NIL)
+        (SPADLET |$lisplibModemapAlist| NIL)
+        (SPADLET |$lisplibCategoriesExtended| NIL)
+        (SPADLET |$lisplibSlot1| NIL)
+        (SPADLET |$lisplibOperationAlist| NIL)
+        (SPADLET |$lisplibOpAlist| NIL)
+        (SPADLET |$lisplibSuperDomain| NIL)
+        (SPADLET |$libFile| NIL)
+        (SPADLET |$lisplibVariableAlist| NIL)
+        (SPADLET |$lisplibSignatureAlist| NIL)
+        (COND
+          ((AND (NULL (ATOM |fun|)) (NULL (CDR |fun|)))
+           (SPADLET |fun| (CAR |fun|))))
+        (SPADLET |libName| (|getConstructorAbbreviation| |fun|))
+        (SPADLET |infile|
+                 (OR |infileOrNil| (|getFunctionSourceFile| |fun|)
+                     (|throwKeyedMsg| 'S2IL0004 (CONS |fun| NIL))))
+        (SETQ /EDITFILE |infile|)
+        (SPADLET |outfile|
+                 (OR |outfileOrNil|
+                     (CONS |libName|
+                           (CONS 'OUTPUT
+                                 (CONS |$listingDirectory| NIL)))))
+        ($ERASE |libName| 'OUTPUT |$listingDirectory|)
+        (SPADLET |outstream| (DEFSTREAM |outfile| 'OUTPUT))
+        (SPADLET |val|
+                 (|/D,2,LIB| |fun| |infile| |outstream| |auxOp|
+                     |editFlag| |traceFlag|))
+        |val|))))
+
+;compDefineLisplib(df:=["DEF",[op,:.],:.],m,e,prefix,fal,fn) ==
+;  --fn= compDefineCategory OR compDefineFunctor
+;  sayMSG fillerSpaces(72,'"-")
+;  $LISPLIB: local := 'T
+;  $op: local := op
+;  $lisplibAttributes: local := NIL
+;  $lisplibPredicates: local := NIL -- set by makePredicateBitVector
+;  $lisplibCategoriesExtended: local := NIL -- this is always nil. why? (tpd)
+;  $lisplibForm: local := NIL
+;  $lisplibKind: local := NIL
+;  $lisplibAbbreviation: local := NIL
+;  $lisplibParents: local := NIL
+;  $lisplibAncestors: local := NIL
+;  $lisplibModemap: local := NIL
+;  $lisplibModemapAlist: local := NIL
+;  $lisplibSlot1 : local := NIL   -- used by NRT mechanisms
+;  $lisplibOperationAlist: local := NIL
+;  $lisplibSuperDomain: local := NIL
+;  $libFile: local := NIL
+;  $lisplibVariableAlist: local := NIL
+;--  $lisplibRelatedDomains: local := NIL   --from ++ Related Domains: see c-doc
+;  $lisplibCategory: local := nil
+;  --for categories, is rhs of definition; otherwise, is target of functor
+;  --will eventually become the "constructorCategory" property in lisplib
+;  --set in compDefineCategory1 if category, otherwise in finalizeLisplib
+;  libName := getConstructorAbbreviation op
+;  BOUNDP '$compileDocumentation and $compileDocumentation =>
+;     compileDocumentation libName
+;  sayMSG ['"   initializing ",$spadLibFT,:bright libName,
+;    '"for",:bright op]
+;  initializeLisplib libName
+;  sayMSG ['"   compiling into ",$spadLibFT,:bright libName]
+;  -- res:= FUNCALL(fn,df,m,e,prefix,fal)
+;  -- sayMSG ['"   finalizing ",$spadLibFT,:bright libName]
+;  -- finalizeLisplib libName
+;  -- following guarantee's compiler output files get closed.
+;  ok := false;
+;  UNWIND_-PROTECT(
+;      PROGN(res:= FUNCALL(fn,df,m,e,prefix,fal),
+;            sayMSG ['"   finalizing ",$spadLibFT,:bright libName],
+;            finalizeLisplib libName,
+;            ok := true),
+;      RSHUT $libFile)
+;  if ok then lisplibDoRename(libName)
+;  filearg := $FILEP(libName,$spadLibFT,$libraryDirectory)
+;  RPACKFILE filearg
+;  FRESH_-LINE $algebraOutputStream
+;  sayMSG fillerSpaces(72,'"-")
+;  unloadOneConstructor(op,libName)
+;  LOCALDATABASE(LIST GETDATABASE(op,'ABBREVIATION),NIL)
+;  $newConlist := [op, :$newConlist]  ---------->  bound in function "compiler"
+;  if $lisplibKind = 'category
+;    then updateCategoryFrameForCategory op
+;     else updateCategoryFrameForConstructor op
+;  res
+
+(DEFUN |compDefineLisplib| (|df| |m| |e| |prefix| |fal| |fn|)
+  (PROG ($LISPLIB |$op| |$lisplibAttributes| |$lisplibPredicates|
+            |$lisplibCategoriesExtended| |$lisplibForm| |$lisplibKind|
+            |$lisplibAbbreviation| |$lisplibParents|
+            |$lisplibAncestors| |$lisplibModemap|
+            |$lisplibModemapAlist| |$lisplibSlot1|
+            |$lisplibOperationAlist| |$lisplibSuperDomain| |$libFile|
+            |$lisplibVariableAlist| |$lisplibCategory| |op| |libName|
+            |res| |ok| |filearg|)
+    (DECLARE (SPECIAL $LISPLIB |$op| |$lisplibAttributes| |$newConlist|
+                      |$lisplibPredicates| |$lisplibCategoriesExtended|
+                      |$lisplibForm| |$lisplibKind| |$algebraOutputStream|
+                      |$lisplibAbbreviation| |$lisplibParents| |$spadLibFT|
+                      |$lisplibAncestors| |$lisplibModemap| $FILEP
+                      |$lisplibModemapAlist| |$lisplibSlot1|
+                      |$lisplibOperationAlist| |$lisplibSuperDomain|
+                      |$libFile| |$lisplibVariableAlist| 
+                      |$lisplibCategory| |$libraryDirectory|
+                      |$compileDocumentation|))
+    (RETURN
+      (PROGN
+        (COND ((EQ (CAR |df|) 'DEF) (CAR |df|)))
+        (SPADLET |op| (CAADR |df|))
+        (|sayMSG| (|fillerSpaces| 72 (MAKESTRING "-")))
+        (SPADLET $LISPLIB 'T)
+        (SPADLET |$op| |op|)
+        (SPADLET |$lisplibAttributes| NIL)
+        (SPADLET |$lisplibPredicates| NIL)
+        (SPADLET |$lisplibCategoriesExtended| NIL)
+        (SPADLET |$lisplibForm| NIL)
+        (SPADLET |$lisplibKind| NIL)
+        (SPADLET |$lisplibAbbreviation| NIL)
+        (SPADLET |$lisplibParents| NIL)
+        (SPADLET |$lisplibAncestors| NIL)
+        (SPADLET |$lisplibModemap| NIL)
+        (SPADLET |$lisplibModemapAlist| NIL)
+        (SPADLET |$lisplibSlot1| NIL)
+        (SPADLET |$lisplibOperationAlist| NIL)
+        (SPADLET |$lisplibSuperDomain| NIL)
+        (SPADLET |$libFile| NIL)
+        (SPADLET |$lisplibVariableAlist| NIL)
+        (SPADLET |$lisplibCategory| NIL)
+        (SPADLET |libName| (|getConstructorAbbreviation| |op|))
+        (COND
+          ((AND (BOUNDP '|$compileDocumentation|)
+                |$compileDocumentation|)
+           (|compileDocumentation| |libName|))
+          ('T
+           (|sayMSG|
+               (CONS (MAKESTRING "   initializing ")
+                     (CONS |$spadLibFT|
+                           (APPEND (|bright| |libName|)
+                                   (CONS (MAKESTRING "for")
+                                    (|bright| |op|))))))
+           (|initializeLisplib| |libName|)
+           (|sayMSG|
+               (CONS (MAKESTRING "   compiling into ")
+                     (CONS |$spadLibFT| (|bright| |libName|))))
+           (SPADLET |ok| NIL)
+           (UNWIND-PROTECT
+             (PROGN
+               (SPADLET |res|
+                        (FUNCALL |fn| |df| |m| |e| |prefix| |fal|))
+               (|sayMSG|
+                   (CONS (MAKESTRING "   finalizing ")
+                         (CONS |$spadLibFT| (|bright| |libName|))))
+               (|finalizeLisplib| |libName|)
+               (SPADLET |ok| 'T))
+             (RSHUT |$libFile|))
+           (COND (|ok| (|lisplibDoRename| |libName|)))
+           (SPADLET |filearg|
+                    ($FILEP |libName| |$spadLibFT| |$libraryDirectory|))
+           (RPACKFILE |filearg|) (FRESH-LINE |$algebraOutputStream|)
+           (|sayMSG| (|fillerSpaces| 72 (MAKESTRING "-")))
+           (|unloadOneConstructor| |op| |libName|)
+           (LOCALDATABASE (LIST (GETDATABASE |op| 'ABBREVIATION)) NIL)
+           (SPADLET |$newConlist| (CONS |op| |$newConlist|))
+           (COND
+             ((BOOT-EQUAL |$lisplibKind| '|category|)
+              (|updateCategoryFrameForCategory| |op|))
+             ('T (|updateCategoryFrameForConstructor| |op|)))
+           |res|))))))
+
+;compileDocumentation libName ==
+;  filename := MAKE_-INPUT_-FILENAME(libName,$spadLibFT)
+;  $FCOPY(filename,[libName,'DOCLB])
+;  stream := RDEFIOSTREAM [['FILE,libName,'DOCLB],['MODE, :'O]]
+;  lisplibWrite('"documentation",finalizeDocumentation(),stream)
+;--  if $lisplibRelatedDomains then
+;--    lisplibWrite('"relatedDomains",$lisplibRelatedDomains,stream)
+;  RSHUT(stream)
+;  RPACKFILE([libName,'DOCLB])
+;  $REPLACE([libName,$spadLibFT],[libName,'DOCLB])
+;  ['dummy, $EmptyMode, $e]
+
+(DEFUN |compileDocumentation| (|libName|)
+  (PROG (|filename| |stream|)
+  (declare (special |$e| |$EmptyMode| |$spadLibFT| $REPLACE $FCOPY))
+    (RETURN
+      (PROGN
+        (SPADLET |filename|
+                 (MAKE-INPUT-FILENAME |libName| |$spadLibFT|))
+        ($FCOPY |filename| (CONS |libName| (CONS 'DOCLB NIL)))
+        (SPADLET |stream|
+                 (RDEFIOSTREAM
+                     (CONS (CONS 'FILE
+                                 (CONS |libName| (CONS 'DOCLB NIL)))
+                           (CONS (CONS 'MODE 'O) NIL))))
+        (|lisplibWrite| (MAKESTRING "documentation")
+            (|finalizeDocumentation|) |stream|)
+        (RSHUT |stream|)
+        (RPACKFILE (CONS |libName| (CONS 'DOCLB NIL)))
+        ($REPLACE (CONS |libName| (CONS |$spadLibFT| NIL))
+            (CONS |libName| (CONS 'DOCLB NIL)))
+        (CONS '|dummy| (CONS |$EmptyMode| (CONS |$e| NIL)))))))
+
+;getLisplibVersion libName ==
+;  stream := RDEFIOSTREAM [['FILE,libName,$spadLibFT],['MODE, :'I]]
+;  version:= CADR rread('VERSION, stream,nil)
+;  RSHUT(stream)
+;  version
+
+(DEFUN |getLisplibVersion| (|libName|)
+  (PROG (|stream| |version|)
+  (declare (special |$spadLibFT|))
+    (RETURN
+      (PROGN
+        (SPADLET |stream|
+                 (RDEFIOSTREAM
+                     (CONS (CONS 'FILE
+                                 (CONS |libName|
+                                       (CONS |$spadLibFT| NIL)))
+                           (CONS (CONS 'MODE 'I) NIL))))
+        (SPADLET |version| (CADR (|rread| 'VERSION |stream| NIL)))
+        (RSHUT |stream|)
+        |version|))))
+
+;initializeLisplib libName ==
+;  _$ERASE(libName,'ERRORLIB,$libraryDirectory)
+;  SETQ(ERRORS,0) -- ERRORS is a fluid variable for the compiler
+;  $libFile:= writeLib1(libName,'ERRORLIB,$libraryDirectory)
+;  ADDOPTIONS('FILE,$libFile)
+;  $lisplibForm := nil             --defining form for lisplib
+;  $lisplibModemap := nil          --modemap for constructor form
+;  $lisplibKind := nil             --category, domain, or package
+;  $lisplibModemapAlist := nil  --changed in "augmentLisplibModemapsFromCategory"
+;  $lisplibAbbreviation := nil
+;  $lisplibAncestors := nil
+;  $lisplibOpAlist := nil  --operations alist for new runtime system
+;  $lisplibOperationAlist := nil   --old list of operations for functor/package
+;  $lisplibSuperDomain:= nil
+;  -- next var changed in "augmentLisplibDependents"
+;  $lisplibVariableAlist := nil    --this and the next are used by "luke"
+;  $lisplibSignatureAlist := nil
+;  if pathnameTypeId(_/EDITFILE) = 'SPAD
+;    then LAM_,FILEACTQ('VERSION,['_/VERSIONCHECK,_/MAJOR_-VERSION])
+
+(DEFUN |initializeLisplib| (|libName|)
+  (declare (special $ERASE |$libraryDirectory| |$libFile| |$lisplibForm|
+                    |$lisplibModemap| |$lisplibKind| |$lisplibModemapAlist|
+                    |$lisplibAbbreviation| |$lisplibAncestors|
+                    |$lisplibOpAlist| |$lisplibOperationAlist|
+                    |$lisplibSuperDomain| |$lisplibVariableAlist|
+                    |$lisplibSignatureAlist| /EDITFILE /MAJOR-VERSION ERRORS))
+  (PROGN
+    ($ERASE |libName| 'ERRORLIB |$libraryDirectory|)
+    (SETQ ERRORS 0)
+    (SPADLET |$libFile|
+             (|writeLib1| |libName| 'ERRORLIB |$libraryDirectory|))
+    (ADDOPTIONS 'FILE |$libFile|)
+    (SPADLET |$lisplibForm| NIL)
+    (SPADLET |$lisplibModemap| NIL)
+    (SPADLET |$lisplibKind| NIL)
+    (SPADLET |$lisplibModemapAlist| NIL)
+    (SPADLET |$lisplibAbbreviation| NIL)
+    (SPADLET |$lisplibAncestors| NIL)
+    (SPADLET |$lisplibOpAlist| NIL)
+    (SPADLET |$lisplibOperationAlist| NIL)
+    (SPADLET |$lisplibSuperDomain| NIL)
+    (SPADLET |$lisplibVariableAlist| NIL)
+    (SPADLET |$lisplibSignatureAlist| NIL)
+    (COND
+      ((BOOT-EQUAL (|pathnameTypeId| /EDITFILE) 'SPAD)
+       (|LAM,FILEACTQ| 'VERSION
+           (CONS '/VERSIONCHECK (CONS /MAJOR-VERSION NIL))))
+      ('T NIL))))
+
+;finalizeLisplib libName ==
+;  lisplibWrite('"constructorForm",removeZeroOne $lisplibForm,$libFile)
+;  lisplibWrite('"constructorKind",kind:=removeZeroOne $lisplibKind,$libFile)
+;  lisplibWrite('"constructorModemap",removeZeroOne $lisplibModemap,$libFile)
+;  $lisplibCategory:= $lisplibCategory or $lisplibModemap.mmTarget
+;  -- set to target of modemap for package/domain constructors;
+;  -- to the right-hand sides (the definition) for category constructors
+;  lisplibWrite('"constructorCategory",$lisplibCategory,$libFile)
+;  lisplibWrite('"sourceFile",namestring _/EDITFILE,$libFile)
+;  lisplibWrite('"modemaps",removeZeroOne $lisplibModemapAlist,$libFile)
+;  opsAndAtts:= getConstructorOpsAndAtts(
+;    $lisplibForm,kind,$lisplibModemap)
+;  lisplibWrite('"operationAlist",removeZeroOne CAR opsAndAtts,$libFile)
+;  --lisplibWrite('"attributes",CDR opsAndAtts,$libFile)
+;  --if kind='category then NRTgenInitialAttributeAlist CDR opsAndAtts
+;  if kind='category then
+;     $pairlis : local := [[a,:v] for a in rest $lisplibForm
+;                                 for v in $FormalMapVariableList]
+;     $NRTslot1PredicateList : local := []
+;     NRTgenInitialAttributeAlist CDR opsAndAtts
+;  lisplibWrite('"superDomain",removeZeroOne $lisplibSuperDomain,$libFile)
+;  lisplibWrite('"signaturesAndLocals",
+;    removeZeroOne mergeSignatureAndLocalVarAlists($lisplibSignatureAlist,
+;                                    $lisplibVariableAlist),$libFile)
+;  lisplibWrite('"attributes",removeZeroOne $lisplibAttributes,$libFile)
+;  lisplibWrite('"predicates",removeZeroOne  $lisplibPredicates,$libFile)
+;  lisplibWrite('"abbreviation",$lisplibAbbreviation,$libFile)
+;  lisplibWrite('"parents",removeZeroOne $lisplibParents,$libFile)
+;  lisplibWrite('"ancestors",removeZeroOne $lisplibAncestors,$libFile)
+;  lisplibWrite('"documentation",finalizeDocumentation(),$libFile)
+;  lisplibWrite('"slot1Info",removeZeroOne $lisplibSlot1,$libFile)
+;  if $profileCompiler then profileWrite()
+;  if $lisplibForm and null CDR $lisplibForm then
+;    MAKEPROP(CAR $lisplibForm,'NILADIC,'T)
+;  ERRORS ^=0 =>    -- ERRORS is a fluid variable for the compiler
+;    sayMSG ['"   Errors in processing ",kind,'" ",:bright libName,'":"]
+;    sayMSG ['"     not replacing ",$spadLibFT,'" for",:bright libName]
+
+(DEFUN |finalizeLisplib| (|libName|)
+  (PROG (|$pairlis| |$NRTslot1PredicateList| |kind| |opsAndAtts|)
+    (DECLARE (SPECIAL |$pairlis| |$NRTslot1PredicateList| |$spadLibFT|
+                      |$lisplibForm| |$profileCompiler| |$libFile|
+                      |$lisplibSlot1| |$lisplibAncestors| |$lisplibParents|
+                      |$lisplibAbbreviation| |$lisplibPredicates|
+                      |$lisplibAttributes| |$lisplibVariableAlist|
+                      |$lisplibSignatureAlist| |$lisplibSuperDomain|
+                      |$FormalMapVariableList| |$lisplibModemap|
+                      |$lisplibModemapAlist| /EDITFILE |$lisplibCategory|
+                      |$lisplibKind|))
+    (RETURN
+      (SEQ (PROGN
+             (|lisplibWrite| (MAKESTRING "constructorForm")
+                 (|removeZeroOne| |$lisplibForm|) |$libFile|)
+             (|lisplibWrite| (MAKESTRING "constructorKind")
+                 (SPADLET |kind| (|removeZeroOne| |$lisplibKind|))
+                 |$libFile|)
+             (|lisplibWrite| (MAKESTRING "constructorModemap")
+                 (|removeZeroOne| |$lisplibModemap|) |$libFile|)
+             (SPADLET |$lisplibCategory|
+                      (OR |$lisplibCategory| (CADAR |$lisplibModemap|)))
+             (|lisplibWrite| (MAKESTRING "constructorCategory")
+                 |$lisplibCategory| |$libFile|)
+             (|lisplibWrite| (MAKESTRING "sourceFile")
+                 (|namestring| /EDITFILE) |$libFile|)
+             (|lisplibWrite| (MAKESTRING "modemaps")
+                 (|removeZeroOne| |$lisplibModemapAlist|) |$libFile|)
+             (SPADLET |opsAndAtts|
+                      (|getConstructorOpsAndAtts| |$lisplibForm| |kind|
+                          |$lisplibModemap|))
+             (|lisplibWrite| (MAKESTRING "operationAlist")
+                 (|removeZeroOne| (CAR |opsAndAtts|)) |$libFile|)
+             (COND
+               ((BOOT-EQUAL |kind| '|category|)
+                (SPADLET |$pairlis|
+                         (PROG (G166609)
+                           (SPADLET G166609 NIL)
+                           (RETURN
+                             (DO ((G166615 (CDR |$lisplibForm|)
+                                      (CDR G166615))
+                                  (|a| NIL)
+                                  (G166616 |$FormalMapVariableList|
+                                      (CDR G166616))
+                                  (|v| NIL))
+                                 ((OR (ATOM G166615)
+                                      (PROGN
+                                        (SETQ |a| (CAR G166615))
+                                        NIL)
+                                      (ATOM G166616)
+                                      (PROGN
+                                        (SETQ |v| (CAR G166616))
+                                        NIL))
+                                  (NREVERSE0 G166609))
+                               (SEQ (EXIT
+                                     (SETQ G166609
+                                      (CONS (CONS |a| |v|) G166609))))))))
+                (SPADLET |$NRTslot1PredicateList| NIL)
+                (|NRTgenInitialAttributeAlist| (CDR |opsAndAtts|))))
+             (|lisplibWrite| (MAKESTRING "superDomain")
+                 (|removeZeroOne| |$lisplibSuperDomain|) |$libFile|)
+             (|lisplibWrite| (MAKESTRING "signaturesAndLocals")
+                 (|removeZeroOne|
+                     (|mergeSignatureAndLocalVarAlists|
+                         |$lisplibSignatureAlist|
+                         |$lisplibVariableAlist|))
+                 |$libFile|)
+             (|lisplibWrite| (MAKESTRING "attributes")
+                 (|removeZeroOne| |$lisplibAttributes|) |$libFile|)
+             (|lisplibWrite| (MAKESTRING "predicates")
+                 (|removeZeroOne| |$lisplibPredicates|) |$libFile|)
+             (|lisplibWrite| (MAKESTRING "abbreviation")
+                 |$lisplibAbbreviation| |$libFile|)
+             (|lisplibWrite| (MAKESTRING "parents")
+                 (|removeZeroOne| |$lisplibParents|) |$libFile|)
+             (|lisplibWrite| (MAKESTRING "ancestors")
+                 (|removeZeroOne| |$lisplibAncestors|) |$libFile|)
+             (|lisplibWrite| (MAKESTRING "documentation")
+                 (|finalizeDocumentation|) |$libFile|)
+             (|lisplibWrite| (MAKESTRING "slot1Info")
+                 (|removeZeroOne| |$lisplibSlot1|) |$libFile|)
+             (COND (|$profileCompiler| (|profileWrite|)))
+             (COND
+               ((AND |$lisplibForm| (NULL (CDR |$lisplibForm|)))
+                (MAKEPROP (CAR |$lisplibForm|) 'NILADIC 'T)))
+             (COND
+               ((NEQUAL ERRORS 0)
+                (PROGN
+                  (|sayMSG|
+                      (CONS (MAKESTRING "   Errors in processing ")
+                            (CONS |kind|
+                                  (CONS (MAKESTRING " ")
+                                        (APPEND (|bright| |libName|)
+                                         (CONS (MAKESTRING ":") NIL))))))
+                  (|sayMSG|
+                      (CONS (MAKESTRING "     not replacing ")
+                            (CONS |$spadLibFT|
+                                  (CONS (MAKESTRING " for")
+                                        (|bright| |libName|)))))))))))))
+
+;lisplibDoRename(libName) ==
+;  _$REPLACE([libName,$spadLibFT,$libraryDirectory],
+;    [libName,'ERRORLIB,$libraryDirectory])
+
+(DEFUN |lisplibDoRename| (|libName|)
+  (declare (special |$libraryDirectory| |$spadLibFT| $REPLACE))
+  ($REPLACE
+      (CONS |libName|
+            (CONS |$spadLibFT| (CONS |$libraryDirectory| NIL)))
+      (CONS |libName| (CONS 'ERRORLIB (CONS |$libraryDirectory| NIL)))))
+
+;lisplibError(cname,fname,type,cn,fn,typ,error) ==
+;  sayMSG bright ['"  Illegal ",$spadLibFT]
+;  error in '(duplicateAbb  wrongType) =>
+;    sayKeyedMsg("S2IL0007",
+;      [namestring [fname,$spadLibFT],type,cname,typ,cn])
+;  error is 'abbIsName =>
+;    throwKeyedMsg("S2IL0008",[fname,typ,namestring [fn,$spadLibFT]])
+
+(DEFUN |lisplibError| (|cname| |fname| |type| |cn| |fn| |typ| |error|)
+  (declare (special |$spadLibFT|))
+  (PROGN
+    (|sayMSG|
+        (|bright|
+            (CONS (MAKESTRING "  Illegal ") (CONS |$spadLibFT| NIL))))
+    (COND
+      ((|member| |error| '(|duplicateAbb| |wrongType|))
+       (|sayKeyedMsg| 'S2IL0007
+           (CONS (|namestring| (CONS |fname| (CONS |$spadLibFT| NIL)))
+                 (CONS |type|
+                       (CONS |cname| (CONS |typ| (CONS |cn| NIL)))))))
+      ((EQ |error| '|abbIsName|)
+       (|throwKeyedMsg| 'S2IL0008
+           (CONS |fname|
+                 (CONS |typ|
+                       (CONS (|namestring|
+                                 (CONS |fn| (CONS |$spadLibFT| NIL)))
+                             NIL))))))))
+
+;getPartialConstructorModemapSig(c) ==
+;  (s := getConstructorSignature c) => rest s
+;  throwEvalTypeMsg("S2IL0015",[c])
+
+(DEFUN |getPartialConstructorModemapSig| (|c|)
+  (PROG (|s|)
+    (RETURN
+      (COND
+        ((SPADLET |s| (|getConstructorSignature| |c|)) (CDR |s|))
+        ('T (|throwEvalTypeMsg| 'S2IL0015 (CONS |c| NIL)))))))
+
+;mergeSignatureAndLocalVarAlists(signatureAlist, localVarAlist) ==
+;  -- this function makes a single Alist for both signatures
+;  -- and local variable types, to be stored in the LISPLIB
+;  -- for the function being compiled
+;  [[funcName,:[signature,:LASSOC(funcName,localVarAlist)]] for
+;    [funcName, :signature] in signatureAlist]
+
+(DEFUN |mergeSignatureAndLocalVarAlists|
+       (|signatureAlist| |localVarAlist|)
+  (PROG (|funcName| |signature|)
+    (RETURN
+      (SEQ (PROG (G166659)
+             (SPADLET G166659 NIL)
+             (RETURN
+               (DO ((G166665 |signatureAlist| (CDR G166665))
+                    (G166650 NIL))
+                   ((OR (ATOM G166665)
+                        (PROGN (SETQ G166650 (CAR G166665)) NIL)
+                        (PROGN
+                          (PROGN
+                            (SPADLET |funcName| (CAR G166650))
+                            (SPADLET |signature| (CDR G166650))
+                            G166650)
+                          NIL))
+                    (NREVERSE0 G166659))
+                 (SEQ (EXIT (SETQ G166659
+                                  (CONS (CONS |funcName|
+                                         (CONS |signature|
+                                          (LASSOC |funcName|
+                                           |localVarAlist|)))
+                                        G166659)))))))))))
+
+;Operators u ==
+;  ATOM u => []
+;  ATOM first u =>
+;    answer:="UNION"/[Operators v for v in rest u]
+;    MEMQ(first u,answer) => answer
+;    [first u,:answer]
+;  "UNION"/[Operators v for v in u]
+
+(DEFUN |Operators| (|u|)
+  (PROG (|answer|)
+    (RETURN
+      (SEQ (COND
+             ((ATOM |u|) NIL)
+             ((ATOM (CAR |u|))
+              (SPADLET |answer|
+                       (PROG (G166680)
+                         (SPADLET G166680 NIL)
+                         (RETURN
+                           (DO ((G166685 (CDR |u|) (CDR G166685))
+                                (|v| NIL))
+                               ((OR (ATOM G166685)
+                                    (PROGN
+                                      (SETQ |v| (CAR G166685))
+                                      NIL))
+                                G166680)
+                             (SEQ (EXIT (SETQ G166680
+                                         (|union| G166680
+                                          (|Operators| |v|)))))))))
+              (COND
+                ((MEMQ (CAR |u|) |answer|) |answer|)
+                ('T (CONS (CAR |u|) |answer|))))
+             ('T
+              (PROG (G166691)
+                (SPADLET G166691 NIL)
+                (RETURN
+                  (DO ((G166696 |u| (CDR G166696)) (|v| NIL))
+                      ((OR (ATOM G166696)
+                           (PROGN (SETQ |v| (CAR G166696)) NIL))
+                       G166691)
+                    (SEQ (EXIT (SETQ G166691
+                                     (|union| G166691
+                                      (|Operators| |v|))))))))))))))
+
+;getConstructorOpsAndAtts(form,kind,modemap) ==
+;  kind is 'category => getCategoryOpsAndAtts(form)
+;  getFunctorOpsAndAtts(form,modemap)
+
+(DEFUN |getConstructorOpsAndAtts| (|form| |kind| |modemap|)
+  (COND
+    ((EQ |kind| '|category|) (|getCategoryOpsAndAtts| |form|))
+    ('T (|getFunctorOpsAndAtts| |form| |modemap|))))
+
+;getCategoryOpsAndAtts(catForm) ==
+;  -- returns [operations,:attributes] of CAR catForm
+;  [transformOperationAlist getSlotFromCategoryForm(catForm,1),
+;    :getSlotFromCategoryForm(catForm,2)]
+
+(DEFUN |getCategoryOpsAndAtts| (|catForm|)
+  (CONS (|transformOperationAlist|
+            (|getSlotFromCategoryForm| |catForm| 1))
+        (|getSlotFromCategoryForm| |catForm| 2)))
+
+;getFunctorOpsAndAtts(form,modemap) ==
+;  [transformOperationAlist getSlotFromFunctor(form,1,modemap),
+;    :getSlotFromFunctor(form,2,modemap)]
+
+(DEFUN |getFunctorOpsAndAtts| (|form| |modemap|)
+  (CONS (|transformOperationAlist|
+            (|getSlotFromFunctor| |form| 1 |modemap|))
+        (|getSlotFromFunctor| |form| 2 |modemap|)))
+
+;getSlotFromFunctor([name,:args],slot,[[.,target,:argMml],:.]) ==
+;  slot = 1 => $lisplibOperationAlist
+;  t := compMakeCategoryObject(target,$e) or
+;      systemErrorHere '"getSlotFromFunctor"
+;  t.expr.slot
+
+(DEFUN |getSlotFromFunctor| (G166719 |slot| G166728)
+  (PROG (|target| |argMml| |name| |args| |t|)
+  (declare (special |$e| |$lisplibOperationAlist|))
+    (RETURN
+      (PROGN
+        (SPADLET |target| (CADAR G166728))
+        (SPADLET |argMml| (CDDAR G166728))
+        (SPADLET |name| (CAR G166719))
+        (SPADLET |args| (CDR G166719))
+        (COND
+          ((EQL |slot| 1) |$lisplibOperationAlist|)
+          ('T
+           (SPADLET |t|
+                    (OR (|compMakeCategoryObject| |target| |$e|)
+                        (|systemErrorHere|
+                            (MAKESTRING "getSlotFromFunctor"))))
+           (ELT (CAR |t|) |slot|)))))))
+
+;getSlot1 domainName ==
+;  $e: local:= $CategoryFrame
+;  fn:= getLisplibName domainName
+;  p := pathname [fn,$spadLibFT,'"*"]
+;  not isExistingFile(p) =>
+;    sayKeyedMsg("S2IL0003",[namestring p])
+;    NIL
+;  (sig := getConstructorSignature domainName) =>
+;    [.,target,:argMml] := sig
+;    for a in $FormalMapVariableList for m in argMml repeat
+;      $e:= put(a,'mode,m,$e)
+;    t := compMakeCategoryObject(target,$e) or
+;      systemErrorHere '"getSlot1"
+;    t.expr.1
+;  sayKeyedMsg("S2IL0022",[namestring p,'"constructor modemap"])
+;  NIL
+
+(DEFUN |getSlot1| (|domainName|)
+  (PROG (|$e| |fn| |p| |sig| |target| |argMml| |t|)
+    (DECLARE (SPECIAL |$e| |$FormalMapVariableList| |$spadLibFT| 
+                      |$CategoryFrame|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$e| |$CategoryFrame|)
+             (SPADLET |fn| (|getLisplibName| |domainName|))
+             (SPADLET |p|
+                      (|pathname|
+                          (CONS |fn|
+                                (CONS |$spadLibFT|
+                                      (CONS (MAKESTRING "*") NIL)))))
+             (COND
+               ((NULL (|isExistingFile| |p|))
+                (|sayKeyedMsg| 'S2IL0003 (CONS (|namestring| |p|) NIL))
+                NIL)
+               ((SPADLET |sig|
+                         (|getConstructorSignature| |domainName|))
+                (SPADLET |target| (CADR |sig|))
+                (SPADLET |argMml| (CDDR |sig|))
+                (DO ((G166759 |$FormalMapVariableList|
+                         (CDR G166759))
+                     (|a| NIL) (G166760 |argMml| (CDR G166760))
+                     (|m| NIL))
+                    ((OR (ATOM G166759)
+                         (PROGN (SETQ |a| (CAR G166759)) NIL)
+                         (ATOM G166760)
+                         (PROGN (SETQ |m| (CAR G166760)) NIL))
+                     NIL)
+                  (SEQ (EXIT (SPADLET |$e|
+                                      (|put| |a| '|mode| |m| |$e|)))))
+                (SPADLET |t|
+                         (OR (|compMakeCategoryObject| |target| |$e|)
+                             (|systemErrorHere|
+                                 (MAKESTRING "getSlot1"))))
+                (ELT (CAR |t|) 1))
+               ('T
+                (|sayKeyedMsg| 'S2IL0022
+                    (CONS (|namestring| |p|)
+                          (CONS (MAKESTRING "constructor modemap") NIL)))
+                NIL)))))))
+
+;transformOperationAlist operationAlist ==
+;  --  this transforms the operationAlist which is written out onto LISPLIBs.
+;  --  The original form of this list is a list of items of the form:
+;  --        ((<op> <signature>) (<condition> (ELT $ n)))
+;  --  The new form is an op-Alist which has entries (<op> . signature-Alist)
+;  --      where signature-Alist has entries (<signature> . item)
+;  --        where item has form (<slotNumber> <condition> <kind>)
+;  --          where <kind> =
+;  --             NIL  => function
+;  --             CONST => constant ... and others
+;  newAlist:= nil
+;  for [[op,sig,:.],condition,implementation] in operationAlist repeat
+;    kind:=
+;      implementation is [eltEtc,.,n] and eltEtc in '(CONST ELT) => eltEtc
+;      implementation is [impOp,:.] =>
+;        impOp = 'XLAM => implementation
+;        impOp in '(CONST Subsumed) => impOp
+;        keyedSystemError("S2IL0025",[impOp])
+;      implementation = 'mkRecord => 'mkRecord
+;      keyedSystemError("S2IL0025",[implementation])
+;    signatureItem:=
+;      if u:= ASSOC([op,sig],$functionLocations) then n := [n,:rest u]
+;      kind = 'ELT =>
+;        condition = 'T => [sig,n]
+;        [sig,n,condition]
+;      [sig,n,condition,kind]
+;    itemList:= [signatureItem,:LASSQ(op,newAlist)]
+;    newAlist:= insertAlist(op,itemList,newAlist)
+;  newAlist
+
+(DEFUN |transformOperationAlist| (|operationAlist|)
+  (PROG (|op| |sig| |condition| |implementation| |eltEtc| |ISTMP#1|
+              |ISTMP#2| |impOp| |kind| |u| |n| |signatureItem|
+              |itemList| |newAlist|)
+  (declare (special |$functionLocations|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |newAlist| NIL)
+             (DO ((G166830 |operationAlist| (CDR G166830))
+                  (G166804 NIL))
+                 ((OR (ATOM G166830)
+                      (PROGN (SETQ G166804 (CAR G166830)) NIL)
+                      (PROGN
+                        (PROGN
+                          (SPADLET |op| (CAAR G166804))
+                          (SPADLET |sig| (CADAR G166804))
+                          (SPADLET |condition| (CADR G166804))
+                          (SPADLET |implementation| (CADDR G166804))
+                          G166804)
+                        NIL))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |kind|
+                                     (COND
+                                       ((AND (PAIRP |implementation|)
+                                         (PROGN
+                                           (SPADLET |eltEtc|
+                                            (QCAR |implementation|))
+                                           (SPADLET |ISTMP#1|
+                                            (QCDR |implementation|))
+                                           (AND (PAIRP |ISTMP#1|)
+                                            (PROGN
+                                              (SPADLET |ISTMP#2|
+                                               (QCDR |ISTMP#1|))
+                                              (AND (PAIRP |ISTMP#2|)
+                                               (EQ (QCDR |ISTMP#2|)
+                                                NIL)
+                                               (PROGN
+                                                 (SPADLET |n|
+                                                  (QCAR |ISTMP#2|))
+                                                 'T)))))
+                                         (|member| |eltEtc|
+                                          '(CONST ELT)))
+                                        |eltEtc|)
+                                       ((AND (PAIRP |implementation|)
+                                         (PROGN
+                                           (SPADLET |impOp|
+                                            (QCAR |implementation|))
+                                           'T))
+                                        (COND
+                                          ((BOOT-EQUAL |impOp| 'XLAM)
+                                           |implementation|)
+                                          ((|member| |impOp|
+                                            '(CONST |Subsumed|))
+                                           |impOp|)
+                                          ('T
+                                           (|keyedSystemError|
+                                            'S2IL0025
+                                            (CONS |impOp| NIL)))))
+                                       ((BOOT-EQUAL |implementation|
+                                         '|mkRecord|)
+                                        '|mkRecord|)
+                                       ('T
+                                        (|keyedSystemError| 'S2IL0025
+                                         (CONS |implementation| NIL)))))
+                            (SPADLET |signatureItem|
+                                     (PROGN
+                                       (COND
+                                         ((SPADLET |u|
+                                           (|assoc|
+                                            (CONS |op|
+                                             (CONS |sig| NIL))
+                                            |$functionLocations|))
+                                          (SPADLET |n|
+                                           (CONS |n| (CDR |u|)))))
+                                       (COND
+                                         ((BOOT-EQUAL |kind| 'ELT)
+                                          (COND
+                                            ((BOOT-EQUAL |condition|
+                                              'T)
+                                             (CONS |sig|
+                                              (CONS |n| NIL)))
+                                            ('T
+                                             (CONS |sig|
+                                              (CONS |n|
+                                               (CONS |condition| NIL))))))
+                                         ('T
+                                          (CONS |sig|
+                                           (CONS |n|
+                                            (CONS |condition|
+                                             (CONS |kind| NIL))))))))
+                            (SPADLET |itemList|
+                                     (CONS |signatureItem|
+                                      (LASSQ |op| |newAlist|)))
+                            (SPADLET |newAlist|
+                                     (|insertAlist| |op| |itemList|
+                                      |newAlist|))))))
+             |newAlist|)))))
+
+;sayNonUnique x ==
+;  sayBrightlyNT '"Non-unique:"
+;  pp x
+
+(DEFUN |sayNonUnique| (|x|)
+  (PROGN (|sayBrightlyNT| (MAKESTRING "Non-unique:")) (|pp| |x|)))
+
+;-- flattenOperationAlist operationAlist ==
+;--   --new form is (<op> <signature> <slotNumber> <condition> <kind>)
+;--   [:[[op,:x] for x in y] for [op,:y] in operationAlist]
+;
+;getSlotFromDomain(dom,op,oldSig) ==
+;  --  returns the slot number in the domain where the function whose
+;  --  signature is oldSig may be found in the domain dom
+;  oldSig:= removeOPT oldSig
+;  dom:= removeOPT dom
+;  sig:= SUBST("$",dom,oldSig)
+;  loadIfNecessary first dom
+;  isPackageForm dom => getSlotFromPackage(dom,op,oldSig)
+;  domain:= evalDomain dom
+;  n:= findConstructorSlotNumber(dom,domain,op,sig) =>
+;    (slot:= domain.n).0 = Undef =>
+;      throwKeyedMsg("S2IL0023A",[op,formatSignature sig,dom])
+;    slot
+;  throwKeyedMsg("S2IL0024A",[op,formatSignature sig,dom])
+
+(DEFUN |getSlotFromDomain| (|dom| |op| |oldSig|)
+  (PROG (|sig| |domain| |n| |slot|)
+    (RETURN
+      (PROGN
+        (SPADLET |oldSig| (|removeOPT| |oldSig|))
+        (SPADLET |dom| (|removeOPT| |dom|))
+        (SPADLET |sig| (MSUBST '$ |dom| |oldSig|))
+        (|loadIfNecessary| (CAR |dom|))
+        (COND
+          ((|isPackageForm| |dom|)
+           (|getSlotFromPackage| |dom| |op| |oldSig|))
+          ('T (SPADLET |domain| (|evalDomain| |dom|))
+           (COND
+             ((SPADLET |n|
+                       (|findConstructorSlotNumber| |dom| |domain| |op|
+                           |sig|))
+              (COND
+                ((BOOT-EQUAL
+                     (ELT (SPADLET |slot| (ELT |domain| |n|)) 0)
+                     |Undef|)
+                 (|throwKeyedMsg| 'S2IL0023A
+                     (CONS |op|
+                           (CONS (|formatSignature| |sig|)
+                                 (CONS |dom| NIL)))))
+                ('T |slot|)))
+             ('T
+              (|throwKeyedMsg| 'S2IL0024A
+                  (CONS |op|
+                        (CONS (|formatSignature| |sig|)
+                              (CONS |dom| NIL))))))))))))
+
+;findConstructorSlotNumber(domainForm,domain,op,sig) ==
+;  null domain.1 => getSlotNumberFromOperationAlist(domainForm,op,sig)
+;  sayMSG ['"   using slot 1 of ",domainForm]
+;  constructorArglist:= rest domainForm
+;  nsig:=#sig
+;  tail:= or/[r for [[op1,sig1],:r] in domain.1 | op=op1 and nsig=#sig1 and
+;    and/[compare for a in sig for b in sig1]] where compare ==
+;      a=b => true
+;      FIXP b => a=constructorArglist.b
+;      isSuperDomain(bustUnion b,bustUnion a,$CategoryFrame)
+;  tail is [.,["ELT",.,n]] => n
+;  systemErrorHere '"findSlotNumber"
+
+(DEFUN |findConstructorSlotNumber| (|domainForm| |domain| |op| |sig|)
+  (PROG (|constructorArglist| |nsig| |op1| |sig1| |r| |tail| |ISTMP#1|
+            |ISTMP#2| |ISTMP#3| |ISTMP#4| |n|)
+  (declare (special |$CategoryFrame|))
+    (RETURN
+      (SEQ (COND
+             ((NULL (ELT |domain| 1))
+              (|getSlotNumberFromOperationAlist| |domainForm| |op|
+                  |sig|))
+             ('T
+              (|sayMSG|
+                  (CONS (MAKESTRING "   using slot 1 of ")
+                        (CONS |domainForm| NIL)))
+              (SPADLET |constructorArglist| (CDR |domainForm|))
+              (SPADLET |nsig| (|#| |sig|))
+              (SPADLET |tail|
+                       (PROG (G166911)
+                         (SPADLET G166911 NIL)
+                         (RETURN
+                           (DO ((G166919 NIL G166911)
+                                (G166920 (ELT |domain| 1)
+                                    (CDR G166920))
+                                (G166872 NIL))
+                               ((OR G166919 (ATOM G166920)
+                                    (PROGN
+                                      (SETQ G166872 (CAR G166920))
+                                      NIL)
+                                    (PROGN
+                                      (PROGN
+                                        (SPADLET |op1|
+                                         (CAAR G166872))
+                                        (SPADLET |sig1|
+                                         (CADAR G166872))
+                                        (SPADLET |r| (CDR G166872))
+                                        G166872)
+                                      NIL))
+                                G166911)
+                             (SEQ (EXIT (COND
+                                          ((AND (BOOT-EQUAL |op| |op1|)
+                                            (BOOT-EQUAL |nsig|
+                                             (|#| |sig1|))
+                                            (PROG (G166928)
+                                              (SPADLET G166928 'T)
+                                              (RETURN
+                                                (DO
+                                                 ((G166935 NIL
+                                                   (NULL G166928))
+                                                  (G166936 |sig|
+                                                   (CDR G166936))
+                                                  (|a| NIL)
+                                                  (G166937 |sig1|
+                                                   (CDR G166937))
+                                                  (|b| NIL))
+                                                 ((OR G166935
+                                                   (ATOM G166936)
+                                                   (PROGN
+                                                     (SETQ |a|
+                                                      (CAR G166936))
+                                                     NIL)
+                                                   (ATOM G166937)
+                                                   (PROGN
+                                                     (SETQ |b|
+                                                      (CAR G166937))
+                                                     NIL))
+                                                  G166928)
+                                                  (SEQ
+                                                   (EXIT
+                                                    (SETQ G166928
+                                                     (AND G166928
+                                                      (COND
+                                                        ((BOOT-EQUAL
+                                                          |a| |b|)
+                                                         'T)
+                                                        ((FIXP |b|)
+                                                         (BOOT-EQUAL
+                                                          |a|
+                                                          (ELT
+                                                           |constructorArglist|
+                                                           |b|)))
+                                                        ('T
+                                                         (|isSuperDomain|
+                                                          (|bustUnion|
+                                                           |b|)
+                                                          (|bustUnion|
+                                                           |a|)
+                                                    |$CategoryFrame|)))))))))))
+                                           (SETQ G166911
+                                            (OR G166911 |r|))))))))))
+              (COND
+                ((AND (PAIRP |tail|)
+                      (PROGN
+                        (SPADLET |ISTMP#1| (QCDR |tail|))
+                        (AND (PAIRP |ISTMP#1|)
+                             (EQ (QCDR |ISTMP#1|) NIL)
+                             (PROGN
+                               (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                               (AND (PAIRP |ISTMP#2|)
+                                    (EQ (QCAR |ISTMP#2|) 'ELT)
+                                    (PROGN
+                                      (SPADLET |ISTMP#3|
+                                       (QCDR |ISTMP#2|))
+                                      (AND (PAIRP |ISTMP#3|)
+                                       (PROGN
+                                         (SPADLET |ISTMP#4|
+                                          (QCDR |ISTMP#3|))
+                                         (AND (PAIRP |ISTMP#4|)
+                                          (EQ (QCDR |ISTMP#4|) NIL)
+                                          (PROGN
+                                            (SPADLET |n|
+                                             (QCAR |ISTMP#4|))
+                                            'T))))))))))
+                 |n|)
+                ('T (|systemErrorHere| (MAKESTRING "findSlotNumber"))))))))))
+
+;bustUnion d ==
+;  d is ["Union",domain,utype] and utype='"failed" => domain
+;  d
+
+(DEFUN |bustUnion| (|d|)
+  (PROG (|ISTMP#1| |domain| |ISTMP#2| |utype|)
+    (RETURN
+      (COND
+        ((AND (PAIRP |d|) (EQ (QCAR |d|) '|Union|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |d|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN
+                       (SPADLET |domain| (QCAR |ISTMP#1|))
+                       (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                       (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL)
+                            (PROGN
+                              (SPADLET |utype| (QCAR |ISTMP#2|))
+                              'T)))))
+              (BOOT-EQUAL |utype| (MAKESTRING "failed")))
+         |domain|)
+        ('T |d|)))))
+
+;getSlotNumberFromOperationAlist(domainForm,op,sig) ==
+;  constructorName:= CAR domainForm
+;  constructorArglist:= CDR domainForm
+;  operationAlist:=
+;    GETDATABASE(constructorName, 'OPERATIONALIST) or
+;      keyedSystemError("S2IL0026",[constructorName])
+;  entryList:= QLASSQ(op,operationAlist) or return nil
+;  tail:= or/[r for [sig1,:r] in entryList | sigsMatch(sig,sig1,domainForm)] =>
+;    first tail
+;  nil
+
+(DEFUN |getSlotNumberFromOperationAlist| (|domainForm| |op| |sig|)
+  (PROG (|constructorName| |constructorArglist| |operationAlist|
+            |entryList| |sig1| |r| |tail|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |constructorName| (CAR |domainForm|))
+             (SPADLET |constructorArglist| (CDR |domainForm|))
+             (SPADLET |operationAlist|
+                      (OR (GETDATABASE |constructorName|
+                              'OPERATIONALIST)
+                          (|keyedSystemError| 'S2IL0026
+                              (CONS |constructorName| NIL))))
+             (SPADLET |entryList|
+                      (OR (QLASSQ |op| |operationAlist|) (RETURN NIL)))
+             (COND
+               ((SPADLET |tail|
+                         (PROG (G166992)
+                           (SPADLET G166992 NIL)
+                           (RETURN
+                             (DO ((G167000 NIL G166992)
+                                  (G167001 |entryList|
+                                      (CDR G167001))
+                                  (G166987 NIL))
+                                 ((OR G167000 (ATOM G167001)
+                                      (PROGN
+                                        (SETQ G166987
+                                         (CAR G167001))
+                                        NIL)
+                                      (PROGN
+                                        (PROGN
+                                          (SPADLET |sig1|
+                                           (CAR G166987))
+                                          (SPADLET |r| (CDR G166987))
+                                          G166987)
+                                        NIL))
+                                  G166992)
+                               (SEQ (EXIT
+                                     (COND
+                                       ((|sigsMatch| |sig| |sig1|
+                                         |domainForm|)
+                                        (SETQ G166992
+                                         (OR G166992 |r|))))))))))
+                (CAR |tail|))
+               ('T NIL)))))))
+
+;sigsMatch(sig,sig1,domainForm) ==
+;  --  does signature "sig" match "sig1", where integers 1,2,.. in
+;  --  sig1 designate corresponding arguments of domainForm
+;  while sig and sig1 repeat
+;    partsMatch:=
+;      (item:= CAR sig)=(item1:= CAR sig1) => true --ok, go to next iteration
+;      FIXP item1 => item = domainForm.item1       --item1=n means nth arg
+;      isSuperDomain(bustUnion item,bustUnion item1,$CategoryFrame)
+;    null partsMatch => return nil
+;    sig:= rest sig; sig1 := rest sig1
+;  sig or sig1 => nil
+;  true
+
+(DEFUN |sigsMatch| (|sig| |sig1| |domainForm|)
+  (PROG (|item| |item1| |partsMatch|)
+  (declare (special |$CategoryFrame|))
+    (RETURN
+      (SEQ (PROGN
+             (DO () ((NULL (AND |sig| |sig1|)) NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |partsMatch|
+                                     (COND
+                                       ((BOOT-EQUAL
+                                         (SPADLET |item| (CAR |sig|))
+                                         (SPADLET |item1| (CAR |sig1|)))
+                                        'T)
+                                       ((FIXP |item1|)
+                                        (BOOT-EQUAL |item|
+                                         (ELT |domainForm| |item1|)))
+                                       ('T
+                                        (|isSuperDomain|
+                                         (|bustUnion| |item|)
+                                         (|bustUnion| |item1|)
+                                         |$CategoryFrame|))))
+                            (COND
+                              ((NULL |partsMatch|) (RETURN NIL))
+                              ('T (SPADLET |sig| (CDR |sig|))
+                               (SPADLET |sig1| (CDR |sig1|))))))))
+             (COND ((OR |sig| |sig1|) NIL) ('T 'T)))))))
+
+;findDomainSlotNumber(domain,op,sig) == --using slot 1 of the domain
+;  nsig:=#sig
+;  tail:= or/[r for [[op1,sig1],:r] in domain.1 | op=op1 and nsig=#sig1 and
+;    and/[a=b or isSuperDomain(bustUnion b,bustUnion a,$CategoryFrame)
+;      for a in sig for b in sig1]]
+;  tail is [.,["ELT",.,n]] => n
+;  systemErrorHere '"findDomainSlotNumber"
+
+(DEFUN |findDomainSlotNumber| (|domain| |op| |sig|)
+  (PROG (|nsig| |op1| |sig1| |r| |tail| |ISTMP#1| |ISTMP#2| |ISTMP#3|
+                |ISTMP#4| |n|)
+  (declare (special |$CategoryFrame|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |nsig| (|#| |sig|))
+             (SPADLET |tail|
+                      (PROG (G167073)
+                        (SPADLET G167073 NIL)
+                        (RETURN
+                          (DO ((G167081 NIL G167073)
+                               (G167082 (ELT |domain| 1)
+                                   (CDR G167082))
+                               (G167039 NIL))
+                              ((OR G167081 (ATOM G167082)
+                                   (PROGN
+                                     (SETQ G167039 (CAR G167082))
+                                     NIL)
+                                   (PROGN
+                                     (PROGN
+                                       (SPADLET |op1| (CAAR G167039))
+                                       (SPADLET |sig1|
+                                        (CADAR G167039))
+                                       (SPADLET |r| (CDR G167039))
+                                       G167039)
+                                     NIL))
+                               G167073)
+                            (SEQ (EXIT (COND
+                                         ((AND (BOOT-EQUAL |op| |op1|)
+                                           (BOOT-EQUAL |nsig|
+                                            (|#| |sig1|))
+                                           (PROG (G167090)
+                                             (SPADLET G167090 'T)
+                                             (RETURN
+                                               (DO
+                                                ((G167097 NIL
+                                                  (NULL G167090))
+                                                 (G167098 |sig|
+                                                  (CDR G167098))
+                                                 (|a| NIL)
+                                                 (G167099 |sig1|
+                                                  (CDR G167099))
+                                                 (|b| NIL))
+                                                ((OR G167097
+                                                  (ATOM G167098)
+                                                  (PROGN
+                                                    (SETQ |a|
+                                                     (CAR G167098))
+                                                    NIL)
+                                                  (ATOM G167099)
+                                                  (PROGN
+                                                    (SETQ |b|
+                                                     (CAR G167099))
+                                                    NIL))
+                                                 G167090)
+                                                 (SEQ
+                                                  (EXIT
+                                                   (SETQ G167090
+                                                    (AND G167090
+                                                     (OR
+                                                      (BOOT-EQUAL |a|
+                                                       |b|)
+                                                      (|isSuperDomain|
+                                                       (|bustUnion|
+                                                        |b|)
+                                                       (|bustUnion|
+                                                        |a|)
+                                                     |$CategoryFrame|))))))))))
+                                          (SETQ G167073
+                                           (OR G167073 |r|))))))))))
+             (COND
+               ((AND (PAIRP |tail|)
+                     (PROGN
+                       (SPADLET |ISTMP#1| (QCDR |tail|))
+                       (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                            (PROGN
+                              (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                              (AND (PAIRP |ISTMP#2|)
+                                   (EQ (QCAR |ISTMP#2|) 'ELT)
+                                   (PROGN
+                                     (SPADLET |ISTMP#3|
+                                      (QCDR |ISTMP#2|))
+                                     (AND (PAIRP |ISTMP#3|)
+                                      (PROGN
+                                        (SPADLET |ISTMP#4|
+                                         (QCDR |ISTMP#3|))
+                                        (AND (PAIRP |ISTMP#4|)
+                                         (EQ (QCDR |ISTMP#4|) NIL)
+                                         (PROGN
+                                           (SPADLET |n|
+                                            (QCAR |ISTMP#4|))
+                                           'T))))))))))
+                |n|)
+               ('T
+                (|systemErrorHere| (MAKESTRING "findDomainSlotNumber")))))))))
+
+;getConstructorModemap form ==
+;  GETDATABASE(opOf form, 'CONSTRUCTORMODEMAP)
+
+(DEFUN |getConstructorModemap| (|form|)
+  (GETDATABASE (|opOf| |form|) 'CONSTRUCTORMODEMAP))
+
+;getConstructorSignature form ==
+;  (mm := GETDATABASE(opOf(form),'CONSTRUCTORMODEMAP)) =>
+;    [[.,:sig],:.] := mm
+;    sig
+;  NIL
+
+(DEFUN |getConstructorSignature| (|form|)
+  (PROG (|mm| |sig|)
+    (RETURN
+      (COND
+        ((SPADLET |mm|
+                  (GETDATABASE (|opOf| |form|) 'CONSTRUCTORMODEMAP))
+         (SPADLET |sig| (CDAR |mm|)) |sig|)
+        ('T NIL)))))
+
+;--% from MODEMAP BOOT
+;
+;augModemapsFromDomain1(name,functorForm,e) ==
+;  GET(KAR functorForm,"makeFunctionList") =>
+;    addConstructorModemaps(name,functorForm,e)
+;  atom functorForm and (catform:= getmode(functorForm,e)) =>
+;    augModemapsFromCategory(name,name,functorForm,catform,e)
+;  mappingForm:= getmodeOrMapping(KAR functorForm,e) =>
+;    ["Mapping",categoryForm,:functArgTypes]:= mappingForm
+;    catform:= substituteCategoryArguments(rest functorForm,categoryForm)
+;    augModemapsFromCategory(name,name,functorForm,catform,e)
+;  stackMessage [functorForm," is an unknown mode"]
+;  e
+
+(DEFUN |augModemapsFromDomain1| (|name| |functorForm| |e|)
+  (PROG (|mappingForm| |categoryForm| |functArgTypes| |catform|)
+    (RETURN
+      (COND
+        ((GETL (KAR |functorForm|) '|makeFunctionList|)
+         (|addConstructorModemaps| |name| |functorForm| |e|))
+        ((AND (ATOM |functorForm|)
+              (SPADLET |catform| (|getmode| |functorForm| |e|)))
+         (|augModemapsFromCategory| |name| |name| |functorForm|
+             |catform| |e|))
+        ((SPADLET |mappingForm|
+                  (|getmodeOrMapping| (KAR |functorForm|) |e|))
+         (COND
+           ((EQ (CAR |mappingForm|) '|Mapping|) (CAR |mappingForm|)))
+         (SPADLET |categoryForm| (CADR |mappingForm|))
+         (SPADLET |functArgTypes| (CDDR |mappingForm|))
+         (SPADLET |catform|
+                  (|substituteCategoryArguments| (CDR |functorForm|)
+                      |categoryForm|))
+         (|augModemapsFromCategory| |name| |name| |functorForm|
+             |catform| |e|))
+        ('T
+         (|stackMessage|
+             (CONS |functorForm| (CONS '| is an unknown mode| NIL)))
+         |e|)))))
+
+;getSlotFromCategoryForm ([op,:argl],index) ==
+;  u:= eval [op,:MAPCAR('MKQ,TAKE(#argl,$FormalMapVariableList))]
+;  null VECP u =>
+;    systemErrorHere '"getSlotFromCategoryForm"
+;  u . index
+
+(DEFUN |getSlotFromCategoryForm| (G167151 |index|)
+  (PROG (|op| |argl| |u|)
+  (declare (special |$FormalMapVariableList|))
+    (RETURN
+      (PROGN
+        (SPADLET |op| (CAR G167151))
+        (SPADLET |argl| (CDR G167151))
+        (SPADLET |u|
+                 (|eval| (CONS |op|
+                               (MAPCAR 'MKQ
+                                       (TAKE (|#| |argl|)
+                                        |$FormalMapVariableList|)))))
+        (COND
+          ((NULL (VECP |u|))
+           (|systemErrorHere| (MAKESTRING "getSlotFromCategoryForm")))
+          ('T (ELT |u| |index|)))))))
+
+;--% constructor evaluation
+;--  The following functions are used by the compiler but are modified
+;--  here for use with new LISPLIB scheme
+;
+;mkEvalableCategoryForm c ==       --from DEFINE
+;  c is [op,:argl] =>
+;    op="Join" => ["Join",:[mkEvalableCategoryForm x for x in argl]]
+;    op is "DomainSubstitutionMacro" =>
+;        --$extraParms :local
+;        --catobj := EVAL c -- DomainSubstitutionFunction makes $extraParms
+;        --mkEvalableCategoryForm sublisV($extraParms, catobj)
+;        mkEvalableCategoryForm CADR argl
+;    op is "mkCategory" => c
+;    MEMQ(op,$CategoryNames) =>
+;      ([x,m,$e]:= compOrCroak(c,$EmptyMode,$e); m=$Category => x)
+;    --loadIfNecessary op
+;    GETDATABASE(op,'CONSTRUCTORKIND) = 'category or
+;      get(op,"isCategory",$CategoryFrame) =>
+;        [op,:[quotifyCategoryArgument x for x in argl]]
+;    [x,m,$e]:= compOrCroak(c,$EmptyMode,$e)
+;    m=$Category => x
+;  MKQ c
+
+(DEFUN |mkEvalableCategoryForm| (|c|)
+  (PROG (|op| |argl| |LETTMP#1| |x| |m|)
+  (declare (special |$Category| |$e| |$EmptyMode| |$CategoryFrame|
+                    |$CategoryNames|))
+    (RETURN
+      (SEQ (COND
+             ((AND (PAIRP |c|)
+                   (PROGN
+                     (SPADLET |op| (QCAR |c|))
+                     (SPADLET |argl| (QCDR |c|))
+                     'T))
+              (COND
+                ((BOOT-EQUAL |op| '|Join|)
+                 (CONS '|Join|
+                       (PROG (G167194)
+                         (SPADLET G167194 NIL)
+                         (RETURN
+                           (DO ((G167199 |argl| (CDR G167199))
+                                (|x| NIL))
+                               ((OR (ATOM G167199)
+                                    (PROGN
+                                      (SETQ |x| (CAR G167199))
+                                      NIL))
+                                (NREVERSE0 G167194))
+                             (SEQ (EXIT (SETQ G167194
+                                         (CONS
+                                          (|mkEvalableCategoryForm|
+                                           |x|)
+                                          G167194)))))))))
+                ((EQ |op| '|DomainSubstitutionMacro|)
+                 (|mkEvalableCategoryForm| (CADR |argl|)))
+                ((EQ |op| '|mkCategory|) |c|)
+                ((MEMQ |op| |$CategoryNames|)
+                 (SPADLET |LETTMP#1|
+                          (|compOrCroak| |c| |$EmptyMode| |$e|))
+                 (SPADLET |x| (CAR |LETTMP#1|))
+                 (SPADLET |m| (CADR |LETTMP#1|))
+                 (SPADLET |$e| (CADDR |LETTMP#1|))
+                 (COND ((BOOT-EQUAL |m| |$Category|) |x|)))
+                ((OR (BOOT-EQUAL (GETDATABASE |op| 'CONSTRUCTORKIND)
+                         '|category|)
+                     (|get| |op| '|isCategory| |$CategoryFrame|))
+                 (CONS |op|
+                       (PROG (G167209)
+                         (SPADLET G167209 NIL)
+                         (RETURN
+                           (DO ((G167214 |argl| (CDR G167214))
+                                (|x| NIL))
+                               ((OR (ATOM G167214)
+                                    (PROGN
+                                      (SETQ |x| (CAR G167214))
+                                      NIL))
+                                (NREVERSE0 G167209))
+                             (SEQ (EXIT (SETQ G167209
+                                         (CONS
+                                          (|quotifyCategoryArgument|
+                                           |x|)
+                                          G167209)))))))))
+                ('T
+                 (SPADLET |LETTMP#1|
+                          (|compOrCroak| |c| |$EmptyMode| |$e|))
+                 (SPADLET |x| (CAR |LETTMP#1|))
+                 (SPADLET |m| (CADR |LETTMP#1|))
+                 (SPADLET |$e| (CADDR |LETTMP#1|))
+                 (COND ((BOOT-EQUAL |m| |$Category|) |x|)))))
+             ('T (MKQ |c|)))))))
+
+;isDomainForm(D,e) ==
+;  --added for MPOLY 3/83 by RDJ
+;  MEMQ(KAR D,$SpecialDomainNames) or isFunctor D or
+;    -- ((D is ['Mapping,target,:.]) and isCategoryForm(target,e)) or
+;     ((getmode(D,e) is ['Mapping,target,:.]) and isCategoryForm(target,e)) or
+;       isCategoryForm(getmode(D,e),e) or isDomainConstructorForm(D,e)
+
+(DEFUN |isDomainForm| (D |e|)
+  (PROG (|ISTMP#1| |ISTMP#2| |target|)
+  (declare (special |$SpecialDomainNames|))
+    (RETURN
+      (OR (MEMQ (KAR D) |$SpecialDomainNames|) (|isFunctor| D)
+          (AND (PROGN
+                 (SPADLET |ISTMP#1| (|getmode| D |e|))
+                 (AND (PAIRP |ISTMP#1|)
+                      (EQ (QCAR |ISTMP#1|) '|Mapping|)
+                      (PROGN
+                        (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                        (AND (PAIRP |ISTMP#2|)
+                             (PROGN
+                               (SPADLET |target| (QCAR |ISTMP#2|))
+                               'T)))))
+               (|isCategoryForm| |target| |e|))
+          (|isCategoryForm| (|getmode| D |e|) |e|)
+          (|isDomainConstructorForm| D |e|)))))
+
+;isDomainConstructorForm(D,e) ==
+;  D is [op,:argl] and (u:= get(op,"value",e)) and
+;    u is [.,["Mapping",target,:.],:.] and
+;      isCategoryForm(EQSUBSTLIST(argl,$FormalMapVariableList,target),e)
+
+(DEFUN |isDomainConstructorForm| (D |e|)
+  (PROG (|op| |argl| |u| |ISTMP#1| |ISTMP#2| |ISTMP#3| |target|)
+  (declare (special |$FormalMapVariableList|))
+    (RETURN
+      (AND (PAIRP D)
+           (PROGN
+             (SPADLET |op| (QCAR D))
+             (SPADLET |argl| (QCDR D))
+             'T)
+           (SPADLET |u| (|get| |op| '|value| |e|)) (PAIRP |u|)
+           (PROGN
+             (SPADLET |ISTMP#1| (QCDR |u|))
+             (AND (PAIRP |ISTMP#1|)
+                  (PROGN
+                    (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                    (AND (PAIRP |ISTMP#2|)
+                         (EQ (QCAR |ISTMP#2|) '|Mapping|)
+                         (PROGN
+                           (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                           (AND (PAIRP |ISTMP#3|)
+                                (PROGN
+                                  (SPADLET |target| (QCAR |ISTMP#3|))
+                                  'T)))))))
+           (|isCategoryForm|
+               (EQSUBSTLIST |argl| |$FormalMapVariableList| |target|)
+               |e|)))))
+
+;isFunctor x ==
+;  op:= opOf x
+;  not IDENTP op => false
+;  $InteractiveMode =>
+;    MEMQ(op,'(Union SubDomain Mapping Record)) => true
+;    MEMQ(GETDATABASE(op,'CONSTRUCTORKIND),'(domain package))
+;  u:= get(op,'isFunctor,$CategoryFrame)
+;    or MEMQ(op,'(SubDomain Union Record)) => u
+;  constructor? op =>
+;    prop := get(op,'isFunctor,$CategoryFrame) => prop
+;    if GETDATABASE(op,'CONSTRUCTORKIND) = 'category
+;      then updateCategoryFrameForCategory op
+;      else updateCategoryFrameForConstructor op
+;    get(op,'isFunctor,$CategoryFrame)
+;  nil
+;
+;
+;
+
+(DEFUN |isFunctor| (|x|)
+  (PROG (|op| |u| |prop|)
+  (declare (special |$CategoryFrame| |$InteractiveMode|))
+    (RETURN
+      (PROGN
+        (SPADLET |op| (|opOf| |x|))
+        (COND
+          ((NULL (IDENTP |op|)) NIL)
+          (|$InteractiveMode|
+              (COND
+                ((MEMQ |op| '(|Union| |SubDomain| |Mapping| |Record|))
+                 'T)
+                ('T
+                 (MEMQ (GETDATABASE |op| 'CONSTRUCTORKIND)
+                       '(|domain| |package|)))))
+          ((SPADLET |u|
+                    (OR (|get| |op| '|isFunctor| |$CategoryFrame|)
+                        (MEMQ |op| '(|SubDomain| |Union| |Record|))))
+           |u|)
+          ((|constructor?| |op|)
+           (COND
+             ((SPADLET |prop|
+                       (|get| |op| '|isFunctor| |$CategoryFrame|))
+              |prop|)
+             ('T
+              (COND
+                ((BOOT-EQUAL (GETDATABASE |op| 'CONSTRUCTORKIND)
+                     '|category|)
+                 (|updateCategoryFrameForCategory| |op|))
+                ('T (|updateCategoryFrameForConstructor| |op|)))
+              (|get| |op| '|isFunctor| |$CategoryFrame|))))
+          ('T NIL))))))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

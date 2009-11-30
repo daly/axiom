@@ -1,0 +1,2391 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp i-analy.boot}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\section{License}
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;--% Interpreter Analysis Functions
+;--% Basic Object Type Identification
+;getBasicMode x ==  getBasicMode0(x,$useIntegerSubdomain)
+
+(DEFUN |getBasicMode| (|x|)
+  (DECLARE (SPECIAL |$useIntegerSubdomain|))
+  (|getBasicMode0| |x| |$useIntegerSubdomain|))
+
+;getBasicMode0(x,useIntegerSubdomain) ==
+;  --  if x is one of the basic types (Integer String Float Boolean) then
+;  --  this function returns its type, and nil otherwise
+;  x is nil => $EmptyMode
+;  STRINGP x => $String
+;  INTEGERP x =>
+;    useIntegerSubdomain =>
+;      x > 0 => $PositiveInteger
+;      x = 0 => $NonNegativeInteger
+;      $Integer
+;    $Integer
+;  FLOATP x => $DoubleFloat
+;  (x='noBranch) or (x='noValue) => $NoValueMode
+;  nil
+
+(DEFUN |getBasicMode0| (|x| |useIntegerSubdomain|)
+  (DECLARE (SPECIAL |$NoValueMode| |$DoubleFloat| |$Integer|
+                    |$PositiveInteger| |$NonNegativeInteger| |$String|
+                    |$EmptyMode|))
+  (COND
+    ((NULL |x|) |$EmptyMode|)
+    ((STRINGP |x|) |$String|)
+    ((INTEGERP |x|)
+     (COND
+       (|useIntegerSubdomain|
+           (COND
+             ((> |x| 0) |$PositiveInteger|)
+             ((EQL |x| 0) |$NonNegativeInteger|)
+             ('T |$Integer|)))
+       ('T |$Integer|)))
+    ((FLOATP |x|) |$DoubleFloat|)
+    ((OR (BOOT-EQUAL |x| '|noBranch|) (BOOT-EQUAL |x| '|noValue|))
+     |$NoValueMode|)
+    ('T NIL)))
+
+;getBasicObject x ==
+;  INTEGERP    x =>
+;    t :=
+;      not $useIntegerSubdomain => $Integer
+;      x > 0 => $PositiveInteger
+;      x = 0 => $NonNegativeInteger
+;      $Integer
+;    objNewWrap(x,t)
+;  STRINGP x => objNewWrap(x,$String)
+;  FLOATP  x => objNewWrap(x,$DoubleFloat)
+;  NIL
+
+(DEFUN |getBasicObject| (|x|)
+  (PROG (|t|)
+    (DECLARE (SPECIAL |$DoubleFloat| |$String| |$Integer|
+                      |$NonNegativeInteger| |$PositiveInteger|
+                      |$useIntegerSubdomain|))
+    (RETURN
+      (COND
+        ((INTEGERP |x|)
+         (SPADLET |t|
+                  (COND
+                    ((NULL |$useIntegerSubdomain|) |$Integer|)
+                    ((> |x| 0) |$PositiveInteger|)
+                    ((EQL |x| 0) |$NonNegativeInteger|)
+                    ('T |$Integer|)))
+         (|objNewWrap| |x| |t|))
+        ((STRINGP |x|) (|objNewWrap| |x| |$String|))
+        ((FLOATP |x|) (|objNewWrap| |x| |$DoubleFloat|))
+        ('T NIL)))))
+
+;getMinimalVariableTower(var,t) ==
+;  -- gets the minimal polynomial subtower of t that contains the
+;  -- given variable. Returns NIL if none.
+;  STRINGP(t) or IDENTP(t) => NIL
+;  t = $Symbol => t
+;  t is ['Variable,u] =>
+;    (u = var) => t
+;    NIL
+;  t is ['Polynomial,.] => t
+;  t is ['RationalFunction,D] => ['Polynomial,D]
+;  t is [up,t',u,.] and MEMQ(up,$univariateDomains) =>
+;    -- power series have one more arg and different ordering
+;    u = var => t
+;    getMinimalVariableTower(var,t')
+;  t is [up,u,t'] and MEMQ(up,$univariateDomains) =>
+;    u = var => t
+;    getMinimalVariableTower(var,t')
+;  t is [mp,u,t'] and MEMQ(mp,$multivariateDomains) =>
+;    var in u => t
+;    getMinimalVariableTower(var,t')
+;  null (t' := underDomainOf t) => NIL
+;  getMinimalVariableTower(var,t')
+
+(DEFUN |getMinimalVariableTower| (|var| |t|)
+  (PROG (D |ISTMP#3| |up| |mp| |ISTMP#1| |u| |ISTMP#2| |t'|)
+    (DECLARE (SPECIAL |$multivariateDomains| |$univariateDomains|
+                      |$Symbol|))
+    (RETURN
+      (COND
+        ((OR (STRINGP |t|) (IDENTP |t|)) NIL)
+        ((BOOT-EQUAL |t| |$Symbol|) |t|)
+        ((AND (PAIRP |t|) (EQ (QCAR |t|) '|Variable|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET |u| (QCAR |ISTMP#1|)) 'T))))
+         (COND ((BOOT-EQUAL |u| |var|) |t|) ('T NIL)))
+        ((AND (PAIRP |t|) (EQ (QCAR |t|) '|Polynomial|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL))))
+         |t|)
+        ((AND (PAIRP |t|) (EQ (QCAR |t|) '|RationalFunction|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |t|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET D (QCAR |ISTMP#1|)) 'T))))
+         (CONS '|Polynomial| (CONS D NIL)))
+        ((AND (PAIRP |t|)
+              (PROGN
+                (SPADLET |up| (QCAR |t|))
+                (SPADLET |ISTMP#1| (QCDR |t|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN
+                       (SPADLET |t'| (QCAR |ISTMP#1|))
+                       (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                       (AND (PAIRP |ISTMP#2|)
+                            (PROGN
+                              (SPADLET |u| (QCAR |ISTMP#2|))
+                              (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                              (AND (PAIRP |ISTMP#3|)
+                                   (EQ (QCDR |ISTMP#3|) NIL)))))))
+              (MEMQ |up| |$univariateDomains|))
+         (COND
+           ((BOOT-EQUAL |u| |var|) |t|)
+           ('T (|getMinimalVariableTower| |var| |t'|))))
+        ((AND (PAIRP |t|)
+              (PROGN
+                (SPADLET |up| (QCAR |t|))
+                (SPADLET |ISTMP#1| (QCDR |t|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN
+                       (SPADLET |u| (QCAR |ISTMP#1|))
+                       (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                       (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL)
+                            (PROGN (SPADLET |t'| (QCAR |ISTMP#2|)) 'T)))))
+              (MEMQ |up| |$univariateDomains|))
+         (COND
+           ((BOOT-EQUAL |u| |var|) |t|)
+           ('T (|getMinimalVariableTower| |var| |t'|))))
+        ((AND (PAIRP |t|)
+              (PROGN
+                (SPADLET |mp| (QCAR |t|))
+                (SPADLET |ISTMP#1| (QCDR |t|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN
+                       (SPADLET |u| (QCAR |ISTMP#1|))
+                       (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                       (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL)
+                            (PROGN (SPADLET |t'| (QCAR |ISTMP#2|)) 'T)))))
+              (MEMQ |mp| |$multivariateDomains|))
+         (COND
+           ((|member| |var| |u|) |t|)
+           ('T (|getMinimalVariableTower| |var| |t'|))))
+        ((NULL (SPADLET |t'| (|underDomainOf| |t|))) NIL)
+        ('T (|getMinimalVariableTower| |var| |t'|))))))
+
+;getMinimalVarMode(id,m) ==
+;  --  This function finds the minimum polynomial subtower type of the
+;  --  polynomial domain tower m which id to which can be coerced
+;  --  It includes all polys above the found level if they are
+;  --  contiguous.
+;  --  E.g.:    x and G P[y] P[x] I ---> P[y] P[x] I
+;  --           x and P[y] G P[x] I ---> P[x] I
+;  m is ['Mapping, :.] => m
+;  defaultMode :=
+;    $Symbol
+;  null m => defaultMode
+;  (vl := polyVarlist m) and ((id in vl) or 'all in vl) =>
+;    SUBSTQ('(Integer),$EmptyMode,m)
+;  (um := underDomainOf m) => getMinimalVarMode(id,um)
+;  defaultMode
+
+(DEFUN |getMinimalVarMode| (|id| |m|)
+  (PROG (|defaultMode| |vl| |um|)
+    (DECLARE (SPECIAL |$EmptyMode| |$Symbol|))
+    (RETURN
+      (COND
+        ((AND (PAIRP |m|) (EQ (QCAR |m|) '|Mapping|)) |m|)
+        ('T (SPADLET |defaultMode| |$Symbol|)
+         (COND
+           ((NULL |m|) |defaultMode|)
+           ((AND (SPADLET |vl| (|polyVarlist| |m|))
+                 (OR (|member| |id| |vl|) (|member| '|all| |vl|)))
+            (SUBSTQ '(|Integer|) |$EmptyMode| |m|))
+           ((SPADLET |um| (|underDomainOf| |m|))
+            (|getMinimalVarMode| |id| |um|))
+           ('T |defaultMode|)))))))
+
+;polyVarlist m ==
+;  --  If m is a polynomial type this function returns a list of its
+;  --  top level variables, and nil otherwise
+;  -- ignore any QuotientFields that may separate poly types
+;  m is [=$QuotientField,op] => polyVarlist op
+;  m is [op,a,:.] =>
+;    op in '(UnivariateTaylorSeries UnivariateLaurentSeries
+;      UnivariatePuiseuxSeries) =>
+;        [., ., a, :.] := m
+;        a := removeQuote a
+;        [a]
+;    op in '(Polynomial RationalFunction Expression) =>
+;      '(all)
+;    a := removeQuote a
+;    op in '(UnivariatePolynomial) =>
+;      [a]
+;    op in $multivariateDomains =>
+;          a
+;  nil
+
+(DEFUN |polyVarlist| (|m|)
+  (PROG (|op| |ISTMP#1| |a|)
+    (DECLARE (SPECIAL |$multivariateDomains| |$QuotientField|))
+    (RETURN
+      (COND
+        ((AND (PAIRP |m|) (EQUAL (QCAR |m|) |$QuotientField|)
+              (PROGN
+                (SPADLET |ISTMP#1| (QCDR |m|))
+                (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                     (PROGN (SPADLET |op| (QCAR |ISTMP#1|)) 'T))))
+         (|polyVarlist| |op|))
+        ((AND (PAIRP |m|)
+              (PROGN
+                (SPADLET |op| (QCAR |m|))
+                (SPADLET |ISTMP#1| (QCDR |m|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN (SPADLET |a| (QCAR |ISTMP#1|)) 'T))))
+         (COND
+           ((|member| |op|
+                '(|UnivariateTaylorSeries| |UnivariateLaurentSeries|
+                     |UnivariatePuiseuxSeries|))
+            (SPADLET |a| (CADDR |m|)) (SPADLET |a| (|removeQuote| |a|))
+            (CONS |a| NIL))
+           ((|member| |op|
+                '(|Polynomial| |RationalFunction| |Expression|))
+            '(|all|))
+           ('T (SPADLET |a| (|removeQuote| |a|))
+            (COND
+              ((|member| |op| '(|UnivariatePolynomial|))
+               (CONS |a| NIL))
+              ((|member| |op| |$multivariateDomains|) |a|)))))
+        ('T NIL)))))
+
+;--% Pushing Down Target Information
+;pushDownTargetInfo(op,target,arglist) ==
+;  -- put target info on args for certain operations
+;  target = $OutputForm => NIL
+;  target = $Any        => NIL
+;  n := LENGTH arglist
+;  pushDownOnArithmeticVariables(op,target,arglist)
+;  (pdArgs := pushDownOp?(op,n)) =>
+;    for i in pdArgs repeat
+;      x := arglist.i
+;      if not getTarget(x) then putTarget(x,target)
+;  nargs := #arglist
+;  1 = nargs =>
+;    (op = 'SEGMENT) and (target is ['UniversalSegment,S]) =>
+;      for x in arglist repeat
+;        if not getTarget(x) then putTarget(x,S)
+;  2 = nargs =>
+;    op = "*" =>            -- only push down on 1st arg if not immed
+;      if not getTarget CADR arglist then putTarget(CADR arglist,target)
+;      getTarget(x := CAR arglist) => NIL
+;      if getUnname(x) ^= $immediateDataSymbol then putTarget(x,target)
+;    op = "**" or op = "^" =>           -- push down on base
+;      if not getTarget CAR arglist then putTarget(CAR arglist,target)
+;    (op = 'equation) and (target is ['Equation,S]) =>
+;      for x in arglist repeat
+;        if not getTarget(x) then putTarget(x,S)
+;    (op = 'gauss) and (target is ['Gaussian,S]) =>
+;      for x in arglist repeat
+;        if not getTarget(x) then putTarget(x,S)
+;    (op = '_/) =>
+;      targ :=
+;        target is ['Fraction,S] => S
+;        target
+;      for x in arglist repeat
+;        if not getTarget(x) then putTarget(x,targ)
+;    (op = 'SEGMENT) and (target is ['Segment,S]) =>
+;      for x in arglist repeat
+;        if not getTarget(x) then putTarget(x,S)
+;    (op = 'SEGMENT) and (target is ['UniversalSegment,S]) =>
+;      for x in arglist repeat
+;        if not getTarget(x) then putTarget(x,S)
+;    NIL
+;  NIL
+
+(DEFUN |pushDownTargetInfo| (|op| |target| |arglist|)
+  (PROG (|n| |pdArgs| |nargs| |x| |targ| |ISTMP#1| S)
+    (DECLARE (SPECIAL |$immediateDataSymbol| |$Any| |$OutputForm|))
+    (RETURN
+      (SEQ (COND
+             ((BOOT-EQUAL |target| |$OutputForm|) NIL)
+             ((BOOT-EQUAL |target| |$Any|) NIL)
+             ('T (SPADLET |n| (LENGTH |arglist|))
+              (|pushDownOnArithmeticVariables| |op| |target| |arglist|)
+              (COND
+                ((SPADLET |pdArgs| (|pushDownOp?| |op| |n|))
+                 (DO ((G166265 |pdArgs| (CDR G166265)) (|i| NIL))
+                     ((OR (ATOM G166265)
+                          (PROGN (SETQ |i| (CAR G166265)) NIL))
+                      NIL)
+                   (SEQ (EXIT (PROGN
+                                (SPADLET |x| (ELT |arglist| |i|))
+                                (COND
+                                  ((NULL (|getTarget| |x|))
+                                   (|putTarget| |x| |target|))
+                                  ('T NIL)))))))
+                ('T (SPADLET |nargs| (|#| |arglist|))
+                 (SEQ (COND
+                        ((EQL 1 |nargs|)
+                         (COND
+                           ((AND (BOOT-EQUAL |op| 'SEGMENT)
+                                 (PAIRP |target|)
+                                 (EQ (QCAR |target|)
+                                     '|UniversalSegment|)
+                                 (PROGN
+                                   (SPADLET |ISTMP#1| (QCDR |target|))
+                                   (AND (PAIRP |ISTMP#1|)
+                                    (EQ (QCDR |ISTMP#1|) NIL)
+                                    (PROGN
+                                      (SPADLET S (QCAR |ISTMP#1|))
+                                      'T))))
+                            (EXIT (DO ((G166274 |arglist|
+                                        (CDR G166274))
+                                       (|x| NIL))
+                                      ((OR (ATOM G166274)
+                                        (PROGN
+                                          (SETQ |x| (CAR G166274))
+                                          NIL))
+                                       NIL)
+                                    (SEQ
+                                     (EXIT
+                                      (COND
+                                        ((NULL (|getTarget| |x|))
+                                         (|putTarget| |x| S))
+                                        ('T NIL)))))))))
+                        ((EQL 2 |nargs|)
+                         (COND
+                           ((BOOT-EQUAL |op| '*)
+                            (COND
+                              ((NULL (|getTarget| (CADR |arglist|)))
+                               (|putTarget| (CADR |arglist|) |target|)))
+                            (COND
+                              ((|getTarget|
+                                   (SPADLET |x| (CAR |arglist|)))
+                               NIL)
+                              ((NEQUAL (|getUnname| |x|)
+                                       |$immediateDataSymbol|)
+                               (|putTarget| |x| |target|))
+                              ('T NIL)))
+                           ((OR (BOOT-EQUAL |op| '**)
+                                (BOOT-EQUAL |op| '^))
+                            (COND
+                              ((NULL (|getTarget| (CAR |arglist|)))
+                               (|putTarget| (CAR |arglist|) |target|))
+                              ('T NIL)))
+                           ((AND (BOOT-EQUAL |op| '|equation|)
+                                 (PAIRP |target|)
+                                 (EQ (QCAR |target|) '|Equation|)
+                                 (PROGN
+                                   (SPADLET |ISTMP#1| (QCDR |target|))
+                                   (AND (PAIRP |ISTMP#1|)
+                                    (EQ (QCDR |ISTMP#1|) NIL)
+                                    (PROGN
+                                      (SPADLET S (QCAR |ISTMP#1|))
+                                      'T))))
+                            (DO ((G166283 |arglist| (CDR G166283))
+                                 (|x| NIL))
+                                ((OR (ATOM G166283)
+                                     (PROGN
+                                       (SETQ |x| (CAR G166283))
+                                       NIL))
+                                 NIL)
+                              (SEQ (EXIT
+                                    (COND
+                                      ((NULL (|getTarget| |x|))
+                                       (|putTarget| |x| S))
+                                      ('T NIL))))))
+                           ((AND (BOOT-EQUAL |op| '|gauss|)
+                                 (PAIRP |target|)
+                                 (EQ (QCAR |target|) '|Gaussian|)
+                                 (PROGN
+                                   (SPADLET |ISTMP#1| (QCDR |target|))
+                                   (AND (PAIRP |ISTMP#1|)
+                                    (EQ (QCDR |ISTMP#1|) NIL)
+                                    (PROGN
+                                      (SPADLET S (QCAR |ISTMP#1|))
+                                      'T))))
+                            (DO ((G166292 |arglist| (CDR G166292))
+                                 (|x| NIL))
+                                ((OR (ATOM G166292)
+                                     (PROGN
+                                       (SETQ |x| (CAR G166292))
+                                       NIL))
+                                 NIL)
+                              (SEQ (EXIT
+                                    (COND
+                                      ((NULL (|getTarget| |x|))
+                                       (|putTarget| |x| S))
+                                      ('T NIL))))))
+                           ((BOOT-EQUAL |op| '/)
+                            (SPADLET |targ|
+                                     (COND
+                                       ((AND (PAIRP |target|)
+                                         (EQ (QCAR |target|)
+                                          '|Fraction|)
+                                         (PROGN
+                                           (SPADLET |ISTMP#1|
+                                            (QCDR |target|))
+                                           (AND (PAIRP |ISTMP#1|)
+                                            (EQ (QCDR |ISTMP#1|) NIL)
+                                            (PROGN
+                                              (SPADLET S
+                                               (QCAR |ISTMP#1|))
+                                              'T))))
+                                        S)
+                                       ('T |target|)))
+                            (DO ((G166301 |arglist| (CDR G166301))
+                                 (|x| NIL))
+                                ((OR (ATOM G166301)
+                                     (PROGN
+                                       (SETQ |x| (CAR G166301))
+                                       NIL))
+                                 NIL)
+                              (SEQ (EXIT
+                                    (COND
+                                      ((NULL (|getTarget| |x|))
+                                       (|putTarget| |x| |targ|))
+                                      ('T NIL))))))
+                           ((AND (BOOT-EQUAL |op| 'SEGMENT)
+                                 (PAIRP |target|)
+                                 (EQ (QCAR |target|) '|Segment|)
+                                 (PROGN
+                                   (SPADLET |ISTMP#1| (QCDR |target|))
+                                   (AND (PAIRP |ISTMP#1|)
+                                    (EQ (QCDR |ISTMP#1|) NIL)
+                                    (PROGN
+                                      (SPADLET S (QCAR |ISTMP#1|))
+                                      'T))))
+                            (DO ((G166310 |arglist| (CDR G166310))
+                                 (|x| NIL))
+                                ((OR (ATOM G166310)
+                                     (PROGN
+                                       (SETQ |x| (CAR G166310))
+                                       NIL))
+                                 NIL)
+                              (SEQ (EXIT
+                                    (COND
+                                      ((NULL (|getTarget| |x|))
+                                       (|putTarget| |x| S))
+                                      ('T NIL))))))
+                           ((AND (BOOT-EQUAL |op| 'SEGMENT)
+                                 (PAIRP |target|)
+                                 (EQ (QCAR |target|)
+                                     '|UniversalSegment|)
+                                 (PROGN
+                                   (SPADLET |ISTMP#1| (QCDR |target|))
+                                   (AND (PAIRP |ISTMP#1|)
+                                    (EQ (QCDR |ISTMP#1|) NIL)
+                                    (PROGN
+                                      (SPADLET S (QCAR |ISTMP#1|))
+                                      'T))))
+                            (DO ((G166319 |arglist| (CDR G166319))
+                                 (|x| NIL))
+                                ((OR (ATOM G166319)
+                                     (PROGN
+                                       (SETQ |x| (CAR G166319))
+                                       NIL))
+                                 NIL)
+                              (SEQ (EXIT
+                                    (COND
+                                      ((NULL (|getTarget| |x|))
+                                       (|putTarget| |x| S))
+                                      ('T NIL))))))
+                           ('T NIL)))
+                        ('T NIL)))))))))))
+
+;pushDownOnArithmeticVariables(op,target,arglist) ==
+;  -- tries to push appropriate target information onto variable
+;  -- occurring in arithmetic expressions
+;  PAIRP(target) and CAR(target) = 'Variable => NIL
+;  not MEMQ(op,'(_+ _- _* _*_* _/)) => NIL
+;  not containsPolynomial(target)   => NIL
+;  for x in arglist for i in 1.. repeat
+;    VECP(x) =>   -- leaf
+;      transferPropsToNode(xn := getUnname(x),x)
+;      getValue(x) or (xn = $immediateDataSymbol) => NIL
+;      t := getMinimalVariableTower(xn,target) or target
+;      if not getTarget(x) then putTarget(x,t)
+;    PAIRP(x) =>  -- node
+;      [op',:arglist'] := x
+;      pushDownOnArithmeticVariables(getUnname op',target,arglist')
+;  arglist
+
+(DEFUN |pushDownOnArithmeticVariables| (|op| |target| |arglist|)
+  (PROG (|xn| |t| |op'| |arglist'|)
+    (DECLARE (SPECIAL |$immediateDataSymbol|))
+    (RETURN
+      (SEQ (COND
+             ((AND (PAIRP |target|)
+                   (BOOT-EQUAL (CAR |target|) '|Variable|))
+              NIL)
+             ((NULL (MEMQ |op| '(+ - * ** /))) NIL)
+             ((NULL (|containsPolynomial| |target|)) NIL)
+             ('T
+              (DO ((G166357 |arglist| (CDR G166357)) (|x| NIL)
+                   (|i| 1 (QSADD1 |i|)))
+                  ((OR (ATOM G166357)
+                       (PROGN (SETQ |x| (CAR G166357)) NIL))
+                   NIL)
+                (SEQ (EXIT (COND
+                             ((VECP |x|)
+                              (|transferPropsToNode|
+                                  (SPADLET |xn| (|getUnname| |x|)) |x|)
+                              (COND
+                                ((OR (|getValue| |x|)
+                                     (BOOT-EQUAL |xn|
+                                      |$immediateDataSymbol|))
+                                 NIL)
+                                ('T
+                                 (SPADLET |t|
+                                          (OR
+                                           (|getMinimalVariableTower|
+                                            |xn| |target|)
+                                           |target|))
+                                 (COND
+                                   ((NULL (|getTarget| |x|))
+                                    (|putTarget| |x| |t|))
+                                   ('T NIL)))))
+                             ((PAIRP |x|) (SPADLET |op'| (CAR |x|))
+                              (SPADLET |arglist'| (CDR |x|))
+                              (|pushDownOnArithmeticVariables|
+                                  (|getUnname| |op'|) |target|
+                                  |arglist'|))))))
+              |arglist|))))))
+
+;pushDownOp?(op,n) ==
+;  -- determine if for op with n arguments whether for all modemaps
+;  -- the target type is equal to one or more arguments. If so, a list
+;  -- of the appropriate arguments is returned.
+;  ops := [sig for [sig,:.] in getModemapsFromDatabase(op,n)]
+;  null ops => NIL
+;  op in '(_+ _* _- _exquo) => [i for i in 0..(n-1)]
+;  -- each signature has form
+;  -- [domain of implementation, target, arg1, arg2, ...]
+;  -- sameAsTarg is a vector that counts the number of modemaps that
+;  -- have the corresponding argument equal to the target type
+;  sameAsTarg := GETZEROVEC n
+;  numMms := LENGTH ops
+;  for [.,targ,:argl] in ops repeat
+;    for arg in argl for i in 0.. repeat
+;      targ = arg => SETELT(sameAsTarg,i,1 + sameAsTarg.i)
+;  -- now see which args have their count = numMms
+;  ok := NIL
+;  for i in 0..(n-1) repeat
+;    if numMms = sameAsTarg.i then ok := cons(i,ok)
+;  reverse ok
+
+(DEFUN |pushDownOp?| (|op| |n|)
+  (PROG (|sig| |ops| |sameAsTarg| |numMms| |targ| |argl| |ok|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |ops|
+                      (PROG (G166383)
+                        (SPADLET G166383 NIL)
+                        (RETURN
+                          (DO ((G166389
+                                   (|getModemapsFromDatabase| |op| |n|)
+                                   (CDR G166389))
+                               (G166370 NIL))
+                              ((OR (ATOM G166389)
+                                   (PROGN
+                                     (SETQ G166370 (CAR G166389))
+                                     NIL)
+                                   (PROGN
+                                     (PROGN
+                                       (SPADLET |sig| (CAR G166370))
+                                       G166370)
+                                     NIL))
+                               (NREVERSE0 G166383))
+                            (SEQ (EXIT (SETQ G166383
+                                        (CONS |sig| G166383))))))))
+             (COND
+               ((NULL |ops|) NIL)
+               ((|member| |op| '(+ * - |exquo|))
+                (PROG (G166400)
+                  (SPADLET G166400 NIL)
+                  (RETURN
+                    (DO ((G166405 (SPADDIFFERENCE |n| 1))
+                         (|i| 0 (QSADD1 |i|)))
+                        ((QSGREATERP |i| G166405)
+                         (NREVERSE0 G166400))
+                      (SEQ (EXIT (SETQ G166400 (CONS |i| G166400))))))))
+               ('T (SPADLET |sameAsTarg| (GETZEROVEC |n|))
+                (SPADLET |numMms| (LENGTH |ops|))
+                (SEQ (DO ((G166413 |ops| (CDR G166413))
+                          (G166373 NIL))
+                         ((OR (ATOM G166413)
+                              (PROGN
+                                (SETQ G166373 (CAR G166413))
+                                NIL)
+                              (PROGN
+                                (PROGN
+                                  (SPADLET |targ| (CADR G166373))
+                                  (SPADLET |argl| (CDDR G166373))
+                                  G166373)
+                                NIL))
+                          NIL)
+                       (SEQ (EXIT (DO ((G166424 |argl|
+                                        (CDR G166424))
+                                       (|arg| NIL)
+                                       (|i| 0 (QSADD1 |i|)))
+                                      ((OR (ATOM G166424)
+                                        (PROGN
+                                          (SETQ |arg| (CAR G166424))
+                                          NIL))
+                                       NIL)
+                                    (SEQ
+                                     (EXIT
+                                      (COND
+                                        ((BOOT-EQUAL |targ| |arg|)
+                                         (EXIT
+                                          (SETELT |sameAsTarg| |i|
+                                           (PLUS 1
+                                            (ELT |sameAsTarg| |i|))))))))))))
+                     (SPADLET |ok| NIL)
+                     (DO ((G166433 (SPADDIFFERENCE |n| 1))
+                          (|i| 0 (QSADD1 |i|)))
+                         ((QSGREATERP |i| G166433) NIL)
+                       (SEQ (EXIT (COND
+                                    ((BOOT-EQUAL |numMms|
+                                      (ELT |sameAsTarg| |i|))
+                                     (SPADLET |ok| (CONS |i| |ok|)))
+                                    ('T NIL)))))
+                     (REVERSE |ok|)))))))))
+
+;--% Bottom Up Processing
+;-- Also see I-SPEC BOOT for special handlers and I-MAP BOOT for
+;-- user function processing.
+;bottomUp t ==
+;  -- bottomUp takes an attributed tree, and returns the modeSet for it.
+;  -- As a side-effect it also evaluates the tree.
+;  t is [op,:argl] =>
+;    tar := getTarget op
+;    getUnname(op) ^= $immediateDataSymbol and (v := getValue op) =>
+;      om := objMode(v)
+;      null tar => [om]
+;      (r := resolveTM(om,tar)) => [r]
+;      [om]
+;    if atom op then
+;      opName:= getUnname op
+;      if opName in $localVars then
+;        putModeSet(op,bottomUpIdentifier(op,opName))
+;      else
+;        transferPropsToNode(opName,op)
+;    else
+;      opName := NIL
+;      bottomUp op
+;    opVal := getValue op
+;    -- call a special handler if we are not being package called
+;    dol := getAtree(op,'dollar) and (opName ^= 'construct)
+;    (null dol) and (fn:= GET(opName,"up")) and (u:= FUNCALL(fn, t)) => u
+;    nargs := #argl
+;    if opName then for x in argl for i in 1.. repeat
+;      putAtree(x,'callingFunction,opName)
+;      putAtree(x,'argumentNumber,i)
+;      putAtree(x,'totalArgs,nargs)
+;    if tar then pushDownTargetInfo(opName,tar,argl)
+;    -- see if we are calling a declared user map
+;    -- if so, push down the declared types as targets on the args
+;    if opVal and (objVal opVal  is ['MAP,:.]) and
+;      (getMode op is ['Mapping,:ms]) and (nargs + 1= #ms) then
+;        for m in rest ms for x in argl repeat putTarget(x,m)
+;    argModeSetList:= [bottomUp x for x in argl]
+;    if ^tar and opName = "*" and nargs = 2 then
+;        [[t1],[t2]] := argModeSetList
+;        tar := computeTypeWithVariablesTarget(t1, t2)
+;        tar =>
+;            pushDownTargetInfo(opName,tar,argl)
+;            argModeSetList:= [bottomUp x for x in argl]
+;    ms := bottomUpForm(t,op,opName,argl,argModeSetList)
+;    -- given no target or package calling, force integer constants to
+;    -- belong to tightest possible subdomain
+;    op := CAR t                -- may have changed in bottomUpElt
+;    $useIntegerSubdomain and null tar and null dol and
+;      isEqualOrSubDomain(first ms,$Integer) =>
+;        val := objVal getValue op
+;        isWrapped val =>       -- constant if wrapped
+;          val := unwrap val
+;          bm := getBasicMode val
+;          putValue(op,objNewWrap(val,bm))
+;          putModeSet(op,[bm])
+;        ms
+;    ms
+;  m := getBasicMode t => [m]
+;  IDENTP (id := getUnname t) =>
+;    putModeSet(t,bottomUpIdentifier(t,id))
+;  keyedSystemError("S2GE0016",['"bottomUp",'"unknown object form"])
+
+(DEFUN |bottomUp| (|t|)
+  (PROG (|argl| |v| |om| |r| |opName| |opVal| |dol| |fn| |u| |nargs|
+                |ISTMP#1| |t1| |t2| |tar| |argModeSetList| |ms| |op|
+                |val| |bm| |m| |id|)
+    (DECLARE (SPECIAL |$Integer| |$useIntegerSubdomain| |$localVars|
+                      |$immediateDataSymbol|))
+    (RETURN
+      (SEQ (COND
+             ((AND (PAIRP |t|)
+                   (PROGN
+                     (SPADLET |op| (QCAR |t|))
+                     (SPADLET |argl| (QCDR |t|))
+                     'T))
+              (SPADLET |tar| (|getTarget| |op|))
+              (COND
+                ((AND (NEQUAL (|getUnname| |op|)
+                              |$immediateDataSymbol|)
+                      (SPADLET |v| (|getValue| |op|)))
+                 (SPADLET |om| (|objMode| |v|))
+                 (COND
+                   ((NULL |tar|) (CONS |om| NIL))
+                   ((SPADLET |r| (|resolveTM| |om| |tar|))
+                    (CONS |r| NIL))
+                   ('T (CONS |om| NIL))))
+                ('T
+                 (COND
+                   ((ATOM |op|) (SPADLET |opName| (|getUnname| |op|))
+                    (COND
+                      ((|member| |opName| |$localVars|)
+                       (|putModeSet| |op|
+                           (|bottomUpIdentifier| |op| |opName|)))
+                      ('T (|transferPropsToNode| |opName| |op|))))
+                   ('T (SPADLET |opName| NIL) (|bottomUp| |op|)))
+                 (SPADLET |opVal| (|getValue| |op|))
+                 (SPADLET |dol|
+                          (AND (|getAtree| |op| '|dollar|)
+                               (NEQUAL |opName| '|construct|)))
+                 (COND
+                   ((AND (NULL |dol|)
+                         (SPADLET |fn| (GETL |opName| '|up|))
+                         (SPADLET |u| (FUNCALL |fn| |t|)))
+                    |u|)
+                   ('T (SPADLET |nargs| (|#| |argl|))
+                    (COND
+                      (|opName|
+                          (DO ((G166479 |argl| (CDR G166479))
+                               (|x| NIL) (|i| 1 (QSADD1 |i|)))
+                              ((OR (ATOM G166479)
+                                   (PROGN
+                                     (SETQ |x| (CAR G166479))
+                                     NIL))
+                               NIL)
+                            (SEQ (EXIT (PROGN
+                                         (|putAtree| |x|
+                                          '|callingFunction| |opName|)
+                                         (|putAtree| |x|
+                                          '|argumentNumber| |i|)
+                                         (|putAtree| |x| '|totalArgs|
+                                          |nargs|)))))))
+                    (COND
+                      (|tar| (|pushDownTargetInfo| |opName| |tar|
+                                 |argl|)))
+                    (COND
+                      ((AND |opVal|
+                            (PROGN
+                              (SPADLET |ISTMP#1| (|objVal| |opVal|))
+                              (AND (PAIRP |ISTMP#1|)
+                                   (EQ (QCAR |ISTMP#1|) 'MAP)))
+                            (PROGN
+                              (SPADLET |ISTMP#1| (|getMode| |op|))
+                              (AND (PAIRP |ISTMP#1|)
+                                   (EQ (QCAR |ISTMP#1|) '|Mapping|)
+                                   (PROGN
+                                     (SPADLET |ms| (QCDR |ISTMP#1|))
+                                     'T)))
+                            (BOOT-EQUAL (PLUS |nargs| 1) (|#| |ms|)))
+                       (DO ((G166489 (CDR |ms|) (CDR G166489))
+                            (|m| NIL)
+                            (G166490 |argl| (CDR G166490))
+                            (|x| NIL))
+                           ((OR (ATOM G166489)
+                                (PROGN (SETQ |m| (CAR G166489)) NIL)
+                                (ATOM G166490)
+                                (PROGN (SETQ |x| (CAR G166490)) NIL))
+                            NIL)
+                         (SEQ (EXIT (|putTarget| |x| |m|))))))
+                    (SPADLET |argModeSetList|
+                             (PROG (G166503)
+                               (SPADLET G166503 NIL)
+                               (RETURN
+                                 (DO ((G166508 |argl|
+                                       (CDR G166508))
+                                      (|x| NIL))
+                                     ((OR (ATOM G166508)
+                                       (PROGN
+                                         (SETQ |x| (CAR G166508))
+                                         NIL))
+                                      (NREVERSE0 G166503))
+                                   (SEQ
+                                    (EXIT
+                                     (SETQ G166503
+                                      (CONS (|bottomUp| |x|) G166503))))))))
+                    (COND
+                      ((AND (NULL |tar|) (BOOT-EQUAL |opName| '*)
+                            (EQL |nargs| 2))
+                       (SPADLET |t1| (CAAR |argModeSetList|))
+                       (SPADLET |t2| (CAADR |argModeSetList|))
+                       (SPADLET |tar|
+                                (|computeTypeWithVariablesTarget| |t1|
+                                    |t2|))
+                       (COND
+                         (|tar| (PROGN
+                                  (|pushDownTargetInfo| |opName| |tar|
+                                      |argl|)
+                                  (SPADLET |argModeSetList|
+                                           (PROG (G166518)
+                                             (SPADLET G166518 NIL)
+                                             (RETURN
+                                               (DO
+                                                ((G166523 |argl|
+                                                  (CDR G166523))
+                                                 (|x| NIL))
+                                                ((OR (ATOM G166523)
+                                                  (PROGN
+                                                    (SETQ |x|
+                                                     (CAR G166523))
+                                                    NIL))
+                                                 (NREVERSE0 G166518))
+                                                 (SEQ
+                                                  (EXIT
+                                                   (SETQ G166518
+                                                    (CONS
+                                                     (|bottomUp| |x|)
+                                                     G166518)))))))))))))
+                    (SPADLET |ms|
+                             (|bottomUpForm| |t| |op| |opName| |argl|
+                                 |argModeSetList|))
+                    (SPADLET |op| (CAR |t|))
+                    (COND
+                      ((AND |$useIntegerSubdomain| (NULL |tar|)
+                            (NULL |dol|)
+                            (|isEqualOrSubDomain| (CAR |ms|)
+                                |$Integer|))
+                       (SPADLET |val| (|objVal| (|getValue| |op|)))
+                       (COND
+                         ((|isWrapped| |val|)
+                          (SPADLET |val| (|unwrap| |val|))
+                          (SPADLET |bm| (|getBasicMode| |val|))
+                          (|putValue| |op| (|objNewWrap| |val| |bm|))
+                          (|putModeSet| |op| (CONS |bm| NIL)))
+                         ('T |ms|)))
+                      ('T |ms|)))))))
+             ((SPADLET |m| (|getBasicMode| |t|)) (CONS |m| NIL))
+             ((IDENTP (SPADLET |id| (|getUnname| |t|)))
+              (|putModeSet| |t| (|bottomUpIdentifier| |t| |id|)))
+             ('T
+              (|keyedSystemError| 'S2GE0016
+                  (CONS "bottomUp" (CONS "unknown object form" NIL)))))))))
+
+;computeTypeWithVariablesTarget(p, q) ==
+;    polyVarlist(p) or polyVarlist(q) =>
+;        t := resolveTT(p, q)
+;        polyVarlist(t) => t
+;        NIL
+;    NIL
+
+(DEFUN |computeTypeWithVariablesTarget| (|p| |q|)
+  (PROG (|t|)
+    (RETURN
+      (COND
+        ((OR (|polyVarlist| |p|) (|polyVarlist| |q|))
+         (SPADLET |t| (|resolveTT| |p| |q|))
+         (COND ((|polyVarlist| |t|) |t|) ('T NIL)))
+        ('T NIL)))))
+
+;bottomUpCompile t ==
+;  $genValue:local := false
+;  ms := bottomUp t
+;  COMP_-TRAN_-1 objVal getValue t
+;  ms
+
+(DEFUN |bottomUpCompile| (|t|)
+  (PROG (|$genValue| |ms|)
+    (DECLARE (SPECIAL |$genValue|))
+    (RETURN
+      (PROGN
+        (SPADLET |$genValue| NIL)
+        (SPADLET |ms| (|bottomUp| |t|))
+        (COMP-TRAN-1 (|objVal| (|getValue| |t|)))
+        |ms|))))
+
+;bottomUpUseSubdomain t ==
+;  $useIntegerSubdomain : local := true
+;  ms := bottomUp t
+;  ($immediateDataSymbol ^= getUnname(t)) or ($Integer ^= CAR(ms)) => ms
+;  null INTEGERP(num := objValUnwrap getValue t) => ms
+;  o := getBasicObject(num)
+;  putValue(t,o)
+;  ms := [objMode o]
+;  putModeSet(t,ms)
+;  ms
+
+(DEFUN |bottomUpUseSubdomain| (|t|)
+  (PROG (|$useIntegerSubdomain| |num| |o| |ms|)
+    (DECLARE (SPECIAL |$useIntegerSubdomain| |$Integer|
+                      |$immediateDataSymbol|))
+    (RETURN
+      (PROGN
+        (SPADLET |$useIntegerSubdomain| 'T)
+        (SPADLET |ms| (|bottomUp| |t|))
+        (COND
+          ((OR (NEQUAL |$immediateDataSymbol| (|getUnname| |t|))
+               (NEQUAL |$Integer| (CAR |ms|)))
+           |ms|)
+          ((NULL (INTEGERP
+                     (SPADLET |num| (|objValUnwrap| (|getValue| |t|)))))
+           |ms|)
+          ('T (SPADLET |o| (|getBasicObject| |num|))
+           (|putValue| |t| |o|)
+           (SPADLET |ms| (CONS (|objMode| |o|) NIL))
+           (|putModeSet| |t| |ms|) |ms|))))))
+
+;bottomUpPredicate(pred, name) ==
+;  putTarget(pred,$Boolean)
+;  ms := bottomUp pred
+;  $Boolean ^= first ms => throwKeyedMsg('"S2IB0001",[name])
+;  ms
+
+(DEFUN |bottomUpPredicate| (|pred| |name|)
+  (PROG (|ms|)
+    (DECLARE (SPECIAL |$Boolean|))
+    (RETURN
+      (PROGN
+        (|putTarget| |pred| |$Boolean|)
+        (SPADLET |ms| (|bottomUp| |pred|))
+        (COND
+          ((NEQUAL |$Boolean| (CAR |ms|))
+           (|throwKeyedMsg| (MAKESTRING "S2IB0001") (CONS |name| NIL)))
+          ('T |ms|))))))
+
+;bottomUpCompilePredicate(pred, name) ==
+;  $genValue:local := false
+;  bottomUpPredicate(pred,name)
+
+(DEFUN |bottomUpCompilePredicate| (|pred| |name|)
+  (PROG (|$genValue|)
+    (DECLARE (SPECIAL |$genValue|))
+    (RETURN
+      (PROGN
+        (SPADLET |$genValue| NIL)
+        (|bottomUpPredicate| |pred| |name|)))))
+
+;bottomUpIdentifier(t,id) ==
+;  m := isType t => bottomUpType(t, m)
+;  EQ(id,'noMapVal) => throwKeyedMsg('"S2IB0002",NIL)
+;  EQ(id,'noBranch) =>
+;    keyedSystemError("S2GE0016",
+;      ['"bottomUpIdentifier",'"trying to evaluate noBranch"])
+;  transferPropsToNode(id,t)
+;  defaultType := ['Variable,id]
+;  -- This was meant to stop building silly symbols but had some unfortunate
+;  -- side effects, like not being able to say e:=foo in the interpreter.  MCD
+;--  defaultType :=
+;--    getModemapsFromDatabase(id,1) =>
+;--      userError ['"Cannot use operation name as a variable: ", id]
+;--    ['Variable, id]
+;  u := getValue t => --non-cached values MAY be re-evaluated
+;    tar := getTarget t
+;    expr:= objVal u
+;    om := objMode(u)
+;    (om ^= $EmptyMode) and (om isnt ['RuleCalled,.]) =>
+;      $genValue or GENSYMP(id) =>
+;        null tar => [om]
+;        (r := resolveTM(om,tar)) => [r]
+;        [om]
+;      bottomUpDefault(t,id,defaultType,getTarget t)
+;    interpRewriteRule(t,id,expr) or
+;      (isMapExpr expr and [objMode(u)]) or
+;        keyedSystemError("S2GE0016",
+;          ['"bottomUpIdentifier",'"cannot evaluate identifier"])
+;  bottomUpDefault(t,id,defaultType,getTarget t)
+
+(DEFUN |bottomUpIdentifier| (|t| |id|)
+  (PROG (|m| |defaultType| |u| |tar| |expr| |om| |ISTMP#1| |r|)
+    (DECLARE (SPECIAL |$genValue| |$EmptyMode|))
+    (RETURN
+      (COND
+        ((SPADLET |m| (|isType| |t|)) (|bottomUpType| |t| |m|))
+        ((EQ |id| '|noMapVal|)
+         (|throwKeyedMsg| (MAKESTRING "S2IB0002") NIL))
+        ((EQ |id| '|noBranch|)
+         (|keyedSystemError| 'S2GE0016
+             (CONS "bottomUpIdentifier"
+                   (CONS "trying to evaluate noBranch" NIL))))
+        ('T (|transferPropsToNode| |id| |t|)
+         (SPADLET |defaultType| (CONS '|Variable| (CONS |id| NIL)))
+         (COND
+           ((SPADLET |u| (|getValue| |t|))
+            (SPADLET |tar| (|getTarget| |t|))
+            (SPADLET |expr| (|objVal| |u|))
+            (SPADLET |om| (|objMode| |u|))
+            (COND
+              ((AND (NEQUAL |om| |$EmptyMode|)
+                    (NULL (AND (PAIRP |om|)
+                               (EQ (QCAR |om|) '|RuleCalled|)
+                               (PROGN
+                                 (SPADLET |ISTMP#1| (QCDR |om|))
+                                 (AND (PAIRP |ISTMP#1|)
+                                      (EQ (QCDR |ISTMP#1|) NIL))))))
+               (COND
+                 ((OR |$genValue| (GENSYMP |id|))
+                  (COND
+                    ((NULL |tar|) (CONS |om| NIL))
+                    ((SPADLET |r| (|resolveTM| |om| |tar|))
+                     (CONS |r| NIL))
+                    ('T (CONS |om| NIL))))
+                 ('T
+                  (|bottomUpDefault| |t| |id| |defaultType|
+                      (|getTarget| |t|)))))
+              ('T
+               (OR (|interpRewriteRule| |t| |id| |expr|)
+                   (AND (|isMapExpr| |expr|)
+                        (CONS (|objMode| |u|) NIL))
+                   (|keyedSystemError| 'S2GE0016
+                       (CONS "bottomUpIdentifier"
+                             (CONS "cannot evaluate identifier" NIL)))))))
+           ('T
+            (|bottomUpDefault| |t| |id| |defaultType|
+                (|getTarget| |t|)))))))))
+
+;bottomUpDefault(t,id,defaultMode,target) ==
+;  if $genValue
+;    then bottomUpDefaultEval(t,id,defaultMode,target,nil)
+;    else bottomUpDefaultCompile(t,id,defaultMode,target,nil)
+
+(DEFUN |bottomUpDefault| (|t| |id| |defaultMode| |target|)
+  (DECLARE (SPECIAL |$genValue|))
+  (COND
+    (|$genValue|
+        (|bottomUpDefaultEval| |t| |id| |defaultMode| |target| NIL))
+    ('T (|bottomUpDefaultCompile| |t| |id| |defaultMode| |target| NIL))))
+
+;bottomUpDefaultEval(t,id,defaultMode,target,isSub) ==
+;  -- try to get value case.
+;  -- 1. declared mode but no value case
+;  (m := getMode t) =>
+;    m is ['Mapping,:.] => throwKeyedMsg('"S2IB0003",[getUnname t])
+;    -- hmm, try to treat it like target mode or declared mode
+;    if isPartialMode(m) then m := resolveTM(['Variable,id],m)
+;    -- if there is a target, probably want it to be that way and not
+;    -- declared mode. Like "x" in second line:
+;    --   x : P[x] I
+;    --   y : P[x] I
+;    target and not isSub and
+;      (val := coerceInteractive(objNewWrap(id,['Variable,id]),target))=>
+;        putValue(t,val)
+;        [target]
+;    -- Ok, see if we can make it into declared mode from symbolic form
+;    -- For example, (x : P[x] I; x + 1)
+;    not target and not isSub and m and
+;      (val := coerceInteractive(objNewWrap(id,['Variable,id]),m)) =>
+;        putValue(t,val)
+;        [m]
+;    -- give up
+;    throwKeyedMsg('"S2IB0004",[id,m])
+;  -- 2. no value and no mode case
+;  val := objNewWrap(id,defaultMode)
+;  (null target) or (defaultMode = target) =>
+;    putValue(t,val)
+;    [defaultMode]
+;  if isPartialMode target then
+;    -- this hackery will go away when Symbol is not the default type
+;    if defaultMode = $Symbol and (target is [D,x,.]) then
+;      (D in $univariateDomains and (x = id)) or
+;        (D in $multivariateDomains and (id in x)) =>
+;           dmode := [D,x,$Integer]
+;           (val' := coerceInteractive(objNewWrap(id,
+;             ['Variable,id]),dmode)) =>
+;               defaultMode := dmode
+;               val := val'
+;      NIL
+;    target := resolveTM(defaultMode,target)
+;  -- The following is experimental.  SCM 10/11/90
+;  if target and (tm := getMinimalVarMode(id, target)) then
+;    target := tm
+;  (null target) or null (val' := coerceInteractive(val,target)) =>
+;    putValue(t,val)
+;    [defaultMode]
+;  putValue(t,val')
+;  [target]
+
+(DEFUN |bottomUpDefaultEval| (|t| |id| |defaultMode| |target| |isSub|)
+  (PROG (|m| D |ISTMP#1| |x| |ISTMP#2| |dmode| |val| |tm| |val'|)
+    (DECLARE (SPECIAL |$Integer| |$multivariateDomains|
+                      |$univariateDomains| |$Symbol|))
+    (RETURN
+      (COND
+        ((SPADLET |m| (|getMode| |t|))
+         (COND
+           ((AND (PAIRP |m|) (EQ (QCAR |m|) '|Mapping|))
+            (|throwKeyedMsg| (MAKESTRING "S2IB0003")
+                (CONS (|getUnname| |t|) NIL)))
+           ('T
+            (COND
+              ((|isPartialMode| |m|)
+               (SPADLET |m|
+                        (|resolveTM| (CONS '|Variable| (CONS |id| NIL))
+                            |m|))))
+            (COND
+              ((AND |target| (NULL |isSub|)
+                    (SPADLET |val|
+                             (|coerceInteractive|
+                                 (|objNewWrap| |id|
+                                     (CONS '|Variable| (CONS |id| NIL)))
+                                 |target|)))
+               (|putValue| |t| |val|) (CONS |target| NIL))
+              ((AND (NULL |target|) (NULL |isSub|) |m|
+                    (SPADLET |val|
+                             (|coerceInteractive|
+                                 (|objNewWrap| |id|
+                                     (CONS '|Variable| (CONS |id| NIL)))
+                                 |m|)))
+               (|putValue| |t| |val|) (CONS |m| NIL))
+              ('T
+               (|throwKeyedMsg| "S2IB0004" (CONS |id| (CONS |m| NIL))))))))
+        ('T (SPADLET |val| (|objNewWrap| |id| |defaultMode|))
+         (COND
+           ((OR (NULL |target|) (BOOT-EQUAL |defaultMode| |target|))
+            (|putValue| |t| |val|) (CONS |defaultMode| NIL))
+           ('T
+            (COND
+              ((|isPartialMode| |target|)
+               (COND
+                 ((AND (BOOT-EQUAL |defaultMode| |$Symbol|)
+                       (PAIRP |target|)
+                       (PROGN
+                         (SPADLET D (QCAR |target|))
+                         (SPADLET |ISTMP#1| (QCDR |target|))
+                         (AND (PAIRP |ISTMP#1|)
+                              (PROGN
+                                (SPADLET |x| (QCAR |ISTMP#1|))
+                                (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                                (AND (PAIRP |ISTMP#2|)
+                                     (EQ (QCDR |ISTMP#2|) NIL))))))
+                  (COND
+                    ((OR (AND (|member| D |$univariateDomains|)
+                              (BOOT-EQUAL |x| |id|))
+                         (AND (|member| D |$multivariateDomains|)
+                              (|member| |id| |x|)))
+                     (SPADLET |dmode|
+                              (CONS D (CONS |x| (CONS |$Integer| NIL))))
+                     (COND
+                       ((SPADLET |val'|
+                                 (|coerceInteractive|
+                                     (|objNewWrap| |id|
+                                      (CONS '|Variable|
+                                       (CONS |id| NIL)))
+                                     |dmode|))
+                        (PROGN
+                          (SPADLET |defaultMode| |dmode|)
+                          (SPADLET |val| |val'|)))))
+                    ('T NIL))))
+               (SPADLET |target| (|resolveTM| |defaultMode| |target|))))
+            (COND
+              ((AND |target|
+                    (SPADLET |tm| (|getMinimalVarMode| |id| |target|)))
+               (SPADLET |target| |tm|)))
+            (COND
+              ((OR (NULL |target|)
+                   (NULL (SPADLET |val'|
+                                  (|coerceInteractive| |val| |target|))))
+               (|putValue| |t| |val|) (CONS |defaultMode| NIL))
+              ('T (|putValue| |t| |val'|) (CONS |target| NIL))))))))))
+
+;bottomUpDefaultCompile(t,id,defaultMode,target,isSub) ==
+;  tmode := getMode t
+;  tval  := getValue t
+;  expr:=
+;    id in $localVars => id
+;    tmode or tval =>
+;      envMode := tmode or objMode tval
+;      envMode is ['Variable, :.] => objVal tval
+;      id = $immediateDataSymbol => objVal tval
+;      ['getValueFromEnvironment,MKQ id,MKQ envMode]
+;    wrap id
+;  tmode and tval and (mdv := objMode tval) =>
+;    if isPartialMode tmode then
+;      null (tmode := resolveTM(mdv,tmode)) =>
+;        keyedMsgCompFailure("S2IB0010",NIL)
+;    putValue(t,objNew(expr,tmode))
+;    [tmode]
+;  tmode or (tval and (tmode := objMode tval)) =>
+;    putValue(t,objNew(expr,tmode))
+;    [tmode]
+;  obj := objNew(expr,defaultMode)
+;  canCoerceFrom(defaultMode, target) and
+;    (obj' := coerceInteractive(obj, target)) =>
+;        putValue(t, obj')
+;        [target]
+;  putValue(t,obj)
+;  [defaultMode]
+
+(DEFUN |bottomUpDefaultCompile| (|t| |id| |defaultMode| |target| |isSub|)
+  (declare (ignore |isSub|))
+  (PROG (|tval| |envMode| |expr| |mdv| |tmode| |obj| |obj'|)
+    (DECLARE (SPECIAL |$immediateDataSymbol| |$localVars|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |tmode| (|getMode| |t|))
+             (SPADLET |tval| (|getValue| |t|))
+             (SPADLET |expr|
+                      (COND
+                        ((|member| |id| |$localVars|) |id|)
+                        ((OR |tmode| |tval|)
+                         (SPADLET |envMode|
+                                  (OR |tmode| (|objMode| |tval|)))
+                         (COND
+                           ((AND (PAIRP |envMode|)
+                                 (EQ (QCAR |envMode|) '|Variable|))
+                            (|objVal| |tval|))
+                           ((BOOT-EQUAL |id| |$immediateDataSymbol|)
+                            (|objVal| |tval|))
+                           ('T
+                            (CONS '|getValueFromEnvironment|
+                                  (CONS (MKQ |id|)
+                                        (CONS (MKQ |envMode|) NIL))))))
+                        ('T (|wrap| |id|))))
+             (COND
+               ((AND |tmode| |tval| (SPADLET |mdv| (|objMode| |tval|)))
+                (SEQ (COND
+                       ((|isPartialMode| |tmode|)
+                        (COND
+                          ((NULL (SPADLET |tmode|
+                                          (|resolveTM| |mdv| |tmode|)))
+                           (EXIT (|keyedMsgCompFailure| 'S2IB0010 NIL))))))
+                     (|putValue| |t| (|objNew| |expr| |tmode|))
+                     (CONS |tmode| NIL)))
+               ((OR |tmode|
+                    (AND |tval| (SPADLET |tmode| (|objMode| |tval|))))
+                (|putValue| |t| (|objNew| |expr| |tmode|))
+                (CONS |tmode| NIL))
+               ('T (SPADLET |obj| (|objNew| |expr| |defaultMode|))
+                (COND
+                  ((AND (|canCoerceFrom| |defaultMode| |target|)
+                        (SPADLET |obj'|
+                                 (|coerceInteractive| |obj| |target|)))
+                   (|putValue| |t| |obj'|) (CONS |target| NIL))
+                  ('T (|putValue| |t| |obj|) (CONS |defaultMode| NIL))))))))))
+
+;interpRewriteRule(t,id,expr) ==
+;  null get(id,'isInterpreterRule,$e) => NIL
+;  (ms:= selectLocalMms(t,id,nil,nil)) and (ms:=evalForm(t,id,nil,ms)) =>
+;    ms
+;  nil
+
+(DEFUN |interpRewriteRule| (|t| |id| |expr|)
+  (declare (ignore |expr|))
+  (PROG (|ms|)
+    (DECLARE (SPECIAL |$e|))
+    (RETURN
+      (COND
+        ((NULL (|get| |id| '|isInterpreterRule| |$e|)) NIL)
+        ((AND (SPADLET |ms| (|selectLocalMms| |t| |id| NIL NIL))
+              (SPADLET |ms| (|evalForm| |t| |id| NIL |ms|)))
+         |ms|)
+        ('T NIL)))))
+
+;bottomUpForm(t,op,opName,argl,argModeSetList) ==
+;  not($inRetract) =>
+;    bottomUpForm3(t,op,opName,argl,argModeSetList)
+;  bottomUpForm2(t,op,opName,argl,argModeSetList)
+
+(DEFUN |bottomUpForm| (|t| |op| |opName| |argl| |argModeSetList|)
+  (DECLARE (SPECIAL |$inRetract|))
+  (COND
+    ((NULL |$inRetract|)
+     (|bottomUpForm3| |t| |op| |opName| |argl| |argModeSetList|))
+    ('T (|bottomUpForm2| |t| |op| |opName| |argl| |argModeSetList|))))
+
+;bottomUpForm3(t,op,opName,argl,argModeSetList) ==
+;  $origArgModeSetList:local  := COPY argModeSetList
+;  bottomUpForm2(t,op,opName,argl,argModeSetList)
+
+(DEFUN |bottomUpForm3| (|t| |op| |opName| |argl| |argModeSetList|)
+  (PROG (|$origArgModeSetList|)
+    (DECLARE (SPECIAL |$origArgModeSetList|))
+    (RETURN
+      (PROGN
+        (SPADLET |$origArgModeSetList| (COPY |argModeSetList|))
+        (|bottomUpForm2| |t| |op| |opName| |argl| |argModeSetList|)))))
+
+;bottomUpForm2(t,op,opName,argl,argModeSetList) ==
+;  not atom t and EQ(opName,"%%") => bottomUpPercent t
+;  opVal := getValue op
+;  -- for things with objects in operator position, be careful before
+;  -- we enter general modemap selection
+;  lookForIt :=
+;    getAtree(op,'dollar) => true
+;    not opVal => true
+;    opMode := objMode opVal
+;    not (opModeTop := IFCAR opMode) => true
+;    opModeTop in '(Record Union) => false
+;    opModeTop in '(Variable Mapping FunctionCalled RuleCalled AnonymousFunction) => true
+;    false
+;  -- get rid of Union($, "failed") except when op is "=" and all
+;  -- modesets are the same
+;  $genValue and
+;    ^(opName = "=" and argModeSetList is [[m],[=m]] and m is ['Union,:.]) and
+;      (u := bottomUpFormUntaggedUnionRetract(t,op,opName,argl,argModeSetList)) => u
+;  lookForIt and (u := bottomUpFormTuple(t, op, opName, argl, argModeSetList)) => u
+;  -- opName can change in the call to selectMms
+;  (lookForIt and (mmS := selectMms(op,argl,getTarget op))) and
+;    (mS := evalForm(op,opName := getUnname op,argl,mmS)) =>
+;      putModeSet(op,mS)
+;  bottomUpForm0(t,op,opName,argl,argModeSetList)
+
+(DEFUN |bottomUpForm2| (|t| |op| |opName| |argl| |argModeSetList|)
+  (PROG (|opVal| |opMode| |opModeTop| |lookForIt| |ISTMP#1| |m|
+                 |ISTMP#2| |ISTMP#3| |u| |mmS| |mS|)
+    (DECLARE (SPECIAL |$genValue|))
+    (RETURN
+      (COND
+        ((AND (NULL (ATOM |t|)) (EQ |opName| '%%))
+         (|bottomUpPercent| |t|))
+        ('T (SPADLET |opVal| (|getValue| |op|))
+         (SPADLET |lookForIt|
+                  (COND
+                    ((|getAtree| |op| '|dollar|) 'T)
+                    ((NULL |opVal|) 'T)
+                    ('T (SPADLET |opMode| (|objMode| |opVal|))
+                     (COND
+                       ((NULL (SPADLET |opModeTop| (IFCAR |opMode|)))
+                        'T)
+                       ((|member| |opModeTop| '(|Record| |Union|)) NIL)
+                       ((|member| |opModeTop|
+                            '(|Variable| |Mapping| |FunctionCalled|
+                                 |RuleCalled| |AnonymousFunction|))
+                        'T)
+                       ('T NIL)))))
+         (COND
+           ((AND |$genValue|
+                 (NULL (AND (BOOT-EQUAL |opName| '=)
+                            (PAIRP |argModeSetList|)
+                            (PROGN
+                              (SPADLET |ISTMP#1|
+                                       (QCAR |argModeSetList|))
+                              (AND (PAIRP |ISTMP#1|)
+                                   (EQ (QCDR |ISTMP#1|) NIL)
+                                   (PROGN
+                                     (SPADLET |m| (QCAR |ISTMP#1|))
+                                     'T)))
+                            (PROGN
+                              (SPADLET |ISTMP#2|
+                                       (QCDR |argModeSetList|))
+                              (AND (PAIRP |ISTMP#2|)
+                                   (EQ (QCDR |ISTMP#2|) NIL)
+                                   (PROGN
+                                     (SPADLET |ISTMP#3|
+                                      (QCAR |ISTMP#2|))
+                                     (AND (PAIRP |ISTMP#3|)
+                                      (EQ (QCDR |ISTMP#3|) NIL)
+                                      (EQUAL (QCAR |ISTMP#3|) |m|)))))
+                            (PAIRP |m|) (EQ (QCAR |m|) '|Union|)))
+                 (SPADLET |u|
+                          (|bottomUpFormUntaggedUnionRetract| |t| |op|
+                              |opName| |argl| |argModeSetList|)))
+            |u|)
+           ((AND |lookForIt|
+                 (SPADLET |u|
+                          (|bottomUpFormTuple| |t| |op| |opName| |argl|
+                              |argModeSetList|)))
+            |u|)
+           ((AND |lookForIt|
+                 (SPADLET |mmS|
+                          (|selectMms| |op| |argl| (|getTarget| |op|)))
+                 (SPADLET |mS|
+                          (|evalForm| |op|
+                              (SPADLET |opName| (|getUnname| |op|))
+                              |argl| |mmS|)))
+            (|putModeSet| |op| |mS|))
+           ('T
+            (|bottomUpForm0| |t| |op| |opName| |argl| |argModeSetList|))))))))
+
+;bottomUpFormTuple(t, op, opName, args, argModeSetList) ==
+;  getAtree(op,'dollar) => NIL
+;  null (singles := getModemapsFromDatabase(opName, 1)) => NIL
+;  -- see if any of the modemaps have Tuple arguments
+;  haveTuple := false
+;  for mm in singles while not haveTuple repeat
+;    if getFirstArgTypeFromMm(mm) is ["Tuple",.] then haveTuple := true
+;  not haveTuple => nil
+;  nargs := #args
+;  nargs = 1 and getUnname first args = "Tuple" => NIL
+;  nargs = 1 and (ms := bottomUp first args) and
+;    (ms is [["Tuple",.]] or ms is [["List",.]]) => NIL
+;  -- now make the args into a tuple
+;  newArg := [mkAtreeNode "Tuple",:args]
+;  bottomUp [op, newArg]
+
+(DEFUN |bottomUpFormTuple| (|t| |op| |opName| |args| |argModeSetList|)
+  (declare (ignore |t| |argModeSetList|))
+  (PROG (|singles| |haveTuple| |nargs| |ms| |ISTMP#1| |ISTMP#2| |newArg|)
+    (RETURN
+      (SEQ (COND
+             ((|getAtree| |op| '|dollar|) NIL)
+             ((NULL (SPADLET |singles|
+                             (|getModemapsFromDatabase| |opName| 1)))
+              NIL)
+             ('T (SPADLET |haveTuple| NIL)
+              (DO ((G166755 |singles| (CDR G166755)) (|mm| NIL))
+                  ((OR (ATOM G166755)
+                       (PROGN (SETQ |mm| (CAR G166755)) NIL)
+                       (NULL (NULL |haveTuple|)))
+                   NIL)
+                (SEQ (EXIT (COND
+                             ((PROGN
+                                (SPADLET |ISTMP#1|
+                                         (|getFirstArgTypeFromMm| |mm|))
+                                (AND (PAIRP |ISTMP#1|)
+                                     (EQ (QCAR |ISTMP#1|) '|Tuple|)
+                                     (PROGN
+                                       (SPADLET |ISTMP#2|
+                                        (QCDR |ISTMP#1|))
+                                       (AND (PAIRP |ISTMP#2|)
+                                        (EQ (QCDR |ISTMP#2|) NIL)))))
+                              (SPADLET |haveTuple| 'T))
+                             ('T NIL)))))
+              (COND
+                ((NULL |haveTuple|) NIL)
+                ('T (SPADLET |nargs| (|#| |args|))
+                 (COND
+                   ((AND (EQL |nargs| 1)
+                         (BOOT-EQUAL (|getUnname| (CAR |args|))
+                             '|Tuple|))
+                    NIL)
+                   ((AND (EQL |nargs| 1)
+                         (SPADLET |ms| (|bottomUp| (CAR |args|)))
+                         (OR (AND (PAIRP |ms|) (EQ (QCDR |ms|) NIL)
+                                  (PROGN
+                                    (SPADLET |ISTMP#1| (QCAR |ms|))
+                                    (AND (PAIRP |ISTMP#1|)
+                                     (EQ (QCAR |ISTMP#1|) '|Tuple|)
+                                     (PROGN
+                                       (SPADLET |ISTMP#2|
+                                        (QCDR |ISTMP#1|))
+                                       (AND (PAIRP |ISTMP#2|)
+                                        (EQ (QCDR |ISTMP#2|) NIL))))))
+                             (AND (PAIRP |ms|) (EQ (QCDR |ms|) NIL)
+                                  (PROGN
+                                    (SPADLET |ISTMP#1| (QCAR |ms|))
+                                    (AND (PAIRP |ISTMP#1|)
+                                     (EQ (QCAR |ISTMP#1|) '|List|)
+                                     (PROGN
+                                       (SPADLET |ISTMP#2|
+                                        (QCDR |ISTMP#1|))
+                                       (AND (PAIRP |ISTMP#2|)
+                                        (EQ (QCDR |ISTMP#2|) NIL))))))))
+                    NIL)
+                   ('T
+                    (SPADLET |newArg|
+                             (CONS (|mkAtreeNode| '|Tuple|) |args|))
+                    (|bottomUp| (CONS |op| (CONS |newArg| NIL)))))))))))))
+
+;removeUnionsAtStart(argl,modeSets) ==
+;  null $genValue => modeSets
+;  for arg in argl for ms in modeSets repeat
+;    null (v := getValue arg) => nil
+;    m := objMode(v)
+;    m isnt ['Union,:.] => nil
+;    val := objVal(v)
+;    null isWrapped val => nil
+;    val' := retract v
+;    m' := objMode val'
+;    putValue(arg,val')
+;    putModeSet(arg,[m'])
+;    RPLACA(ms,m')
+;  modeSets
+
+(DEFUN |removeUnionsAtStart| (|argl| |modeSets|)
+  (PROG (|v| |m| |val| |val'| |m'|)
+    (DECLARE (SPECIAL |$genValue|))
+    (RETURN
+      (SEQ (COND
+             ((NULL |$genValue|) |modeSets|)
+             ('T
+              (DO ((G166783 |argl| (CDR G166783)) (|arg| NIL)
+                   (G166784 |modeSets| (CDR G166784)) (|ms| NIL))
+                  ((OR (ATOM G166783)
+                       (PROGN (SETQ |arg| (CAR G166783)) NIL)
+                       (ATOM G166784)
+                       (PROGN (SETQ |ms| (CAR G166784)) NIL))
+                   NIL)
+                (SEQ (EXIT (COND
+                             ((NULL (SPADLET |v| (|getValue| |arg|)))
+                              NIL)
+                             ('T (SPADLET |m| (|objMode| |v|))
+                              (COND
+                                ((NULL (AND (PAIRP |m|)
+                                        (EQ (QCAR |m|) '|Union|)))
+                                 NIL)
+                                ('T (SPADLET |val| (|objVal| |v|))
+                                 (COND
+                                   ((NULL (|isWrapped| |val|)) NIL)
+                                   ('T (SPADLET |val'| (|retract| |v|))
+                                    (SPADLET |m'| (|objMode| |val'|))
+                                    (|putValue| |arg| |val'|)
+                                    (|putModeSet| |arg|
+                                     (CONS |m'| NIL))
+                                    (RPLACA |ms| |m'|))))))))))
+              |modeSets|))))))
+
+;printableArgModeSetList() ==
+;  amsl := nil
+;  for a in reverse $origArgModeSetList repeat
+;    b := prefix2String first a
+;    if ATOM b then b := [b]
+;    amsl := ['%l,:b,:amsl]
+;  if amsl then amsl := rest amsl
+;  amsl
+
+(DEFUN |printableArgModeSetList| ()
+  (PROG (|b| |amsl|)
+    (DECLARE (SPECIAL |$origArgModeSetList|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |amsl| NIL)
+             (DO ((G166809 (REVERSE |$origArgModeSetList|)
+                      (CDR G166809))
+                  (|a| NIL))
+                 ((OR (ATOM G166809)
+                      (PROGN (SETQ |a| (CAR G166809)) NIL))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |b| (|prefix2String| (CAR |a|)))
+                            (COND
+                              ((ATOM |b|) (SPADLET |b| (CONS |b| NIL))))
+                            (SPADLET |amsl|
+                                     (CONS '|%l| (APPEND |b| |amsl|)))))))
+             (COND (|amsl| (SPADLET |amsl| (CDR |amsl|))))
+             |amsl|)))))
+
+;bottomUpForm0(t,op,opName,argl,argModeSetList) ==
+;  op0 := op
+;  opName0 := opName
+;  m := isType t =>
+;    bottomUpType(t, m)
+;  opName = 'copy and argModeSetList is [[['Record,:rargs]]] =>
+;    -- this is a hack until Records go through the normal
+;    -- modemap selection process
+;    rtype := ['Record,:rargs]
+;    code := optRECORDCOPY(['RECORDCOPY,getArgValue(CAR argl, rtype),#rargs])
+;    if $genValue then code := wrap timedEVALFUN code
+;    val := objNew(code,rtype)
+;    putValue(t,val)
+;    putModeSet(t,[rtype])
+;  m := getModeOrFirstModeSetIfThere op
+;  m is ['Record,:.] and argModeSetList is [[['Variable,x]]] and
+;      member(x,getUnionOrRecordTags m) and (u := bottomUpElt t) => u
+;  m is ['Union,:.] and argModeSetList is [[['Variable,x]]] =>
+;      member(x,getUnionOrRecordTags m) and (u := bottomUpElt t) => u
+;      not $genValue =>
+;        amsl := printableArgModeSetList()
+;        throwKeyedMsgSP("S2IB0008",['"the union object",amsl], op)
+;      object := retract getValue op
+;      object = 'failed =>
+;        throwKeyedMsgSP("S2IB0008",['"the union object",amsl], op)
+;      putModeSet(op,[objMode(object)])
+;      putValue(op,object)
+;      (u := bottomUpElt t) => u
+;      bottomUpForm0(t,op,opName,argl,argModeSetList)
+;  (opName ^= "elt") and (opName ^= "apply") and
+;    #argl = 1 and first first argModeSetList is ['Variable, var]
+;      and var in '(first last rest) and
+;        isEltable(op, argl, #argl) and (u := bottomUpElt t) => u
+;  $genValue and
+;    ( u:= bottomUpFormRetract(t,op,opName,argl,argModeSetList) ) => u
+;  (opName ^= "elt") and (opName ^= "apply") and
+;    isEltable(op, argl, #argl) and (u := bottomUpElt t) => u
+;  if FIXP $HTCompanionWindowID then
+;    mkCompanionPage('operationError, t)
+;  amsl := printableArgModeSetList()
+;  opName1 :=
+;    opName0 = $immediateDataSymbol =>
+;        (o := coerceInteractive(getValue op0,$OutputForm)) =>
+;            outputTran objValUnwrap o
+;        NIL
+;    opName0
+;  if null(opName1) then
+;    opName1 :=
+;        (o := getValue op0) => prefix2String objMode o
+;        '"<unknown type>"
+;    msgKey :=
+;        null amsl => "S2IB0013"
+;        "S2IB0012"
+;  else
+;    msgKey :=
+;        null amsl => "S2IB0011"
+;        (n := isSharpVarWithNum opName1) =>
+;            opName1 := n
+;            "S2IB0008g"
+;        "S2IB0008"
+;  sayIntelligentMessageAboutOpAvailability(opName1, #argl)
+;  not $genValue =>
+;    keyedMsgCompFailureSP(msgKey,[opName1, amsl], op0)
+;  throwKeyedMsgSP(msgKey,[opName1, amsl], op0)
+
+(DEFUN |bottomUpForm0| (|t| |op| |opName| |argl| |argModeSetList|)
+  (PROG (|op0| |opName0| |rargs| |rtype| |code| |val| |m| |ISTMP#3| |x|
+               |object| |ISTMP#1| |ISTMP#2| |var| |u| |amsl| |o| |n|
+               |opName1| |msgKey|)
+    (DECLARE (SPECIAL |$genValue| |$OutputForm| |$immediateDataSymbol|
+                      |$HTCompanionWindowID|))
+    (RETURN
+      (PROGN
+        (SPADLET |op0| |op|)
+        (SPADLET |opName0| |opName|)
+        (COND
+          ((SPADLET |m| (|isType| |t|)) (|bottomUpType| |t| |m|))
+          ((AND (BOOT-EQUAL |opName| '|copy|) (PAIRP |argModeSetList|)
+                (EQ (QCDR |argModeSetList|) NIL)
+                (PROGN
+                  (SPADLET |ISTMP#1| (QCAR |argModeSetList|))
+                  (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                       (PROGN
+                         (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                         (AND (PAIRP |ISTMP#2|)
+                              (EQ (QCAR |ISTMP#2|) '|Record|)
+                              (PROGN
+                                (SPADLET |rargs| (QCDR |ISTMP#2|))
+                                'T))))))
+           (SPADLET |rtype| (CONS '|Record| |rargs|))
+           (SPADLET |code|
+                    (|optRECORDCOPY|
+                        (CONS 'RECORDCOPY
+                              (CONS (|getArgValue| (CAR |argl|)
+                                     |rtype|)
+                                    (CONS (|#| |rargs|) NIL)))))
+           (COND
+             (|$genValue|
+                 (SPADLET |code| (|wrap| (|timedEVALFUN| |code|)))))
+           (SPADLET |val| (|objNew| |code| |rtype|))
+           (|putValue| |t| |val|)
+           (|putModeSet| |t| (CONS |rtype| NIL)))
+          ('T (SPADLET |m| (|getModeOrFirstModeSetIfThere| |op|))
+           (COND
+             ((AND (PAIRP |m|) (EQ (QCAR |m|) '|Record|)
+                   (PAIRP |argModeSetList|)
+                   (EQ (QCDR |argModeSetList|) NIL)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCAR |argModeSetList|))
+                     (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                          (PROGN
+                            (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCAR |ISTMP#2|) '|Variable|)
+                                 (PROGN
+                                   (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                                   (AND (PAIRP |ISTMP#3|)
+                                    (EQ (QCDR |ISTMP#3|) NIL)
+                                    (PROGN
+                                      (SPADLET |x| (QCAR |ISTMP#3|))
+                                      'T)))))))
+                   (|member| |x| (|getUnionOrRecordTags| |m|))
+                   (SPADLET |u| (|bottomUpElt| |t|)))
+              |u|)
+             ((AND (PAIRP |m|) (EQ (QCAR |m|) '|Union|)
+                   (PAIRP |argModeSetList|)
+                   (EQ (QCDR |argModeSetList|) NIL)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCAR |argModeSetList|))
+                     (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL)
+                          (PROGN
+                            (SPADLET |ISTMP#2| (QCAR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCAR |ISTMP#2|) '|Variable|)
+                                 (PROGN
+                                   (SPADLET |ISTMP#3| (QCDR |ISTMP#2|))
+                                   (AND (PAIRP |ISTMP#3|)
+                                    (EQ (QCDR |ISTMP#3|) NIL)
+                                    (PROGN
+                                      (SPADLET |x| (QCAR |ISTMP#3|))
+                                      'T))))))))
+              (COND
+                ((AND (|member| |x| (|getUnionOrRecordTags| |m|))
+                      (SPADLET |u| (|bottomUpElt| |t|)))
+                 |u|)
+                ((NULL |$genValue|)
+                 (SPADLET |amsl| (|printableArgModeSetList|))
+                 (|throwKeyedMsgSP| 'S2IB0008
+                     (CONS (MAKESTRING "the union object")
+                           (CONS |amsl| NIL))
+                     |op|))
+                ('T (SPADLET |object| (|retract| (|getValue| |op|)))
+                 (COND
+                   ((BOOT-EQUAL |object| '|failed|)
+                    (|throwKeyedMsgSP| 'S2IB0008
+                        (CONS (MAKESTRING "the union object")
+                              (CONS |amsl| NIL))
+                        |op|))
+                   ('T
+                    (|putModeSet| |op| (CONS (|objMode| |object|) NIL))
+                    (|putValue| |op| |object|)
+                    (COND
+                      ((SPADLET |u| (|bottomUpElt| |t|)) |u|)
+                      ('T
+                       (|bottomUpForm0| |t| |op| |opName| |argl|
+                           |argModeSetList|))))))))
+             ((AND (NEQUAL |opName| '|elt|) (NEQUAL |opName| '|apply|)
+                   (EQL (|#| |argl|) 1)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (CAR (CAR |argModeSetList|)))
+                     (AND (PAIRP |ISTMP#1|)
+                          (EQ (QCAR |ISTMP#1|) '|Variable|)
+                          (PROGN
+                            (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                            (AND (PAIRP |ISTMP#2|)
+                                 (EQ (QCDR |ISTMP#2|) NIL)
+                                 (PROGN
+                                   (SPADLET |var| (QCAR |ISTMP#2|))
+                                   'T)))))
+                   (|member| |var| '(|first| |last| |rest|))
+                   (|isEltable| |op| |argl| (|#| |argl|))
+                   (SPADLET |u| (|bottomUpElt| |t|)))
+              |u|)
+             ((AND |$genValue|
+                   (SPADLET |u|
+                            (|bottomUpFormRetract| |t| |op| |opName|
+                                |argl| |argModeSetList|)))
+              |u|)
+             ((AND (NEQUAL |opName| '|elt|) (NEQUAL |opName| '|apply|)
+                   (|isEltable| |op| |argl| (|#| |argl|))
+                   (SPADLET |u| (|bottomUpElt| |t|)))
+              |u|)
+             ('T
+              (COND
+                ((FIXP |$HTCompanionWindowID|)
+                 (|mkCompanionPage| '|operationError| |t|)))
+              (SPADLET |amsl| (|printableArgModeSetList|))
+              (SPADLET |opName1|
+                       (COND
+                         ((BOOT-EQUAL |opName0| |$immediateDataSymbol|)
+                          (COND
+                            ((SPADLET |o|
+                                      (|coerceInteractive|
+                                       (|getValue| |op0|)
+                                       |$OutputForm|))
+                             (|outputTran| (|objValUnwrap| |o|)))
+                            ('T NIL)))
+                         ('T |opName0|)))
+              (COND
+                ((NULL |opName1|)
+                 (SPADLET |opName1|
+                          (COND
+                            ((SPADLET |o| (|getValue| |op0|))
+                             (|prefix2String| (|objMode| |o|)))
+                            ('T (MAKESTRING "<unknown type>"))))
+                 (SPADLET |msgKey|
+                          (COND
+                            ((NULL |amsl|) 'S2IB0013)
+                            ('T 'S2IB0012))))
+                ('T
+                 (SPADLET |msgKey|
+                          (COND
+                            ((NULL |amsl|) 'S2IB0011)
+                            ((SPADLET |n|
+                                      (|isSharpVarWithNum| |opName1|))
+                             (SPADLET |opName1| |n|) '|S2IB0008g|)
+                            ('T 'S2IB0008)))))
+              (|sayIntelligentMessageAboutOpAvailability| |opName1|
+                  (|#| |argl|))
+              (COND
+                ((NULL |$genValue|)
+                 (|keyedMsgCompFailureSP| |msgKey|
+                     (CONS |opName1| (CONS |amsl| NIL)) |op0|))
+                ('T
+                 (|throwKeyedMsgSP| |msgKey|
+                     (CONS |opName1| (CONS |amsl| NIL)) |op0|)))))))))))
+
+;sayIntelligentMessageAboutOpAvailability(opName, nArgs) ==
+;  -- see if we can give some decent messages about the availability if
+;  -- library messages
+;  NUMBERP opName => NIL
+;  oo :=  object2Identifier opOf opName
+;  if ( oo = "%" ) or ( oo = "Domain" ) or ( domainForm? opName ) then
+;    opName := "elt"
+;  nAllExposedMmsWithName := #getModemapsFromDatabase(opName, NIL)
+;  nAllMmsWithName        := #getAllModemapsFromDatabase(opName, NIL)
+;  -- first see if there are ANY ops with this name
+;  if nAllMmsWithName = 0 then
+;    sayKeyedMsg("S2IB0008a", [opName])
+;  else if nAllExposedMmsWithName = 0 then
+;    nAllMmsWithName = 1 => sayKeyedMsg("S2IB0008b", [opName])
+;    sayKeyedMsg("S2IB0008c", [opName, nAllMmsWithName])
+;  else
+;    -- now talk about specific arguments
+;    nAllExposedMmsWithNameAndArgs   := #getModemapsFromDatabase(opName, nArgs)
+;    nAllMmsWithNameAndArgs          := #getAllModemapsFromDatabase(opName, nArgs)
+;    nAllMmsWithNameAndArgs = 0 =>
+;        sayKeyedMsg("S2IB0008d", [opName, nArgs, nAllExposedMmsWithName, nAllMmsWithName - nAllExposedMmsWithName])
+;    nAllExposedMmsWithNameAndArgs = 0 =>
+;        sayKeyedMsg("S2IB0008e", [opName, nArgs, nAllMmsWithNameAndArgs - nAllExposedMmsWithNameAndArgs])
+;    sayKeyedMsg("S2IB0008f", [opName, nArgs, nAllExposedMmsWithNameAndArgs, nAllMmsWithNameAndArgs - nAllExposedMmsWithNameAndArgs])
+;  nil
+
+(DEFUN |sayIntelligentMessageAboutOpAvailability| (|opName| |nArgs|)
+  (PROG (|oo| |nAllExposedMmsWithName| |nAllMmsWithName|
+              |nAllExposedMmsWithNameAndArgs| |nAllMmsWithNameAndArgs|)
+    (RETURN
+      (COND
+        ((NUMBERP |opName|) NIL)
+        ('T (SPADLET |oo| (|object2Identifier| (|opOf| |opName|)))
+         (COND
+           ((OR (BOOT-EQUAL |oo| '%) (BOOT-EQUAL |oo| '|Domain|)
+                (|domainForm?| |opName|))
+            (SPADLET |opName| '|elt|)))
+         (SPADLET |nAllExposedMmsWithName|
+                  (|#| (|getModemapsFromDatabase| |opName| NIL)))
+         (SPADLET |nAllMmsWithName|
+                  (|#| (|getAllModemapsFromDatabase| |opName| NIL)))
+         (COND
+           ((EQL |nAllMmsWithName| 0)
+            (|sayKeyedMsg| '|S2IB0008a| (CONS |opName| NIL)))
+           ((EQL |nAllExposedMmsWithName| 0)
+            (COND
+              ((EQL |nAllMmsWithName| 1)
+               (|sayKeyedMsg| '|S2IB0008b| (CONS |opName| NIL)))
+              ('T
+               (|sayKeyedMsg| '|S2IB0008c|
+                   (CONS |opName| (CONS |nAllMmsWithName| NIL))))))
+           ('T
+            (SPADLET |nAllExposedMmsWithNameAndArgs|
+                     (|#| (|getModemapsFromDatabase| |opName| |nArgs|)))
+            (SPADLET |nAllMmsWithNameAndArgs|
+                     (|#| (|getAllModemapsFromDatabase| |opName|
+                              |nArgs|)))
+            (COND
+              ((EQL |nAllMmsWithNameAndArgs| 0)
+               (|sayKeyedMsg| '|S2IB0008d|
+                   (CONS |opName|
+                         (CONS |nArgs|
+                               (CONS |nAllExposedMmsWithName|
+                                     (CONS
+                                      (SPADDIFFERENCE |nAllMmsWithName|
+                                       |nAllExposedMmsWithName|)
+                                      NIL))))))
+              ((EQL |nAllExposedMmsWithNameAndArgs| 0)
+               (|sayKeyedMsg| '|S2IB0008e|
+                   (CONS |opName|
+                         (CONS |nArgs|
+                               (CONS (SPADDIFFERENCE
+                                      |nAllMmsWithNameAndArgs|
+                                      |nAllExposedMmsWithNameAndArgs|)
+                                     NIL)))))
+              ('T
+               (|sayKeyedMsg| '|S2IB0008f|
+                   (CONS |opName|
+                         (CONS |nArgs|
+                               (CONS |nAllExposedMmsWithNameAndArgs|
+                                     (CONS
+                                      (SPADDIFFERENCE
+                                       |nAllMmsWithNameAndArgs|
+                                       |nAllExposedMmsWithNameAndArgs|)
+                                      NIL)))))))))
+         NIL)))))
+
+;bottomUpType(t, type) ==
+;  mode :=
+;    if isPartialMode type then '(Mode)
+;    else if categoryForm?(type) then '(SubDomain (Domain))
+;         else '(Domain)
+;  val:= objNew(type,mode)
+;  putValue(t,val)
+;  -- have to fix the following
+;  putModeSet(t,[mode])
+
+(DEFUN |bottomUpType| (|t| |type|)
+  (PROG (|mode| |val|)
+    (RETURN
+      (PROGN
+        (SPADLET |mode|
+                 (COND
+                   ((|isPartialMode| |type|) '(|Mode|))
+                   ((|categoryForm?| |type|) '(|SubDomain| (|Domain|)))
+                   ('T '(|Domain|))))
+        (SPADLET |val| (|objNew| |type| |mode|))
+        (|putValue| |t| |val|)
+        (|putModeSet| |t| (CONS |mode| NIL))))))
+
+;bottomUpPercent(tree is [op,:argl]) ==
+;  -- handles a call %%(5), which means the output of step 5
+;  -- %%() is the same as %%(-1)
+;  null argl =>
+;    val:= fetchOutput(-1)
+;    putValue(op,val)
+;    putModeSet(op,[objMode(val)])
+;  argl is [t] =>
+;    i:= getArgValue(t,$Integer) =>
+;      val:= fetchOutput i
+;      putValue(op,val)
+;      putModeSet(op,[objMode(val)])
+;    throwKeyedMsgSP('"S2IB0006",NIL,t)
+;  throwKeyedMsgSP('"S2IB0006",NIL,op)
+
+(DEFUN |bottomUpPercent| (|tree|)
+  (PROG (|op| |argl| |t| |i| |val|)
+    (DECLARE (SPECIAL |$Integer|))
+    (RETURN
+      (PROGN
+        (SPADLET |op| (CAR |tree|))
+        (SPADLET |argl| (CDR |tree|))
+        (COND
+          ((NULL |argl|)
+           (SPADLET |val| (|fetchOutput| (SPADDIFFERENCE 1)))
+           (|putValue| |op| |val|)
+           (|putModeSet| |op| (CONS (|objMode| |val|) NIL)))
+          ((AND (PAIRP |argl|) (EQ (QCDR |argl|) NIL)
+                (PROGN (SPADLET |t| (QCAR |argl|)) 'T))
+           (COND
+             ((SPADLET |i| (|getArgValue| |t| |$Integer|))
+              (SPADLET |val| (|fetchOutput| |i|))
+              (|putValue| |op| |val|)
+              (|putModeSet| |op| (CONS (|objMode| |val|) NIL)))
+             ('T (|throwKeyedMsgSP| (MAKESTRING "S2IB0006") NIL |t|))))
+          ('T (|throwKeyedMsgSP| (MAKESTRING "S2IB0006") NIL |op|)))))))
+
+;bottomUpFormRetract(t,op,opName,argl,amsl) ==
+;  -- tries to find one argument, which can be pulled back, and calls
+;  -- bottomUpForm again. We do not retract the first argument to a
+;  -- setelt, because this is presumably a destructive operation and
+;  -- the retract can create a new object.
+;  -- if no such operation exists in the database, don't bother
+;  $inRetract: local := true
+;  null getAllModemapsFromDatabase(getUnname op,#argl) => NIL
+;  u := bottomUpFormAnyUnionRetract(t,op,opName,argl,amsl) => u
+;  a  := NIL
+;  b  := NIL
+;  ms := NIL
+;  for x in argl for m in amsl for i in 1.. repeat
+;    -- do not retract first arg of a setelt
+;    (i = 1) and (opName = "setelt") =>
+;        a := [x,:a]
+;        ms := [m,:ms]
+;    (i = 1) and (opName = "set!") =>
+;        a := [x,:a]
+;        ms := [m,:ms]
+;    if PAIRP(m) and CAR(m) = $EmptyMode then return NIL
+;    object:= retract getValue x
+;    a:= [x,:a]
+;    EQ(object,'failed) =>
+;        putAtree(x,'retracted,nil)
+;        ms := [m, :ms]
+;    b:= true
+;    RPLACA(m,objMode(object))
+;    ms := [COPY_-TREE m, :ms]
+;    putAtree(x,'retracted,true)
+;    putValue(x,object)
+;    putModeSet(x,[objMode(object)])
+;  --insert pulled-back items
+;  a := nreverse a
+;  ms := nreverse ms
+;  -- check that we haven't seen these types before
+;  typesHad := getAtree(t, 'typesHad)
+;  if member(ms, typesHad) then b := nil
+;  else putAtree(t, 'typesHad, cons(ms, typesHad))
+;  b and bottomUpForm(t,op,opName,a,amsl)
+
+(DEFUN |bottomUpFormRetract| (|t| |op| |opName| |argl| |amsl|)
+  (PROG (|$inRetract| |u| |object| |a| |ms| |typesHad| |b|)
+    (DECLARE (SPECIAL |$inRetract| |$EmptyMode|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |$inRetract| 'T)
+             (COND
+               ((NULL (|getAllModemapsFromDatabase| (|getUnname| |op|)
+                          (|#| |argl|)))
+                NIL)
+               ((SPADLET |u|
+                         (|bottomUpFormAnyUnionRetract| |t| |op|
+                             |opName| |argl| |amsl|))
+                |u|)
+               ('T (SPADLET |a| NIL) (SPADLET |b| NIL)
+                (SPADLET |ms| NIL)
+                (DO ((G166983 |argl| (CDR G166983)) (|x| NIL)
+                     (G166984 |amsl| (CDR G166984)) (|m| NIL)
+                     (|i| 1 (QSADD1 |i|)))
+                    ((OR (ATOM G166983)
+                         (PROGN (SETQ |x| (CAR G166983)) NIL)
+                         (ATOM G166984)
+                         (PROGN (SETQ |m| (CAR G166984)) NIL))
+                     NIL)
+                  (SEQ (EXIT (COND
+                               ((AND (EQL |i| 1)
+                                     (BOOT-EQUAL |opName| '|setelt|))
+                                (SPADLET |a| (CONS |x| |a|))
+                                (SPADLET |ms| (CONS |m| |ms|)))
+                               ((AND (EQL |i| 1)
+                                     (BOOT-EQUAL |opName| '|set!|))
+                                (SPADLET |a| (CONS |x| |a|))
+                                (SPADLET |ms| (CONS |m| |ms|)))
+                               ('T
+                                (COND
+                                  ((AND (PAIRP |m|)
+                                    (BOOT-EQUAL (CAR |m|) |$EmptyMode|))
+                                   (RETURN NIL)))
+                                (SPADLET |object|
+                                         (|retract| (|getValue| |x|)))
+                                (SPADLET |a| (CONS |x| |a|))
+                                (COND
+                                  ((EQ |object| '|failed|)
+                                   (|putAtree| |x| '|retracted| NIL)
+                                   (SPADLET |ms| (CONS |m| |ms|)))
+                                  ('T (SPADLET |b| 'T)
+                                   (RPLACA |m| (|objMode| |object|))
+                                   (SPADLET |ms|
+                                    (CONS (COPY-TREE |m|) |ms|))
+                                   (|putAtree| |x| '|retracted| 'T)
+                                   (|putValue| |x| |object|)
+                                   (|putModeSet| |x|
+                                    (CONS (|objMode| |object|) NIL)))))))))
+                (SPADLET |a| (NREVERSE |a|))
+                (SPADLET |ms| (NREVERSE |ms|))
+                (SPADLET |typesHad| (|getAtree| |t| '|typesHad|))
+                (COND
+                  ((|member| |ms| |typesHad|) (SPADLET |b| NIL))
+                  ('T
+                   (|putAtree| |t| '|typesHad| (CONS |ms| |typesHad|))))
+                (AND |b| (|bottomUpForm| |t| |op| |opName| |a| |amsl|)))))))))
+
+;retractAtree atr ==
+;    object:= retract getValue atr
+;    EQ(object,'failed) =>
+;        putAtree(atr,'retracted,nil)
+;        nil
+;    putAtree(atr,'retracted,true)
+;    putValue(atr,object)
+;    putModeSet(atr,[objMode(object)])
+;    true
+
+(DEFUN |retractAtree| (|atr|)
+  (PROG (|object|)
+    (RETURN
+      (PROGN
+        (SPADLET |object| (|retract| (|getValue| |atr|)))
+        (COND
+          ((EQ |object| '|failed|) (|putAtree| |atr| '|retracted| NIL)
+           NIL)
+          ('T (|putAtree| |atr| '|retracted| 'T)
+           (|putValue| |atr| |object|)
+           (|putModeSet| |atr| (CONS (|objMode| |object|) NIL)) 'T))))))
+
+;bottomUpFormAnyUnionRetract(t,op,opName,argl,amsl) ==
+;  -- see if we have a Union
+;  ok := NIL
+;  for m in amsl while not ok repeat
+;    if atom first(m) then return NIL
+;    first m = $Any => ok := true
+;    (first first m = 'Union) => ok := true
+;  not ok => NIL
+;  a:= NIL
+;  b:= NIL
+;  for x in argl for m in amsl for i in 0.. repeat
+;    m0 := first m
+;    if ( (m0 = $Any) or (first m0 = 'Union) ) and
+;      ('failed^=(object:=retract getValue x)) then
+;        b := true
+;        RPLACA(m,objMode(object))
+;        putModeSet(x,[objMode(object)])
+;        putValue(x,object)
+;    a := cons(x,a)
+;  b and bottomUpForm(t,op,opName,nreverse a,amsl)
+
+(DEFUN |bottomUpFormAnyUnionRetract| (|t| |op| |opName| |argl| |amsl|)
+  (PROG (|ok| |m0| |object| |b| |a|)
+    (DECLARE (SPECIAL |$Any|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |ok| NIL)
+             (DO ((G167032 |amsl| (CDR G167032)) (|m| NIL))
+                 ((OR (ATOM G167032)
+                      (PROGN (SETQ |m| (CAR G167032)) NIL)
+                      (NULL (NULL |ok|)))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (COND ((ATOM (CAR |m|)) (RETURN NIL)))
+                            (COND
+                              ((BOOT-EQUAL (CAR |m|) |$Any|)
+                               (SPADLET |ok| 'T))
+                              ((BOOT-EQUAL (CAR (CAR |m|)) '|Union|)
+                               (SPADLET |ok| 'T)))))))
+             (COND
+               ((NULL |ok|) NIL)
+               ('T (SPADLET |a| NIL) (SPADLET |b| NIL)
+                (DO ((G167047 |argl| (CDR G167047)) (|x| NIL)
+                     (G167048 |amsl| (CDR G167048)) (|m| NIL)
+                     (|i| 0 (QSADD1 |i|)))
+                    ((OR (ATOM G167047)
+                         (PROGN (SETQ |x| (CAR G167047)) NIL)
+                         (ATOM G167048)
+                         (PROGN (SETQ |m| (CAR G167048)) NIL))
+                     NIL)
+                  (SEQ (EXIT (PROGN
+                               (SPADLET |m0| (CAR |m|))
+                               (COND
+                                 ((AND (OR (BOOT-EQUAL |m0| |$Any|)
+                                        (BOOT-EQUAL (CAR |m0|)
+                                         '|Union|))
+                                       (NEQUAL '|failed|
+                                        (SPADLET |object|
+                                         (|retract| (|getValue| |x|)))))
+                                  (SPADLET |b| 'T)
+                                  (RPLACA |m| (|objMode| |object|))
+                                  (|putModeSet| |x|
+                                      (CONS (|objMode| |object|) NIL))
+                                  (|putValue| |x| |object|)))
+                               (SPADLET |a| (CONS |x| |a|))))))
+                (AND |b|
+                     (|bottomUpForm| |t| |op| |opName| (NREVERSE |a|)
+                         |amsl|)))))))))
+
+;bottomUpFormUntaggedUnionRetract(t,op,opName,argl,amsl) ==
+;  -- see if we have a Union with no tags, if so retract all such guys
+;  ok := NIL
+;  for [m] in amsl while not ok repeat
+;    if atom m then return NIL
+;    if m is ['Union, :.] and null getUnionOrRecordTags m then ok := true
+;  not ok => NIL
+;  a:= NIL
+;  b:= NIL
+;  for x in argl for m in amsl for i in 0.. repeat
+;    m0 := first m
+;    if (m0 is ['Union, :.] and null getUnionOrRecordTags m0) and
+;      ('failed ^= (object:=retract getValue x)) then
+;        b := true
+;        RPLACA(m,objMode(object))
+;        putModeSet(x,[objMode(object)])
+;        putValue(x,object)
+;    a := cons(x,a)
+;  b and bottomUpForm(t,op,opName,nreverse a,amsl)
+
+(DEFUN |bottomUpFormUntaggedUnionRetract|
+       (|t| |op| |opName| |argl| |amsl|)
+  (PROG (|m| |ok| |m0| |object| |b| |a|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |ok| NIL)
+             (DO ((G167083 |amsl| (CDR G167083)) (G167070 NIL))
+                 ((OR (ATOM G167083)
+                      (PROGN (SETQ G167070 (CAR G167083)) NIL)
+                      (PROGN
+                        (PROGN
+                          (SPADLET |m| (CAR G167070))
+                          G167070)
+                        NIL)
+                      (NULL (NULL |ok|)))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (COND ((ATOM |m|) (RETURN NIL)))
+                            (COND
+                              ((AND (PAIRP |m|)
+                                    (EQ (QCAR |m|) '|Union|)
+                                    (NULL (|getUnionOrRecordTags| |m|)))
+                               (SPADLET |ok| 'T))
+                              ('T NIL))))))
+             (COND
+               ((NULL |ok|) NIL)
+               ('T (SPADLET |a| NIL) (SPADLET |b| NIL)
+                (DO ((G167099 |argl| (CDR G167099)) (|x| NIL)
+                     (G167100 |amsl| (CDR G167100)) (|m| NIL)
+                     (|i| 0 (QSADD1 |i|)))
+                    ((OR (ATOM G167099)
+                         (PROGN (SETQ |x| (CAR G167099)) NIL)
+                         (ATOM G167100)
+                         (PROGN (SETQ |m| (CAR G167100)) NIL))
+                     NIL)
+                  (SEQ (EXIT (PROGN
+                               (SPADLET |m0| (CAR |m|))
+                               (COND
+                                 ((AND (PAIRP |m0|)
+                                       (EQ (QCAR |m0|) '|Union|)
+                                       (NULL
+                                        (|getUnionOrRecordTags| |m0|))
+                                       (NEQUAL '|failed|
+                                        (SPADLET |object|
+                                         (|retract| (|getValue| |x|)))))
+                                  (SPADLET |b| 'T)
+                                  (RPLACA |m| (|objMode| |object|))
+                                  (|putModeSet| |x|
+                                      (CONS (|objMode| |object|) NIL))
+                                  (|putValue| |x| |object|)))
+                               (SPADLET |a| (CONS |x| |a|))))))
+                (AND |b|
+                     (|bottomUpForm| |t| |op| |opName| (NREVERSE |a|)
+                         |amsl|)))))))))
+
+;bottomUpElt (form:=[op,:argl]) ==
+;  -- this transfers expressions that look like function calls into
+;  -- forms with elt or apply.
+;    ms := bottomUp op
+;    ms and (ms is [['Union,:.]] or ms is [['Record,:.]]) =>
+;        RPLAC(CDR form, [op,:argl])
+;        RPLAC(CAR form, mkAtreeNode "elt")
+;        bottomUp form
+;    target  := getTarget form
+;    newOps := [mkAtreeNode "elt", mkAtreeNode "apply"]
+;    u := nil
+;    while ^u for newOp in newOps repeat
+;        newArgs := [op,:argl]
+;        if selectMms(newOp, newArgs, target) then
+;            RPLAC(CDR form, newArgs)
+;            RPLAC(CAR form, newOp)
+;            u := bottomUp form
+;    while ^u and ( "and"/[retractAtree(a) for a in newArgs] ) repeat
+;        while ^u for newOp in newOps repeat
+;            newArgs := [op,:argl]
+;            if selectMms(newOp, newArgs, target) then
+;                RPLAC(CDR form, newArgs)
+;                RPLAC(CAR form, newOp)
+;                u := bottomUp form
+;    u
+
+(DEFUN |bottomUpElt| (|form|)
+  (PROG (|op| |argl| |ms| |ISTMP#1| |target| |newOps| |newArgs| |u|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |op| (CAR |form|))
+             (SPADLET |argl| (CDR |form|))
+             (SPADLET |ms| (|bottomUp| |op|))
+             (COND
+               ((AND |ms|
+                     (OR (AND (PAIRP |ms|) (EQ (QCDR |ms|) NIL)
+                              (PROGN
+                                (SPADLET |ISTMP#1| (QCAR |ms|))
+                                (AND (PAIRP |ISTMP#1|)
+                                     (EQ (QCAR |ISTMP#1|) '|Union|))))
+                         (AND (PAIRP |ms|) (EQ (QCDR |ms|) NIL)
+                              (PROGN
+                                (SPADLET |ISTMP#1| (QCAR |ms|))
+                                (AND (PAIRP |ISTMP#1|)
+                                     (EQ (QCAR |ISTMP#1|) '|Record|))))))
+                (RPLAC (CDR |form|) (CONS |op| |argl|))
+                (RPLAC (CAR |form|) (|mkAtreeNode| '|elt|))
+                (|bottomUp| |form|))
+               ('T (SPADLET |target| (|getTarget| |form|))
+                (SPADLET |newOps|
+                         (CONS (|mkAtreeNode| '|elt|)
+                               (CONS (|mkAtreeNode| '|apply|) NIL)))
+                (SPADLET |u| NIL)
+                (DO ((G167149 |newOps| (CDR G167149))
+                     (|newOp| NIL))
+                    ((OR (NULL (NULL |u|)) (ATOM G167149)
+                         (PROGN (SETQ |newOp| (CAR G167149)) NIL))
+                     NIL)
+                  (SEQ (EXIT (PROGN
+                               (SPADLET |newArgs| (CONS |op| |argl|))
+                               (COND
+                                 ((|selectMms| |newOp| |newArgs|
+                                      |target|)
+                                  (RPLAC (CDR |form|) |newArgs|)
+                                  (RPLAC (CAR |form|) |newOp|)
+                                  (SPADLET |u| (|bottomUp| |form|)))
+                                 ('T NIL))))))
+                (DO ()
+                    ((NULL (AND (NULL |u|)
+                                (PROG (G167164)
+                                  (SPADLET G167164 'T)
+                                  (RETURN
+                                    (DO
+                                     ((G167170 NIL (NULL G167164))
+                                      (G167171 |newArgs|
+                                       (CDR G167171))
+                                      (|a| NIL))
+                                     ((OR G167170 (ATOM G167171)
+                                       (PROGN
+                                         (SETQ |a| (CAR G167171))
+                                         NIL))
+                                      G167164)
+                                      (SEQ
+                                       (EXIT
+                                        (SETQ G167164
+                                         (AND G167164
+                                          (|retractAtree| |a|))))))))))
+                     NIL)
+                  (SEQ (EXIT (DO ((G167184 |newOps| (CDR G167184))
+                                  (|newOp| NIL))
+                                 ((OR (NULL (NULL |u|))
+                                      (ATOM G167184)
+                                      (PROGN
+                                        (SETQ |newOp| (CAR G167184))
+                                        NIL))
+                                  NIL)
+                               (SEQ (EXIT
+                                     (PROGN
+                                       (SPADLET |newArgs|
+                                        (CONS |op| |argl|))
+                                       (COND
+                                         ((|selectMms| |newOp|
+                                           |newArgs| |target|)
+                                          (RPLAC (CDR |form|)
+                                           |newArgs|)
+                                          (RPLAC (CAR |form|) |newOp|)
+                                          (SPADLET |u|
+                                           (|bottomUp| |form|)))
+                                         ('T NIL)))))))))
+                |u|)))))))
+
+;isEltable(op,argl,numArgs) ==
+;  -- determines if the object might possible have an elt function
+;  -- we exclude Mapping and Variable types explicitly
+;  v := getValue op =>
+;    ZEROP numArgs => true
+;    not(m := objMode(v)) => nil
+;    m is ['Mapping, :.] => nil
+;    objVal(v) is ['MAP, :mapDef] and numMapArgs(mapDef) > 0 => nil
+;    true
+;  m := getMode op =>
+;    ZEROP numArgs => true
+;    m is ['Mapping, :.] => nil
+;    true
+;  numArgs ^= 1 => nil
+;  name := getUnname op
+;  name = 'SEQ => nil
+;--not (name in '(a e h s)) and getAllModemapsFromDatabase(name, nil) => nil
+;  arg := first argl
+;  (getUnname arg) ^= 'construct => nil
+;  true
+
+(DEFUN |isEltable| (|op| |argl| |numArgs|)
+  (PROG (|v| |ISTMP#1| |mapDef| |m| |name| |arg|)
+    (RETURN
+      (COND
+        ((SPADLET |v| (|getValue| |op|))
+         (COND
+           ((ZEROP |numArgs|) 'T)
+           ((NULL (SPADLET |m| (|objMode| |v|))) NIL)
+           ((AND (PAIRP |m|) (EQ (QCAR |m|) '|Mapping|)) NIL)
+           ((AND (PROGN
+                   (SPADLET |ISTMP#1| (|objVal| |v|))
+                   (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) 'MAP)
+                        (PROGN (SPADLET |mapDef| (QCDR |ISTMP#1|)) 'T)))
+                 (> (|numMapArgs| |mapDef|) 0))
+            NIL)
+           ('T 'T)))
+        ((SPADLET |m| (|getMode| |op|))
+         (COND
+           ((ZEROP |numArgs|) 'T)
+           ((AND (PAIRP |m|) (EQ (QCAR |m|) '|Mapping|)) NIL)
+           ('T 'T)))
+        ((NEQUAL |numArgs| 1) NIL)
+        ('T (SPADLET |name| (|getUnname| |op|))
+         (COND
+           ((BOOT-EQUAL |name| 'SEQ) NIL)
+           ('T (SPADLET |arg| (CAR |argl|))
+            (COND
+              ((NEQUAL (|getUnname| |arg|) '|construct|) NIL)
+              ('T 'T)))))))))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}

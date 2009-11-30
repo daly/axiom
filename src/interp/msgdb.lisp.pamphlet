@@ -1,0 +1,2800 @@
+\documentclass{article}
+\usepackage{axiom}
+\begin{document}
+\title{\$SPAD/src/interp msgdb.lisp}
+\author{The Axiom Team}
+\maketitle
+\begin{abstract}
+\end{abstract}
+\eject
+\tableofcontents
+\eject
+\begin{verbatim}
+Description of Messages
+
+Axiom messages are read from a flat file database and returned
+as one long string.  They are preceded in the database by a key and
+this is how they are referenced from code.  For example, one key is
+S2IL0001 which means:
+   S2          Scratchpad II designation
+   I           from the interpreter
+   L           originally from LISPLIB BOOT
+   0001        a sequence number
+
+Each message may contain formatting codes and and parameter codes.
+The formatting codes are:
+   %b          turn on bright printing
+   %ceoff      turn off centering
+   %ceon       turn on centering
+   %d          turn off bright printing
+   %f          user defined printing
+   %i          start indentation of 3 more spaces
+   %l          start a new line
+   %m          math-print an expression
+   %rjoff      turn off right justification (actually ragged left)
+   %rjon       turn on right justification (actually ragged left)
+   %s          pretty-print as an S-expression
+   %u          unindent 3 spaces
+   %x#         insert # spaces
+
+The parameter codes look like %1, %2b, %3p, %4m, %5bp, %6s where the
+digit is the parameter number ans the letters following indicate
+additional formatting. You can indicate as many additional formatting
+qualifiers as you like, to the degree they make sense. The "p" code
+means to call prefix2String on the parameter, a standard way of
+printing abbreviated types.  The "P" operator maps prefix2String over 
+its arguments.  The "o" operation formats the argument as an operation 
+name.  "b" means to print that parameter in
+a bold (bright) font. "c" means to center that parameter on a
+new line.  "f" means that the parameter is a list [fn, :args]
+and that "fn" is to be called on "args" to get the text. "r" means
+to right justify (ragged left) the argument.
+
+Look in the file with the name defined in $defaultMsgDatabaseName
+above for examples.
+
+\end{verbatim}
+<<*>>=
+
+(IN-PACKAGE "BOOT" )
+
+;--% Message Database Code and Message Utility Functions
+;SETANDFILEQ($msgDatabase,NIL)
+
+
+;SETANDFILEQ($cacheMessages,'T)  -- for debugging purposes
+
+(SETANDFILEQ |$cacheMessages| 'T)
+
+;SETANDFILEQ($msgAlist,NIL)
+
+(SETANDFILEQ |$msgAlist| NIL) 
+
+;SETANDFILEQ($msgDatabaseName,NIL)
+
+(SETANDFILEQ |$msgDatabaseName| NIL) 
+
+;SETANDFILEQ($testingErrorPrefix, '"Daly Bug")
+
+(SETANDFILEQ |$testingErrorPrefix| (MAKESTRING "Daly Bug")) 
+
+;SETANDFILEQ($texFormatting, false)
+
+(SETANDFILEQ |$texFormatting| NIL) 
+
+;--% Accessing the Database
+;string2Words l ==
+;  i := 0
+;  [w while wordFrom(l,i) is [w,i]]
+
+(DEFUN |string2Words| (|l|)
+  (PROG (|ISTMP#1| |w| |ISTMP#2| |i|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |i| 0)
+             (PROG (G166078)
+               (SPADLET G166078 NIL)
+               (RETURN
+                 (DO ()
+                     ((NULL (PROGN
+                              (SPADLET |ISTMP#1| (|wordFrom| |l| |i|))
+                              (AND (PAIRP |ISTMP#1|)
+                                   (PROGN
+                                     (SPADLET |w| (QCAR |ISTMP#1|))
+                                     (SPADLET |ISTMP#2|
+                                      (QCDR |ISTMP#1|))
+                                     (AND (PAIRP |ISTMP#2|)
+                                      (EQ (QCDR |ISTMP#2|) NIL)
+                                      (PROGN
+                                        (SPADLET |i| (QCAR |ISTMP#2|))
+                                        'T))))))
+                      (NREVERSE0 G166078))
+                   (SEQ (EXIT (SETQ G166078 (CONS |w| G166078))))))))))))
+
+;wordFrom(l,i) ==
+;  maxIndex := MAXINDEX l
+;  k := or/[j for j in i..maxIndex | l.j ^= char ('_ ) ] or return nil
+;  buf := '""
+;  while k < maxIndex and (c := l.k) ^= char ('_ ) repeat
+;    ch :=
+;      c = char '__   => l.(k := 1+k)  --this may exceed bounds
+;      c
+;    buf := STRCONC(buf,ch)
+;    k := k + 1
+;  if k = maxIndex and (c := l.k) ^= char ('_ ) then buf := STRCONC(buf,c)
+;  [buf,k+1]
+
+(DEFUN |wordFrom| (|l| |i|)
+  (PROG (|maxIndex| |ch| |k| |c| |buf|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |maxIndex| (MAXINDEX |l|))
+             (SPADLET |k|
+                      (OR (PROG (G166098)
+                            (SPADLET G166098 NIL)
+                            (RETURN
+                              (DO ((G166105 NIL G166098)
+                                   (|j| |i| (+ |j| 1)))
+                                  ((OR G166105 (> |j| |maxIndex|))
+                                   G166098)
+                                (SEQ (EXIT
+                                      (COND
+                                        ((NEQUAL (ELT |l| |j|)
+                                          (|char| '| |))
+                                         (SETQ G166098
+                                          (OR G166098 |j|)))))))))
+                          (RETURN NIL)))
+             (SPADLET |buf| (MAKESTRING ""))
+             (DO ()
+                 ((NULL (AND (> |maxIndex| |k|)
+                             (NEQUAL (SPADLET |c| (ELT |l| |k|))
+                                     (|char| '| |))))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |ch|
+                                     (COND
+                                       ((BOOT-EQUAL |c| (|char| '_))
+                                        (ELT |l|
+                                         (SPADLET |k| (PLUS 1 |k|))))
+                                       ('T |c|)))
+                            (SPADLET |buf| (STRCONC |buf| |ch|))
+                            (SPADLET |k| (PLUS |k| 1))))))
+             (COND
+               ((AND (BOOT-EQUAL |k| |maxIndex|)
+                     (NEQUAL (SPADLET |c| (ELT |l| |k|)) (|char| '| |)))
+                (SPADLET |buf| (STRCONC |buf| |c|))))
+             (CONS |buf| (CONS (PLUS |k| 1) NIL)))))))
+
+;getKeyedMsg key == fetchKeyedMsg(key,false)
+
+(DEFUN |getKeyedMsg| (|key|) (|fetchKeyedMsg| |key| NIL)) 
+
+;--% Formatting and Printing Keyed Messages
+;segmentKeyedMsg(msg) == string2Words msg
+
+(DEFUN |segmentKeyedMsg| (|msg|) (|string2Words| |msg|)) 
+
+;segmentedMsgPreprocess x ==
+;  ATOM x => x
+;  [head,:tail] := x
+;  center := rightJust := NIL
+;  if head in '(%ceon "%ceon") then center := true
+;  if head in '(%rjon "%rjon") then rightJust := true
+;  center or rightJust =>
+;    -- start collecting terms
+;    y := NIL
+;    ok := true
+;    while tail and ok repeat
+;      [t,:tail] := tail
+;      t in '(%ceoff "%ceoff" %rjoff "%rjoff") => ok := NIL
+;      y := CONS(segmentedMsgPreprocess t,y)
+;    head1 := [(center => '"%ce"; '"%rj"),:NREVERSE y]
+;    NULL tail => [head1]
+;    [head1,:segmentedMsgPreprocess tail]
+;  head1 := segmentedMsgPreprocess head
+;  tail1 := segmentedMsgPreprocess tail
+;  EQ(head,head1) and EQ(tail,tail1) => x
+;  [head1,:tail1]
+
+(DEFUN |segmentedMsgPreprocess| (|x|)
+  (PROG (|head| |center| |rightJust| |LETTMP#1| |t| |tail| |ok| |y|
+                |head1| |tail1|)
+    (RETURN
+      (SEQ (COND
+             ((ATOM |x|) |x|)
+             ('T (SPADLET |head| (CAR |x|)) (SPADLET |tail| (CDR |x|))
+              (SPADLET |center| (SPADLET |rightJust| NIL))
+              (COND
+                ((|member| |head| '(|%ceon| "%ceon"))
+                 (SPADLET |center| 'T)))
+              (COND
+                ((|member| |head| '(|%rjon| "%rjon"))
+                 (SPADLET |rightJust| 'T)))
+              (COND
+                ((OR |center| |rightJust|) (SPADLET |y| NIL)
+                 (SPADLET |ok| 'T)
+                 (DO () ((NULL (AND |tail| |ok|)) NIL)
+                   (SEQ (EXIT (PROGN
+                                (SPADLET |LETTMP#1| |tail|)
+                                (SPADLET |t| (CAR |LETTMP#1|))
+                                (SPADLET |tail| (CDR |LETTMP#1|))
+                                (COND
+                                  ((|member| |t|
+                                    '(|%ceoff| "%ceoff" |%rjoff|
+                                      "%rjoff"))
+                                   (SPADLET |ok| NIL))
+                                  ('T
+                                   (SPADLET |y|
+                                    (CONS
+                                     (|segmentedMsgPreprocess| |t|)
+                                     |y|))))))))
+                 (SPADLET |head1|
+                          (CONS (COND
+                                  (|center| (MAKESTRING "%ce"))
+                                  ('T (MAKESTRING "%rj")))
+                                (NREVERSE |y|)))
+                 (COND
+                   ((NULL |tail|) (CONS |head1| NIL))
+                   ('T
+                    (CONS |head1| (|segmentedMsgPreprocess| |tail|)))))
+                ('T (SPADLET |head1| (|segmentedMsgPreprocess| |head|))
+                 (SPADLET |tail1| (|segmentedMsgPreprocess| |tail|))
+                 (COND
+                   ((AND (EQ |head| |head1|) (EQ |tail| |tail1|)) |x|)
+                   ('T (CONS |head1| |tail1|)))))))))))
+
+;removeAttributes msg ==
+;    --takes a segmented message and returns it with the attributes
+;    --separted.
+;    first msg ^= '"%atbeg" =>
+;        [msg,NIL]
+;    attList := []
+;    until item = '"%atend" repeat
+;        msg     := rest  msg
+;        item    := first msg
+;        attList := [INTERN item,:attList]
+;    msg := rest msg
+;    attList := rest attList
+;    [msg,attList]
+
+(DEFUN |removeAttributes| (|msg|)
+  (PROG (|item| |attList|)
+    (RETURN
+      (SEQ (COND
+             ((NEQUAL (CAR |msg|) (MAKESTRING "%atbeg"))
+              (CONS |msg| (CONS NIL NIL)))
+             ('T (SPADLET |attList| NIL)
+              (DO ((G166190 NIL
+                       (BOOT-EQUAL |item| (MAKESTRING "%atend"))))
+                  (G166190 NIL)
+                (SEQ (EXIT (PROGN
+                             (SPADLET |msg| (CDR |msg|))
+                             (SPADLET |item| (CAR |msg|))
+                             (SPADLET |attList|
+                                      (CONS (INTERN |item|) |attList|))))))
+              (SPADLET |msg| (CDR |msg|))
+              (SPADLET |attList| (CDR |attList|))
+              (CONS |msg| (CONS |attList| NIL))))))))
+
+;substituteSegmentedMsg(msg,args) ==
+;  -- this does substitution of the parameters
+;  l := NIL
+;  nargs := #args
+;  for x in segmentedMsgPreprocess msg repeat
+;    -- x is a list
+;    PAIRP x =>
+;      l := cons(substituteSegmentedMsg(x,args),l)
+;    c := x.0
+;    n := STRINGLENGTH x
+;    -- x is a special case
+;    (n > 2) and (c = "%") and (x.1 = "k") =>
+;        l := NCONC(NREVERSE pkey SUBSTRING(x,2,NIL),l)
+;    -- ?name gets replaced by '"Push PF10" or '"Type >b (enter)"
+;    (x.0 = char "?") and n > 1 and (v := pushOrTypeFuture(INTERN x,nil)) =>
+;      l := NCONC(NREVERSE v,l)
+;    -- x requires parameter substitution
+;    (x.0 = char "%") and (n > 1) and (DIGITP x.1) =>
+;      a := DIG2FIX x.1
+;      arg :=
+;        a <= nargs => args.(a-1)
+;        '"???"
+;      -- now pull out qualifiers
+;      q := NIL
+;      for i in 2..(n-1) repeat q := cons(x.i,q)
+;      -- Note 'f processing must come first.
+;      if MEMQ(char 'f,q) then
+;          arg :=
+;              PAIRP arg => APPLY(first arg, rest arg)
+;              arg
+;      if MEMQ(char 'm,q) then arg := [['"%m",:arg]]
+;      if MEMQ(char 's,q) then arg := [['"%s",:arg]]
+;      if MEMQ(char 'p,q) then
+;          $texFormatting => arg := prefix2StringAsTeX arg
+;          arg := prefix2String arg
+;      if MEMQ(char 'P,q) then
+;          $texFormatting => arg := [prefix2StringAsTeX x for x in arg]
+;          arg := [prefix2String x for x in arg]
+;      if MEMQ(char 'o, q) and $texFormatting then arg := operationLink(arg)
+;      if MEMQ(char 'c,q) then arg := [['"%ce",:arg]]
+;      if MEMQ(char 'r,q) then arg := [['"%rj",:arg]]
+;      if MEMQ(char 'l,q) then l := cons('"%l",l)
+;      if MEMQ(char 'b,q) then l := cons('"%b",l)
+;      --we splice in arguments that are lists
+;      --if y is not specified, then the adding of blanks is
+;      --stifled after the first item in the list until the
+;      --end of the list. (using %n and %y)
+;      l :=
+;         PAIRP(arg) =>
+;           MEMQ(char 'y,q) or (CAR arg = '"%y") or ((LENGTH arg) = 1)  =>
+;             APPEND(REVERSE arg, l)
+;           head := first arg
+;           tail := rest arg
+;           ['"%y",:APPEND(REVERSE tail, ['"%n",head,:l ]) ]
+;         cons(arg,l)
+;      if MEMQ(char 'b,q) then l := cons('"%d",l)
+;      for ch in '(_. _, _! _: _; _?) repeat
+;        if MEMQ(char ch,q) then l := cons(ch,l)
+;    --x is a plain word
+;    l := cons(x,l)
+;  addBlanks NREVERSE l
+
+(DEFUN |substituteSegmentedMsg| (|msg| |args|)
+  (PROG (|nargs| |c| |n| |v| |a| |q| |arg| |head| |tail| |l|)
+  (declare (special |$texFormatting|))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |l| NIL)
+             (SPADLET |nargs| (|#| |args|))
+             (DO ((G166215 (|segmentedMsgPreprocess| |msg|)
+                      (CDR G166215))
+                  (|x| NIL))
+                 ((OR (ATOM G166215)
+                      (PROGN (SETQ |x| (CAR G166215)) NIL))
+                  NIL)
+               (SEQ (EXIT (COND
+                            ((PAIRP |x|)
+                             (SPADLET |l|
+                                      (CONS
+                                       (|substituteSegmentedMsg| |x|
+                                        |args|)
+                                       |l|)))
+                            ('T (SPADLET |c| (ELT |x| 0))
+                             (SPADLET |n| (STRINGLENGTH |x|))
+                             (COND
+                               ((AND (> |n| 2) (BOOT-EQUAL |c| '%)
+                                     (BOOT-EQUAL (ELT |x| 1) '|k|))
+                                (SPADLET |l|
+                                         (NCONC
+                                          (NREVERSE
+                                           (|pkey|
+                                            (SUBSTRING |x| 2 NIL)))
+                                          |l|)))
+                               ((AND (BOOT-EQUAL (ELT |x| 0)
+                                      (|char| '?))
+                                     (> |n| 1)
+                                     (SPADLET |v|
+                                      (|pushOrTypeFuture| (INTERN |x|)
+                                       NIL)))
+                                (SPADLET |l|
+                                         (NCONC (NREVERSE |v|) |l|)))
+                               ((AND (BOOT-EQUAL (ELT |x| 0)
+                                      (|char| '%))
+                                     (> |n| 1) (DIGITP (ELT |x| 1)))
+                                (SPADLET |a| (DIG2FIX (ELT |x| 1)))
+                                (SPADLET |arg|
+                                         (COND
+                                           ((<= |a| |nargs|)
+                                            (ELT |args|
+                                             (SPADDIFFERENCE |a| 1)))
+                                           ('T (MAKESTRING "???"))))
+                                (SPADLET |q| NIL)
+                                (DO ((G166224 (SPADDIFFERENCE |n| 1))
+                                     (|i| 2 (QSADD1 |i|)))
+                                    ((QSGREATERP |i| G166224) NIL)
+                                  (SEQ (EXIT
+                                        (SPADLET |q|
+                                         (CONS (ELT |x| |i|) |q|)))))
+                                (COND
+                                  ((MEMQ (|char| '|f|) |q|)
+                                   (SPADLET |arg|
+                                    (COND
+                                      ((PAIRP |arg|)
+                                       (APPLY (CAR |arg|) (CDR |arg|)))
+                                      ('T |arg|)))))
+                                (COND
+                                  ((MEMQ (|char| '|m|) |q|)
+                                   (SPADLET |arg|
+                                    (CONS
+                                     (CONS (MAKESTRING "%m") |arg|)
+                                     NIL))))
+                                (COND
+                                  ((MEMQ (|char| '|s|) |q|)
+                                   (SPADLET |arg|
+                                    (CONS
+                                     (CONS (MAKESTRING "%s") |arg|)
+                                     NIL))))
+                                (COND
+                                  ((MEMQ (|char| '|p|) |q|)
+                                   (COND
+                                     (|$texFormatting|
+                                      (SPADLET |arg|
+                                       (|prefix2StringAsTeX| |arg|)))
+                                     ('T
+                                      (SPADLET |arg|
+                                       (|prefix2String| |arg|))))))
+                                (COND
+                                  ((MEMQ (|char| 'P) |q|)
+                                   (COND
+                                     (|$texFormatting|
+                                      (SPADLET |arg|
+                                       (PROG (G166232)
+                                         (SPADLET G166232 NIL)
+                                         (RETURN
+                                           (DO
+                                            ((G166237 |arg|
+                                              (CDR G166237))
+                                             (|x| NIL))
+                                            ((OR (ATOM G166237)
+                                              (PROGN
+                                                (SETQ |x|
+                                                 (CAR G166237))
+                                                NIL))
+                                             (NREVERSE0 G166232))
+                                             (SEQ
+                                              (EXIT
+                                               (SETQ G166232
+                                                (CONS
+                                                 (|prefix2StringAsTeX|
+                                                  |x|)
+                                                 G166232)))))))))
+                                     ('T
+                                      (SPADLET |arg|
+                                       (PROG (G166247)
+                                         (SPADLET G166247 NIL)
+                                         (RETURN
+                                           (DO
+                                            ((G166252 |arg|
+                                              (CDR G166252))
+                                             (|x| NIL))
+                                            ((OR (ATOM G166252)
+                                              (PROGN
+                                                (SETQ |x|
+                                                 (CAR G166252))
+                                                NIL))
+                                             (NREVERSE0 G166247))
+                                             (SEQ
+                                              (EXIT
+                                               (SETQ G166247
+                                                (CONS
+                                                 (|prefix2String| |x|)
+                                                 G166247))))))))))))
+                                (COND
+                                  ((AND (MEMQ (|char| '|o|) |q|)
+                                    |$texFormatting|)
+                                   (SPADLET |arg|
+                                    (|operationLink| |arg|))))
+                                (COND
+                                  ((MEMQ (|char| '|c|) |q|)
+                                   (SPADLET |arg|
+                                    (CONS
+                                     (CONS (MAKESTRING "%ce") |arg|)
+                                     NIL))))
+                                (COND
+                                  ((MEMQ (|char| '|r|) |q|)
+                                   (SPADLET |arg|
+                                    (CONS
+                                     (CONS (MAKESTRING "%rj") |arg|)
+                                     NIL))))
+                                (COND
+                                  ((MEMQ (|char| '|l|) |q|)
+                                   (SPADLET |l|
+                                    (CONS (MAKESTRING "%l") |l|))))
+                                (COND
+                                  ((MEMQ (|char| '|b|) |q|)
+                                   (SPADLET |l|
+                                    (CONS (MAKESTRING "%b") |l|))))
+                                (SPADLET |l|
+                                         (COND
+                                           ((PAIRP |arg|)
+                                            (COND
+                                              ((OR
+                                                (MEMQ (|char| '|y|)
+                                                 |q|)
+                                                (BOOT-EQUAL (CAR |arg|)
+                                                 (MAKESTRING "%y"))
+                                                (EQL (LENGTH |arg|) 1))
+                                               (APPEND (REVERSE |arg|)
+                                                |l|))
+                                              ('T
+                                               (SPADLET |head|
+                                                (CAR |arg|))
+                                               (SPADLET |tail|
+                                                (CDR |arg|))
+                                               (CONS (MAKESTRING "%y")
+                                                (APPEND
+                                                 (REVERSE |tail|)
+                                                 (CONS
+                                                  (MAKESTRING "%n")
+                                                  (CONS |head| |l|)))))))
+                                           ('T (CONS |arg| |l|))))
+                                (COND
+                                  ((MEMQ (|char| '|b|) |q|)
+                                   (SPADLET |l|
+                                    (CONS (MAKESTRING "%d") |l|))))
+                                (DO ((G166261 '(|.| |,| ! |:| |;| ?)
+                                      (CDR G166261))
+                                     (|ch| NIL))
+                                    ((OR (ATOM G166261)
+                                      (PROGN
+                                        (SETQ |ch| (CAR G166261))
+                                        NIL))
+                                     NIL)
+                                  (SEQ (EXIT
+                                        (COND
+                                          ((MEMQ (|char| |ch|) |q|)
+                                           (SPADLET |l|
+                                            (CONS |ch| |l|)))
+                                          ('T NIL))))))
+                               ('T (SPADLET |l| (CONS |x| |l|)))))))))
+             (|addBlanks| (NREVERSE |l|)))))))
+
+;addBlanks msg ==
+;  -- adds proper blanks
+;  null PAIRP msg => msg
+;  null msg => msg
+;  LENGTH msg = 1 => msg
+;  blanksOff := false
+;  x := first msg
+;  if x = '"%n" then
+;    blanksOff := true
+;    msg1 := []
+;  else
+;    msg1 := LIST x
+;  blank := '" "
+;  for y in rest msg repeat
+;    y in '("%n" %n) => blanksOff := true
+;    y in '("%y" %y) => blanksOff  := false
+;    if noBlankAfterP x or noBlankBeforeP y or blanksOff then
+;       msg1 := [y,:msg1]
+;    else
+;       msg1 := [y,blank,:msg1]
+;    x := y
+;  NREVERSE msg1
+
+(DEFUN |addBlanks| (|msg|)
+  (PROG (|blank| |blanksOff| |msg1| |x|)
+    (RETURN
+      (SEQ (COND
+             ((NULL (PAIRP |msg|)) |msg|)
+             ((NULL |msg|) |msg|)
+             ((EQL (LENGTH |msg|) 1) |msg|)
+             ('T (SPADLET |blanksOff| NIL) (SPADLET |x| (CAR |msg|))
+              (COND
+                ((BOOT-EQUAL |x| (MAKESTRING "%n"))
+                 (SPADLET |blanksOff| 'T) (SPADLET |msg1| NIL))
+                ('T (SPADLET |msg1| (LIST |x|))))
+              (SPADLET |blank| (MAKESTRING " "))
+              (DO ((G166308 (CDR |msg|) (CDR G166308)) (|y| NIL))
+                  ((OR (ATOM G166308)
+                       (PROGN (SETQ |y| (CAR G166308)) NIL))
+                   NIL)
+                (SEQ (EXIT (COND
+                             ((|member| |y| '("%n" |%n|))
+                              (SPADLET |blanksOff| 'T))
+                             ((|member| |y| '("%y" |%y|))
+                              (SPADLET |blanksOff| NIL))
+                             ('T
+                              (COND
+                                ((OR (|noBlankAfterP| |x|)
+                                     (|noBlankBeforeP| |y|)
+                                     |blanksOff|)
+                                 (SPADLET |msg1| (CONS |y| |msg1|)))
+                                ('T
+                                 (SPADLET |msg1|
+                                          (CONS |y|
+                                           (CONS |blank| |msg1|)))))
+                              (SPADLET |x| |y|))))))
+              (NREVERSE |msg1|)))))))
+
+;SETANDFILEQ($msgdbPrims,'( %b %d %l %i %u %U %n %x %ce %rj "%U" "%b" "%d" "%l" "%i" "%u" "%U" "%n" "%x" "%ce" "%rj"))
+
+(SETANDFILEQ |$msgdbPrims|
+    '(|%b| |%d| |%l| |%i| |%u| %U |%n| |%x| |%ce| |%rj| "%U" "%b" "%d"
+           "%l" "%i" "%u" "%U" "%n" "%x" "%ce" "%rj"))
+
+
+;SETANDFILEQ($msgdbPunct,'(_. _, _! _: _; _? _] _)  "." "," "!" ":" ";" "?" "]" ")"  ))
+
+(SETANDFILEQ |$msgdbPunct|
+    '(|.| |,| ! |:| |;| ? ] |)| "." "," "!" ":" ";" "?" "]" ")"))
+
+;SETANDFILEQ($msgdbNoBlanksBeforeGroup,['" ", " ", '"%", "%",_
+;                            :$msgdbPrims, :$msgdbPunct])
+
+(SETANDFILEQ |$msgdbNoBlanksBeforeGroup|
+    (CONS (MAKESTRING " ")
+          (CONS '| |
+                (CONS (MAKESTRING "%")
+                      (CONS '% (APPEND |$msgdbPrims| |$msgdbPunct|))))))
+
+;SETANDFILEQ($msgdbListPrims,'(%m %s %ce %rj "%m" "%s" "%ce" "%rj"))
+
+(SETANDFILEQ |$msgdbListPrims|
+    '(|%m| |%s| |%ce| |%rj| "%m" "%s" "%ce" "%rj"))
+
+;noBlankBeforeP word==
+;    INTP word => false
+;    word in $msgdbNoBlanksBeforeGroup => true
+;    if CVECP word and SIZE word > 1 then
+;       word.0 = char '% and word.1 = char 'x => return true
+;       word.0 = char " " => return true
+;    (PAIRP word) and (CAR word in $msgdbListPrims) => true
+;    false
+
+(DEFUN |noBlankBeforeP| (|word|)
+  (PROG ()
+  (declare (special |$msgdbListPrims| |$msgdbNoBlanksBeforeGroup|))
+    (RETURN
+      (COND
+        ((INTP |word|) NIL)
+        ((|member| |word| |$msgdbNoBlanksBeforeGroup|) 'T)
+        ('T
+         (COND
+           ((AND (CVECP |word|) (> (SIZE |word|) 1))
+            (COND
+              ((AND (BOOT-EQUAL (ELT |word| 0) (|char| '%))
+                    (BOOT-EQUAL (ELT |word| 1) (|char| '|x|)))
+               (RETURN 'T))
+              ((BOOT-EQUAL (ELT |word| 0) (|char| '| |)) (RETURN 'T)))))
+         (COND
+           ((AND (PAIRP |word|)
+                 (|member| (CAR |word|) |$msgdbListPrims|))
+            'T)
+           ('T NIL)))))))
+
+;$msgdbPunct := '(_[ _(  "[" "(" )
+
+(SPADLET |$msgdbPunct| '([ |(| "[" "("))
+
+;SETANDFILEQ($msgdbNoBlanksAfterGroup,['" ", " ",'"%" ,"%",_
+;                          :$msgdbPrims,:$msgdbPunct])
+
+(SETANDFILEQ |$msgdbNoBlanksAfterGroup|
+    (CONS (MAKESTRING " ")
+          (CONS '| |
+                (CONS (MAKESTRING "%")
+                      (CONS '% (APPEND |$msgdbPrims| |$msgdbPunct|))))))
+
+;noBlankAfterP word==
+;    INTP word => false
+;    word in $msgdbNoBlanksAfterGroup => true
+;    if CVECP word and (s := SIZE word) > 1 then
+;       word.0 = char '% and word.1 = char 'x => return true
+;       word.(s-1) = char " " => return true
+;    (PAIRP word) and (CAR word in $msgdbListPrims) => true
+;    false
+
+(DEFUN |noBlankAfterP| (|word|)
+  (PROG (|s|)
+  (declare (special |$msgdbListPrims| |$msgdbNoBlanksAfterGroup|))
+    (RETURN
+      (COND
+        ((INTP |word|) NIL)
+        ((|member| |word| |$msgdbNoBlanksAfterGroup|) 'T)
+        ('T
+         (COND
+           ((AND (CVECP |word|) (> (SPADLET |s| (SIZE |word|)) 1))
+            (COND
+              ((AND (BOOT-EQUAL (ELT |word| 0) (|char| '%))
+                    (BOOT-EQUAL (ELT |word| 1) (|char| '|x|)))
+               (RETURN 'T))
+              ((BOOT-EQUAL (ELT |word| (SPADDIFFERENCE |s| 1))
+                   (|char| '| |))
+               (RETURN 'T)))))
+         (COND
+           ((AND (PAIRP |word|)
+                 (|member| (CAR |word|) |$msgdbListPrims|))
+            'T)
+           ('T NIL)))))))
+
+;cleanUpSegmentedMsg msg ==
+;  -- removes any junk like double blanks
+;  -- takes a reversed msg and puts it in the correct order
+;  null PAIRP msg => msg
+;  blanks := ['" "," "]
+;  haveBlank := NIL
+;  prims :=
+;    '(%b %d %l %i %u %m %ce %rj _
+;     "%b" "%d" "%l" "%i" "%m" "%u" "%ce" "%rj")
+;  msg1 := NIL
+;  for x in msg repeat
+;    if haveBlank and ((x in blanks) or (x in prims)) then
+;      msg1 := CDR msg1
+;    msg1 := cons(x,msg1)
+;    haveBlank := (x in blanks => true; NIL)
+;  msg1
+
+(DEFUN |cleanUpSegmentedMsg| (|msg|)
+  (PROG (|blanks| |prims| |msg1| |haveBlank|)
+    (RETURN
+      (SEQ (COND
+             ((NULL (PAIRP |msg|)) |msg|)
+             ('T
+              (SPADLET |blanks|
+                       (CONS (MAKESTRING " ") (CONS '| | NIL)))
+              (SPADLET |haveBlank| NIL)
+              (SPADLET |prims|
+                       '(|%b| |%d| |%l| |%i| |%u| |%m| |%ce| |%rj| "%b"
+                              "%d" "%l" "%i" "%m" "%u" "%ce" "%rj"))
+              (SPADLET |msg1| NIL)
+              (DO ((G166348 |msg| (CDR G166348)) (|x| NIL))
+                  ((OR (ATOM G166348)
+                       (PROGN (SETQ |x| (CAR G166348)) NIL))
+                   NIL)
+                (SEQ (EXIT (PROGN
+                             (COND
+                               ((AND |haveBlank|
+                                     (OR (|member| |x| |blanks|)
+                                      (|member| |x| |prims|)))
+                                (SPADLET |msg1| (CDR |msg1|))))
+                             (SPADLET |msg1| (CONS |x| |msg1|))
+                             (SPADLET |haveBlank|
+                                      (COND
+                                        ((|member| |x| |blanks|) 'T)
+                                        ('T NIL)))))))
+              |msg1|))))))
+
+;operationLink name ==
+;  FORMAT(nil, '"\lispLink{\verb!(|oSearch| _"~a_")!}{~a}",
+;         name,
+;         escapeSpecialChars STRINGIMAGE name)
+
+(DEFUN |operationLink| (|name|)
+  (FORMAT NIL (MAKESTRING "\\lispLink{\\verb!(|oSearch| \"~a\")!}{~a}")
+          |name| (|escapeSpecialChars| (STRINGIMAGE |name|))))
+
+;----------------------------------------
+;sayPatternMsg(msg,args) ==
+;  msg := segmentKeyedMsg msg
+;  msg := substituteSegmentedMsg(msg,args)
+;  sayMSG flowSegmentedMsg(msg,$LINELENGTH,3)
+
+(DEFUN |sayPatternMsg| (|msg| |args|)
+  (declare (special $LINELENGTH))
+  (PROGN
+    (SPADLET |msg| (|segmentKeyedMsg| |msg|))
+    (SPADLET |msg| (|substituteSegmentedMsg| |msg| |args|))
+    (|sayMSG| (|flowSegmentedMsg| |msg| $LINELENGTH 3))))
+
+;throwPatternMsg(key,args) ==
+;  sayMSG '" "
+;  if $testingSystem then sayMSG $testingErrorPrefix
+;  sayPatternMsg(key,args)
+;  spadThrow()
+
+(DEFUN |throwPatternMsg| (|key| |args|)
+  (declare (special |$testingErrorPrefix| |$testingSystem|))
+  (PROGN
+    (|sayMSG| (MAKESTRING " "))
+    (COND (|$testingSystem| (|sayMSG| |$testingErrorPrefix|)))
+    (|sayPatternMsg| |key| |args|)
+    (|spadThrow|)))
+
+;sayKeyedMsgAsTeX(key, args) ==
+;  $texFormatting: fluid := true
+;  sayKeyedMsgLocal(key, args)
+
+(DEFUN |sayKeyedMsgAsTeX| (|key| |args|)
+  (PROG (|$texFormatting|)
+    (DECLARE (SPECIAL |$texFormatting|))
+    (RETURN
+      (PROGN
+        (SPADLET |$texFormatting| 'T)
+        (|sayKeyedMsgLocal| |key| |args|)))))
+
+;sayKeyedMsg(key,args) ==
+;  $texFormatting: fluid := false
+;  sayKeyedMsgLocal(key, args)
+
+(DEFUN |sayKeyedMsg| (|key| |args|)
+  (PROG (|$texFormatting|)
+    (DECLARE (SPECIAL |$texFormatting|))
+    (RETURN
+      (PROGN
+        (SPADLET |$texFormatting| NIL)
+        (|sayKeyedMsgLocal| |key| |args|)))))
+
+;sayKeyedMsgLocal(key, args) ==
+;  msg := segmentKeyedMsg getKeyedMsg key
+;  msg := substituteSegmentedMsg(msg,args)
+;  if $displayMsgNumber then msg := ['"%b",key,":",'"%d",:msg]
+;  msg' := flowSegmentedMsg(msg,$LINELENGTH,$MARGIN)
+;  if $printMsgsToFile then sayMSG2File msg'
+;  sayMSG msg'
+
+(DEFUN |sayKeyedMsgLocal| (|key| |args|)
+  (PROG (|msg| |msg'|)
+  (declare (special |$printMsgsToFile| $LINELENGTH $MARGIN 
+                    |$displayMsgNumber|))
+    (RETURN
+      (PROGN
+        (SPADLET |msg| (|segmentKeyedMsg| (|getKeyedMsg| |key|)))
+        (SPADLET |msg| (|substituteSegmentedMsg| |msg| |args|))
+        (COND
+          (|$displayMsgNumber|
+              (SPADLET |msg|
+                       (CONS (MAKESTRING "%b")
+                             (CONS |key|
+                                   (CONS '|:|
+                                    (CONS (MAKESTRING "%d") |msg|)))))))
+        (SPADLET |msg'| (|flowSegmentedMsg| |msg| $LINELENGTH $MARGIN))
+        (COND (|$printMsgsToFile| (|sayMSG2File| |msg'|)))
+        (|sayMSG| |msg'|)))))
+
+;throwKeyedErrorMsg(kind,key,args) ==
+;  BUMPERRORCOUNT kind
+;  sayMSG '" "
+;  if $testingSystem then sayMSG $testingErrorPrefix
+;  sayKeyedMsg(key,args)
+;  spadThrow()
+
+(DEFUN |throwKeyedErrorMsg| (|kind| |key| |args|)
+  (declare (special |$testingErrorPrefix| |$testingSystem|))
+  (PROGN
+    (BUMPERRORCOUNT |kind|)
+    (|sayMSG| (MAKESTRING " "))
+    (COND (|$testingSystem| (|sayMSG| |$testingErrorPrefix|)))
+    (|sayKeyedMsg| |key| |args|)
+    (|spadThrow|)))
+
+;throwKeyedMsgSP(key,args,atree) ==
+;    if atree and (sp := getSrcPos(atree)) then
+;        sayMSG '" "
+;        srcPosDisplay(sp)
+;    throwKeyedMsg(key,args)
+
+(DEFUN |throwKeyedMsgSP| (|key| |args| |atree|)
+  (PROG (|sp|)
+    (RETURN
+      (PROGN
+        (COND
+          ((AND |atree| (SPADLET |sp| (|getSrcPos| |atree|)))
+           (|sayMSG| (MAKESTRING " ")) (|srcPosDisplay| |sp|)))
+        (|throwKeyedMsg| |key| |args|)))))
+
+;throwKeyedMsg(key,args) ==
+;  $saturn => saturnThrowKeyedMsg(key, args)
+;  throwKeyedMsg1(key, args)
+
+(DEFUN |throwKeyedMsg| (|key| |args|)
+  (declare (special |$saturn|))
+  (COND
+    (|$saturn| (|saturnThrowKeyedMsg| |key| |args|))
+    ('T (|throwKeyedMsg1| |key| |args|))))
+
+;saturnThrowKeyedMsg(key,args) ==
+;  _*STANDARD_-OUTPUT_* : fluid := $texOutputStream
+;  last := pushSatOutput("line")
+;  sayString '"\bgroup\color{red}\begin{list}\item{} "
+;  sayKeyedMsgAsTeX(key,args)
+;  sayString '"\end{list}\egroup"
+;  popSatOutput(last)
+;  spadThrow()
+
+(DEFUN |saturnThrowKeyedMsg| (|key| |args|)
+  (PROG (*STANDARD-OUTPUT* |last|)
+    (DECLARE (SPECIAL *STANDARD-OUTPUT* |$texOutputStream|))
+    (RETURN
+      (PROGN
+        (SPADLET *STANDARD-OUTPUT* |$texOutputStream|)
+        (SPADLET |last| (|pushSatOutput| '|line|))
+        (|sayString|
+            (MAKESTRING "\\bgroup\\color{red}\\begin{list}\\item{} "))
+        (|sayKeyedMsgAsTeX| |key| |args|)
+        (|sayString| (MAKESTRING "\\end{list}\\egroup"))
+        (|popSatOutput| |last|)
+        (|spadThrow|)))))
+
+;throwKeyedMsg1(key,args) ==
+;  _*STANDARD_-OUTPUT_* : fluid := $texOutputStream
+;  sayMSG '" "
+;  if $testingSystem then sayMSG $testingErrorPrefix
+;  sayKeyedMsg(key,args)
+;  spadThrow()
+
+(DEFUN |throwKeyedMsg1| (|key| |args|)
+  (PROG (*STANDARD-OUTPUT*)
+    (DECLARE (SPECIAL *STANDARD-OUTPUT* |$testingErrorPrefix|
+                      |$testingSystem| |$texOutputStream|))
+    (RETURN
+      (PROGN
+        (SPADLET *STANDARD-OUTPUT* |$texOutputStream|)
+        (|sayMSG| (MAKESTRING " "))
+        (COND (|$testingSystem| (|sayMSG| |$testingErrorPrefix|)))
+        (|sayKeyedMsg| |key| |args|)
+        (|spadThrow|)))))
+
+;throwListOfKeyedMsgs(descKey,descArgs,l) ==
+;  -- idea is that descKey and descArgs are the message describing
+;  -- what the list is about and l is a list of [key,args] messages
+;  -- the messages in the list are numbered and should have a %1 as
+;  -- the first token in the message text.
+;  sayMSG '" "
+;  if $testingSystem then sayMSG $testingErrorPrefix
+;  sayKeyedMsg(descKey,descArgs)
+;  sayMSG '" "
+;  for [key,args] in l for i in 1.. repeat
+;    n := STRCONC(object2String i,'".")
+;    sayKeyedMsg(key,[n,:args])
+;  spadThrow()
+
+(DEFUN |throwListOfKeyedMsgs| (|descKey| |descArgs| |l|)
+  (PROG (|key| |args| |n|)
+  (declare (special |$testingErrorPrefix| |$testingSystem|))
+    (RETURN
+      (SEQ (PROGN
+             (|sayMSG| (MAKESTRING " "))
+             (COND
+               (|$testingSystem| (|sayMSG| |$testingErrorPrefix|)))
+             (|sayKeyedMsg| |descKey| |descArgs|)
+             (|sayMSG| (MAKESTRING " "))
+             (DO ((G166441 |l| (CDR G166441)) (G166429 NIL)
+                  (|i| 1 (QSADD1 |i|)))
+                 ((OR (ATOM G166441)
+                      (PROGN (SETQ G166429 (CAR G166441)) NIL)
+                      (PROGN
+                        (PROGN
+                          (SPADLET |key| (CAR G166429))
+                          (SPADLET |args| (CADR G166429))
+                          G166429)
+                        NIL))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |n|
+                                     (STRCONC (|object2String| |i|)
+                                      (MAKESTRING ".")))
+                            (|sayKeyedMsg| |key| (CONS |n| |args|))))))
+             (|spadThrow|))))))
+
+;--  breakKeyedMsg is like throwKeyedMsg except that the user is given
+;--  a chance to play around in a break loop if $BreakMode is not 'nobreak
+;breakKeyedMsg(key,args) ==
+;  BUMPCOMPERRORCOUNT()
+;  sayKeyedMsg(key,args)
+;  handleLispBreakLoop($BreakMode)
+
+(DEFUN |breakKeyedMsg| (|key| |args|)
+  (declare (special |$BreakMode|))
+  (PROGN
+    (BUMPCOMPERRORCOUNT)
+    (|sayKeyedMsg| |key| |args|)
+    (|handleLispBreakLoop| |$BreakMode|)))
+
+;keyedSystemError(key,args) ==
+;  $saturn => saturnKeyedSystemError(key, args)
+;  keyedSystemError1(key, args)
+
+(DEFUN |keyedSystemError| (|key| |args|)
+  (declare (special |$saturn|))
+  (COND
+    (|$saturn| (|saturnKeyedSystemError| |key| |args|))
+    ('T (|keyedSystemError1| |key| |args|))))
+
+;saturnKeyedSystemError(key, args) ==
+;  _*STANDARD_-OUTPUT_* : fluid := $texOutputStream
+;  sayString '"\bgroup\color{red}"
+;  sayString '"\begin{verbatim}"
+;  sayKeyedMsg("S2GE0000",NIL)
+;  BUMPCOMPERRORCOUNT()
+;  sayKeyedMsgAsTeX(key,args)
+;  sayString '"\end{verbatim}"
+;  sayString '"\egroup"
+;  handleLispBreakLoop($BreakMode)
+
+(DEFUN |saturnKeyedSystemError| (|key| |args|)
+  (PROG (*STANDARD-OUTPUT*)
+    (DECLARE (SPECIAL *STANDARD-OUTPUT* |$BreakMode| |$texOutputStream|))
+    (RETURN
+      (PROGN
+        (SPADLET *STANDARD-OUTPUT* |$texOutputStream|)
+        (|sayString| (MAKESTRING "\\bgroup\\color{red}"))
+        (|sayString| (MAKESTRING "\\begin{verbatim}"))
+        (|sayKeyedMsg| 'S2GE0000 NIL)
+        (BUMPCOMPERRORCOUNT)
+        (|sayKeyedMsgAsTeX| |key| |args|)
+        (|sayString| (MAKESTRING "\\end{verbatim}"))
+        (|sayString| (MAKESTRING "\\egroup"))
+        (|handleLispBreakLoop| |$BreakMode|)))))
+
+;keyedSystemError1(key,args) ==
+;  sayKeyedMsg("S2GE0000",NIL)
+;  breakKeyedMsg(key,args)
+
+(DEFUN |keyedSystemError1| (|key| |args|)
+  (PROGN (|sayKeyedMsg| 'S2GE0000 NIL) (|breakKeyedMsg| |key| |args|)))
+
+;-- these 2 functions control the mode of saturn output.
+;-- having the stream writing functions control this would
+;-- be better (eg. sayText, sayCommands)
+;pushSatOutput(arg) ==
+;  $saturnMode = arg => arg
+;  was := $saturnMode
+;  arg = "verb" =>
+;    $saturnMode := "verb"
+;    sayString '"\begin{verbatim}"
+;    was
+;  arg = "line" =>
+;    $saturnMode := "line"
+;    sayString '"\end{verbatim}"
+;    was
+;  sayString FORMAT(nil, '"What is: ~a", $saturnMode)
+;  $saturnMode
+
+(DEFUN |pushSatOutput| (|arg|)
+  (PROG (|was|)
+  (declare (special |$saturnMode|))
+    (RETURN
+      (COND
+        ((BOOT-EQUAL |$saturnMode| |arg|) |arg|)
+        ('T (SPADLET |was| |$saturnMode|)
+         (COND
+           ((BOOT-EQUAL |arg| '|verb|) (SPADLET |$saturnMode| '|verb|)
+            (|sayString| (MAKESTRING "\\begin{verbatim}")) |was|)
+           ((BOOT-EQUAL |arg| '|line|) (SPADLET |$saturnMode| '|line|)
+            (|sayString| (MAKESTRING "\\end{verbatim}")) |was|)
+           ('T
+            (|sayString|
+                (FORMAT NIL (MAKESTRING "What is: ~a") |$saturnMode|))
+            |$saturnMode|)))))))
+
+;popSatOutput(newmode) ==
+;  newmode = $saturnMode => nil
+;  newmode = "verb" =>
+;    $saturnMode := "verb"
+;    sayString '"\begin{verbatim}"
+;  newmode = "line" =>
+;    $saturnMode := "line"
+;    sayString '"\end{verbatim}"
+;  sayString FORMAT(nil, '"What is: ~a", $saturnMode)
+;  $saturnMode
+
+(DEFUN |popSatOutput| (|newmode|)
+  (declare (special |$saturnMode|))
+  (COND
+    ((BOOT-EQUAL |newmode| |$saturnMode|) NIL)
+    ((BOOT-EQUAL |newmode| '|verb|) (SPADLET |$saturnMode| '|verb|)
+     (|sayString| (MAKESTRING "\\begin{verbatim}")))
+    ((BOOT-EQUAL |newmode| '|line|) (SPADLET |$saturnMode| '|line|)
+     (|sayString| (MAKESTRING "\\end{verbatim}")))
+    ('T
+     (|sayString|
+         (FORMAT NIL (MAKESTRING "What is: ~a") |$saturnMode|))
+     |$saturnMode|)))
+
+;systemErrorHere functionName ==
+;  keyedSystemError("S2GE0017",[functionName])
+
+(DEFUN |systemErrorHere| (|functionName|)
+  (|keyedSystemError| 'S2GE0017 (CONS |functionName| NIL)))
+
+;isKeyedMsgInDb(key,dbName) ==
+;  $msgDatabaseName : fluid := pathname dbName
+;  fetchKeyedMsg(key,true)
+
+(DEFUN |isKeyedMsgInDb| (|key| |dbName|)
+  (PROG (|$msgDatabaseName|)
+    (DECLARE (SPECIAL |$msgDatabaseName|))
+    (RETURN
+      (PROGN
+        (SPADLET |$msgDatabaseName| (|pathname| |dbName|))
+        (|fetchKeyedMsg| |key| 'T)))))
+
+;getKeyedMsgInDb(key,dbName) ==
+;  $msgDatabaseName : fluid := pathname dbName
+;  fetchKeyedMsg(key,false)
+
+(DEFUN |getKeyedMsgInDb| (|key| |dbName|)
+  (PROG (|$msgDatabaseName|)
+    (DECLARE (SPECIAL |$msgDatabaseName|))
+    (RETURN
+      (PROGN
+        (SPADLET |$msgDatabaseName| (|pathname| |dbName|))
+        (|fetchKeyedMsg| |key| NIL)))))
+
+;sayKeyedMsgFromDb(key,args,dbName) ==
+;  $msgDatabaseName : fluid := pathname dbName
+;  msg := segmentKeyedMsg getKeyedMsg key
+;  msg := substituteSegmentedMsg(msg,args)
+;  if $displayMsgNumber then msg := ['"%b",key,":",'%d,:msg]
+;--sayMSG flowSegmentedMsg(msg,$LINELENGTH,3)
+;  u := flowSegmentedMsg(msg,$LINELENGTH,3)
+;  sayBrightly u
+
+(DEFUN |sayKeyedMsgFromDb| (|key| |args| |dbName|)
+  (PROG (|$msgDatabaseName| |msg| |u|)
+    (DECLARE (SPECIAL |$msgDatabaseName| $LINELENGTH |$displayMsgNumber|))
+    (RETURN
+      (PROGN
+        (SPADLET |$msgDatabaseName| (|pathname| |dbName|))
+        (SPADLET |msg| (|segmentKeyedMsg| (|getKeyedMsg| |key|)))
+        (SPADLET |msg| (|substituteSegmentedMsg| |msg| |args|))
+        (COND
+          (|$displayMsgNumber|
+              (SPADLET |msg|
+                       (CONS (MAKESTRING "%b")
+                             (CONS |key|
+                                   (CONS '|:| (CONS '|%d| |msg|)))))))
+        (SPADLET |u| (|flowSegmentedMsg| |msg| $LINELENGTH 3))
+        (|sayBrightly| |u|)))))
+
+;returnStLFromKey(key,argL,:optDbN) ==
+;    savedDbN := $msgDatabaseName
+;    if IFCAR optDbN then
+;        $msgDatabaseName := pathname CAR optDbN
+;    text := fetchKeyedMsg(key, false)
+;    $msgDatabaseName := savedDbN
+;    text := segmentKeyedMsg text
+;    text := substituteSegmentedMsg(text,argL)
+
+(DEFUN |returnStLFromKey| (&REST G166528 &AUX |optDbN| |argL| |key|)
+  (DSETQ (|key| |argL| . |optDbN|) G166528)
+  (PROG (|savedDbN| |text|)
+  (declare (special |$msgDatabaseName|))
+    (RETURN
+      (PROGN
+        (SPADLET |savedDbN| |$msgDatabaseName|)
+        (COND
+          ((IFCAR |optDbN|)
+           (SPADLET |$msgDatabaseName| (|pathname| (CAR |optDbN|)))))
+        (SPADLET |text| (|fetchKeyedMsg| |key| NIL))
+        (SPADLET |$msgDatabaseName| |savedDbN|)
+        (SPADLET |text| (|segmentKeyedMsg| |text|))
+        (SPADLET |text| (|substituteSegmentedMsg| |text| |argL|))))))
+
+;throwKeyedMsgFromDb(key,args,dbName) ==
+;  sayMSG '" "
+;  if $testingSystem then sayMSG $testingErrorPrefix
+;  sayKeyedMsgFromDb(key,args,dbName)
+;  spadThrow()
+
+(DEFUN |throwKeyedMsgFromDb| (|key| |args| |dbName|)
+  (declare (special |$testingErrorPrefix| |$testingSystem|))
+  (PROGN
+    (|sayMSG| (MAKESTRING " "))
+    (COND (|$testingSystem| (|sayMSG| |$testingErrorPrefix|)))
+    (|sayKeyedMsgFromDb| |key| |args| |dbName|)
+    (|spadThrow|)))
+
+;queryUserKeyedMsg(key,args) ==
+;  -- display message and return reply
+;  conStream := DEFIOSTREAM ('((DEVICE . CONSOLE) (MODE . INPUT)),120,0)
+;  sayKeyedMsg(key,args)
+;  ans := READ_-LINE conStream
+;  SHUT conStream
+;  ans
+
+(DEFUN |queryUserKeyedMsg| (|key| |args|)
+  (PROG (|conStream| |ans|)
+    (RETURN
+      (PROGN
+        (SPADLET |conStream|
+                 (DEFIOSTREAM '((DEVICE . CONSOLE) (MODE . INPUT)) 120
+                     0))
+        (|sayKeyedMsg| |key| |args|)
+        (SPADLET |ans| (|read-line| |conStream|))
+        (SHUT |conStream|)
+        |ans|))))
+
+;flowSegmentedMsg(msg, len, offset) ==
+;  -- tries to break a sayBrightly-type input msg into multiple
+;  -- lines, with offset and given length.
+;  -- msgs that are entirely centered or right justified are not flowed
+;  msg is [[ce,:.]] and ce in '(%ce "%ce" %rj "%rj") => msg
+;  -- if we are formatting latex, then we assume
+;  -- that nothing needs to be done
+;  $texFormatting => msg
+;  -- msgs that are entirely centered are not flowed
+;  msg is [[ce,:.]] and ListMember?(ce,'(%ce "%ce")) => msg
+;
+;  potentialMarg := 0
+;  actualMarg    := 0
+;  off := (offset <= 0 => '""; fillerSpaces(offset,'" "))
+;  off1:= (offset <= 1 => '""; fillerSpaces(offset-1,'" "))
+;  firstLine := true
+;  PAIRP msg =>
+;    lnl := offset
+;    if msg is [a,:.] and a in '(%b %d _  "%b" "%d" " ") then
+;      nl :=  [off1]
+;      lnl := lnl - 1
+;    else nl := [off]
+;    for f in msg repeat
+;      f in '("%l" %l) =>
+;        actualMarg := potentialMarg
+;        if lnl = 99999 then nl := ['%l,:nl]
+;        lnl := 99999
+;      PAIRP(f) and CAR(f) in '("%m" %m '%ce "%ce" %rj "%rj") =>
+;        actualMarg := potentialMarg
+;        nl := [f,'%l,:nl]
+;        lnl := 199999
+;      f in '("%i" %i ) =>
+;        potentialMarg := potentialMarg + 3
+;        nl := [f,:nl]
+;      PAIRP(f) and CAR(f) in '("%t" %t) =>
+;        potentialMarg := potentialMarg + CDR f
+;        nl := [f,:nl]
+;      sbl := sayBrightlyLength f
+;      tot := lnl + offset + sbl + actualMarg
+;      if firstLine then
+;        firstLine  := false
+;        offset := offset + offset
+;        off1   := STRCONC(off, off1)
+;        off    := STRCONC(off, off)
+;      if (tot <= len) or (sbl = 1 and tot = len) then
+;        nl := [f,:nl]
+;        lnl := lnl + sbl
+;      else
+;        f in '(%b %d _  "%b" "%d" " ") =>
+;          nl := [f,off1,'%l,:nl]
+;          actualMarg := potentialMarg
+;          lnl := -1 + offset + sbl
+;        nl := [f,off,'%l,:nl]
+;        lnl := offset + sbl
+;    concat nreverse nl
+;  concat('%l,off,msg)
+
+(DEFUN |flowSegmentedMsg| (|msg| |len| |offset|)
+  (PROG (|ISTMP#1| |ce| |a| |potentialMarg| |sbl| |tot| |firstLine|
+                   |off1| |off| |actualMarg| |nl| |lnl|)
+  (declare (special |$texFormatting|))
+    (RETURN
+      (SEQ (COND
+             ((AND (PAIRP |msg|) (EQ (QCDR |msg|) NIL)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCAR |msg|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN (SPADLET |ce| (QCAR |ISTMP#1|)) 'T)))
+                   (|member| |ce| '(|%ce| "%ce" |%rj| "%rj")))
+              |msg|)
+             (|$texFormatting| |msg|)
+             ((AND (PAIRP |msg|) (EQ (QCDR |msg|) NIL)
+                   (PROGN
+                     (SPADLET |ISTMP#1| (QCAR |msg|))
+                     (AND (PAIRP |ISTMP#1|)
+                          (PROGN (SPADLET |ce| (QCAR |ISTMP#1|)) 'T)))
+                   (|ListMember?| |ce| '(|%ce| "%ce")))
+              |msg|)
+             ('T (SPADLET |potentialMarg| 0) (SPADLET |actualMarg| 0)
+              (SPADLET |off|
+                       (COND
+                         ((<= |offset| 0) (MAKESTRING ""))
+                         ('T
+                          (|fillerSpaces| |offset| (MAKESTRING " ")))))
+              (SPADLET |off1|
+                       (COND
+                         ((<= |offset| 1) (MAKESTRING ""))
+                         ('T
+                          (|fillerSpaces| (SPADDIFFERENCE |offset| 1)
+                              (MAKESTRING " ")))))
+              (SPADLET |firstLine| 'T)
+              (COND
+                ((PAIRP |msg|) (SPADLET |lnl| |offset|)
+                 (COND
+                   ((AND (PAIRP |msg|)
+                         (PROGN (SPADLET |a| (QCAR |msg|)) 'T)
+                         (|member| |a| '(|%b| |%d| | | "%b" "%d" " ")))
+                    (SPADLET |nl| (CONS |off1| NIL))
+                    (SPADLET |lnl| (SPADDIFFERENCE |lnl| 1)))
+                   ('T (SPADLET |nl| (CONS |off| NIL))))
+                 (DO ((G166564 |msg| (CDR G166564)) (|f| NIL))
+                     ((OR (ATOM G166564)
+                          (PROGN (SETQ |f| (CAR G166564)) NIL))
+                      NIL)
+                   (SEQ (EXIT (COND
+                                ((|member| |f| '("%l" |%l|))
+                                 (SPADLET |actualMarg| |potentialMarg|)
+                                 (COND
+                                   ((EQL |lnl| 99999)
+                                    (SPADLET |nl| (CONS '|%l| |nl|))))
+                                 (SPADLET |lnl| 99999))
+                                ((AND (PAIRP |f|)
+                                      (|member| (CAR |f|)
+                                       '("%m" |%m| '|%ce| "%ce" |%rj|
+                                         "%rj")))
+                                 (SPADLET |actualMarg| |potentialMarg|)
+                                 (SPADLET |nl|
+                                          (CONS |f| (CONS '|%l| |nl|)))
+                                 (SPADLET |lnl| 199999))
+                                ((|member| |f| '("%i" |%i|))
+                                 (SPADLET |potentialMarg|
+                                          (PLUS |potentialMarg| 3))
+                                 (SPADLET |nl| (CONS |f| |nl|)))
+                                ((AND (PAIRP |f|)
+                                      (|member| (CAR |f|) '("%t" |%t|)))
+                                 (SPADLET |potentialMarg|
+                                          (PLUS |potentialMarg|
+                                           (CDR |f|)))
+                                 (SPADLET |nl| (CONS |f| |nl|)))
+                                ('T
+                                 (SPADLET |sbl|
+                                          (|sayBrightlyLength| |f|))
+                                 (SPADLET |tot|
+                                          (PLUS
+                                           (PLUS (PLUS |lnl| |offset|)
+                                            |sbl|)
+                                           |actualMarg|))
+                                 (COND
+                                   (|firstLine|
+                                    (SPADLET |firstLine| NIL)
+                                    (SPADLET |offset|
+                                     (PLUS |offset| |offset|))
+                                    (SPADLET |off1|
+                                     (STRCONC |off| |off1|))
+                                    (SPADLET |off|
+                                     (STRCONC |off| |off|))))
+                                 (COND
+                                   ((OR (<= |tot| |len|)
+                                     (AND (EQL |sbl| 1)
+                                      (BOOT-EQUAL |tot| |len|)))
+                                    (SPADLET |nl| (CONS |f| |nl|))
+                                    (SPADLET |lnl| (PLUS |lnl| |sbl|)))
+                                   ((|member| |f|
+                                     '(|%b| |%d| | | "%b" "%d" " "))
+                                    (SPADLET |nl|
+                                     (CONS |f|
+                                      (CONS |off1| (CONS '|%l| |nl|))))
+                                    (SPADLET |actualMarg|
+                                     |potentialMarg|)
+                                    (SPADLET |lnl|
+                                     (PLUS
+                                      (PLUS (SPADDIFFERENCE 1)
+                                       |offset|)
+                                      |sbl|)))
+                                   ('T
+                                    (SPADLET |nl|
+                                     (CONS |f|
+                                      (CONS |off| (CONS '|%l| |nl|))))
+                                    (SPADLET |lnl|
+                                     (PLUS |offset| |sbl|)))))))))
+                 (|concat| (NREVERSE |nl|)))
+                ('T (|concat| '|%l| |off| |msg|)))))))))
+
+;--% Other handy things
+;keyedMsgCompFailure(key,args) ==
+;  -- Called when compilation fails in such a way that interpret-code
+;  --  mode might be of some use.
+;  not $useCoerceOrCroak =>   THROW('coerceOrCroaker, 'croaked)
+;  if not($Coerce) and  $reportInterpOnly then
+;    sayKeyedMsg(key,args)
+;    sayKeyedMsg("S2IB0009",NIL)
+;  null $compilingMap => THROW('loopCompiler,'tryInterpOnly)
+;  THROW('mapCompiler,'tryInterpOnly)
+
+(DEFUN |keyedMsgCompFailure| (|key| |args|)
+  (declare (special |$compilingMap| |$reportInterpOnly| |$Coerce|
+                    |$useCoerceOrCroak|))
+  (COND
+    ((NULL |$useCoerceOrCroak|) (THROW '|coerceOrCroaker| '|croaked|))
+    ('T
+     (COND
+       ((AND (NULL |$Coerce|) |$reportInterpOnly|)
+        (|sayKeyedMsg| |key| |args|) (|sayKeyedMsg| 'S2IB0009 NIL)))
+     (COND
+       ((NULL |$compilingMap|)
+        (THROW '|loopCompiler| '|tryInterpOnly|))
+       ('T (THROW '|mapCompiler| '|tryInterpOnly|))))))
+
+;keyedMsgCompFailureSP(key,args,atree) ==
+;  -- Called when compilation fails in such a way that interpret-code
+;  --  mode might be of some use.
+;  not $useCoerceOrCroak =>   THROW('coerceOrCroaker, 'croaked)
+;  if not($Coerce) and  $reportInterpOnly then
+;    if atree and (sp := getSrcPos(atree)) then
+;        sayMSG '" "
+;        srcPosDisplay(sp)
+;    sayKeyedMsg(key,args)
+;    sayKeyedMsg("S2IB0009",NIL)
+;  null $compilingMap => THROW('loopCompiler,'tryInterpOnly)
+;  THROW('mapCompiler,'tryInterpOnly)
+
+(DEFUN |keyedMsgCompFailureSP| (|key| |args| |atree|)
+  (PROG (|sp|)
+  (declare (special |$compilingMap| |$reportInterpOnly| |$Coerce|
+                    |$useCoerceOrCroak|))
+    (RETURN
+      (COND
+        ((NULL |$useCoerceOrCroak|)
+         (THROW '|coerceOrCroaker| '|croaked|))
+        ('T
+         (COND
+           ((AND (NULL |$Coerce|) |$reportInterpOnly|)
+            (COND
+              ((AND |atree| (SPADLET |sp| (|getSrcPos| |atree|)))
+               (|sayMSG| (MAKESTRING " ")) (|srcPosDisplay| |sp|)))
+            (|sayKeyedMsg| |key| |args|) (|sayKeyedMsg| 'S2IB0009 NIL)))
+         (COND
+           ((NULL |$compilingMap|)
+            (THROW '|loopCompiler| '|tryInterpOnly|))
+           ('T (THROW '|mapCompiler| '|tryInterpOnly|))))))))
+
+;throwKeyedMsgCannotCoerceWithValue(val,t1,t2) ==
+;  null (val' := coerceInteractive(mkObj(val,t1),$OutputForm)) =>
+;    throwKeyedMsg("S2IC0002",[t1,t2])
+;  val' := objValUnwrap(val')
+;  throwKeyedMsg("S2IC0003",[t1,t2,val'])
+
+(DEFUN |throwKeyedMsgCannotCoerceWithValue| (|val| |t1| |t2|)
+  (PROG (|val'|)
+  (declare (special |$OutputForm|))
+    (RETURN
+      (COND
+        ((NULL (SPADLET |val'|
+                        (|coerceInteractive| (|mkObj| |val| |t1|)
+                            |$OutputForm|)))
+         (|throwKeyedMsg| 'S2IC0002 (CONS |t1| (CONS |t2| NIL))))
+        ('T (SPADLET |val'| (|objValUnwrap| |val'|))
+         (|throwKeyedMsg| 'S2IC0003
+             (CONS |t1| (CONS |t2| (CONS |val'| NIL)))))))))
+
+;--% Some Standard Message Printing Functions
+;bright x == ['"%b",:(PAIRP(x) and NULL CDR LASTNODE x => x; [x]),'"%d"]
+
+(DEFUN |bright| (|x|)
+  (CONS (MAKESTRING "%b")
+        (APPEND (COND
+                  ((AND (PAIRP |x|) (NULL (CDR (LASTNODE |x|)))) |x|)
+                  ('T (CONS |x| NIL)))
+                (CONS (MAKESTRING "%d") NIL))))
+
+;--bright x == ['%b,:(ATOM x => [x]; x),'%d]
+;mkMessage msg ==
+;  msg and (PAIRP msg) and ((first msg) in '(%l "%l"))  and
+;    ((last msg) in '(%l "%l")) => concat msg
+;  concat('%l,msg,'%l)
+
+(DEFUN |mkMessage| (|msg|)
+  (COND
+    ((AND |msg| (PAIRP |msg|) (|member| (CAR |msg|) '(|%l| "%l"))
+          (|member| (|last| |msg|) '(|%l| "%l")))
+     (|concat| |msg|))
+    ('T (|concat| '|%l| |msg| '|%l|))))
+
+;sayMessage msg == sayMSG mkMessage msg
+
+(DEFUN |sayMessage| (|msg|) (|sayMSG| (|mkMessage| |msg|)))
+
+;sayNewLine(:margin) ==
+;  -- Note: this function should *always* be used by sayBrightly and
+;  -- friends rather than TERPRI --  see bindSayBrightly
+;  TERPRI()
+;  if margin is [n] then BLANKS n
+;  nil
+
+;;;     ***       |sayNewLine| REDEFINED
+
+(DEFUN |sayNewLine| (&REST G166644 &AUX |margin|)
+  (DSETQ |margin| G166644)
+  (PROG (|n|)
+    (RETURN
+      (PROGN
+        (TERPRI)
+        (COND
+          ((AND (PAIRP |margin|) (EQ (QCDR |margin|) NIL)
+                (PROGN (SPADLET |n| (QCAR |margin|)) 'T))
+           (BLANKS |n|)))
+        NIL))))
+
+;sayString x ==
+;  -- Note: this function should *always* be used by sayBrightly and
+;  -- friends rather than PRINTEXP --  see bindSayBrightly
+;  PRINTEXP x
+
+(DEFUN |sayString| (|x|) (PRINTEXP |x|)) 
+
+;spadStartUpMsgs() ==
+;  -- messages displayed when the system starts up
+;  $LINELENGTH < 60 => NIL
+;  bar := fillerSpaces($LINELENGTH,specialChar 'hbar)
+;  sayKeyedMsg("S2GL0001",[_*BUILD_-VERSION_*, _*YEARWEEK_*])
+;  sayMSG bar
+;  sayKeyedMsg("S2GL0018C",NIL)
+;  sayKeyedMsg("S2GL0018D",NIL)
+;  sayKeyedMsg("S2GL0003B",[$opSysName])
+;  sayMSG bar
+;--  sayMSG bar
+;--  sayMSG '"                                    *"
+;--  sayMSG '"               *****    **     **  ***     ******    ** *     *"
+;--  sayMSG '"              *     *     *   *     *     *      *    ** ** ** **"
+;--  sayMSG '"                    *      * *      *    *        *   **  ***  **"
+;--  sayMSG '"               ******       *       *   *          *  *    *    *"
+;--  sayMSG '"              *     *      * *      *    *        *   *    *    *"
+;--  sayMSG '"              *     *     *   *     *     *      *    *    *    *"
+;--  sayMSG '"              *     *    *     *    *      *    *     *    *    *"
+;--  sayMSG '"               ***** * **       ** ***      ****     **   ***  ***"
+;--  sayMSG '"                                    *"
+;--  sayMSG '"   Issue )copyright for copyright notices."
+;--  sayKeyedMsg("S2GL0018A",NIL)
+;--  sayKeyedMsg("S2GL0018B",NIL)
+;--  sayKeyedMsg("S2GL0003C",NIL)
+;--  sayKeyedMsg("S2GL0003A",NIL)
+;--  if not $printTimeIfTrue then sayKeyedMsg("S2GL0004",NIL)
+;--  if not $printTypeIfTrue then sayKeyedMsg("S2GL0005",NIL)
+;  --  if not $displaySetValue then sayKeyedMsg("S2GL0007",NIL)
+;--  if not $HiFiAccess then sayKeyedMsg("S2GL0008",NIL)
+;--  sayMSG bar
+;--  version()
+;  $msgAlist := NIL    -- these msgs need not be saved
+;  sayMSG " "
+
+(DEFUN |spadStartUpMsgs| ()
+  (PROG (|bar|)
+  (declare (special |$msgAlist| |$opSysName| $LINELENGTH *YEARWEEK*
+                    *BUILD-VERSION*))
+    (RETURN
+      (COND
+        ((> 60 $LINELENGTH) NIL)
+        ('T
+         (SPADLET |bar|
+                  (|fillerSpaces| $LINELENGTH (|specialChar| '|hbar|)))
+         (|sayKeyedMsg| 'S2GL0001
+             (CONS *BUILD-VERSION* (CONS *YEARWEEK* NIL)))
+         (|sayMSG| |bar|) (|sayKeyedMsg| 'S2GL0018C NIL)
+         (|sayKeyedMsg| 'S2GL0018D NIL)
+         (|sayKeyedMsg| 'S2GL0003B (CONS |$opSysName| NIL))
+         (|sayMSG| |bar|) (SPADLET |$msgAlist| NIL) (|sayMSG| '| |))))))
+
+;HELP() == sayKeyedMsg("S2GL0019",NIL)
+
+;;;     ***       HELP REDEFINED
+
+(DEFUN HELP () (|sayKeyedMsg| 'S2GL0019 NIL))
+
+;version() == _*YEARWEEK_*
+
+(DEFUN |version| ()
+ (declare (special  *YEARWEEK*)) 
+  *YEARWEEK*)
+
+;--% Some Advanced Formatting Functions
+;brightPrint x ==
+;  $MARG : local := 0
+;  for y in x repeat brightPrint0 y
+;  NIL
+
+(DEFUN |brightPrint| (|x|)
+  (PROG ($MARG)
+    (DECLARE (SPECIAL $MARG))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET $MARG 0)
+             (DO ((G166664 |x| (CDR G166664)) (|y| NIL))
+                 ((OR (ATOM G166664)
+                      (PROGN (SETQ |y| (CAR G166664)) NIL))
+                  NIL)
+               (SEQ (EXIT (|brightPrint0| |y|))))
+             NIL)))))
+
+;brightPrint0 x ==
+;  $texFormatting => brightPrint0AsTeX x
+;  if IDENTP x then x := PNAME x
+;  -- if the first character is a backslash and the second is a percent sign,
+;  -- don't try to give the token any special interpretation. Just print
+;  -- it without the backslash.
+;  STRINGP x and STRINGLENGTH x > 1 and x.0 = char "\" and x.1 = char "%" =>
+;    sayString SUBSTRING(x,1,NIL)
+;  x = '"%l" =>
+;    sayNewLine()
+;    for i in 1..$MARG repeat sayString '" "
+;  x = '"%i" =>
+;    $MARG := $MARG + 3
+;  x = '"%u" =>
+;    $MARG := $MARG - 3
+;    if $MARG < 0 then $MARG := 0
+;  x = '"%U" =>
+;    $MARG := 0
+;  x = '"%" =>
+;    sayString '" "
+;  x = '"%%" =>
+;    sayString  '"%"
+;  x = '"%b" =>
+;    NULL IS_-CONSOLE CUROUTSTREAM => sayString '" "
+;    NULL $highlightAllowed        => sayString '" "
+;    sayString $highlightFontOn
+;  k := blankIndicator x => BLANKS k
+;  x = '"%d" =>
+;    NULL IS_-CONSOLE CUROUTSTREAM => sayString '" "
+;    NULL $highlightAllowed        => sayString '" "
+;    sayString $highlightFontOff
+;  STRINGP x => sayString x
+;  brightPrintHighlight x
+
+(DEFUN |brightPrint0| (|x|)
+  (PROG (|k|)
+  (declare (special |$highlightFontOff| |$highlightAllowed| $MARG
+                    |$highlightFontOn| |$texFormatting|))
+    (RETURN
+      (SEQ (COND
+             (|$texFormatting| (|brightPrint0AsTeX| |x|))
+             ('T (COND ((IDENTP |x|) (SPADLET |x| (PNAME |x|))))
+              (COND
+                ((AND (STRINGP |x|) (> (STRINGLENGTH |x|) 1)
+                      (BOOT-EQUAL (ELT |x| 0) (|char| '|\\|))
+                      (BOOT-EQUAL (ELT |x| 1) (|char| '%)))
+                 (|sayString| (SUBSTRING |x| 1 NIL)))
+                ((BOOT-EQUAL |x| (MAKESTRING "%l")) (|sayNewLine|)
+                 (DO ((|i| 1 (QSADD1 |i|)))
+                     ((QSGREATERP |i| $MARG) NIL)
+                   (SEQ (EXIT (|sayString| (MAKESTRING " "))))))
+                ((BOOT-EQUAL |x| (MAKESTRING "%i"))
+                 (SPADLET $MARG (PLUS $MARG 3)))
+                ((BOOT-EQUAL |x| (MAKESTRING "%u"))
+                 (SPADLET $MARG (SPADDIFFERENCE $MARG 3))
+                 (COND ((MINUSP $MARG) (SPADLET $MARG 0)) ('T NIL)))
+                ((BOOT-EQUAL |x| (MAKESTRING "%U")) (SPADLET $MARG 0))
+                ((BOOT-EQUAL |x| (MAKESTRING "%"))
+                 (|sayString| (MAKESTRING " ")))
+                ((BOOT-EQUAL |x| (MAKESTRING "%%"))
+                 (|sayString| (MAKESTRING "%")))
+                ((BOOT-EQUAL |x| (MAKESTRING "%b"))
+                 (COND
+                   ((NULL (IS-CONSOLE CUROUTSTREAM))
+                    (|sayString| (MAKESTRING " ")))
+                   ((NULL |$highlightAllowed|)
+                    (|sayString| (MAKESTRING " ")))
+                   ('T (|sayString| |$highlightFontOn|))))
+                ((SPADLET |k| (|blankIndicator| |x|)) (BLANKS |k|))
+                ((BOOT-EQUAL |x| (MAKESTRING "%d"))
+                 (COND
+                   ((NULL (IS-CONSOLE CUROUTSTREAM))
+                    (|sayString| (MAKESTRING " ")))
+                   ((NULL |$highlightAllowed|)
+                    (|sayString| (MAKESTRING " ")))
+                   ('T (|sayString| |$highlightFontOff|))))
+                ((STRINGP |x|) (|sayString| |x|))
+                ('T (|brightPrintHighlight| |x|)))))))))
+
+;brightPrint0AsTeX x ==
+;  x = '"%l" =>
+;    sayString('"\\")
+;    for i in 1..$MARG repeat sayString '"\ "
+;  x = '"%i" =>
+;    $MARG := $MARG + 3
+;  x = '"%u" =>
+;    $MARG := $MARG - 3
+;    if $MARG < 0 then $MARG := 0
+;  x = '"%U" =>
+;    $MARG := 0
+;  x = '"%" =>
+;    sayString '"\ "
+;  x = '"%%" =>
+;    sayString  '"%"
+;  x = '"%b" =>
+;    sayString '" {\tt "
+;  k := blankIndicator x => for i in 1..k repeat sayString '"\ "
+;  x = '"%d" =>
+;    sayString '"} "
+;  x = '"_"$_"" =>
+;    sayString('"_"\verb!$!_"")
+;  x = '"$" =>
+;    sayString('"\verb!$!")
+;  STRINGP x => sayString x
+;  brightPrintHighlight x
+
+(DEFUN |brightPrint0AsTeX| (|x|)
+  (PROG (|k|)
+  (declare (special $MARG))
+    (RETURN
+      (SEQ (COND
+             ((BOOT-EQUAL |x| (MAKESTRING "%l"))
+              (|sayString| (MAKESTRING "\\\\"))
+              (DO ((|i| 1 (QSADD1 |i|))) ((QSGREATERP |i| $MARG) NIL)
+                (SEQ (EXIT (|sayString| (MAKESTRING "\\ "))))))
+             ((BOOT-EQUAL |x| (MAKESTRING "%i"))
+              (SPADLET $MARG (PLUS $MARG 3)))
+             ((BOOT-EQUAL |x| (MAKESTRING "%u"))
+              (SPADLET $MARG (SPADDIFFERENCE $MARG 3))
+              (COND ((MINUSP $MARG) (SPADLET $MARG 0)) ('T NIL)))
+             ((BOOT-EQUAL |x| (MAKESTRING "%U")) (SPADLET $MARG 0))
+             ((BOOT-EQUAL |x| (MAKESTRING "%"))
+              (|sayString| (MAKESTRING "\\ ")))
+             ((BOOT-EQUAL |x| (MAKESTRING "%%"))
+              (|sayString| (MAKESTRING "%")))
+             ((BOOT-EQUAL |x| (MAKESTRING "%b"))
+              (|sayString| (MAKESTRING " {\\tt ")))
+             ((SPADLET |k| (|blankIndicator| |x|))
+              (DO ((|i| 1 (QSADD1 |i|))) ((QSGREATERP |i| |k|) NIL)
+                (SEQ (EXIT (|sayString| (MAKESTRING "\\ "))))))
+             ((BOOT-EQUAL |x| (MAKESTRING "%d"))
+              (|sayString| (MAKESTRING "} ")))
+             ((BOOT-EQUAL |x| (MAKESTRING "\"$\""))
+              (|sayString| (MAKESTRING "\"\\verb!$!\"")))
+             ((BOOT-EQUAL |x| (MAKESTRING "$"))
+              (|sayString| (MAKESTRING "\\verb!$!")))
+             ((STRINGP |x|) (|sayString| |x|))
+             ('T (|brightPrintHighlight| |x|)))))))
+
+;blankIndicator x ==
+;  if IDENTP x then x := PNAME x
+;  null STRINGP x or MAXINDEX x < 1 => nil
+;  x.0 = '% and x.1 = 'x =>
+;    MAXINDEX x > 1 => PARSE_-INTEGER SUBSTRING(x,2,nil)
+;    1
+;  nil
+
+(DEFUN |blankIndicator| (|x|)
+  (PROGN
+    (COND ((IDENTP |x|) (SPADLET |x| (PNAME |x|))))
+    (COND
+      ((OR (NULL (STRINGP |x|)) (> 1 (MAXINDEX |x|))) NIL)
+      ((AND (BOOT-EQUAL (ELT |x| 0) '%) (BOOT-EQUAL (ELT |x| 1) '|x|))
+       (COND
+         ((> (MAXINDEX |x|) 1) (PARSE-INTEGER (SUBSTRING |x| 2 NIL)))
+         ('T 1)))
+      ('T NIL))))
+
+;brightPrint1 x ==
+;  if x in '(%l "%l") then sayNewLine()
+;  else if STRINGP x then sayString x
+;       else brightPrintHighlight x
+;  NIL
+
+(DEFUN |brightPrint1| (|x|)
+  (PROGN
+    (COND
+      ((|member| |x| '(|%l| "%l")) (|sayNewLine|))
+      ((STRINGP |x|) (|sayString| |x|))
+      ('T (|brightPrintHighlight| |x|)))
+    NIL))
+
+;brightPrintHighlight x ==
+;  $texFormatting => brightPrintHighlightAsTeX x
+;  IDENTP x =>
+;    pn := PNAME x
+;    sayString pn
+;  -- following line helps find certain bugs that slip through
+;  -- also see sayBrightlyLength1
+;  VECP x => sayString '"UNPRINTABLE"
+;  ATOM x => sayString object2String x
+;  [key,:rst] := x
+;  if IDENTP key then key:=PNAME key
+;  key = '"%m" => mathprint rst
+;  key in '("%p" "%s") => PRETTYPRIN0 rst
+;  key = '"%ce" => brightPrintCenter rst
+;  key = '"%rj" => brightPrintRightJustify rst
+;  key = '"%t"  => $MARG := $MARG + tabber rst
+;  sayString '"("
+;  brightPrint1 key
+;  if EQ(key,'TAGGEDreturn) then
+;    rst:=[CAR rst,CADR rst,CADDR rst, '"environment (omitted)"]
+;  for y in rst repeat
+;    sayString '" "
+;    brightPrint1 y
+;  if rst and (la := LASTATOM rst) then
+;    sayString '" . "
+;    brightPrint1 la
+;  sayString '")"
+
+(DEFUN |brightPrintHighlight| (|x|)
+  (PROG (|pn| |key| |rst| |la|)
+  (declare (special $MARG |$texFormatting|))
+    (RETURN
+      (SEQ (COND
+             (|$texFormatting| (|brightPrintHighlightAsTeX| |x|))
+             ((IDENTP |x|) (SPADLET |pn| (PNAME |x|))
+              (|sayString| |pn|))
+             ((VECP |x|) (|sayString| (MAKESTRING "UNPRINTABLE")))
+             ((ATOM |x|) (|sayString| (|object2String| |x|)))
+             ('T (SPADLET |key| (CAR |x|)) (SPADLET |rst| (CDR |x|))
+              (COND ((IDENTP |key|) (SPADLET |key| (PNAME |key|))))
+              (COND
+                ((BOOT-EQUAL |key| (MAKESTRING "%m"))
+                 (|mathprint| |rst|))
+                ((|member| |key| '("%p" "%s")) (PRETTYPRIN0 |rst|))
+                ((BOOT-EQUAL |key| (MAKESTRING "%ce"))
+                 (|brightPrintCenter| |rst|))
+                ((BOOT-EQUAL |key| (MAKESTRING "%rj"))
+                 (|brightPrintRightJustify| |rst|))
+                ((BOOT-EQUAL |key| (MAKESTRING "%t"))
+                 (SPADLET $MARG (PLUS $MARG (|tabber| |rst|))))
+                ('T (|sayString| (MAKESTRING "("))
+                 (|brightPrint1| |key|)
+                 (COND
+                   ((EQ |key| '|TAGGEDreturn|)
+                    (SPADLET |rst|
+                             (CONS (CAR |rst|)
+                                   (CONS (CADR |rst|)
+                                    (CONS (CADDR |rst|)
+                                     (CONS
+                                      (MAKESTRING
+                                       "environment (omitted)")
+                                      NIL)))))))
+                 (DO ((G166741 |rst| (CDR G166741)) (|y| NIL))
+                     ((OR (ATOM G166741)
+                          (PROGN (SETQ |y| (CAR G166741)) NIL))
+                      NIL)
+                   (SEQ (EXIT (PROGN
+                                (|sayString| (MAKESTRING " "))
+                                (|brightPrint1| |y|)))))
+                 (COND
+                   ((AND |rst| (SPADLET |la| (LASTATOM |rst|)))
+                    (|sayString| (MAKESTRING " . "))
+                    (|brightPrint1| |la|)))
+                 (|sayString| (MAKESTRING ")"))))))))))
+
+;brightPrintHighlightAsTeX x ==
+;  IDENTP x =>
+;    pn := PNAME x
+;    sayString pn
+;  ATOM x => sayString object2String x
+;  VECP x => sayString '"UNPRINTABLE"
+;  [key,:rst] := x
+;  key = '"%m" => mathprint rst
+;  key = '"%m" => rst
+;  key = '"%s" =>
+;    sayString '"\verb__"
+;    PRETTYPRIN0 rst
+;    sayString '"__"
+;  key = '"%ce" => brightPrintCenter rst
+;  key = '"%t"  => $MARG := $MARG + tabber rst
+;  -- unhandled junk (print verbatim(ish)
+;  sayString '"("
+;  brightPrint1 key
+;  if EQ(key,'TAGGEDreturn) then
+;    rst:=[CAR rst,CADR rst,CADDR rst, '"environment (omitted)"]
+;  for y in rst repeat
+;    sayString '" "
+;    brightPrint1 y
+;  if rst and (la := LASTATOM rst) then
+;    sayString '" . "
+;    brightPrint1 la
+;  sayString '")"
+
+(DEFUN |brightPrintHighlightAsTeX| (|x|)
+  (PROG (|pn| |key| |rst| |la|)
+  (declare (special $MARG))
+    (RETURN
+      (SEQ (COND
+             ((IDENTP |x|) (SPADLET |pn| (PNAME |x|))
+              (|sayString| |pn|))
+             ((ATOM |x|) (|sayString| (|object2String| |x|)))
+             ((VECP |x|) (|sayString| (MAKESTRING "UNPRINTABLE")))
+             ('T (SPADLET |key| (CAR |x|)) (SPADLET |rst| (CDR |x|))
+              (COND
+                ((BOOT-EQUAL |key| (MAKESTRING "%m"))
+                 (|mathprint| |rst|))
+                ((BOOT-EQUAL |key| (MAKESTRING "%m")) |rst|)
+                ((BOOT-EQUAL |key| (MAKESTRING "%s"))
+                 (|sayString| (MAKESTRING "\\verb_"))
+                 (PRETTYPRIN0 |rst|) (|sayString| (MAKESTRING "_")))
+                ((BOOT-EQUAL |key| (MAKESTRING "%ce"))
+                 (|brightPrintCenter| |rst|))
+                ((BOOT-EQUAL |key| (MAKESTRING "%t"))
+                 (SPADLET $MARG (PLUS $MARG (|tabber| |rst|))))
+                ('T (|sayString| (MAKESTRING "("))
+                 (|brightPrint1| |key|)
+                 (COND
+                   ((EQ |key| '|TAGGEDreturn|)
+                    (SPADLET |rst|
+                             (CONS (CAR |rst|)
+                                   (CONS (CADR |rst|)
+                                    (CONS (CADDR |rst|)
+                                     (CONS
+                                      (MAKESTRING
+                                       "environment (omitted)")
+                                      NIL)))))))
+                 (DO ((G166770 |rst| (CDR G166770)) (|y| NIL))
+                     ((OR (ATOM G166770)
+                          (PROGN (SETQ |y| (CAR G166770)) NIL))
+                      NIL)
+                   (SEQ (EXIT (PROGN
+                                (|sayString| (MAKESTRING " "))
+                                (|brightPrint1| |y|)))))
+                 (COND
+                   ((AND |rst| (SPADLET |la| (LASTATOM |rst|)))
+                    (|sayString| (MAKESTRING " . "))
+                    (|brightPrint1| |la|)))
+                 (|sayString| (MAKESTRING ")"))))))))))
+
+;tabber num ==
+;    maxTab := 50
+;    num > maxTab => maxTab
+;    num
+
+(DEFUN |tabber| (|num|)
+  (PROG (|maxTab|)
+    (RETURN
+      (PROGN
+        (SPADLET |maxTab| 50)
+        (COND ((> |num| |maxTab|) |maxTab|) ('T |num|))))))
+
+;brightPrintCenter x ==
+;  $texFormatting => brightPrintCenterAsTeX x
+;  -- centers rst within $LINELENGTH, checking for %l's
+;  ATOM x =>
+;    x := object2String x
+;    wid := STRINGLENGTH x
+;    if wid < $LINELENGTH then
+;      f := DIVIDE($LINELENGTH - wid,2)
+;      x := LIST(fillerSpaces(f.0,'" "),x)
+;    for y in x repeat brightPrint0 y
+;    NIL
+;  y := NIL
+;  ok := true
+;  while x and ok repeat
+;    if CAR(x) in '(%l "%l") then ok := NIL
+;    else y := cons(CAR x, y)
+;    x := CDR x
+;  y := NREVERSE y
+;  wid := sayBrightlyLength y
+;  if wid < $LINELENGTH then
+;    f := DIVIDE($LINELENGTH - wid,2)
+;    y := CONS(fillerSpaces(f.0,'" "),y)
+;  for z in y repeat brightPrint0 z
+;  if x then
+;    sayNewLine()
+;    brightPrintCenter x
+;  NIL
+
+(DEFUN |brightPrintCenter| (|x|)
+  (PROG (|ok| |wid| |f| |y|)
+  (declare (special $LINELENGTH |$texFormatting|))
+    (RETURN
+      (SEQ (COND
+             (|$texFormatting| (|brightPrintCenterAsTeX| |x|))
+             ((ATOM |x|) (SPADLET |x| (|object2String| |x|))
+              (SPADLET |wid| (STRINGLENGTH |x|))
+              (COND
+                ((> $LINELENGTH |wid|)
+                 (SPADLET |f|
+                          (DIVIDE (SPADDIFFERENCE $LINELENGTH |wid|) 2))
+                 (SPADLET |x|
+                          (LIST (|fillerSpaces| (ELT |f| 0)
+                                    (MAKESTRING " "))
+                                |x|))))
+              (DO ((G166799 |x| (CDR G166799)) (|y| NIL))
+                  ((OR (ATOM G166799)
+                       (PROGN (SETQ |y| (CAR G166799)) NIL))
+                   NIL)
+                (SEQ (EXIT (|brightPrint0| |y|))))
+              NIL)
+             ('T (SPADLET |y| NIL) (SPADLET |ok| 'T)
+              (DO () ((NULL (AND |x| |ok|)) NIL)
+                (SEQ (EXIT (PROGN
+                             (COND
+                               ((|member| (CAR |x|) '(|%l| "%l"))
+                                (SPADLET |ok| NIL))
+                               ('T (SPADLET |y| (CONS (CAR |x|) |y|))))
+                             (SPADLET |x| (CDR |x|))))))
+              (SPADLET |y| (NREVERSE |y|))
+              (SPADLET |wid| (|sayBrightlyLength| |y|))
+              (COND
+                ((> $LINELENGTH |wid|)
+                 (SPADLET |f|
+                          (DIVIDE (SPADDIFFERENCE $LINELENGTH |wid|) 2))
+                 (SPADLET |y|
+                          (CONS (|fillerSpaces| (ELT |f| 0)
+                                    (MAKESTRING " "))
+                                |y|))))
+              (DO ((G166816 |y| (CDR G166816)) (|z| NIL))
+                  ((OR (ATOM G166816)
+                       (PROGN (SETQ |z| (CAR G166816)) NIL))
+                   NIL)
+                (SEQ (EXIT (|brightPrint0| |z|))))
+              (COND (|x| (|sayNewLine|) (|brightPrintCenter| |x|)))
+              NIL))))))
+
+;brightPrintCenterAsTeX x ==
+;  ATOM x =>
+;    sayString '"\centerline{"
+;    sayString x
+;    sayString '"}"
+;  lst := x
+;  while lst repeat
+;    words := nil
+;    while lst and not CAR(lst) = "%l" repeat
+;      words := [CAR lst,: words]
+;      lst := CDR lst
+;    if lst then lst := cdr lst
+;    sayString '"\centerline{"
+;    words := nreverse words
+;    for zz in words repeat
+;      brightPrint0 zz
+;    sayString '"}"
+;  nil
+
+(DEFUN |brightPrintCenterAsTeX| (|x|)
+  (PROG (|lst| |words|)
+    (RETURN
+      (SEQ (COND
+             ((ATOM |x|) (|sayString| (MAKESTRING "\\centerline{"))
+              (|sayString| |x|) (|sayString| (MAKESTRING "}")))
+             ('T (SPADLET |lst| |x|)
+              (DO () ((NULL |lst|) NIL)
+                (SEQ (EXIT (PROGN
+                             (SPADLET |words| NIL)
+                             (DO ()
+                                 ((NULL (AND |lst|
+                                         (NULL
+                                          (BOOT-EQUAL (CAR |lst|)
+                                           '|%l|))))
+                                  NIL)
+                               (SEQ (EXIT
+                                     (PROGN
+                                       (SPADLET |words|
+                                        (CONS (CAR |lst|) |words|))
+                                       (SPADLET |lst| (CDR |lst|))))))
+                             (COND
+                               (|lst| (SPADLET |lst| (CDR |lst|))))
+                             (|sayString| (MAKESTRING "\\centerline{"))
+                             (SPADLET |words| (NREVERSE |words|))
+                             (DO ((G166868 |words| (CDR G166868))
+                                  (|zz| NIL))
+                                 ((OR (ATOM G166868)
+                                      (PROGN
+                                        (SETQ |zz| (CAR G166868))
+                                        NIL))
+                                  NIL)
+                               (SEQ (EXIT (|brightPrint0| |zz|))))
+                             (|sayString| (MAKESTRING "}"))))))
+              NIL))))))
+
+;brightPrintRightJustify x ==
+;  -- right justifies rst within $LINELENGTH, checking for %l's
+;  ATOM x =>
+;    x := object2String x
+;    wid := STRINGLENGTH x
+;    wid < $LINELENGTH =>
+;      x := LIST(fillerSpaces($LINELENGTH-wid,'" "),x)
+;      for y in x repeat brightPrint0 y
+;      NIL
+;    brightPrint0 x
+;    NIL
+;  y := NIL
+;  ok := true
+;  while x and ok repeat
+;    if CAR(x) in '(%l "%l") then ok := NIL
+;    else y := cons(CAR x, y)
+;    x := CDR x
+;  y := NREVERSE y
+;  wid := sayBrightlyLength y
+;  if wid < $LINELENGTH then
+;    y := CONS(fillerSpaces($LINELENGTH-wid,'" "),y)
+;  for z in y repeat brightPrint0 z
+;  if x then
+;    sayNewLine()
+;    brightPrintRightJustify x
+;  NIL
+
+(DEFUN |brightPrintRightJustify| (|x|)
+  (PROG (|ok| |wid| |y|)
+  (declare (special $LINELENGTH))
+    (RETURN
+      (SEQ (COND
+             ((ATOM |x|) (SPADLET |x| (|object2String| |x|))
+              (SPADLET |wid| (STRINGLENGTH |x|))
+              (COND
+                ((> $LINELENGTH |wid|)
+                 (SPADLET |x|
+                          (LIST (|fillerSpaces|
+                                    (SPADDIFFERENCE $LINELENGTH |wid|)
+                                    (MAKESTRING " "))
+                                |x|))
+                 (DO ((G166891 |x| (CDR G166891)) (|y| NIL))
+                     ((OR (ATOM G166891)
+                          (PROGN (SETQ |y| (CAR G166891)) NIL))
+                      NIL)
+                   (SEQ (EXIT (|brightPrint0| |y|))))
+                 NIL)
+                ('T (|brightPrint0| |x|) NIL)))
+             ('T (SPADLET |y| NIL) (SPADLET |ok| 'T)
+              (DO () ((NULL (AND |x| |ok|)) NIL)
+                (SEQ (EXIT (PROGN
+                             (COND
+                               ((|member| (CAR |x|) '(|%l| "%l"))
+                                (SPADLET |ok| NIL))
+                               ('T (SPADLET |y| (CONS (CAR |x|) |y|))))
+                             (SPADLET |x| (CDR |x|))))))
+              (SPADLET |y| (NREVERSE |y|))
+              (SPADLET |wid| (|sayBrightlyLength| |y|))
+              (COND
+                ((> $LINELENGTH |wid|)
+                 (SPADLET |y|
+                          (CONS (|fillerSpaces|
+                                    (SPADDIFFERENCE $LINELENGTH |wid|)
+                                    (MAKESTRING " "))
+                                |y|))))
+              (DO ((G166908 |y| (CDR G166908)) (|z| NIL))
+                  ((OR (ATOM G166908)
+                       (PROGN (SETQ |z| (CAR G166908)) NIL))
+                   NIL)
+                (SEQ (EXIT (|brightPrint0| |z|))))
+              (COND
+                (|x| (|sayNewLine|) (|brightPrintRightJustify| |x|)))
+              NIL))))))
+
+;-- some hooks for older functions
+;--------------------> NEW DEFINITION (see macros.lisp.pamphlet)
+;BRIGHTPRINT x == brightPrint x
+
+;;;     ***       BRIGHTPRINT REDEFINED
+
+(DEFUN BRIGHTPRINT (|x|) (|brightPrint| |x|)) 
+
+;--------------------> NEW DEFINITION (see macros.lisp.pamphlet)
+;BRIGHTPRINT_-0 x == brightPrint0 x
+
+;;;     ***       BRIGHTPRINT-0 REDEFINED
+
+(DEFUN BRIGHTPRINT-0 (|x|) (|brightPrint0| |x|)) 
+
+;--% Message Formatting Utilities
+;sayBrightlyLength l ==
+;  null l => 0
+;  atom l => sayBrightlyLength1 l
+;  sayBrightlyLength1 first l + sayBrightlyLength rest l
+
+(DEFUN |sayBrightlyLength| (|l|)
+  (COND
+    ((NULL |l|) 0)
+    ((ATOM |l|) (|sayBrightlyLength1| |l|))
+    ('T
+     (PLUS (|sayBrightlyLength1| (CAR |l|))
+           (|sayBrightlyLength| (CDR |l|))))))
+
+;sayBrightlyLength1 x ==
+;  MEMBER(x,'("%b" "%d" %b %d)) =>
+;    NULL $highlightAllowed => 1
+;    1
+;  MEMBER(x,'("%l" %l)) => 0
+;  STRINGP x and STRINGLENGTH x > 2 and x.0 = '"%" and x.1 = '"x" =>
+;    INTERN x.3
+;  STRINGP x => STRINGLENGTH x
+;  IDENTP x => STRINGLENGTH PNAME x
+;  -- following line helps find certain bugs that slip through
+;  -- also see brightPrintHighlight
+;  VECP x => STRINGLENGTH '"UNPRINTABLE"
+;  ATOM x => STRINGLENGTH STRINGIMAGE x
+;  2 + sayBrightlyLength x
+
+(DEFUN |sayBrightlyLength1| (|x|)
+  (declare (special |$highlightAllowed|))
+  (COND
+    ((|member| |x| '("%b" "%d" |%b| |%d|))
+     (COND ((NULL |$highlightAllowed|) 1) ('T 1)))
+    ((|member| |x| '("%l" |%l|)) 0)
+    ((AND (STRINGP |x|) (> (STRINGLENGTH |x|) 2)
+          (BOOT-EQUAL (ELT |x| 0) (MAKESTRING "%"))
+          (BOOT-EQUAL (ELT |x| 1) (MAKESTRING "x")))
+     (INTERN (ELT |x| 3)))
+    ((STRINGP |x|) (STRINGLENGTH |x|))
+    ((IDENTP |x|) (STRINGLENGTH (PNAME |x|)))
+    ((VECP |x|) (STRINGLENGTH (MAKESTRING "UNPRINTABLE")))
+    ((ATOM |x|) (STRINGLENGTH (STRINGIMAGE |x|)))
+    ('T (PLUS 2 (|sayBrightlyLength| |x|)))))
+
+;sayAsManyPerLineAsPossible l ==
+;  -- it is assumed that l is a list of strings
+;  l := [atom2String a for a in l]
+;  m := 1 + "MAX"/[SIZE(a) for a in l]
+;  -- w will be the field width in which we will display the elements
+;  m > $LINELENGTH =>
+;    for a in l repeat sayMSG a
+;    NIL
+;  w := MIN(m + 3,$LINELENGTH)
+;  -- p is the number of elements per line
+;  p := QUOTIENT($LINELENGTH,w)
+;  n := # l
+;  str := '""
+;  for i in 0..(n-1) repeat
+;    [c,:l] := l
+;    str := STRCONC(str,c,fillerSpaces(w - #c,'" "))
+;    REMAINDER(i+1,p) = 0 => (sayMSG str ; str := '"" )
+;  if str ^= '"" then sayMSG str
+;  NIL
+
+(DEFUN |sayAsManyPerLineAsPossible| (|l|)
+  (PROG (|m| |w| |p| |n| |LETTMP#1| |c| |str|)
+  (declare (special $LINELENGTH))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |l|
+                      (PROG (G166958)
+                        (SPADLET G166958 NIL)
+                        (RETURN
+                          (DO ((G166963 |l| (CDR G166963))
+                               (|a| NIL))
+                              ((OR (ATOM G166963)
+                                   (PROGN
+                                     (SETQ |a| (CAR G166963))
+                                     NIL))
+                               (NREVERSE0 G166958))
+                            (SEQ (EXIT (SETQ G166958
+                                        (CONS (|atom2String| |a|)
+                                         G166958))))))))
+             (SPADLET |m|
+                      (PLUS 1
+                            (PROG (G166969)
+                              (SPADLET G166969 -999999)
+                              (RETURN
+                                (DO ((G166974 |l| (CDR G166974))
+                                     (|a| NIL))
+                                    ((OR (ATOM G166974)
+                                      (PROGN
+                                        (SETQ |a| (CAR G166974))
+                                        NIL))
+                                     G166969)
+                                  (SEQ (EXIT
+                                        (SETQ G166969
+                                         (MAX G166969 (SIZE |a|))))))))))
+             (COND
+               ((> |m| $LINELENGTH)
+                (DO ((G166983 |l| (CDR G166983)) (|a| NIL))
+                    ((OR (ATOM G166983)
+                         (PROGN (SETQ |a| (CAR G166983)) NIL))
+                     NIL)
+                  (SEQ (EXIT (|sayMSG| |a|))))
+                NIL)
+               ('T (SPADLET |w| (MIN (PLUS |m| 3) $LINELENGTH))
+                (SPADLET |p| (QUOTIENT $LINELENGTH |w|))
+                (SPADLET |n| (|#| |l|)) (SPADLET |str| (MAKESTRING ""))
+                (DO ((G166999 (SPADDIFFERENCE |n| 1))
+                     (|i| 0 (QSADD1 |i|)))
+                    ((QSGREATERP |i| G166999) NIL)
+                  (SEQ (EXIT (PROGN
+                               (SPADLET |LETTMP#1| |l|)
+                               (SPADLET |c| (CAR |LETTMP#1|))
+                               (SPADLET |l| (CDR |LETTMP#1|))
+                               (SPADLET |str|
+                                        (STRCONC |str| |c|
+                                         (|fillerSpaces|
+                                          (SPADDIFFERENCE |w|
+                                           (|#| |c|))
+                                          (MAKESTRING " "))))
+                               (COND
+                                 ((EQL (REMAINDER (PLUS |i| 1) |p|) 0)
+                                  (PROGN
+                                    (|sayMSG| |str|)
+                                    (SPADLET |str| (MAKESTRING "")))))))))
+                (COND
+                  ((NEQUAL |str| (MAKESTRING "")) (|sayMSG| |str|)))
+                NIL)))))))
+
+;say2PerLine l == say2PerLineWidth(l,$LINELENGTH / 2)
+
+(DEFUN |say2PerLine| (|l|)
+  (declare (special $LINELENGTH))
+  (|say2PerLineWidth| |l| (QUOTIENT $LINELENGTH 2)))
+
+;say2PerLineWidth(l,n) ==
+;  [short,long] := say2Split(l,nil,nil,n)
+;  say2PerLineThatFit short
+;  for x in long repeat sayLongOperation x
+;  sayBrightly '""
+
+(DEFUN |say2PerLineWidth| (|l| |n|)
+  (PROG (|LETTMP#1| |short| |long|)
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |LETTMP#1| (|say2Split| |l| NIL NIL |n|))
+             (SPADLET |short| (CAR |LETTMP#1|))
+             (SPADLET |long| (CADR |LETTMP#1|))
+             (|say2PerLineThatFit| |short|)
+             (DO ((G167033 |long| (CDR G167033)) (|x| NIL))
+                 ((OR (ATOM G167033)
+                      (PROGN (SETQ |x| (CAR G167033)) NIL))
+                  NIL)
+               (SEQ (EXIT (|sayLongOperation| |x|))))
+             (|sayBrightly| (MAKESTRING "")))))))
+
+;say2Split(l,short,long,width) ==
+;  l is [x,:l'] =>
+;    sayWidth x < width => say2Split(l',[x,:short],long,width)
+;    say2Split(l',short,[x,:long],width)
+;  [nreverse short,nreverse long]
+
+(DEFUN |say2Split| (|l| |short| |long| |width|)
+  (PROG (|x| |l'|)
+    (RETURN
+      (COND
+        ((AND (PAIRP |l|)
+              (PROGN
+                (SPADLET |x| (QCAR |l|))
+                (SPADLET |l'| (QCDR |l|))
+                'T))
+         (COND
+           ((> |width| (|sayWidth| |x|))
+            (|say2Split| |l'| (CONS |x| |short|) |long| |width|))
+           ('T (|say2Split| |l'| |short| (CONS |x| |long|) |width|))))
+        ('T (CONS (NREVERSE |short|) (CONS (NREVERSE |long|) NIL)))))))
+
+;sayLongOperation x ==
+;  sayWidth x > $LINELENGTH and (splitListOn(x,"if") is [front,back]) =>
+;    sayBrightly front
+;    BLANKS (6 + # PNAME front.1)
+;    sayBrightly back
+;  sayBrightly x
+
+(DEFUN |sayLongOperation| (|x|)
+  (PROG (|ISTMP#1| |front| |ISTMP#2| |back|)
+  (declare (special $LINELENGTH))
+    (RETURN
+      (COND
+        ((AND (> (|sayWidth| |x|) $LINELENGTH)
+              (PROGN
+                (SPADLET |ISTMP#1| (|splitListOn| |x| '|if|))
+                (AND (PAIRP |ISTMP#1|)
+                     (PROGN
+                       (SPADLET |front| (QCAR |ISTMP#1|))
+                       (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
+                       (AND (PAIRP |ISTMP#2|) (EQ (QCDR |ISTMP#2|) NIL)
+                            (PROGN
+                              (SPADLET |back| (QCAR |ISTMP#2|))
+                              'T))))))
+         (|sayBrightly| |front|)
+         (BLANKS (PLUS 6 (|#| (PNAME (ELT |front| 1)))))
+         (|sayBrightly| |back|))
+        ('T (|sayBrightly| |x|))))))
+
+;splitListOn(x,key) ==
+;  key in x =>
+;    while first x ^= key repeat
+;      y:= [first x,:y]
+;      x:= rest x
+;    [nreverse y,x]
+;  nil
+
+(DEFUN |splitListOn| (|x| |key|)
+  (PROG (|y|)
+    (RETURN
+      (SEQ (COND
+             ((|member| |key| |x|)
+              (DO () ((NULL (NEQUAL (CAR |x|) |key|)) NIL)
+                (SEQ (EXIT (PROGN
+                             (SPADLET |y| (CONS (CAR |x|) |y|))
+                             (SPADLET |x| (CDR |x|))))))
+              (CONS (NREVERSE |y|) (CONS |x| NIL)))
+             ('T NIL))))))
+
+;say2PerLineThatFit l ==
+;  while l repeat
+;    sayBrightlyNT first l
+;    sayBrightlyNT
+;      fillerSpaces((($LINELENGTH/2)-sayDisplayWidth first l),'" ")
+;    (l:= rest l) =>
+;      sayBrightlyNT first l
+;      l:= rest l
+;      sayBrightly '""
+;    sayBrightly '""
+
+(DEFUN |say2PerLineThatFit| (|l|)
+  (declare (special $LINELENGTH))
+  (SEQ (DO () ((NULL |l|) NIL)
+         (SEQ (EXIT (PROGN
+                      (|sayBrightlyNT| (CAR |l|))
+                      (|sayBrightlyNT|
+                          (|fillerSpaces|
+                              (SPADDIFFERENCE (QUOTIENT $LINELENGTH 2)
+                                  (|sayDisplayWidth| (CAR |l|)))
+                              (MAKESTRING " ")))
+                      (COND
+                        ((SPADLET |l| (CDR |l|))
+                         (|sayBrightlyNT| (CAR |l|))
+                         (SPADLET |l| (CDR |l|))
+                         (|sayBrightly| (MAKESTRING "")))
+                        ('T (|sayBrightly| (MAKESTRING ""))))))))))
+
+;sayDisplayStringWidth x ==
+;  null x => 0
+;  sayDisplayWidth x
+
+(DEFUN |sayDisplayStringWidth| (|x|)
+  (COND ((NULL |x|) 0) ('T (|sayDisplayWidth| |x|))))
+
+;sayDisplayWidth x ==
+;  PAIRP x =>
+;    +/[fn y for y in x] where fn y ==
+;      y in '(%b %d "%b" "%d") or y=$quadSymbol => 1
+;      k := blankIndicator y => k
+;      sayDisplayWidth y
+;  x = "%%" or x = '"%%" => 1
+;  # atom2String x
+
+(DEFUN |sayDisplayWidth,fn| (|y|)
+  (PROG (|k|)
+  (declare (special |$quadSymbol|))
+    (RETURN
+      (SEQ (IF (OR (|member| |y| '(|%b| |%d| "%b" "%d"))
+                   (BOOT-EQUAL |y| |$quadSymbol|))
+               (EXIT 1))
+           (IF (SPADLET |k| (|blankIndicator| |y|)) (EXIT |k|))
+           (EXIT (|sayDisplayWidth| |y|))))))
+
+
+(DEFUN |sayDisplayWidth| (|x|)
+  (PROG ()
+    (RETURN
+      (SEQ (COND
+             ((PAIRP |x|)
+              (PROG (G167123)
+                (SPADLET G167123 0)
+                (RETURN
+                  (DO ((G167128 |x| (CDR G167128)) (|y| NIL))
+                      ((OR (ATOM G167128)
+                           (PROGN (SETQ |y| (CAR G167128)) NIL))
+                       G167123)
+                    (SEQ (EXIT (SETQ G167123
+                                     (PLUS G167123
+                                      (|sayDisplayWidth,fn| |y|)))))))))
+             ((OR (BOOT-EQUAL |x| '%%)
+                  (BOOT-EQUAL |x| (MAKESTRING "%%")))
+              1)
+             ('T (|#| (|atom2String| |x|))))))))
+
+;sayWidth x ==
+;  atom x => # atom2String x
+;  +/[fn y for y in x] where fn y ==
+;    sayWidth y
+
+(DEFUN |sayWidth,fn| (|y|) (|sayWidth| |y|)) 
+
+(DEFUN |sayWidth| (|x|)
+  (PROG ()
+    (RETURN
+      (SEQ (COND
+             ((ATOM |x|) (|#| (|atom2String| |x|)))
+             ('T
+              (PROG (G167143)
+                (SPADLET G167143 0)
+                (RETURN
+                  (DO ((G167148 |x| (CDR G167148)) (|y| NIL))
+                      ((OR (ATOM G167148)
+                           (PROGN (SETQ |y| (CAR G167148)) NIL))
+                       G167143)
+                    (SEQ (EXIT (SETQ G167143
+                                     (PLUS G167143
+                                      (|sayWidth,fn| |y|))))))))))))))
+
+;pp2Cols(al) ==
+;  while al repeat
+;    [[abb,:name],:al]:= al
+;    ppPair(abb,name)
+;    if canFit2ndEntry(name,al) then
+;      [[abb,:name],:al]:= al
+;      TAB ($LINELENGTH / 2)
+;      ppPair(abb,name)
+;    sayNewLine()
+;  nil
+
+(DEFUN |pp2Cols| (|al|)
+  (PROG (|LETTMP#1| |abb| |name|)
+  (declare (special $LINELENGTH))
+    (RETURN
+      (SEQ (PROGN
+             (DO () ((NULL |al|) NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |LETTMP#1| |al|)
+                            (SPADLET |abb| (CAAR |LETTMP#1|))
+                            (SPADLET |name| (CDAR |LETTMP#1|))
+                            (SPADLET |al| (CDR |LETTMP#1|))
+                            (|ppPair| |abb| |name|)
+                            (COND
+                              ((|canFit2ndEntry| |name| |al|)
+                               (SPADLET |LETTMP#1| |al|)
+                               (SPADLET |abb| (CAAR |LETTMP#1|))
+                               (SPADLET |name| (CDAR |LETTMP#1|))
+                               (SPADLET |al| (CDR |LETTMP#1|))
+                               (TAB (QUOTIENT $LINELENGTH 2))
+                               (|ppPair| |abb| |name|)))
+                            (|sayNewLine|)))))
+             NIL)))))
+
+;ppPair(abb,name) ==
+;    sayBrightlyNT [:bright abb,fillerSpaces(8-entryWidth abb," "),name]
+
+(DEFUN |ppPair| (|abb| |name|)
+  (|sayBrightlyNT|
+      (APPEND (|bright| |abb|)
+              (CONS (|fillerSpaces|
+                        (SPADDIFFERENCE 8 (|entryWidth| |abb|)) '| |)
+                    (CONS |name| NIL)))))
+
+;canFit2ndEntry(name,al) ==
+;  wid := ($LINELENGTH/2) - 10
+;  null al => nil
+;  entryWidth name > wid => nil
+;  entryWidth CDAR al > wid => nil
+;  'T
+
+(DEFUN |canFit2ndEntry| (|name| |al|)
+  (PROG (|wid|)
+  (declare (special $LINELENGTH))
+    (RETURN
+      (PROGN
+        (SPADLET |wid| (SPADDIFFERENCE (QUOTIENT $LINELENGTH 2) 10))
+        (COND
+          ((NULL |al|) NIL)
+          ((> (|entryWidth| |name|) |wid|) NIL)
+          ((> (|entryWidth| (CDAR |al|)) |wid|) NIL)
+          ('T 'T))))))
+
+;entryWidth x == # atom2String x
+
+(DEFUN |entryWidth| (|x|) (|#| (|atom2String| |x|))) 
+
+;center80 text == centerNoHighlight(text,$LINELENGTH,'" ")
+
+(DEFUN |center80| (|text|)
+  (declare (special $LINELENGTH))
+  (|centerNoHighlight| |text| $LINELENGTH (MAKESTRING " ")))
+
+;centerAndHighlight(text,:argList) ==
+;  width := IFCAR argList or $LINELENGTH
+;  fillchar := IFCAR IFCDR argList or '" "
+;  wid := entryWidth text + 2
+;  wid >= width - 2 => sayBrightly ['%b,text,'%d]
+;  f := DIVIDE(width - wid - 2,2)
+;  fill1 := '""
+;  for i in 1..(f.0) repeat
+;    fill1 := STRCONC(fillchar,fill1)
+;  if f.1 = 0 then fill2 := fill1 else fill2 := STRCONC(fillchar,fill1)
+;  sayBrightly [fill1,'%b,text,'%d,fill2]
+;  nil
+
+(DEFUN |centerAndHighlight| (&REST G167236 &AUX |argList| |text|)
+  (DSETQ (|text| . |argList|) G167236)
+  (PROG (|width| |fillchar| |wid| |f| |fill1| |fill2|)
+  (declare (special $LINELENGTH))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |width| (OR (IFCAR |argList|) $LINELENGTH))
+             (SPADLET |fillchar|
+                      (OR (IFCAR (IFCDR |argList|)) (MAKESTRING " ")))
+             (SPADLET |wid| (PLUS (|entryWidth| |text|) 2))
+             (COND
+               ((>= |wid| (SPADDIFFERENCE |width| 2))
+                (|sayBrightly|
+                    (CONS '|%b| (CONS |text| (CONS '|%d| NIL)))))
+               ('T
+                (SPADLET |f|
+                         (DIVIDE (SPADDIFFERENCE
+                                     (SPADDIFFERENCE |width| |wid|) 2)
+                                 2))
+                (SPADLET |fill1| (MAKESTRING ""))
+                (DO ((G167221 (ELT |f| 0)) (|i| 1 (QSADD1 |i|)))
+                    ((QSGREATERP |i| G167221) NIL)
+                  (SEQ (EXIT (SPADLET |fill1|
+                                      (STRCONC |fillchar| |fill1|)))))
+                (COND
+                  ((EQL (ELT |f| 1) 0) (SPADLET |fill2| |fill1|))
+                  ('T (SPADLET |fill2| (STRCONC |fillchar| |fill1|))))
+                (|sayBrightly|
+                    (CONS |fill1|
+                          (CONS '|%b|
+                                (CONS |text|
+                                      (CONS '|%d| (CONS |fill2| NIL))))))
+                NIL)))))))
+
+;centerNoHighlight(text,:argList) == sayBrightly center(text,argList)
+
+(DEFUN |centerNoHighlight| (&REST G167240 &AUX |argList| |text|)
+  (DSETQ (|text| . |argList|) G167240)
+  (|sayBrightly| (|center| |text| |argList|)))
+
+;center(text,argList) ==
+;  width := IFCAR argList or $LINELENGTH
+;  fillchar := IFCAR IFCDR argList or '" "
+;  if (u:= splitSayBrightlyArgument text) then [text,:moreLines]:= u
+;  wid := sayBrightlyLength text
+;  wid >= width - 2 => sayBrightly text
+;  f := DIVIDE(width - wid - 2,2)
+;  fill1 := '""
+;  for i in 1..(f.0) repeat
+;    fill1 := STRCONC(fillchar,fill1)
+;  if f.1 = 0 then fill2 := fill1 else fill2 := STRCONC(fillchar,fill1)
+;  concat(fill1,text,fill2)
+
+(DEFUN |center| (|text| |argList|)
+  (PROG (|width| |fillchar| |u| |moreLines| |wid| |f| |fill1| |fill2|)
+  (declare (special $LINELENGTH))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |width| (OR (IFCAR |argList|) $LINELENGTH))
+             (SPADLET |fillchar|
+                      (OR (IFCAR (IFCDR |argList|)) (MAKESTRING " ")))
+             (COND
+               ((SPADLET |u| (|splitSayBrightlyArgument| |text|))
+                (SPADLET |text| (CAR |u|))
+                (SPADLET |moreLines| (CDR |u|)) |u|))
+             (SPADLET |wid| (|sayBrightlyLength| |text|))
+             (COND
+               ((>= |wid| (SPADDIFFERENCE |width| 2))
+                (|sayBrightly| |text|))
+               ('T
+                (SPADLET |f|
+                         (DIVIDE (SPADDIFFERENCE
+                                     (SPADDIFFERENCE |width| |wid|) 2)
+                                 2))
+                (SPADLET |fill1| (MAKESTRING ""))
+                (DO ((G167248 (ELT |f| 0)) (|i| 1 (QSADD1 |i|)))
+                    ((QSGREATERP |i| G167248) NIL)
+                  (SEQ (EXIT (SPADLET |fill1|
+                                      (STRCONC |fillchar| |fill1|)))))
+                (COND
+                  ((EQL (ELT |f| 1) 0) (SPADLET |fill2| |fill1|))
+                  ('T (SPADLET |fill2| (STRCONC |fillchar| |fill1|))))
+                (|concat| |fill1| |text| |fill2|))))))))
+
+;splitSayBrightly u ==
+;  width:= 0
+;  while u and (width:= width + sayWidth first u) < $LINELENGTH repeat
+;    segment:= [first u,:segment]
+;    u := rest u
+;  null u => NREVERSE segment
+;  segment => [:NREVERSE segment,"%l",:splitSayBrightly(u)]
+;  u
+
+(DEFUN |splitSayBrightly| (|u|)
+  (PROG (|width| |segment|)
+  (declare (special $LINELENGTH))
+    (RETURN
+      (SEQ (PROGN
+             (SPADLET |width| 0)
+             (DO ()
+                 ((NULL (AND |u|
+                             (> $LINELENGTH
+                                (SPADLET |width|
+                                         (PLUS |width|
+                                          (|sayWidth| (CAR |u|)))))))
+                  NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |segment|
+                                     (CONS (CAR |u|) |segment|))
+                            (SPADLET |u| (CDR |u|))))))
+             (COND
+               ((NULL |u|) (NREVERSE |segment|))
+               (|segment|
+                   (APPEND (NREVERSE |segment|)
+                           (CONS '|%l| (|splitSayBrightly| |u|))))
+               ('T |u|)))))))
+
+;splitSayBrightlyArgument u ==
+;  atom u => nil
+;  while splitListSayBrightly u is [head,:u] repeat result:= [head,:result]
+;  result => [:NREVERSE result,u]
+;  [u]
+
+(DEFUN |splitSayBrightlyArgument| (|u|)
+  (PROG (|ISTMP#1| |head| |result|)
+    (RETURN
+      (SEQ (COND
+             ((ATOM |u|) NIL)
+             ('T
+              (DO ()
+                  ((NULL (PROGN
+                           (SPADLET |ISTMP#1|
+                                    (|splitListSayBrightly| |u|))
+                           (AND (PAIRP |ISTMP#1|)
+                                (PROGN
+                                  (SPADLET |head| (QCAR |ISTMP#1|))
+                                  (SPADLET |u| (QCDR |ISTMP#1|))
+                                  'T))))
+                   NIL)
+                (SEQ (EXIT (SPADLET |result| (CONS |head| |result|)))))
+              (COND
+                (|result| (APPEND (NREVERSE |result|) (CONS |u| NIL)))
+                ('T (CONS |u| NIL)))))))))
+
+;splitListSayBrightly u ==
+;  for x in tails u repeat
+;    y := rest x
+;    null y => nil
+;    first y = '%l =>
+;      RPLACD(x,nil)
+;      ans:= [u,:rest y]
+;  ans
+
+(DEFUN |splitListSayBrightly| (|u|)
+  (PROG (|y| |ans|)
+    (RETURN
+      (SEQ (PROGN
+             (DO ((|x| |u| (CDR |x|))) ((ATOM |x|) NIL)
+               (SEQ (EXIT (PROGN
+                            (SPADLET |y| (CDR |x|))
+                            (COND
+                              ((NULL |y|) NIL)
+                              ((BOOT-EQUAL (CAR |y|) '|%l|)
+                               (RPLACD |x| NIL)
+                               (SPADLET |ans| (CONS |u| (CDR |y|)))))))))
+             |ans|)))))
+
+;--=======================================================================
+;--                Utility Functions
+;--=======================================================================
+;$htSpecialChars := ['"_#", '"[", '"]", '"%", '"{", '"}", '"_\",
+;                    '"$", '"&", '"^", '"__", '"_~"]
+
+(SPADLET |$htSpecialChars|
+         (CONS (MAKESTRING "#")
+               (CONS (MAKESTRING "[")
+                     (CONS (MAKESTRING "]")
+                           (CONS (MAKESTRING "%")
+                                 (CONS (MAKESTRING "{")
+                                       (CONS (MAKESTRING "}")
+                                        (CONS (MAKESTRING "\\")
+                                         (CONS (MAKESTRING "$")
+                                          (CONS (MAKESTRING "&")
+                                           (CONS (MAKESTRING "^")
+                                            (CONS (MAKESTRING "_")
+                                             (CONS (MAKESTRING "~")
+                                              NIL)))))))))))))
+
+;$htCharAlist := '(
+;  ("$"  . "\%")
+;  ("[]" . "\[\]")
+;  ("{}" . "\{\}")
+;  ("\\" . "\\\\")
+;  ("\/" . "\\/" )
+;  ("/\" . "/\\" ) )
+
+(SPADLET |$htCharAlist|
+         '(("$" . "\\%") ("[]" . "\\[\\]") ("{}" . "\\{\\}")
+           ("\\\\" . "\\\\\\\\") ("\\/" . "\\\\/") ("/\\" . "/\\\\")))
+
+;escapeSpecialChars s ==
+;  u := LASSOC(s,$htCharAlist) => u
+;  member(s, $htSpecialChars) => STRCONC('"_\", s)
+;  null $saturn => s
+;  ALPHA_-CHAR_-P (s.0) => s
+;  not (or/[dbSpecialDisplayOpChar? s.i for i in 0..MAXINDEX s]) => s
+;  buf := '""
+;  for i in 0..MAXINDEX s repeat buf :=
+;    dbSpecialDisplayOpChar?(s.i) => STRCONC(buf,'"\verb!",s.i,'"!")
+;    STRCONC(buf,s.i)
+;  buf
+
+(DEFUN |escapeSpecialChars| (|s|)
+  (PROG (|u| |buf|)
+  (declare (special |$saturn| |$htSpecialChars| |$htCharAlist|))
+    (RETURN
+      (SEQ (COND
+             ((SPADLET |u| (LASSOC |s| |$htCharAlist|)) |u|)
+             ((|member| |s| |$htSpecialChars|)
+              (STRCONC (MAKESTRING "\\") |s|))
+             ((NULL |$saturn|) |s|)
+             ((ALPHA-CHAR-P (ELT |s| 0)) |s|)
+             ((NULL (PROG (G167323)
+                      (SPADLET G167323 NIL)
+                      (RETURN
+                        (DO ((G167329 NIL G167323)
+                             (G167330 (MAXINDEX |s|))
+                             (|i| 0 (QSADD1 |i|)))
+                            ((OR G167329 (QSGREATERP |i| G167330))
+                             G167323)
+                          (SEQ (EXIT (SETQ G167323
+                                      (OR G167323
+                                       (|dbSpecialDisplayOpChar?|
+                                        (ELT |s| |i|))))))))))
+              |s|)
+             ('T (SPADLET |buf| (MAKESTRING ""))
+              (DO ((G167338 (MAXINDEX |s|)) (|i| 0 (QSADD1 |i|)))
+                  ((QSGREATERP |i| G167338) NIL)
+                (SEQ (EXIT (SPADLET |buf|
+                                    (COND
+                                      ((|dbSpecialDisplayOpChar?|
+                                        (ELT |s| |i|))
+                                       (STRCONC |buf|
+                                        (MAKESTRING "\\verb!")
+                                        (ELT |s| |i|) (MAKESTRING "!")))
+                                      ('T
+                                       (STRCONC |buf| (ELT |s| |i|))))))))
+              |buf|))))))
+
+;dbSpecialDisplayOpChar? c == (c = char '_~)
+
+(DEFUN |dbSpecialDisplayOpChar?| (|c|) (BOOT-EQUAL |c| (|char| '~)))
+
+@
+\eject
+\begin{thebibliography}{99}
+\bibitem{1} nothing
+\end{thebibliography}
+\end{document}
