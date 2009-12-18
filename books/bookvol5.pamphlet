@@ -1719,6 +1719,18 @@ carrier[lines,messages,..]-> carrier[lines,messages,..]
 
 @
 
+\defun{poGlobalLinePosn}{poGlobalLinePosn}
+\calls{poGlobalLinePosn}{lnGlobalNum}
+\calls{poGlobalLinePosn}{poGetLineObject}
+\calls{poGlobalLinePosn}{ncBug}
+<<defun poGlobalLinePosn>>=
+(defun |poGlobalLinePosn| (posn)
+ (if posn 
+  (|lnGlobalNum| (|poGetLineObject| posn))
+  (|ncBug| "old style pos objects have no global positions" nil)))
+
+@
+
 \defun{streamChop}{streamChop}
 Note that changing the name ``lyne'' to ``line'' will break the system.
 I do not know why. The symptom shows up when there is a file with a large
@@ -2225,24 +2237,27 @@ contiguous comment spanning enough lines to overflow the stack.
 \defun{xlMsg}{xlMsg}
 \calls{xlMsg}{incLine}
 <<defun xlMsg>>=
-(defun |xlMsg| (eb str lno ufo mess)
- (list (|incLine| eb str (- 1) lno ufo) mess))
+(defun |xlMsg| (extrablanks string localnum fileobj mess)
+ (let ((globalnum -1))
+  (list (incLine extrablanks string globalnum localnum fileobj) mess)))
 
 @
 
 \defun{xlOK}{xlOK}
-\calls{xlOK}{incLine}
+\calls{xlOK}{lxOK1}
 <<defun xlOK>>=
-(defun |xlOK| (eb str lno ufo)
- (list (|incLine| eb str -1 lno ufo) (list nil '|none|)))
+(defun |xlOK| (extrablanks string localnum fileobj)
+ (|xlOK1| extrablanks string string localnum fileobj))
 
 @
 
 \defun{xlOK1}{xlOK1}
 \calls{xlOK1}{incLine1}
 <<defun xlOK1>>=
-(defun |xlOK1| (eb str str1 lno ufo)
- (list (|incLine1| eb str str1 -1 lno ufo) (list nil '|none|)))
+(defun |xlOK1| (extrablanks string string1 localnum fileobj)
+ (let ((globalnum -1))
+  (list (incLine1 extrablanks string string1 globalnum localnum fileobj)
+    (list nil '|none|))))
 
 @
 
@@ -2271,11 +2286,20 @@ contiguous comment spanning enough lines to overflow the stack.
 
 @
 
+\defun{incLine}{incLine}
+\calls{incLine}{incLine1}
+<<defun incLine>>=
+(defun incLine (extrablanks string globalnum localnum fileobj)
+ (incLine1 extrablanks string string globalnum localnum fileobj))
+
+@
+
 \defun{incLine1}{incLine1}
 \calls{incLine1}{lnCreate}
 <<defun incLine1>>=
-(defun |incLine1| (eb str str1 gno lno ufo)
-  (cons (cons (|lnCreate| eb str gno lno ufo) 1) str1))
+(defun incLine1 (extrablanks string string1 globalnum localnum fileobj)
+ (cons
+  (cons (|lnCreate| extrablanks string globalnum localnum fileobj) 1) string1))
 
 @
 
@@ -2284,14 +2308,6 @@ contiguous comment spanning enough lines to overflow the stack.
 <<defun inclmsgPrematureEOF>>=
 (defun |inclmsgPrematureEOF| (ufo)
  (list 'S2CI0002 (list (|%origin| ufo))))
-
-@
-
-\defun{incLine}{incLine}
-\calls{incLine}{lnCreate}
-<<defun incLine>>=
-(defun |incLine| (eb str gno lno ufo)
- (cons (cons (|lnCreate| eb str gno lno ufo) 1) str))
 
 @
 
@@ -2314,10 +2330,11 @@ contiguous comment spanning enough lines to overflow the stack.
 \calls{xlSkip}{incLine}
 \calls{xlSkip}{CONCAT}
 <<defun xlSkip>>=
-(defun |xlSkip| (eb str lno ufo)
+(defun |xlSkip| (extrablanks str localnum fileobj)
+ (let ((string (concat "-- Omitting:" str)) (globalnum -1))
  (list 
-  (|incLine| eb (concat "-- Omitting:" str) -1 lno ufo)
-  (list nil '|none|)))
+  (incLine extrablanks string globalnum localnum fileobj)
+  (list nil '|none|))))
 
 @
 
@@ -4238,6 +4255,246 @@ This function is used to build the scanKeyTable
 
 @
 
+\chapter{Input Stream Parser}
+
+\defun{npParse}{Input Stream Parser}
+\calls{npParse}{npFirstTok}
+\calls{npParse}{npItem}
+\calls{npParse}{ncSoftError}
+\calls{npParse}{tokPosn}
+\calls{npParse}{pfWrong}
+\calls{npParse}{pfDocument}
+\calls{npParse}{pfListOf}
+\usesdolloar{npParse}{ttok}
+\usesdolloar{npParse}{stok}
+\usesdolloar{npParse}{stack}
+\usesdolloar{npParse}{inputStream}
+<<defun npParse>>=
+(defun |npParse| (stream)
+ (let (|$ttok| |$stok| |$stack| |$inputStream| found)
+ (declare (special |$ttok| |$stack| |$inputStream| |$stok|))
+  (setq |$inputStream| stream)
+  (setq |$stack| nil)
+  (setq |$stok| nil)
+  (setq |$ttok| nil)
+  (|npFirstTok|)
+  (setq found (catch 'trappoint (|npItem|)))
+  (cond
+   ((eq found 'trapped)
+    (|ncSoftError| (|tokPosn| |$stok|) 's2cy0006 nil)
+    (|pfWrong| (|pfDocument| "top level syntax error") (|pfListOf| nil)))
+   ((null (null |$inputStream|))
+    (|ncSoftError| (|tokPosn| |$stok|) 's2cy0002 nil)
+    (|pfWrong|
+     (|pfDocument| (list "input stream not exhausted"))
+     (|pfListOf| nil)))
+   ((null |$stack|)
+    (|ncSoftError| (|tokPosn| |$stok|) 's2cy0009 nil)
+    (|pfWrong| (|pfDocument| (list "stack empty")) (|pfListOf| nil)))
+   (t (car |$stack|)))))
+
+@
+
+\defun{npItem}{npItem}
+\calls{npItem}{npQualDef}
+\calls{npItem}{npEqKey}
+\calls{npItem}{npItem1}
+\calls{npItem}{npPop1}
+\calls{npItem}{pfEnSequence}
+\calls{npItem}{npPush}
+\calls{npItem}{pfNovalue}
+<<defun npItem>>=
+(defun |npItem| ()
+ (let (c b a tmp1)
+  (when (|npQualDef|)
+    (if (|npEqKey| 'semicolon)
+     (progn
+      (setq tmp1 (|npItem1| (|npPop1|)))
+      (setq a (car tmp1))
+      (setq b (cadr tmp1))
+      (setq c (|pfEnSequence| b))
+      (if a
+       (|npPush| c)
+       (|npPush| (|pfNovalue| c))))
+     (|npPush| (|pfEnSequence| (|npPop1|)))))))
+
+@
+
+\defun{npItem1}{npItem1}
+\calls{npItem1}{npQualDef}
+\calls{npItem1}{npEqKey}
+\calls{npItem1}{npItem1}
+\calls{npItem1}{npPop1}
+<<defun npItem1>>=
+(defun |npItem1| (c)
+ (let (b a tmp1)
+  (if (|npQualDef|)
+   (if (|npEqKey| 'semicolon)
+     (progn
+      (setq tmp1 (|npItem1| (|npPop1|)))
+      (setq a (car tmp1))
+      (setq b (cadr tmp1))
+      (list a (append c b)))
+    (list t (append c (|npPop1|))))
+   (list nil c))))
+
+@
+
+\defun{npFirstTok}{npFirstTok}
+Sets the current leaf (\$stok) to the next leaf in the input stream.
+Sets the current token (\$ttok) cdr of the leaf.
+A leaf token looks like [head, token, position]
+where head is either an id or (id . alist)
+\calls{npFirstTok}{tokConstruct}
+\calls{npFirstTok}{tokPosn}
+\calls{npFirstTok}{tokPart}
+\usesdolloar{npFirstTok}{ttok}
+\usesdolloar{npFirstTok}{stok}
+\usesdolloar{npFirstTok}{inputStream}
+<<defun npFirstTok>>=
+(defun |npFirstTok| ()
+ (declare (special |$ttok| |$stok| |$inputStream|))
+ (if (null |$inputStream|)
+  (setq |$stok| (|tokConstruct| 'error 'nomore (|tokPosn| |$stok|)))
+  (setq |$stok| (car |$inputStream|)))
+ (setq |$ttok| (|tokPart| |$stok|)))
+
+@
+
+\defun{npPush}{Push one item onto \$stack}
+\usesdolloar{npPush}{stack}
+<<defun npPush>>=
+(defun |npPush| (x)
+ (declare (special |$stack|))
+  (push x |$stack|))
+
+@
+
+\defun{npPop1}{Pop one item off \$stack}
+\usesdolloar{npPop1}{stack}
+<<defun npPop1>>=
+(defun |npPop1| ()
+ (declare (special |$stack|))
+ (pop |$stack|))
+
+@
+
+\defun{npPop2}{Pop the second item off \$stack}
+\usesdolloar{npPop2}{stack}
+<<defun npPop2>>=
+(defun |npPop2| ()
+ (let (a) 
+ (declare (special |$stack|))
+  (setq a (cadr |$stack|))
+  (rplacd |$stack| (cddr |$stack|))
+  a))
+@
+
+\defun{npPop3}{Pop the third item off \$stack}
+\usesdolloar{npPop3}{stack}
+<<defun npPop3>>=
+(defun |npPop3| () 
+ (let (a)
+ (declare (special |$stack|))
+  (setq a (caddr |$stack|))
+  (rplacd (cdr |$stack|) (cdddr |$stack|)) a))
+
+@
+
+\defun{npQualDef}{npQualDef}
+\calls{npQualDef}{npComma}
+\calls{npQualDef}{npPush}
+\calls{npQualDef}{npPop1}
+<<defun npQualDef>>=
+(defun |npQualDef| ()
+ (and (|npComma|) (|npPush| (list (|npPop1|)))))
+
+@
+
+\defun{npEqKey}{Advance over a keyword}
+Test for the keyword, if found advance the token stream
+\calls{npEqKey}{npNext}
+\usesdolloar{npEqKey}{ttok}
+\usesdolloar{npEqKey}{stok}
+<<defun npEqKey>>=
+(defun |npEqKey| (keyword)
+ (declare (special |$ttok| |$stok|))
+ (and
+  (eq (caar |$stok|) '|key|)
+  (eq keyword |$ttok|)
+  (|npNext|)))
+
+@
+
+\defun{npNext}{Advance the input stream}
+This advances the input stream. The call to npFirstTok picks off the
+next token in the input stream and updates the current leaf (\$stok)
+and the current token (\$ttok)
+\calls{npNext}{npFirstTok}
+\usesdolloar{npNext}{inputStream}
+<<defun npNext>>=
+(defun |npNext| ()
+ (declare (special |$inputStream|))
+  (setq |$inputStream| (cdr |$inputStream|))
+  (|npFirstTok|))
+
+@
+
+\defun{npComma}{npComma}
+\calls{npComma}{npTuple}
+\calls{npComma}{npQualifiedDefinition}
+<<defun npComma>>=
+(defun |npComma| ()
+ (|npTuple| #'|npQualifiedDefinition|))
+
+@
+
+\defun{npTuple}{npTuple}
+\calls{npTuple}{npListofFun}
+\calls{npTuple}{npCommaBackSet}
+\calls{npTuple}{pfTupleListOf}
+<<defun npTuple>>=
+(defun |npTuple| (|p|)
+ (|npListofFun| |p| #'|npCommaBackSet| #'|pfTupleListOf|))
+
+@
+
+\defun{npQualifiedDefinition}{npQualifiedDefinition}
+\calls{npQualifiedDefinition}{npQualified}
+\calls{npQualifiedDefinition}{npDefinitionOrStatement}
+<<defun npQualifiedDefinition>>=
+(defun |npQualifiedDefinition| ()
+ (|npQualified| #'|npDefinitionOrStatement|))
+
+@
+
+\defun{npListofFun}{npListofFun}
+\calls{npListofFun}{npTrap}
+\calls{npListofFun}{npPush}
+\calls{npListofFun}{npPop3}
+\calls{npListofFun}{npPop2}
+\calls{npListofFun}{npPop1}
+\usesdolloar{npListofFun}{stack}
+<<defun npListofFun>>=
+(defun |npListofFun| (f h g)
+ (let (a)
+ (declare (special |$stack|))
+  (cond
+   ((apply f nil)
+    (cond
+     ((and (apply h nil) (or (apply f nil) (|npTrap|)))
+       (setq a |$stack|) 
+       (setq |$stack| nil)
+       (do ()
+           ((not (and (apply h nil)
+                 (or (apply f nil) (|npTrap|))))))
+       (setq |$stack| (cons (nreverse |$stack|) a))
+       (|npPush| (funcall g (cons (|npPop3|) (cons (|npPop2|) (|npPop1|))))))
+     (t t)))
+   (t nil))))
+
+@
+
 \chapter{Stream Utilities}
 The input stream is parsed into a large s-expression by repeated calls
 to Delay. Delay takes a function f and an argument x and returns a list
@@ -4585,6 +4842,85 @@ The dqAppend function appends 2 dq's, destroying the first
 @
 
 \chapter{Message Handling}
+
+\section{The Line Object}
+
+\defun{lnCreate}{Line object creation}
+This is called in only one place, the incLine1 function.
+<<defun lnCreate>>=
+(defun |lnCreate| (extraBlanks string globalNum &rest optFileStuff)
+ (let ((localNum (first optFileStuff))
+       (filename (second optFileStuff)))
+  (unless localNum (setq localNum 0))
+  (list extraBlanks string globalNum localNum filename)))
+
+@
+
+\defun{lnExtraBlanks}{Line element 0; Extra blanks}
+<<defun lnExtraBlanks>>=
+(defun |lnExtraBlanks| (lineObject) (elt lineObject 0))
+
+@
+
+\defun{lnString}{Line element 1; String}
+<<defun lnString>>=
+(defun |lnString| (lineObject) (elt lineObject 1))
+
+@
+
+\defun{lnGlobalNum}{Line element 2; Globlal number}
+<<defun lnGlobalNum>>=
+(defun |lnGlobalNum| (lineObject) (elt lineObject 2))
+
+@
+
+\defun{lnSetGlobalNum}{Line element 2; Set Global number}
+<<defun lnSetGlobalNum>>=
+(defun |lnSetGlobalNum| (lineObject num)
+ (setf (elt lineObject 2) num))
+
+@
+
+\defun{lnLocalNum}{Line elemnt 3; Local number}
+<<defun lnLocalNum>>=
+(defun |lnLocalNum| (lineObject) (elt lineObject 3))
+
+@
+
+\defun{lnPlaceOfOrigin}{Line element 4; Place of origin}
+<<defun lnPlaceOfOrigin>>=
+(defun |lnPlaceOfOrigin| (lineObject) (elt lineObject 4))
+
+@
+
+\defun{lnImmediate?}{Line element 4: Is it a filename?}
+\calls{lnImmediate?}{lnFileName?}
+<<defun lnImmediate?>>=
+(defun |lnImmediate?| (lineObject) (null (|lnFileName?| lineObject)))
+
+@
+
+\defun{lnFileName?}{Line element 4: Is it a filename?}
+<<defun lnFileName?>>=
+(defun |lnFileName?| (lineObject)
+ (let (filename)
+  (when (consp (setq filename (elt lineObject 4))) filename)))
+
+@
+
+\defun{lnFileName}{Line element 4; Get filename}
+\calls{lnFileName}{lnFileName?}
+\calls{lnFileName}{ncBug}
+<<defun lnFileName>>=
+(defun |lnFileName| (lineObject)
+ (let (fN)
+  (if (setq fN (|lnFileName?| lineObject))
+   fN
+   (|ncBug| "there is no file name in %1" (list lineObject)))))
+@
+
+
+\section{Messages}
 
 \defun{msgCreate}{msgCreate}
 \begin{verbatim}
@@ -5050,6 +5386,52 @@ org prints out the word noposition or console
 
 @
 
+\defun{poNopos?}{poNopos?}
+<<defun poNopos?>>=
+(defun |poNopos?| (posn)
+ (equal posn (list '|noposition|)))
+
+@
+
+\defun{poPosImmediate?}{poPosImmediate?}
+\calls{poPosImmediate?}{poNopos?}
+\calls{poPosImmediate?}{lnImmediate?}
+\calls{poPosImmediate?}{poGetLineObject}
+<<defun poPosImmediate?>>=
+(defun |poPosImmediate?| (txp)
+ (unless (|poNopos?| txp) (|lnImmediate?| (|poGetLineObject| txp))))
+
+@
+
+\defun{poFileName}{poFileName}
+\calls{poFileName}{lnFileName}
+\calls{poFileName}{poGetLineObject}
+<<defun poFileName>>=
+(defun |poFileName| (posn)
+ (if posn
+  (|lnFileName| (|poGetLineObject| posn))
+  (caar posn)))
+
+@
+
+\defun{poGetLineObject}{poGetLineObject}
+<<defun poGetLineObject>>=
+(defun |poGetLineObject| (posn)
+ (car posn))
+
+@
+
+\defun{poLinePosn}{poLinePosn}
+\calls{poLinePosn}{lnLocalNum}
+\calls{poLinePosn}{poGetLineObject}
+<<defun poLinePosn>>=
+(defun |poLinePosn| (posn)
+ (if posn
+  (|lnLocalNum| (|poGetLineObject| posn))
+  (cdar posn)))
+
+@
+
 \defun{listDecideHowMuch}{listDecideHowMuch}
 \calls{listDecideHowMuch}{poNopos?}
 \calls{listDecideHowMuch}{poPosImmediate?}
@@ -5384,6 +5766,20 @@ Bug in the compiler: something which shouldn't have happened did.
 
 @
 
+\defun{compareposns}{compareposns}
+\calls{compareposns}{poGlobalLinePosn}
+\calls{compareposns}{poCharPosn}
+<<defun compareposns>>=
+(defun |compareposns| (a b)
+ (let (c d)
+  (setq c (|poGlobalLinePosn| a))
+  (setq d (|poGlobalLinePosn| b))
+  (if (equal c d) 
+   (not (< (|poCharPosn| a) (|poCharPosn| b)))
+   (not (< c d)))))
+
+@
+
 \defun{erMsgSep}{erMsgSep}
 \calls{erMsgSep}{poNopos?}
 \calls{erMsgSep}{getMsgPos}
@@ -5623,6 +6019,12 @@ redundant(msg,thisPosMsgs) ==
   (setq leaderMsg (|makeLeaderMsg| chPosList))
   (nconc msgList (list leaderMsg))))
 
+@
+
+\defun{poCharPosn}{poCharPosn}
+<<defun poCharPosn>>=
+(defun |poCharPosn| (posn)
+ (cdr posn))
 @
 
 \defun{makeLeaderMsg}{makeLeaderMsg}
@@ -7068,24 +7470,37 @@ THE PFORM DATA STRUCTURE
 
 \end{verbatim}
 
-\defun{tokConstruct}{tokConstruct}
-The tokConstruct function is a constructer and selectors for leaf tokens
+\defun{tokConstruct}{Construct a leaf token}
+The tokConstruct function is a constructer and selectors for leaf tokens.
+A leaf token looks like [head, token, position]
+where head is either an id or (id . alist)
 \calls{tokConstruct}{ifcar}
 \calls{tokConstruct}{pfNoPosition?}
 \calls{tokConstruct}{ncPutQ}
 <<defun tokConstruct>>=
-(defun |tokConstruct| (hd tok &rest pos)
- (let (a)
-  (setq a (cons hd tok))
+(defun |tokConstruct| (head token &rest position)
+ (let (result)
+  (setq result (cons head token))
   (cond
-   ((ifcar pos)
+   ((ifcar position)
     (cond
-     ((|pfNoPosition?| (car pos)) 
-      a)
-     (t 
-      (|ncPutQ| a '|posn| (car pos))
-      a)))
-   (t a))))
+     ((|pfNoPosition?| (car position)) result)
+     (t (|ncPutQ| result '|posn| (car position)) result)))
+   (t result))))
+
+@
+
+\defun{pfNoPosition?}{pfNoPosition?}
+\calls{pfNoPosition?}{poNoPosition?}
+<<defun pfNoPosition?>>=
+(defun |pfNoPosition?| (pos) (|poNoPosition?| pos))
+
+@
+
+\defun{poNoPosition?}{poNoPosition?}
+\calls{poNoPosition?}{eqcar}
+<<defun poNoPosition?>>=
+(defun |poNoPosition?| (pos) (eqcar pos '|noposition|))
 
 @
 
@@ -7113,6 +7528,22 @@ The tokConstruct function is a constructer and selectors for leaf tokens
   (cond
    (a (cdr a))
    (t (|pfNoPosition|)))))
+
+@
+
+\defun{pfNoPosition}{pfNoPosition}
+\calls{pfNoPosition}{poNoPosition}
+<<defun pfNoPosition>>=
+(defun |pfNoPosition| () (|poNoPosition|))
+
+@
+
+\defun{poNoPosition}{poNoPosition}
+\usesdolloar{poNoPosition}{nopos}
+<<defun poNoPosition>>=
+(defun |poNoPosition| ()
+ (declare (special |$nopos|))
+ |$nopos|)
 
 @
 
@@ -24187,7 +24618,6 @@ in the DoubleFloat domain (see Volume 10.3).
 \defmacro{DFLessThan}
 Compute a strongly typed doublefloat comparison
 See Steele Common Lisp 1990 p293
-\calls{DFLessThan}{<}
 <<defmacro DFLessThan>>=
 (defmacro DFLessThan (x y) 
  `(< (the double-float ,x) (the double-float ,y)))
@@ -24197,7 +24627,6 @@ See Steele Common Lisp 1990 p293
 \defmacro{DFUnaryMinus}
 Compute a strongly typed unary doublefloat minus
 See Steele Common Lisp 1990 p295
-\calls{DFUnaryMinus}{-}
 <<defmacro DFUnaryMinus>>=
 (defmacro DFUnaryMinus (x)
  `(the double-float (- (the double-float ,x))))
@@ -24207,7 +24636,6 @@ See Steele Common Lisp 1990 p295
 \defmacro{DFMinusp}
 Compute a strongly typed unary doublefloat test for negative
 See Steele Common Lisp 1990 p292
-\calls{DFMinusp}{minusp}
 <<defmacro DFMinusp>>=
 (defmacro DFMinusp (x)
  `(minusp (the double-float ,x)))
@@ -24217,7 +24645,6 @@ See Steele Common Lisp 1990 p292
 \defmacro{DFZerop}
 Compute a strongly typed unary doublefloat test for zero
 See Steele Common Lisp 1990 p292
-\calls{DFZerop}{zerop}
 <<defmacro DFZerop>>=
 (defmacro DFZerop (x)
  `(zerop (the double-float ,x)))
@@ -24227,7 +24654,6 @@ See Steele Common Lisp 1990 p292
 \defmacro{DFAdd}
 Compute a strongly typed doublefloat addition
 See Steele Common Lisp 1990 p295
-\calls{DFAdd}{+}
 <<defmacro DFAdd>>=
 (defmacro DFAdd (x y) 
  `(the double-float (+ (the double-float ,x) (the double-float ,y))))
@@ -24237,7 +24663,6 @@ See Steele Common Lisp 1990 p295
 \defmacro{DFSubtract}
 Compute a strongly typed doublefloat subtraction
 See Steele Common Lisp 1990 p295
-\calls{DFSubtract}{-}
 <<defmacro DFSubtract>>=
 (defmacro DFSubtract (x y) 
  `(the double-float (- (the double-float ,x) (the double-float ,y))))
@@ -24247,7 +24672,6 @@ See Steele Common Lisp 1990 p295
 \defmacro{DFMultiply}
 Compute a strongly typed doublefloat multiplication
 See Steele Common Lisp 1990 p296
-\calls{DFMultiply}{*}
 <<defmacro DFMultiply>>=
 (defmacro DFMultiply (x y) 
  `(the double-float (* (the double-float ,x) (the double-float ,y))))
@@ -24257,7 +24681,6 @@ See Steele Common Lisp 1990 p296
 \defmacro{DFIntegerMultiply}
 Compute a strongly typed doublefloat multiplication by an integer.
 See Steele Common Lisp 1990 p296
-\calls{DFIntegerMultiply}{*}
 <<defmacro DFIntegerMultiply>>=
 (defmacro DFIntegerMultiply (i y) 
  `(the double-float (* (the integer ,i) (the double-float ,y))))
@@ -24267,7 +24690,6 @@ See Steele Common Lisp 1990 p296
 \defmacro{DFMax}
 Choose the maximum of two doublefloats.
 See Steele Common Lisp 1990 p294
-\calls{DFMax}{max}
 <<defmacro DFMax>>=
 (defmacro DFMax (x y) 
  `(the double-float (max (the double-float ,x) (the double-float ,y))))
@@ -24277,7 +24699,6 @@ See Steele Common Lisp 1990 p294
 \defmacro{DFMin}
 Choose the minimum of two doublefloats.
 See Steele Common Lisp 1990 p294
-\calls{DFMin}{min}
 <<defmacro DFMin>>=
 (defmacro DFMin (x y) 
  `(the double-float (min (the double-float ,x) (the double-float ,y))))
@@ -24288,7 +24709,6 @@ See Steele Common Lisp 1990 p294
 Compare two doublefloats for equality, where equality is eq, or numbers of
 the same type with the same value.
 See Steele Common Lisp 1990 p105
-\calls{DFEql}{eql}
 <<defmacro DFEql>>=
 (defmacro DFEql (x y) 
  `(eql (the double-float ,x) (the double-float ,y)))
@@ -24298,7 +24718,6 @@ See Steele Common Lisp 1990 p105
 \defmacro{DFDivide}
 Divide a doublefloat by a a doublefloat
 See Steele Common Lisp 1990 p296
-\calls{DFDivide}{/}
 <<defmacro DFDivide>>=
 (defmacro DFDivide (x y) 
  `(the double-float (/ (the double-float ,x) (the double-float ,y))))
@@ -24308,7 +24727,6 @@ See Steele Common Lisp 1990 p296
 \defmacro{DFIntegerDivide}
 Divide a doublefloat by an integer
 See Steele Common Lisp 1990 p296
-\calls{DFIntegerDivide}{/}
 <<defmacro DFIntegerDivide>>=
 (defmacro DFIntegerDivide (x i) 
  `(the double-float (/ (the double-float ,x) (the integer ,i))))
@@ -24319,7 +24737,6 @@ See Steele Common Lisp 1990 p296
 Compute the doublefloat square root of $x$. The result will be complex
 if the argument is negative.
 See Steele Common Lisp 1990 p302
-\calls{DFSqrt}{sqrt}
 <<defmacro DFSqrt>>=
 (defmacro DFSqrt (x)
  `(sqrt (the double-float ,x)))
@@ -24330,7 +24747,6 @@ See Steele Common Lisp 1990 p302
 Compute the doublefloat log of $x$ with the base $e$.
 The result will be complex if the argument is negative.
 See Steele Common Lisp 1990 p301
-\calls{DFLogE}{log}
 <<defmacro DFLogE>>=
 (defmacro DFLogE (x)
  `(log (the double-float ,x)))
@@ -24341,7 +24757,6 @@ See Steele Common Lisp 1990 p301
 Compute the doublefloat log of $x$ with a given base $b$.
 The result will be complex if $x$ is negative.
 See Steele Common Lisp 1990 p301
-\calls{DFLog}{log}
 <<defmacro DFLog>>=
 (defmacro DFLog (x b)
  `(log (the double-float ,x) (the fixnum ,b)))
@@ -24351,7 +24766,6 @@ See Steele Common Lisp 1990 p301
 \defmacro{DFIntegerExpt}
 Compute the doublefloat expt of $x$ with a given integer power $i$
 See Steele Common Lisp 1990 p300
-\calls{DFIntegerExpt}{expt}
 <<defmacro DFIntegerExpt>>=
 (defmacro DFIntegerExpt (x i)
  `(the double-float (expt (the double-float ,x) (the integer ,i))))
@@ -24363,7 +24777,6 @@ Compute the doublefloat expt of $x$ with a given power $p$.
 The result could be complex if the base is negative and the power is 
 not an integer.
 See Steele Common Lisp 1990 p300
-\calls{DFExpt}{expt}
 <<defmacro DFExpt>>=
 (defmacro DFExpt (x p)
  `(expt (the double-float ,x) (the double-float ,p)))
@@ -24373,7 +24786,6 @@ See Steele Common Lisp 1990 p300
 \defmacro{DFExp}
 Compute the doublefloat exp with power $e$
 See Steele Common Lisp 1990 p300
-\calls{DFExp}{exp}
 <<defmacro DFExp>>=
 (defmacro DFExp (x)
  `(the double-float (exp (the double-float ,x))))
@@ -24383,7 +24795,6 @@ See Steele Common Lisp 1990 p300
 \defmacro{DFSin}
 Compute a strongly typed doublefloat sin
 See Steele Common Lisp 1990 p304
-\calls{DFSin}{sin}
 <<defmacro DFSin>>=
 (defmacro DFSin (x)
  `(the double-float (sin (the double-float ,x))))
@@ -24393,7 +24804,6 @@ See Steele Common Lisp 1990 p304
 \defmacro{DFCos}
 Compute a strongly typed doublefloat cos
 See Steele Common Lisp 1990 p304
-\calls{DFCos}{cos}
 <<defmacro DFCos>>=
 (defmacro DFCos (x)
  `(the double-float (cos (the double-float ,x))))
@@ -24403,7 +24813,6 @@ See Steele Common Lisp 1990 p304
 \defmacro{DFTan}
 Compute a strongly typed doublefloat tan
 See Steele Common Lisp 1990 p304
-\calls{DFTan}{tan}
 <<defmacro DFTan>>=
 (defmacro DFTan (x)
  `(the double-float (tan (the double-float ,x))))
@@ -24414,7 +24823,6 @@ See Steele Common Lisp 1990 p304
 Compute a strongly typed doublefloat asin. The result is complex if the 
 absolute value of the argument is greater than 1.
 See Steele Common Lisp 1990 p305
-\calls{DFAsin}{asin}
 <<defmacro DFAsin>>=
 (defmacro DFAsin (x)
  `(asin (the double-float ,x)))
@@ -24425,7 +24833,6 @@ See Steele Common Lisp 1990 p305
 Compute a strongly typed doublefloat acos. The result is complex if the 
 absolute value of the argument is greater than 1.
 See Steele Common Lisp 1990 p305
-\calls{DFAcos}{acos}
 <<defmacro DFAcos>>=
 (defmacro DFAcos (x)
  `(acos (the double-float ,x)))
@@ -24435,10 +24842,31 @@ See Steele Common Lisp 1990 p305
 \defmacro{DFAtan}
 Compute a strongly typed doublefloat atan
 See Steele Common Lisp 1990 p305
-\calls{DFAtan}{atan}
 <<defmacro DFAtan>>=
 (defmacro DFAtan (x)
  `(the double-float (atan (the double-float ,x))))
+
+@
+
+\defmacro{DFAtan2}
+Compute a strongly typed doublefloat atan with 2 arguments
+
+\begin{tabular}{lllc}
+$y = 0$ & $x > 0$ & Positive x-axis & 0\\
+$y > 0$ & $x > 0$ & Quadrant I      & $0 <$ result $< \pi/2$\\
+$y > 0$ & $x = 0$ & Positive y-axis & $\pi/2$\\
+$y > 0$ & $x < 0$ & Quadrant II     & $\pi/2 <$ result $<\pi$\\
+$y = 0$ & $x < 0$ & Negative x-axis & $\pi$\\
+$y < 0$ & $x < 0$ & Quadrant III    & $-\pi <$ result $< -\pi/2$\\
+$y < 0$ & $x = 0$ & Negative y-axis & $-\pi/2$\\
+$y < 0$ & $x > 0$ & Quadrant IV     & $-\pi/2 <$ result $< 0$\\
+$y = 0$ & $x = 0$ & Origin          & error
+\end{tabular}
+
+See Steele Common Lisp 1990 p306
+<<defmacro DFAtan2>>=
+(defmacro DFAtan2 (y x)
+ `(the double-float (atan (the double-float ,x) (the double-float ,y))))
 
 @
 
@@ -24446,7 +24874,6 @@ See Steele Common Lisp 1990 p305
 Compute a strongly typed doublefloat sinh
 \[(e^z-e^{-z})/2\]
 See Steele Common Lisp 1990 p308
-\calls{DFSinh}{sinh}
 <<defmacro DFSinh>>=
 (defmacro DFSinh (x)
  `(the double-float (sinh (the double-float ,x))))
@@ -24457,7 +24884,6 @@ See Steele Common Lisp 1990 p308
 Compute a strongly typed doublefloat cosh
 \[(e^z+e^{-z})/2\]
 See Steele Common Lisp 1990 p308
-\calls{DFCosh}{cosh}
 <<defmacro DFCosh>>=
 (defmacro DFCosh (x)
  `(the double-float (cosh (the double-float ,x))))
@@ -24468,7 +24894,6 @@ See Steele Common Lisp 1990 p308
 Compute a strongly typed doublefloat tanh
 \[(e^z-e^{-z})/(e^z+e^{-z})\]
 See Steele Common Lisp 1990 p308
-\calls{DFTanh}{tanh}
 <<defmacro DFTanh>>=
 (defmacro DFTanh (x)
  `(the double-float (tanh (the double-float ,x))))
@@ -24479,7 +24904,6 @@ See Steele Common Lisp 1990 p308
 Compute the inverse hyperbolic sin.
 \[log\left(z+\sqrt{1+z^2}\right)\]
 See Steele Common Lisp 1990 p308
-\calls{DFAsinh}{asinh}
 <<defmacro DFAsinh>>=
 (defmacro DFAsinh (x)
  `(the double-float (asinh (the double-float ,x))))
@@ -24491,7 +24915,6 @@ Compute the inverse hyperbolic cos. Note that the acosh function will return
 a complex result if the argument is less than 1.
 \[log\left(z+(z+1)\sqrt{(z-1)/(z+1)}\right)\]
 See Steele Common Lisp 1990 p308
-\calls{DFAcosh}{acosh}
 <<defmacro DFAcosh>>=
 (defmacro DFAcosh (x)
  `(acosh (the double-float ,x)))
@@ -24503,10 +24926,20 @@ Compute the inverse hyperbolic tan. Note that the acosh function will return
 a complex result if the argument is greater than 1.
 \[log\left((1+z)\sqrt{1/(1-z^2)}\right)\]
 See Steele Common Lisp 1990 p308
-\calls{DFAtanh}{atanh}
 <<defmacro DFAtanh>>=
 (defmacro DFAtanh (x)
  `(atanh (the double-float ,x)))
+
+@
+
+\defun{manexp}{Decode floating-point values}
+This function is used by DoubleFloat to implement the ``mantissa'' and
+``exponent'' functions.
+<<defun manexp>>=
+(defun manexp (u)
+  (multiple-value-bind (f e s) 
+    (decode-float u)
+    (cons (* s f) e)))
 
 @
 
@@ -24539,7 +24972,6 @@ See Steele Common Lisp 1990 pp305-307
 
 \defun{sec}{The secant function}
 \[sec(x) = \frac{1}{cos(x)}\]
-\calls{sec}{cos}
 <<defun sec>>=
 (defun sec (x) (/ 1 (cos x)))
 
@@ -24547,7 +24979,6 @@ See Steele Common Lisp 1990 pp305-307
 
 \defun{asec}{The inverse secant function}
 \[asec(x) = acos\left(\frac{1}{x}\right)\]
-\calls{asec}{acos}
 <<defun asec>>=
 (defun asec (x) (acos (/ 1 x)))
 
@@ -24555,7 +24986,6 @@ See Steele Common Lisp 1990 pp305-307
 
 \defun{csc}{The cosecant function}
 \[csc(x) = \frac{1}{sin(x)}\]
-\calls{csc}{sin}
 <<defun csc>>=
 (defun csc (x) (/ 1 (sin x)))
 
@@ -24563,7 +24993,6 @@ See Steele Common Lisp 1990 pp305-307
 
 \defun{acsc}{The inverse cosecant function}
 \[acsc(x) = \frac{1}{asin(x)}\]
-\calls{acsc}{asin}
 <<defun acsc>>=
 (defun acsc (x) (asin (/ 1 x)))
 
@@ -24571,7 +25000,6 @@ See Steele Common Lisp 1990 pp305-307
 
 \defun{csch}{The hyperbolic cosecant function}
 \[csch(x) = \frac{1}{sinh(x)} \]
-\calls{csch}{sinh}
 <<defun csch>>=
 (defun csch (x) (/ 1 (sinh x)))
 
@@ -24579,8 +25007,6 @@ See Steele Common Lisp 1990 pp305-307
 
 \defun{coth}{The hyperbolic cotangent function}
 \[coth(x) = cosh(x) csch(x)\]
-\calls{coth}{cosh}
-\calls{coth}{csch}
 <<defun coth>>=
 (defun coth (x) (* (cosh x) (csch x)))
 
@@ -24588,7 +25014,6 @@ See Steele Common Lisp 1990 pp305-307
 
 \defun{sech}{The hyperbolic secant function}
 \[sech(x) = \frac{1}{cosh(x)}\]
-\calls{sech}{cosh}
 <<defun sech>>=
 (defun sech (x) (/ 1 (cosh x)))
 
@@ -24596,7 +25021,6 @@ See Steele Common Lisp 1990 pp305-307
 
 \defun{acsch}{The inverse hyperbolic cosecant function}
 \[acsch(x) = asinh\left(\frac{1}{x}\right)\]
-\calls{acsch}{asinh}
 <<defun acsch>>=
 (defun acsch (x) (asinh (/ 1 x)))
 
@@ -24604,7 +25028,6 @@ See Steele Common Lisp 1990 pp305-307
 
 \defun{acoth}{The inverse hyperbolic cotangent function}
 \[acoth(x) = atanh\left(\frac{1}{x}\right)\]
-\calls{acoth}{atanh}
 <<defun acoth>>=
 (defun acoth (x) (atanh (/ 1 x)))
 
@@ -24612,7 +25035,6 @@ See Steele Common Lisp 1990 pp305-307
 
 \defun{asech}{The inverse hyperbolic secant function}
 \[asech(x) = acosh\left(\frac{1}{x}\right)\]
-\calls{asech}{acosh}
 <<defun asech>>=
 (defun asech (x) (acosh (/ 1 x)))
 
@@ -24913,8 +25335,6 @@ expand-tabs
 |intSayKeyedMsg|
 |intSetNeedToSignalSessionManager|
 |ListMemberQ?|
-|lnCreate|
-|lnSetGlobalNum|
 |macroExpanded|
 |MakeSymbol|
 maxindex
@@ -24947,6 +25367,7 @@ maxindex
 <<defmacro DFAsin>>
 <<defmacro DFAsinh>>
 <<defmacro DFAtan>>
+<<defmacro DFAtan2>>
 <<defmacro DFAtanh>>
 <<defmacro DFCos>>
 <<defmacro DFCosh>>
@@ -25024,6 +25445,7 @@ maxindex
 <<defun coerceTraceArgs2E>>
 <<defun coerceTraceFunValue2E>>
 <<defun commandAmbiguityError>>
+<<defun compareposns>>
 <<defun compileBoot>>
 <<defun compiler>>
 <<defun concat>>
@@ -25282,6 +25704,16 @@ maxindex
 <<defun listConstructorAbbreviations>>
 <<defun listDecideHowMuch>>
 <<defun listOutputter>>
+<<defun lnCreate>>
+<<defun lnExtraBlanks>>
+<<defun lnFileName>>
+<<defun lnFileName?>>
+<<defun lnGlobalNum>>
+<<defun lnImmediate?>>
+<<defun lnLocalNum>>
+<<defun lnPlaceOfOrigin>>
+<<defun lnSetGlobalNum>>
+<<defun lnString>>
 <<defun loadExposureGroupData>>
 <<defun lotsof>>
 
@@ -25294,6 +25726,7 @@ maxindex
 <<defun makeMsgFromLine>>
 <<defun make-outstream>>
 <<defun makeStream>>
+<<defun manexp>>
 <<defun mapLetPrint>>
 <<defun member>>
 <<defun messageprint>>
@@ -25334,7 +25767,22 @@ maxindex
 <<defun nextInterpreterFrame>>
 <<defun nextline>>
 <<defun nonBlank>>
+<<defun npComma>>
+<<defun npEqKey>>
+<<defun npFirstTok>>
+<<defun npItem>>
+<<defun npItem1>>
+<<defun npListofFun>>
+<<defun npNext>>
 <<defun npNull>>
+<<defun npParse>>
+<<defun npPop1>>
+<<defun npPop2>>
+<<defun npPop3>>
+<<defun npPush>>
+<<defun npQualDef>>
+<<defun npQualifiedDefinition>>
+<<defun npTuple>>
 
 <<defun oldHistFileName>>
 <<defun openOutputLibrary>>
@@ -25343,6 +25791,8 @@ maxindex
 
 <<defun pcounters>>
 <<defun pfAbSynOp?>>
+<<defun pfNoPosition>>
+<<defun pfNoPosition?>>
 <<defun phBegin>>
 <<defun phMacro>>
 <<defun phParse>>
@@ -25357,6 +25807,15 @@ maxindex
 <<defun pilePlusComment>>
 <<defun pilePlusComments>>
 <<defun pileTree>>
+<<defun poCharPosn>>
+<<defun poFileName>>
+<<defun poGetLineObject>>
+<<defun poGlobalLinePosn>>
+<<defun poLinePosn>>
+<<defun poNopos?>>
+<<defun poNoPosition>>
+<<defun poNoPosition?>>
+<<defun poPosImmediate?>>
 <<defun posend>>
 <<defun posPointers>>
 <<defun pquit>>
