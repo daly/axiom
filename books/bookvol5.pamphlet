@@ -1023,7 +1023,7 @@ will end up as a recursive call to ourselves.
 \uses{processSynonyms}{line}
 <<defun processSynonyms>>=
 (defun |processSynonyms| ()
- (let (fill p aline synstr syn to opt fun cl)
+ (let (fill p aline synstr syn to opt fun cl chr)
  (declare (special |$CommandSynonymAlist| line))
   (setq p (strpos ")" line 0 nil))
   (setq fill "")
@@ -3416,6 +3416,7 @@ returning the token-dq and the rest of the line-stream
 \calls{constoken}{ncPutQ}
 <<defun constoken>>=
 (defun |constoken| (ln lp b n)
+ (declare (ignore ln))
  (let (a)
   (setq a (cons (elt b 0) (elt b 1)))
   (|ncPutQ| a '|posn| (cons lp n))
@@ -8303,6 +8304,240 @@ require an argument name themselves, those which do have their names
 prefixed by ``np''. This makes it possible to dynamically define
 new system commands provided you handle the argument parsing.
 
+\defun{doSystemCommand}{Handle a top level command}
+\calls{doSystemCommand}{concat}
+\calls{doSystemCommand}{expand-tabs}
+\calls{doSystemCommand}{processSynonyms}
+\calls{doSystemCommand}{substring}
+\calls{doSystemCommand}{getFirstWord}
+\calls{doSystemCommand}{unAbbreviateKeyword}
+\calls{doSystemCommand}{member}
+\calls{doSystemCommand}{handleNoParseCommands}
+\calls{doSystemCommand}{splitIntoOptionBlocks}
+\calls{doSystemCommand}{handleTokensizeSystemCommands}
+\calls{doSystemCommand}{handleParsedSystemCommands}
+\usesdollar{doSystemCommand}{tokenCommands}
+\usesdollar{doSystemCommand}{noParseCommands}
+\uses{doSystemCommand}{line}
+<<defun doSystemCommand>>=
+(defun |doSystemCommand| (string)
+ (let (line tok unab optionList)
+ (declare (special line |$tokenCommands| |$noParseCommands|))
+  (setq string (concat ")" (expand-tabs string)))
+  (setq line string)
+  (|processSynonyms|)
+  (setq string line)
+  (setq string (substring string 1 nil))
+  (cond
+   ((string= string "") nil)
+   (t
+    (setq tok (|getFirstWord| string))
+    (cond
+     (tok 
+      (setq unab (|unAbbreviateKeyword| tok))
+      (cond
+       ((|member| unab |$noParseCommands|)
+        (|handleNoParseCommands| unab string))
+       (t
+        (setq optionList (|splitIntoOptionBlocks| string))
+        (cond
+         ((|member| unab |$tokenCommands|)
+          (|handleTokensizeSystemCommands| unab optionList))
+         (t 
+          (|handleParsedSystemCommands| unab optionList)
+          nil)))))
+     (t nil))))))
+
+@
+
+\defun{splitIntoOptionBlocks}{Split block into option block}
+\calls{splitIntoOptionBlocks}{stripSpaces}
+<<defun splitIntoOptionBlocks>>=
+(defun |splitIntoOptionBlocks| (str)
+ (let (optionBlocks inString block (blockStart 0) (parenCount 0) blockList)
+  (dotimes (i (1- (|#| str)))
+   (cond
+    ((char= (elt str i) #\" ) (setq inString (null inString))) 
+    (t
+     (when (and (char= (elt str i) #\( ) (null inString))
+       (incf parenCount))
+     (when (and (char= (elt str i) #\) ) (null inString))
+       (decf parenCount))
+     (when
+      (and (char= (elt str i) #\) )
+            (null inString)
+            (= parenCount -1))
+        (setq block (|stripSpaces| (subseq str blockStart i)))
+        (setq blockList (cons block blockList))
+        (setq blockStart (1+ i))
+        (setq parenCount 0)))))
+  (setq blockList (cons (|stripSpaces| (subseq str blockStart)) blockList))
+  (nreverse blockList)))
+
+@
+
+\defun{handleTokensizeSystemCommands}{Tokenize a system command}
+\calls{handleTokensizeSystemCommands}{dumbTokenize}
+\calls{handleTokensizeSystemCommands}{tokTran}
+\calls{handleTokensizeSystemCommands}{systemCommand}
+<<defun handleTokensizeSystemCommands>>=
+(defun |handleTokensizeSystemCommands| (unabr optionList)
+ (declare (ignore ubabr))
+ (let (parcmd)
+  (setq optionList (mapcar #'(lambda (x) (|dumbTokenize| x)) optionList))
+  (setq parcmd 
+    (mapcar #'(lambda (opt) (mapcar #'(lambda (tok) (|tokTran| tok)) opt))
+     optionLIst))
+  (when parcmd (|systemCommand| parcmd))))
+
+@
+
+\defun{systemCommand}{}
+You can type ``)?'' and see trivial help information.
+You can type ``)? compiler'' and see compiler related information
+\calls{systemCommand}{}
+\usesdollar{systemCommand}{options}
+\usesdollar{systemCommand}{e}
+\usesdollar{systemCommand}{systemCommands}
+\usesdollar{systemCommand}{syscommands}
+\usesdollar{systemCommand}{CategoryFrame}
+<<defun systemCommand>>=
+(defun |systemCommand| (cmd)
+ (let (|$options| |$e| |op| |argl| |options| |fun|)
+ (declare (special |$options| |$e| |$systemCommands| $syscommands
+                   |$CategoryFrame|))
+  (setq |op| (caar cmd))
+  (setq |argl| (cdar cmd))
+  (setq |options| (cdr cmd))
+  (setq |$options| |options|)
+  (setq |$e| |$CategoryFrame|)
+  (setq |fun| (|selectOptionLC| |op| $syscommands '|commandError|))
+  (if (and |argl| (eq (elt |argl| 0) '?) (nequal |fun| '|synonym|))
+   (|helpSpad2Cmd| (cons |fun| nil))
+   (progn
+    (setq |fun|
+     (|selectOption| |fun| (|commandsForUserLevel| |$systemCommands|)
+                        '|commandUserLevelError|))
+    (funcall |fun| |argl|)))))
+
+@
+
+\defun{dumbTokenize}{Split into tokens delimted by spaces}
+\calls{dumbTokenize}{stripSpaces}
+<<defun dumbTokenize>>=
+(defun |dumbTokenize| (str)
+ (let (inString token (tokenStart 0) previousSpace tokenList)
+  (dotimes (i (1- (|#| str)))
+   (cond
+    ((char= (elt str i) #\") ; don't split strings
+     (setq inString (null inString))
+     (setq previousSpace nil))
+    ((and (char= (elt str i) #\space) (null inString))
+     (unless previousSpace
+       (setq token (|stripSpaces| (subseq str tokenStart i)))
+       (setq tokenList (cons token tokenList))
+       (setq tokenStart (1+ i))
+       (setq previousSpace t)))
+    (t
+     (setq previousSpace nil))))
+  (setq tokenList (cons (|stripSpaces| (subseq str tokenStart)) tokenList))
+  (nreverse tokenList)))
+
+@
+
+\defun{tokTran}{Convert string tokens to their proper type}
+\calls{tokTran}{isIntegerString}
+<<defun tokTran>>=
+(defun |tokTran| (tok)
+ (let (tmp)
+  (if (stringp tok)
+   (cond
+    ((eql (|#| tok) 0) nil)
+    ((setq tmp (|isIntegerString| tok)) tmp)
+    ((char= (elt tok 0) #\" ) (subseq tok 1 (1- (|#| tok))))
+    (t (intern tok)))
+   tok)))
+
+@
+
+\defun{isIntegerString}{Is the argument string an integer?}
+<<defun isIntegerString>>=
+(defun |isIntegerString| (tok)
+ (multiple-value-bind (int len) (parse-integer tok :junk-allowed t)
+  (when (and int (= len (length tok))) int)))
+
+@
+
+\defun{handleParsedSystemCommands}{Handle parsed system commands}
+\calls{handleParsedSystemCommands}{dumbTokenize}
+\calls{handleParsedSystemCommands}{parseSystemCmd}
+\calls{handleParsedSystemCommands}{tokTran}
+\calls{handleParsedSystemCommands}{systemCommand}
+<<defun handleParsedSystemCommands>>=
+(defun |handleParsedSystemCommands| (unabr optionList)
+ (declare (ingore unabr))
+ (let (restOptionList parcmd trail)
+  (setq restOptionList (mapcar #'|dumbTokenize| (cdr optionList)))
+  (setq parcmd (|parseSystemCmd| (car optionList)))
+  (setq trail
+   (mapcar #'(lambda (opt)  
+              (mapcar #'(lambda (tok) (|tokTran| tok)) opt)) restOptionList))
+  (|systemCommand| (list parcmd trail)))))
+
+@
+
+\defun{parseSystemCmd}{Parse a system command}
+\calls{parseSystemCmd}{tokTran}
+\calls{parseSystemCmd}{stripSpaces}
+\calls{parseSystemCmd}{parseFromString}
+\calls{parseSystemCmd}{dumbTokenize}
+<<defun parseSystemCmd>>=
+(defun |parseSystemCmd| (opt)
+ (let (spaceIndex)
+  (if (setq spaceIndex (search " " opt))
+   (list
+    (|tokTran| (|stripSpaces| (subseq opt 0 spaceIndex)))
+    (|parseFromString| (|stripSpaces| (subseq opt spaceIndex))))
+   (mapcar #'|tokTran| (|dumbTokenize| opt)))))
+
+@
+
+\defun{getFirstWord}{Get first word in a string}
+\calls{getFirstWord}{subseq}
+\calls{getFirstWord}{stringSpaces}
+<<defun getFirstWord>>=
+(defun |getFirstWord| (string)
+ (let (spaceIndex)
+  (setq spaceIndex (search " " string))
+  (if spaceIndex
+   (|stripSpaces| (subseq string 0 spaceIndex))
+   string)))
+
+@
+
+\defun{unAbbreviateKeyword}{Unabbreviate keywords in commands}
+\calls{unAbbreviateKeyword}{selectOptionLC}
+\calls{unAbbreviateKeyword}{selectOption}
+\calls{unAbbreviateKeyword}{commandsForUserLevel}
+\usesdollar{unAbbreviateKeyword}{systemCommands}
+\usesdollar{unAbbreviateKeyword}{currentLine}
+\usesdollar{unAbbreviateKeyword}{syscommands}
+\uses{unAbbreviateKeyword}{line}
+<<defun unAbbreviateKeyword>>=
+(defun |unAbbreviateKeyword| (x)
+ (let (xp)
+ (declare (special |$systemCommands| |$currentLine| $syscommands line))
+  (setq xp (|selectOptionLC| x $syscommands '|commandErrorIfAmbiguous|))
+  (cond
+   ((null xp) 
+    (setq xp '|system|)
+    (setq line (concat ")system " (substring line 1 (1- (|#| line)))))
+    (spadlet |$currentLine| line)))
+  (|selectOption| xp (|commandsForUserLevel| |$systemCommands|)
+     '|commandUserLevelError|)))
+
+@
+
 \calls{handleNoParseCommands}{stripSpaces}
 \calls{handleNoParseCommands}{nplisp}
 \calls{handleNoParseCommands}{stripLisp}
@@ -8375,6 +8610,7 @@ new system commands provided you handle the argument parsing.
 \tpdhere{Remove all boot references from top level}
 <<defun npboot>>=
 (defun |npboot| (str)
+ (declare (ignore str))
  (format t "The )boot command is no longer supported~%"))
 
 @
@@ -8403,7 +8639,29 @@ in practice.
 \calls{npsynonym}{npProcessSynonym}
 <<defun npsynonym>>=
 (defun |npsynonym| (unab str)
+ (declare (ignore unab))
  (|npProcessSynonym| str)) 
+
+@
+
+\defun{npProcessSynonym}{Handle the synonym system command}
+\calls{npProcessSynonym}{printSynonyms}
+\calls{npProcessSynonym}{processSynonymLine}
+\calls{npProcessSynonym}{putalist}
+\calls{npProcessSynonym}{terminateSystemCommand}
+\usesdollar{npProcessSynonym}{CommandSynonymAlist}
+<<defun npProcessSynonym>>=
+(defun |npProcessSynonym| (str)
+ (let (pair)
+ (declare (special |$CommandSynonymAlist|))
+  (if (= (length str) 0)
+   (|printSynonyms| nil)
+   (progn
+    (setq pair (|processSynonymLine| str))
+    (if |$CommandSynonymAlist|
+     (putalist |$CommandSynonymAlist| (car pair) (cdr pair)))
+     (setq |$CommandSynonymAlist| (cons pair nil))))
+  (|terminateSystemCommand|)))
 
 @
 
@@ -10438,7 +10696,7 @@ in the Category, Domain, or Package source code.
          (wrapOneLine spill margin (append (list oneline) result))))))
 
    (reflowParagraph (line) 
-    (let (lst1 lst2)
+    (let (lst1)
      (setq lst1 (splitAtNewLine line))
      (dolist (x lst1)
       (mapcar #'(lambda(y) (format t "~a~%" y))
@@ -15596,6 +15854,12 @@ recurrence   specially compile recurrence relations     on
       |htSetCache|)
 @
 \section{Variables Used}
+\defdollar{cacheAlist}
+<<initvars>>=
+(defvar |$cacheAlist| nil) 
+
+@
+
 \section{Functions}
 \defunsec{setFunctionsCache}{The top level set functions cache handler}
 \begin{verbatim}
@@ -24042,8 +24306,10 @@ o )library
 
 \defun{getParserMacroNames}{getParserMacroNames}
 The \verb|$pfMacros| is a list of all of the user-defined macros.
+\usesdollar{getParserMacroNames}{pfMacros}
 <<defun getParserMacroNames>>=
 (defun |getParserMacroNames| ()
+ (declare (special |$pfMacros|))
  (remove-duplicates (mapcar #'car |$pfMacros|)))
 
 @
@@ -24489,7 +24755,7 @@ The \verb|$msgdbPrims| variable is set to:
 \uses{/rq}{Echo-Meta}
 <<defun /rq>>=
 (defun /RQ (&rest foo &aux (Echo-Meta nil))
-  (declare (special Echo-Meta))
+  (declare (special Echo-Meta) (ignore foo))
   (/rf-1 nil))
 
 @
@@ -28034,11 +28300,13 @@ See Steele Common Lisp 1990 pp305-307
 <<defun displaySpad2Cmd>>
 <<defun displayWorkspaceNames>>
 <<defun domainToGenvar>>
+<<defun doSystemCommand>>
 <<defun dqAppend>>
 <<defun dqConcat>>
 <<defun dqToList>>
 <<defun dqUnit>>
 <<defun dropInputLibrary>>
+<<defun dumbTokenize>>
 
 <<defun edit>>
 <<defun editSpad2Cmd>>
@@ -28089,6 +28357,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun getdatabase>>
 <<defun getenviron>>
 <<defun getErFromDbL>>
+<<defun getFirstWord>>
 <<defun getKeyedMsg>>
 <<defun getLinePos>>
 <<defun getLineText>>
@@ -28123,6 +28392,8 @@ See Steele Common Lisp 1990 pp305-307
 <<defun getWorkspaceNames>>
 
 <<defun handleNoParseCommands>>
+<<defun handleParsedSystemCommands>>
+<<defun handleTokensizeSystemCommands>>
 <<defun hasOption>>
 <<defun hasPair>>
 <<defun help>>
@@ -28209,6 +28480,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun intProcessSynonyms>>
 <<defun isDomainOrPackage>>
 <<defun isgenvar>>
+<<defun isIntegerString>>
 <<defun isInterpOnlyMap>>
 <<defun isKeyQualityP>>
 <<defun isListOfIdentifiers>>
@@ -28325,6 +28597,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun npPop1>>
 <<defun npPop2>>
 <<defun npPop3>>
+<<defun npProcessSynonym>>
 <<defun npPush>>
 <<defun npQualDef>>
 <<defun npQualifiedDefinition>>
@@ -28338,6 +28611,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun operationOpen>>
 <<defun orderBySlotNumber>>
 
+<<defun parseSystemCmd>>
 <<defun pcounters>>
 <<defun pfAbSynOp?>>
 <<defun pfname>>
@@ -28544,6 +28818,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun specialChar>>
 <<defun spleI>>
 <<defun spleI1>>
+<<defun splitIntoOptionBlocks>>
 <<defun squeeze>>
 <<defun stackTraceOptionError>>
 <<defun startsComment?>>
@@ -28560,6 +28835,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun substringMatch>>
 <<defun subTypes>>
 <<defun summary>>
+<<defun systemCommand>>
 
 <<defun ?t>>
 <<defun tabbing>>
@@ -28573,6 +28849,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun tokConstruct>>
 <<defun tokPart>>
 <<defun tokPosn>>
+<<defun tokTran>>
 <<defun tokType>>
 <<defun To>>
 <<defun Top?>>
@@ -28592,6 +28869,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun transOnlyOption>>
 <<defun transTraceItem>>
 
+<<defun unAbbreviateKeyword>>
 <<defun undo>>
 <<defun undoChanges>>
 <<defun undoCount>>
