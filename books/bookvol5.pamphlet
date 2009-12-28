@@ -1411,7 +1411,6 @@ this is what the current code does so I won't change it.
 \calls{serverReadLine}{read-line}
 \calls{serverReadLine}{addNewInterpreterFrame}
 \calls{serverReadLine}{sockSendInt}
-\calls{serverReadLine}{plus}
 \calls{serverReadLine}{sockSendString}
 \calls{serverReadLine}{mkprompt}
 \calls{serverReadLine}{sockGetInt}
@@ -1483,7 +1482,7 @@ this is what the current code does so I won't change it.
         (setq |$currentFrameNum| |$frameNumber|)
         (|sockSendInt| |$SessionManager| |$CreateFrameAnswer|)
         (|sockSendInt| |$SessionManager| |$frameNumber|)
-        (setq |$frameNumber| (plus |$frameNumber| 1))
+        (setq |$frameNumber| (1+ |$frameNumber|))
         (|sockSendString| |$SessionManager| (mkprompt)))
        ((= action |$SwitchFrames|)
         (setq |$currentFrameNum| (|sockGetInt| |$SessionManager|))
@@ -1495,8 +1494,7 @@ this is what the current code does so I won't change it.
         (setq |$NeedToSignalSessionManager| t)
         (setq stringbuf (make-string |$sockBufferLength|))
         (|sockGetString| |$MenuServer| stringbuf |$sockBufferLength|)
-        (setq form
-         (|unescapeStringsInForm| (read-from-string stringbuf)))
+        (setq form (|unescapeStringsInForm| (read-from-string stringbuf)))
         (|protectedEVAL| form))
        ((= action |$QuietSpadCommand|)
         (setq |$NeedToSignalSessionManager| t)
@@ -1517,6 +1515,26 @@ this is what the current code does so I won't change it.
     (cond
      (line line)
      (t '||))))))
+
+@
+
+\defun{unescapeStringsInForm}{Destructively fix quotes in strings}
+\calls{unescapeStringsInForm}{unescapeStringsInForm}
+\usesdollar{unescapeStringsInForm}{funnyBacks}
+\usesdollar{unescapeStringsInForm}{funnyQuote}
+<<defun unescapeStringsInForm>>=
+(defun |unescapeStringsInForm| (form)
+ (let (str)
+ (declare (special |$funnyBacks| |$funnyQuote|))
+  (cond
+   ((stringp form)
+    (setq str (nsubstitute #\" |$funnyQuote| form))
+    (nsubstitute #\\ |$funnyBacks| str))
+   ((consp form) 
+    (|unescapeStringsInForm| (car form))
+    (|unescapeStringsInForm| (cdr form))
+    form)
+   (t form))))
 
 @
 
@@ -8403,22 +8421,659 @@ You can type ``)? compiler'' and see compiler related information
 \usesdollar{systemCommand}{CategoryFrame}
 <<defun systemCommand>>=
 (defun |systemCommand| (cmd)
- (let (|$options| |$e| |op| |argl| |options| |fun|)
+ (let (|$options| |$e| op argl options fun)
  (declare (special |$options| |$e| |$systemCommands| $syscommands
                    |$CategoryFrame|))
-  (setq |op| (caar cmd))
-  (setq |argl| (cdar cmd))
-  (setq |options| (cdr cmd))
-  (setq |$options| |options|)
+  (setq op (caar cmd))
+  (setq argl (cdar cmd))
+  (setq options (cdr cmd))
+  (setq |$options| options)
   (setq |$e| |$CategoryFrame|)
-  (setq |fun| (|selectOptionLC| |op| $syscommands '|commandError|))
-  (if (and |argl| (eq (elt |argl| 0) '?) (nequal |fun| '|synonym|))
-   (|helpSpad2Cmd| (cons |fun| nil))
+  (setq fun (|selectOptionLC| op $syscommands '|commandError|))
+  (if (and argl (eq (elt argl 0) '?) (nequal fun '|synonym|))
+   (|helpSpad2Cmd| (cons fun nil))
    (progn
-    (setq |fun|
-     (|selectOption| |fun| (|commandsForUserLevel| |$systemCommands|)
+    (setq fun
+     (|selectOption| fun (|commandsForUserLevel| |$systemCommands|)
                         '|commandUserLevelError|))
-    (funcall |fun| |argl|)))))
+    (funcall fun argl)))))
+
+@
+
+\defun{commandsForUserLevel}{Select commands matching this user level}
+The \verb|$UserLevel| variable contains one of three values:
+{\tt compiler}, {\tt development}, or {\tt interpreter}. This variable
+is used to select a subset of commands from the list stored in 
+\verb|$systemCommands|, representing all of the commands that are
+valid for this level.
+\calls{commandsForUserLevel}{satisfiesUserLevel}
+<<defun commandsForUserLevel>>=
+(defun |commandsForUserLevel| (arg)
+ (let (c)
+  (dolist (pair arg)
+   (when (|satisfiesUserLevel| (cdr pair))
+    (setq c (cons (car pair) c))))
+  (nreverse c)))
+
+@
+
+\defun{commandError}{No command begins with this string}
+\calls{commandError}{commandErrorMessage}
+<<defun commandError>>=
+(defun |commandError| (x u)
+ (|commandErrorMessage| '|command| x u)) 
+
+@
+
+\defun{optionError}{No option begins with this string}
+\calls{optionError}{commandErrorMessage}
+<<defun optionError>>=
+(defun |optionError| (x u)
+ (|commandErrorMessage| '|option| x u)) 
+
+@
+
+\defun{commandErrorMessage}{No command/option begins with this string}
+\calls{commandErrorMessage}{commandAmbiguityError}
+\calls{commandErrorMessage}{sayKeyedMsg}
+\calls{commandErrorMessage}{terminateSystemCommand}
+\usesdollar{commandErrorMessage}{oldline}
+\uses{commandErrorMessage}{line}
+<<defun commandErrorMessage>>=
+(defun |commandErrorMessage| (kind x u)
+ (declare (special $oldline line))
+  (setq $oldline line)
+  (if u
+   (|commandAmbiguityError| kind x u)
+   (progn
+    (|sayKeyedMsg| 'S2IZ0008 (list kind x))
+    (|terminateSystemCommand|))))
+
+@
+
+\defun{optionUserLevelError}{Option not available at this user level}
+\calls{optionUserLevelError}{userLevelErrorMessage}
+\usesdollar{}{}
+<<defun optionUserLevelError>>=
+(defun |optionUserLevelError| (x u)
+ (|userLevelErrorMessage| '|option| x u)) 
+
+@
+
+\defun{commandUserLevelError}{Command not available at this user level}
+\calls{commandUserLevelError}{userLevelErrorMessage}
+<<defun commandUserLevelError>>=
+(defun |commandUserLevelError| (x u)
+ (|userLevelErrorMessage| '|command| x u)) 
+
+@
+
+\defun{userLevelErrorMessage}{Command not available error message}
+\calls{userLevelErrorMessage}{commandAmbiguityError}
+\calls{userLevelErrorMessage}{sayKeyedMsg}
+\calls{userLevelErrorMessage}{terminateSystemCommand}
+\usesdollar{userLevelErrorMessage}{UserLevel}
+<<defun userLevelErrorMessage>>=
+(defun |userLevelErrorMessage| (kind x u)
+ (declare (special |$UserLevel|))
+ (if u
+  (|commandAmbiguityError| kind x u)
+  (progn
+   (|sayKeyedMsg| 'S2IZ0007 (list |$UserLevel| kind))
+   (|terminateSystemCommand|))))
+
+@
+
+\defun{satisfiesUserLevel}{satisfiesUserLevel}
+\usesdollar{satisfiesUserLevel}{UserLevel}
+<<defun satisfiesUserLevel>>=
+(defun |satisfiesUserLevel| (x)
+ (declare (special |$UserLevel|))
+ (cond
+  ((eq x '|interpreter|) t)
+  ((eq |$UserLevel| '|interpreter|) nil)
+  ((eq x '|compiler|) t)
+  ((eq |$UserLevel| '|compiler|) nil)
+  (t t)))
+
+@
+
+\defun{hasOption}{hasOption}
+\calls{hasOption}{stringPrefix?}
+\calls{hasOption}{pname}
+<<defun hasOption>>=
+(defun |hasOption| (al opt)
+ (let ((optPname (pname opt)) found)
+  (loop for pair in al do
+    (when (|stringPrefix?| (pname (car pair)) optPname) (setq found pair))
+    until found)
+  found))
+
+@
+
+\defun{terminateSystemCommand}{terminateSystemCommand}
+\calls{terminateSystemCommand}{tersyscommand}
+<<defun terminateSystemCommand>>=
+(defun |terminateSystemCommand| nil (tersyscommand)) 
+
+@
+
+\defun{commandAmbiguityError}{commandAmbiguityError}
+\calls{commandAmbiguityError}{sayKeyedMsg}
+\calls{commandAmbiguityError}{sayMSG}
+\calls{commandAmbiguityError}{bright}
+\calls{commandAmbiguityError}{terminateSystemCommand}
+<<defun commandAmbiguityError>>=
+(defun |commandAmbiguityError| (kind x u)
+ (|sayKeyedMsg| 's2iz0009 (list kind x))
+ (dolist (a u) (|sayMSG| (cons "     " (|bright| a))))
+ (|terminateSystemCommand|))
+
+@
+
+\defun{getParserMacroNames}{getParserMacroNames}
+The \verb|$pfMacros| is a list of all of the user-defined macros.
+\usesdollar{getParserMacroNames}{pfMacros}
+<<defun getParserMacroNames>>=
+(defun |getParserMacroNames| ()
+ (declare (special |$pfMacros|))
+ (remove-duplicates (mapcar #'car |$pfMacros|)))
+
+@
+
+\defun{clearParserMacro}{clearParserMacro}
+Note that if a macro is defined twice this will clear the last instance.
+Thus:
+\begin{verbatim}
+  a ==> 3
+  a ==> 4
+  )d macros
+  a ==> 4
+  )clear prop a
+  )d macros
+  a ==> 3
+  )clear prop a
+  )d macros
+  nil
+\end{verbatim}
+\calls{clearParserMacro}{ifcdr}
+\calls{clearParserMacro}{assoc}
+\calls{clearParserMacro}{remalist}
+\usesdollar{clearParserMacro}{pfMacros}
+<<defun clearParserMacro>>=
+(defun |clearParserMacro| (macro)
+ (declare (special |$pfMacros|))
+ (when (ifcdr (|assoc| macro |$pfMacros|))
+  (setq |$pfMacros| (remalist |$pfMacros| macro))))
+
+@
+
+\defun{displayMacro}{displayMacro}
+\calls{displayMacro}{isInterpMacro}
+\calls{displayMacro}{sayBrightly}
+\calls{displayMacro}{bright}
+\calls{displayMacro}{strconc}
+\calls{displayMacro}{object2String}
+\calls{displayMacro}{mathprint}
+\usesdollar{displayMacro}{op}
+<<defun displayMacro>>=
+(defun |displayMacro| (name)
+ (let (|$op| m body args)
+ (declare (special |$op|))
+  (setq m (|isInterpMacro| name))
+  (cond
+   ((null m)
+    (|sayBrightly|
+     (cons "  " (append (|bright| name) 
+                        (cons "is not an interpreter macro." nil)))))
+   (t
+    (setq |$op| (strconc "macro " (|object2String| name)))
+    (setq args (car m))
+    (setq body (cdr m))
+    (setq args
+     (cond
+      ((null args) nil)
+      ((null (cdr args)) (car args))
+      (t (cons '|Tuple| args))))
+    (|mathprint| (cons 'map (cons (cons args body) nil)))))))
+
+@
+
+\defun{displayWorkspaceNames}{displayWorkspaceNames}
+\calls{displayWorkspaceNames}{getInterpMacroNames}
+\calls{displayWorkspaceNames}{getParserMacroNames}
+\calls{displayWorkspaceNames}{sayMessage}
+\calls{displayWorkspaceNames}{msort}
+\calls{displayWorkspaceNames}{getWorkspaceNames}
+\calls{displayWorkspaceNames}{sayAsManyPerLineAsPossible}
+\calls{displayWorkspaceNames}{sayBrightly}
+\calls{displayWorkspaceNames}{setdifference}
+<<defun displayWorkspaceNames>>=
+(defun |displayWorkspaceNames| ()
+ (let (pmacs names imacs)
+  (setq imacs (|getInterpMacroNames|))
+  (setq pmacs (|getParserMacroNames|))
+  (|sayMessage| "Names of User-Defined Objects in the Workspace:")
+  (setq names (msort (append (|getWorkspaceNames|) pmacs)))
+  (if names
+   (|sayAsManyPerLineAsPossible| (mapcar #'|object2String| names))
+   (|sayBrightly| "   * None *"))
+  (setq imacs (setdifference imacs pmacs))
+  (when imacs
+   (|sayMessage| "Names of System-Defined Objects in the Workspace:")
+   (|sayAsManyPerLineAsPossible| (mapcar #'|object2String| imacs)))))
+
+@
+
+\defun{getWorkspaceNames}{getWorkspaceNames}
+\begin{verbatim}
+;getWorkspaceNames() ==
+;  NMSORT [n for [n,:.] in CAAR $InteractiveFrame |
+;    (n ^= "--macros--" and n^= "--flags--")]
+\end{verbatim}
+\calls{getWorkspaceNames}{nequal}
+\calls{getWorkspaceNames}{seq}
+\calls{getWorkspaceNames}{nmsort}
+\calls{getWorkspaceNames}{exit}
+\usesdollar{getWorkspaceNames}{InteractiveFrame}
+<<defun getWorkspaceNames>>=
+(defun |getWorkspaceNames| ()
+ (PROG (|n|)
+  (declare (special |$InteractiveFrame|))
+    (RETURN
+      (SEQ (NMSORT (PROG (G166322)
+                     (setq G166322 NIL)
+                     (RETURN
+                       (DO ((G166329 (CAAR |$InteractiveFrame|)
+                                (CDR G166329))
+                            (G166313 NIL))
+                           ((OR (ATOM G166329)
+                                (PROGN
+                                  (SETQ G166313 (CAR G166329))
+                                  NIL)
+                                (PROGN
+                                  (PROGN
+                                    (setq |n| (CAR G166313))
+                                    G166313)
+                                  NIL))
+                            (NREVERSE0 G166322))
+                         (SEQ (EXIT (COND
+                                      ((AND (NEQUAL |n| '|--macros--|)
+                                        (NEQUAL |n| '|--flags--|))
+                                       (SETQ G166322
+                                        (CONS |n| G166322))))))))))))))
+
+@
+
+\defun{fixObjectForPrinting}{fixObjectForPrinting}
+The \verb|$msgdbPrims| variable is set to:
+\begin{verbatim}
+(|%b| |%d| |%l| |%i| |%u| %U |%n| |%x| |%ce| |%rj| 
+ "%U" "%b" "%d" "%l" "%i" "%u" "%U" "%n" "%x" "%ce" "%rj")
+\end{verbatim}
+\calls{fixObjectForPrinting}{object2Identifier}
+\calls{fixObjectForPrinting}{member}
+\calls{fixObjectForPrinting}{strconc}
+\calls{fixObjectForPrinting}{pname}
+\usesdollar{fixObjectForPrinting}{msgdbPrims}
+<<defun fixObjectForPrinting>>=
+(defun |fixObjectForPrinting| (v)
+ (let (vp)
+ (declare (special |$msgdbPrims|))
+  (setq vp (|object2Identifier| v))
+  (cond
+   ((eq vp '%) "\\%")
+   ((|member| vp |$msgdbPrims|) (strconc "\\" (pname vp)))
+   (t v))))
+
+@
+
+\defun{displayProperties,sayFunctionDeps}{displayProperties,sayFunctionDeps}
+\begin{verbatim}
+;displayProperties(option,l) ==
+;  $dependentAlist : local := nil
+;  $dependeeAlist  : local := nil
+;  [opt,:vl]:= (l or ['properties])
+;  imacs := getInterpMacroNames()
+;  pmacs := getParserMacroNames()
+;  macros := REMDUP append(imacs, pmacs)
+;  if vl is ['all] or null vl then
+;    vl := MSORT append(getWorkspaceNames(),macros)
+;  if $frameMessages then sayKeyedMsg("S2IZ0065",[$interpreterFrameName])
+;  null vl =>
+;    null $frameMessages => sayKeyedMsg("S2IZ0066",NIL)
+;    sayKeyedMsg("S2IZ0067",[$interpreterFrameName])
+;  interpFunctionDepAlists()
+;  for v in vl repeat
+;    isInternalMapName(v) => 'iterate
+;    pl := getIProplist(v)
+;    option = 'flags =>     getAndSay(v,"flags")
+;    option = 'value =>     displayValue(v,getI(v,'value),nil)
+;    option = 'condition => displayCondition(v,getI(v,"condition"),nil)
+;    option = 'mode =>      displayMode(v,getI(v,'mode),nil)
+;    option = 'type =>      displayType(v,getI(v,'value),nil)
+;    option = 'properties =>
+;      v = "--flags--" => nil
+;      pl is [ ['cacheInfo,:.],:.] => nil
+;      v1 := fixObjectForPrinting(v)
+;      sayMSG ['"Properties of",:bright prefix2String v1,'":"]
+;      null pl =>
+;        v in pmacs =>
+;            sayMSG '"   This is a user-defined macro."
+;            displayParserMacro v
+;        isInterpMacro v =>
+;            sayMSG '"   This is a system-defined macro."
+;            displayMacro v
+;        sayMSG '"   none"
+;      propsSeen:= nil
+;      for [prop,:val] in pl | ^MEMQ(prop,propsSeen) and val repeat
+;        prop in '(alias generatedCode IS_-GENSYM mapBody localVars) =>
+;          nil
+;        prop = 'condition =>
+;          displayCondition(prop,val,true)
+;        prop = 'recursive =>
+;          sayMSG '"   This is recursive."
+;        prop = 'isInterpreterFunction =>
+;          sayMSG '"   This is an interpreter function."
+;          sayFunctionDeps v where
+;            sayFunctionDeps x ==
+;              if dependents := GETALIST($dependentAlist,x) then
+;                null rest dependents =>
+;                  sayMSG ['"   The following function or rule ",
+;                    '"depends on this:",:bright first dependents]
+;                sayMSG
+;                  '"   The following functions or rules depend on this:"
+;                msg := ["%b",'"     "]
+;                for y in dependents repeat msg := ['" ",y,:msg]
+;                sayMSG [:nreverse msg,"%d"]
+;              if dependees := GETALIST($dependeeAlist,x) then
+;                null rest dependees =>
+;                  sayMSG ['"   This depends on the following function ",
+;                    '"or rule:",:bright first dependees]
+;                sayMSG
+;                  '"   This depends on the following functions or rules:"
+;                msg := ["%b",'"     "]
+;                for y in dependees repeat msg := ['" ",y,:msg]
+;                sayMSG [:nreverse msg,"%d"]
+;        prop = 'isInterpreterRule =>
+;          sayMSG '"   This is an interpreter rule."
+;          sayFunctionDeps v
+;        prop = 'localModemap =>
+;          displayModemap(v,val,true)
+;        prop = 'mode =>
+;          displayMode(prop,val,true)
+;        prop = 'value =>
+;          val => displayValue(v,val,true)
+;        sayMSG ['"   ",prop,'":  ",val]
+;        propsSeen:= [prop,:propsSeen]
+;    sayKeyedMsg("S2IZ0068",[option])
+;  terminateSystemCommand()
+\end{verbatim}
+\calls{displayProperties,sayFunctionDeps}{seq}
+\calls{displayProperties,sayFunctionDeps}{getalist}
+\calls{displayProperties,sayFunctionDeps}{exit}
+\calls{displayProperties,sayFunctionDeps}{sayMSG}
+\calls{displayProperties,sayFunctionDeps}{bright}
+\usesdollar{displayProperties,sayFunctionDeps}{dependeeAlist}
+\usesdollar{displayProperties,sayFunctionDeps}{dependentAlist}
+<<defun displayProperties,sayFunctionDeps>>=
+(defun |displayProperties,sayFunctionDeps| (x)
+ (prog (dependents dependees msg)
+ (declare (special |$dependeeAlist| |$dependentAlist|))
+ (return
+  (seq
+   (if (setq dependents (getalist |$dependentAlist| x))
+    (seq 
+     (if (null (cdr dependents))
+      (exit 
+       (|sayMSG| (cons "   The following function or rule "
+                  (cons "depends on this:" (|bright| (car dependents)))))))
+     (|sayMSG| "   The following functions or rules depend on this:")
+     (setq msg (cons '|%b| (cons "     " nil)))
+     (do ((G166397 dependents (cdr G166397)) (y nil))
+         ((or (atom G166397) (progn (setq y (car G166397)) nil)) nil)
+       (seq (exit (setq msg (cons " " (cons y msg))))))
+     (exit (|sayMSG| (append (nreverse msg) (cons '|%d| nil)))))
+    nil)
+   (exit 
+    (if (setq dependees (getalist |$dependeeAlist| x))
+     (seq
+      (if (null (cdr dependees))
+       (exit 
+        (|sayMSG| (cons "   This depends on the following function "
+                   (cons "or rule:" (|bright| (car dependees)))))))
+      (|sayMSG| "   This depends on the following functions or rules:")
+      (setq msg (cons '|%b| (cons "     " nil)))
+      (do ((G166406 dependees (cdr G166406)) (y nil))
+          ((or (atom G166406) (progn (setq y (car G166406)) nil)) nil)
+        (seq (exit (setq msg (cons " " (cons y msg))))))
+      (exit (|sayMSG| (append (nreverse msg) (cons '|%d| nil)))))
+     nil))))))
+
+@
+
+\defun{displayProperties}{displayProperties}
+\calls{displayProperties}{getInterpMacroNames}
+\calls{displayProperties}{getParserMacroNames}
+\calls{displayProperties}{remdup}
+\calls{displayProperties}{pairp}
+\calls{displayProperties}{qcdr}
+\calls{displayProperties}{qcar}
+\calls{displayProperties}{msort}
+\calls{displayProperties}{getWorkspaceNames}
+\calls{displayProperties}{sayKeyedMsg}
+\calls{displayProperties}{interpFunctionDepAlists}
+\calls{displayProperties}{isInternalMapName}
+\calls{displayProperties}{getIProplist}
+\calls{displayProperties}{getAndSay}
+\calls{displayProperties}{displayValue}
+\calls{displayProperties}{getI}
+\calls{displayProperties}{displayCondition}
+\calls{displayProperties}{displayMode}
+\calls{displayProperties}{displayType}
+\calls{displayProperties}{fixObjectForPrinting}
+\calls{displayProperties}{sayMSG}
+\calls{displayProperties}{bright}
+\calls{displayProperties}{prefix2String}
+\calls{displayProperties}{member}
+\calls{displayProperties}{displayParserMacro}
+\calls{displayProperties}{isInterpMacro}
+\calls{displayProperties}{displayMacro}
+\calls{displayProperties}{memq}
+\calls{displayProperties}{displayProperties,sayFunctionDeps}
+\calls{displayProperties}{displayModemap}
+\calls{displayProperties}{exit}
+\calls{displayProperties}{seq}
+\calls{displayProperties}{terminateSystemCommand}
+\usesdollar{displayProperties}{dependentAlist}
+\usesdollar{displayProperties}{dependeeAlist}
+\usesdollar{displayProperties}{frameMessages}
+\usesdollar{displayProperties}{interpreterFrameName}
+<<defun displayProperties>>=
+(defun |displayProperties| (option al)
+ (let (|$dependentAlist| |$dependeeAlist| tmp1 opt imacs pmacs macros vl pl 
+       tmp2 vone prop val propsSeen)
+ (declare (special |$dependentAlist| |$dependeeAlist| |$frameMessages|
+                    |$interpreterFrameName|))
+  (setq |$dependentAlist| nil)
+  (setq |$dependeeAlist| nil)
+  (setq tmp1 (or al (cons '|properties| nil)))
+  (setq opt (car tmp1))
+  (setq vl (cdr tmp1))
+  (setq imacs (|getInterpMacroNames|))
+  (setq pmacs (|getParserMacroNames|))
+  (setq macros (remdup (append imacs pmacs)))
+  (when (or 
+         (and (pairp vl) (eq (qcdr vl) nil) (eq (qcar vl) '|all|))
+         (null vl))
+    (setq vl (msort (append (|getWorkspaceNames|) macros))))
+   (when |$frameMessages|
+    (|sayKeyedMsg| 'S2IZ0065 (cons |$interpreterFrameName| nil)))
+   (cond
+    ((null vl)
+     (if (null |$frameMessages|) 
+      (|sayKeyedMsg| 'S2IZ0066 nil))
+      (|sayKeyedMsg| 'S2IZ0067 (cons |$interpreterFrameName| nil)))
+    (t 
+     (|interpFunctionDepAlists|)
+     (do ((G166440 vl (cdr G166440)) (v nil))
+         ((or (atom G166440) (progn (setq v (car G166440)) nil)) nil)
+       (seq (exit
+        (cond
+         ((|isInternalMapName| v) '|iterate|)
+         (t
+          (setq pl (|getIProplist| v))
+          (cond
+           ((eq option '|flags|) 
+            (|getAndSay| v '|flags|))
+           ((eq option '|value|) 
+            (|displayValue| v (|getI| v '|value|) nil))
+           ((eq option '|condition|)
+            (|displayCondition| v (|getI| v '|condition|) nil))
+           ((eq option '|mode|)
+            (|displayMode| v (|getI| v '|mode|) nil))
+           ((eq option '|type|)
+            (|displayType| v (|getI| v '|value|) nil))
+           ((eq option '|properties|)
+            (cond
+             ((eq v '|--flags--|)
+               nil)
+             ((and (pairp pl)
+                   (progn
+                    (setq tmp2 (qcar pl))
+                    (and (pairp tmp2) (eq (qcar tmp2) '|cacheInfo|))))
+               nil)
+             (t
+              (setq vone (|fixObjectForPrinting| v))
+              (|sayMSG|
+               (cons "Properties of"
+                (append (|bright| (|prefix2String| vone)) (cons ":" nil))))
+              (cond
+               ((null pl)
+                (cond
+                 ((|member| v pmacs)
+                  (|sayMSG| "   This is a user-defined macro.")
+                  (|displayParserMacro| v))
+                 ((|isInterpMacro| v)
+                  (|sayMSG| "   This is a system-defined macro.")
+                  (|displayMacro| v))
+                 (t
+                  (|sayMSG| "   none"))))
+               (t 
+                (setq propsSeen nil)
+                (do ((G166451 pl (cdr G166451)) (G166425 nil))
+                    ((or (atom G166451)
+                         (progn (setq G166425 (car G166451)) nil)
+                         (progn
+                          (progn
+                           (setq prop (car G166425))
+                           (setq val (cdr G166425))
+                           G166425)
+                          nil))
+                       nil)
+                 (seq (exit
+                  (cond
+                   ((and (null (memq prop propsSeen)) val)
+                    (cond
+                     ((|member| prop 
+                       '(|alias| |generatedCode| IS-GENSYM 
+                         |mapBody| |localVars|))
+                       nil)
+                     ((eq prop '|condition|)
+                      (|displayCondition| prop val t))
+                     ((eq prop '|recursive|)
+                      (|sayMSG| "   This is recursive."))
+                     ((eq prop '|isInterpreterFunction|)
+                      (|sayMSG| "   This is an interpreter function.")
+                      (|displayProperties,sayFunctionDeps| v))
+                     ((eq prop '|isInterpreterRule|)
+                      (|sayMSG| "   This is an interpreter rule.")
+                      (|displayProperties,sayFunctionDeps| v))
+                     ((eq prop '|localModemap|)
+                      (|displayModemap| v val t))
+                     ((eq prop '|mode|)
+                      (|displayMode| prop val t))
+                     (t
+                      (when (eq prop '|value|)
+                        (exit
+                         (when val
+                           (exit (|displayValue| v val t)))))
+                       (|sayMSG| (list "   " prop ":  " val))
+                       (setq propsSeen (cons prop propsSeen))))))))))))))
+           (t
+            (|sayKeyedMsg| 'S2IZ0068 (cons option nil)))))))))
+     (|terminateSystemCommand|)))))
+
+@
+
+\defun{interpFunctionDepAlists}{interpFunctionDepAlists}
+\calls{interpFunctionDepAlists}{putalist}
+\calls{interpFunctionDepAlists}{getalist}
+\calls{interpFunctionDepAlists}{getFlag}
+\usesdollar{interpFunctionDepAlists}{e}
+\usesdollar{interpFunctionDepAlists}{dependeeAlist}
+\usesdollar{interpFunctionDepAlists}{dependentAlist}
+\usesdollar{interpFunctionDepAlists}{InteractiveFrame}
+<<defun interpFunctionDepAlists>>=
+(defun |interpFunctionDepAlists| ()
+ (let (|$e|)
+ (declare (special |$e| |$dependeeAlist| |$dependentAlist| 
+                   |$InteractiveFrame|))
+  (setq |$e| |$InteractiveFrame|)
+  (setq |$dependentAlist| (cons (cons nil nil) nil))
+  (setq |$dependeeAlist| (cons (cons nil nil) nil))
+  (mapcar #'(lambda (dep) 
+   (let (dependee dependent)
+    (setq dependee (first dep))
+    (setq dependent (second dep))
+    (setq |$dependentAlist| 
+     (putalist |$dependentAlist| dependee
+      (cons dependent (getalist |$dependentAlist| dependee))))
+    (spadlet |$dependeeAlist|
+     (putalist |$dependeeAlist| dependent
+      (cons dependee (getalist |$dependeeAlist| dependent)))))) 
+   (|getFlag| '|$dependencies|))))
+
+
+@
+
+\defun{displayModemap}{displayModemap}
+\calls{displayModemap}{bright}
+\calls{displayModemap}{sayBrightly}
+\calls{displayModemap}{concat}
+\calls{displayModemap}{formatSignature}
+<<defun displayModemap>>=
+(defun |displayModemap| (v val giveVariableIfNil)
+ (local
+  (g (v mm giveVariableIfNil)
+   (let (local signature fn varPart prefix)
+    (setq local (caar mm))
+    (setq signature (cdar mm))
+    (setq fn (cadr mm))
+    (unless (eq local '|interpOnly|)
+     (spadlet varPart (unless giveVariableIfNil (cons " of" (|bright| v))))
+     (spadlet prefix
+      (cons '|   Compiled function type| (append varPart (cons '|: | nil))))
+     (|sayBrightly| (|concat| prefix (|formatSignature| signature))))))
+  (mapcar #'(lambda (mm) (g v mm giveVariableIfNil)) val)))
+
+@
+
+\defun{displayMode}{displayMode}
+\calls{displayMode}{bright}
+\calls{displayMode}{fixObjectForPrinting}
+\calls{displayMode}{sayBrightly}
+\calls{displayMode}{concat}
+\calls{displayMode}{prefix2String}
+<<defun displayMode>>=
+(defun |displayMode| (v mode giveVariableIfNil)
+ (let (varPart)
+  (when mode
+   (unless giveVariableIfNil
+    (setq varPart (cons '| of| (|bright| (|fixObjectForPrinting| v)))))
+   (|sayBrightly|
+    (|concat| '|   Declared type or mode| varPart '|:   |
+     (|prefix2String| mode))))))
 
 @
 
@@ -8482,7 +9137,7 @@ You can type ``)? compiler'' and see compiler related information
   (setq trail
    (mapcar #'(lambda (opt)  
               (mapcar #'(lambda (tok) (|tokTran| tok)) opt)) restOptionList))
-  (|systemCommand| (list parcmd trail)))))
+  (|systemCommand| (cons parcmd trail)))))
 
 @
 
@@ -8535,6 +9190,19 @@ You can type ``)? compiler'' and see compiler related information
     (spadlet |$currentLine| line)))
   (|selectOption| xp (|commandsForUserLevel| |$systemCommands|)
      '|commandUserLevelError|)))
+
+@
+
+\defun{commandErrorIfAmbiguous}{The command is ambiguous error}
+\calls{commandErrorIfAmbiguous}{commandAmbiguityError}
+\usesdollar{commandErrorIfAmbiguous}{oldline}
+\uses{commandErrorIfAmbiguous}{line}
+<<defun commandErrorIfAmbiguous>>=
+(defun |commandErrorIfAmbiguous| (x u)
+ (declare (special $oldline line))
+ (when u
+   (setq $oldline line)
+   (|commandAmbiguityError| '|command| x u)))
 
 @
 
@@ -12738,7 +13406,6 @@ Also used in the output routines.
 \calls{writeInputLines}{throwKeyedMsg}
 \calls{writeInputLines}{size}
 \calls{writeInputLines}{spaddifference}
-\calls{writeInputLines}{plus}
 \calls{writeInputLines}{memq}
 \calls{writeInputLines}{concat}
 \calls{writeInputLines}{substring}
@@ -12774,7 +13441,7 @@ Also used in the output routines.
              (setq done nil)
              (do ((|j| 1 (qsadd1 |j|)))
                  ((or (qsgreaterp |j| maxn) (null (null done))) nil)
-               (setq k (spaddifference (plus 1 maxn) |j|))
+               (setq k (spaddifference (1+ maxn) |j|))
                (when (memq (elt vec k) breakChars)
                  (setq svec (concat (substring vec 0 (1+ k)) underbar))
                  (setq lineList (cons svec lineList))
@@ -12877,7 +13544,6 @@ Also used in the output routines.
 
 @
 \defun{updateInCoreHist}{updateInCoreHist}
-\calls{updateInCoreHist}{plus}
 \usesdollar{updateInCoreHist}{HistList}
 \usesdollar{updateInCoreHist}{HistListLen}
 \usesdollar{updateInCoreHist}{HistListAct}
@@ -12887,7 +13553,7 @@ Also used in the output routines.
   (setq |$HistList| (cdr |$HistList|))
   (rplaca |$HistList| nil) 
   (when (> |$HistListLen| |$HistListAct|) 
-    (setq |$HistListAct| (plus |$HistListAct| 1))))
+    (setq |$HistListAct| (1+ |$HistListAct|))))
 
 @
 \defun{putHist}{putHist}
@@ -13159,7 +13825,6 @@ Also used in the output routines.
 \calls{restoreHistory}{updateInCoreHist}
 \calls{restoreHistory}{get}
 \calls{restoreHistory}{rempropI}
-\calls{restoreHistory}{plus}
 \calls{restoreHistory}{clearCmdSortedCaches}
 \usesdollar{restoreHistory}{options}
 \usesdollar{restoreHistory}{internalHistoryTable}
@@ -13229,7 +13894,7 @@ Also used in the output routines.
           (|rempropI| a '|localModemap|)
           (|rempropI| a '|localVars|)
           (|rempropI| a '|mapBody|)))
-    (setq |$IOindex| (plus l 1))
+    (setq |$IOindex| (1+ l))
     (setq |$useInternalHistoryTable| oldInternal)
     (|sayKeyedMsg| 'S2IH0025 ; workspace restored
       (cons (|namestring| restfile) nil))
@@ -13297,7 +13962,6 @@ Also used in the output routines.
 \calls{fetchOutput}{boot-equal}
 \calls{fetchOutput}{spaddifference}
 \calls{fetchOutput}{getI}
-\calls{fetchOutput}{plus}
 \calls{fetchOutput}{throwKeyedMsg}
 \calls{fetchOutput}{readHiFi}
 \calls{fetchOutput}{disableHist}
@@ -13311,7 +13975,7 @@ Also used in the output routines.
    (|$HiFiAccess|
     (setq n
      (cond
-      ((minusp n) (plus |$IOindex| n))
+      ((minusp n) (+ |$IOindex| n))
       (t n)))
     (cond
      ((>= n |$IOindex|) 
@@ -13534,7 +14198,6 @@ back.
 \calls{writify,writifyInner}{mkEvalable}
 \calls{writify,writifyInner}{devaluate}
 \calls{writify,writifyInner}{qvmaxindex}
-\calls{writify,writifyInner}{plus}
 \calls{writify,writifyInner}{qsetvelt}
 \calls{writify,writifyInner}{qvelt}
 \calls{writify,writifyInner}{constructor?}
@@ -13607,7 +14270,7 @@ back.
          (hput |$seen| nob nob)
          (exit nob))
        (setq n (qvmaxindex ob))
-       (setq nob (make-array (plus n 1)))
+       (setq nob (make-array (1+ n)))
        (hput |$seen| ob nob)
        (hput |$seen| nob nob)
        (do ((|i| 0 (qsadd1 |i|)))
@@ -13745,7 +14408,6 @@ back.
 \calls{dewritify,dewritifyInner}{qrplacd}
 \calls{dewritify,dewritifyInner}{vecp}
 \calls{dewritify,dewritifyInner}{qvmaxindex}
-\calls{dewritify,dewritifyInner}{plus}
 \calls{dewritify,dewritifyInner}{qsetvelt}
 \calls{dewritify,dewritifyInner}{qvelt}
 \usesdollar{dewritify,dewritifyInner}{seen}
@@ -13868,7 +14530,7 @@ back.
      (exit
       (seq
        (setq n (qvmaxindex ob))
-       (setq nob (make-array (plus n 1)))
+       (setq nob (make-array (1+ n)))
        (hput |$seen| ob nob)
        (hput |$seen| nob nob)
        (do ((|i| 0 (qsadd1 |i|)))
@@ -13943,7 +14605,6 @@ back.
 \calls{gensymInt}{gensymp}
 \calls{gensymInt}{error}
 \calls{gensymInt}{pname}
-\calls{gensymInt}{plus}
 \calls{gensymInt}{times}
 \calls{gensymInt}{charDigitVal}
 <<defun gensymInt>>=
@@ -13956,7 +14617,7 @@ back.
      (setq n 0)
      (do ((tmp0 (spaddifference (|#| p) 1)) (|i| 2 (qsadd1 |i|)))
          ((qsgreaterp |i| tmp0) nil)
-       (setq n (plus (times 10 n) (|charDigitVal| (elt p |i|)))))
+       (setq n (+ (times 10 n) (|charDigitVal| (elt p |i|)))))
      n))))
 
 @
@@ -22638,7 +23299,6 @@ to convert the data into type "Expression"
 \calls{traceReply}{rassocSub}
 \calls{traceReply}{poundsign}
 \calls{traceReply}{sayMSG}
-\calls{traceReply}{plus}
 \calls{traceReply}{sayBrightlyLength}
 \calls{traceReply}{flowSegmentedMsg}
 \calls{traceReply}{concat}
@@ -22698,7 +23358,7 @@ to convert the data into type "Expression"
          (cond 
           ((eql 2 (|#| |functionList|))
              (|sayMSG| (cons '|   Function traced: | |functionList|)))
-          ((<= (PLUS 22 (|sayBrightlyLength| |functionList|)) $linelength)
+          ((<= (+ 22 (|sayBrightlyLength| |functionList|)) $linelength)
              (|sayMSG| (cons '|   Functions traced: | |functionList|)))
           (t 
              (|sayBrightly| "   Functions traced:")
@@ -23626,7 +24286,6 @@ Removing undo lines from \verb|)hist )write linelist|
 \calls{removeUndoLines}{nequal}
 \calls{removeUndoLines}{charPosition}
 \calls{removeUndoLines}{maxindex}
-\calls{removeUndoLines}{plus}
 \calls{removeUndoLines}{undoCount}
 \calls{removeUndoLines}{spaddifference}
 \calls{removeUndoLines}{concat}
@@ -23687,7 +24346,7 @@ Removing undo lines from \verb|)hist )write linelist|
                     (setq m (|charPosition| #\) s1 0))
                     (setq code
                      (cond
-                       ((> (maxindex s1) m) (elt s1 (plus m 1)))
+                       ((> (maxindex s1) m) (elt s1 (1+ m)))
                        (t #\a)))
                     (setq s2 (|trimString| (substring s1 0 m)))))
                 (setq n
@@ -23700,7 +24359,7 @@ Removing undo lines from \verb|)hist )write linelist|
                 (rplaca y
                   (concat ">" code (princ-to-string n))))
                (t nil)))
-            (t (setq |$IOindex| (plus |$IOindex| 1)))))))
+            (t (setq |$IOindex| (1+ |$IOindex|)))))))
         (setq acc nil)
         (do ((y (nreverse u) (cdr y)))
             ((atom y) nil)
@@ -24252,490 +24911,6 @@ o )library
        |%l| "   Available options are"
        ,@(|bright|
           "c ct e ec ect cls pause update patch compare record"))))))))
-
-@
-
-\chapter{Command Handling}
-
-\defun{satisfiesUserLevel}{satisfiesUserLevel}
-\usesdollar{satisfiesUserLevel}{UserLevel}
-<<defun satisfiesUserLevel>>=
-(defun |satisfiesUserLevel| (x)
- (declare (special |$UserLevel|))
- (cond
-  ((eq x '|interpreter|) t)
-  ((eq |$UserLevel| '|interpreter|) nil)
-  ((eq x '|compiler|) t)
-  ((eq |$UserLevel| '|compiler|) nil)
-  (t t)))
-
-@
-
-\defun{hasOption}{hasOption}
-\calls{hasOption}{stringPrefix?}
-\calls{hasOption}{pname}
-<<defun hasOption>>=
-(defun |hasOption| (al opt)
- (let ((optPname (pname opt)) found)
-  (loop for pair in al do
-    (when (|stringPrefix?| (pname (car pair)) optPname) (setq found pair))
-    until found)
-  found))
-
-@
-
-\defun{terminateSystemCommand}{terminateSystemCommand}
-\calls{terminateSystemCommand}{tersyscommand}
-<<defun terminateSystemCommand>>=
-(defun |terminateSystemCommand| nil (tersyscommand)) 
-
-@
-
-\defun{commandAmbiguityError}{commandAmbiguityError}
-\calls{commandAmbiguityError}{sayKeyedMsg}
-\calls{commandAmbiguityError}{sayMSG}
-\calls{commandAmbiguityError}{bright}
-\calls{commandAmbiguityError}{terminateSystemCommand}
-<<defun commandAmbiguityError>>=
-(defun |commandAmbiguityError| (kind x u)
- (|sayKeyedMsg| 's2iz0009 (list kind x))
- (dolist (a u) (|sayMSG| (cons "     " (|bright| a))))
- (|terminateSystemCommand|))
-
-@
-
-\defun{getParserMacroNames}{getParserMacroNames}
-The \verb|$pfMacros| is a list of all of the user-defined macros.
-\usesdollar{getParserMacroNames}{pfMacros}
-<<defun getParserMacroNames>>=
-(defun |getParserMacroNames| ()
- (declare (special |$pfMacros|))
- (remove-duplicates (mapcar #'car |$pfMacros|)))
-
-@
-
-\defun{clearParserMacro}{clearParserMacro}
-Note that if a macro is defined twice this will clear the last instance.
-Thus:
-\begin{verbatim}
-  a ==> 3
-  a ==> 4
-  )d macros
-  a ==> 4
-  )clear prop a
-  )d macros
-  a ==> 3
-  )clear prop a
-  )d macros
-  nil
-\end{verbatim}
-\calls{clearParserMacro}{ifcdr}
-\calls{clearParserMacro}{assoc}
-\calls{clearParserMacro}{remalist}
-\usesdollar{clearParserMacro}{pfMacros}
-<<defun clearParserMacro>>=
-(defun |clearParserMacro| (macro)
- (declare (special |$pfMacros|))
- (when (ifcdr (|assoc| macro |$pfMacros|))
-  (setq |$pfMacros| (remalist |$pfMacros| macro))))
-
-@
-
-\defun{displayMacro}{displayMacro}
-\calls{displayMacro}{isInterpMacro}
-\calls{displayMacro}{sayBrightly}
-\calls{displayMacro}{bright}
-\calls{displayMacro}{strconc}
-\calls{displayMacro}{object2String}
-\calls{displayMacro}{mathprint}
-\usesdollar{displayMacro}{op}
-<<defun displayMacro>>=
-(defun |displayMacro| (name)
- (let (|$op| m body args)
- (declare (special |$op|))
-  (setq m (|isInterpMacro| name))
-  (cond
-   ((null m)
-    (|sayBrightly|
-     (cons "  " (append (|bright| name) 
-                        (cons "is not an interpreter macro." nil)))))
-   (t
-    (setq |$op| (strconc "macro " (|object2String| name)))
-    (setq args (car m))
-    (setq body (cdr m))
-    (setq args
-     (cond
-      ((null args) nil)
-      ((null (cdr args)) (car args))
-      (t (cons '|Tuple| args))))
-    (|mathprint| (cons 'map (cons (cons args body) nil)))))))
-
-@
-
-\defun{displayWorkspaceNames}{displayWorkspaceNames}
-\calls{displayWorkspaceNames}{getInterpMacroNames}
-\calls{displayWorkspaceNames}{getParserMacroNames}
-\calls{displayWorkspaceNames}{sayMessage}
-\calls{displayWorkspaceNames}{msort}
-\calls{displayWorkspaceNames}{getWorkspaceNames}
-\calls{displayWorkspaceNames}{sayAsManyPerLineAsPossible}
-\calls{displayWorkspaceNames}{sayBrightly}
-\calls{displayWorkspaceNames}{setdifference}
-<<defun displayWorkspaceNames>>=
-(defun |displayWorkspaceNames| ()
- (let (pmacs names imacs)
-  (setq imacs (|getInterpMacroNames|))
-  (setq pmacs (|getParserMacroNames|))
-  (|sayMessage| "Names of User-Defined Objects in the Workspace:")
-  (setq names (msort (append (|getWorkspaceNames|) pmacs)))
-  (if names
-   (|sayAsManyPerLineAsPossible| (mapcar #'|object2String| names))
-   (|sayBrightly| "   * None *"))
-  (setq imacs (setdifference imacs pmacs))
-  (when imacs
-   (|sayMessage| "Names of System-Defined Objects in the Workspace:")
-   (|sayAsManyPerLineAsPossible| (mapcar #'|object2String| imacs)))))
-
-@
-
-\defun{getWorkspaceNames}{getWorkspaceNames}
-\begin{verbatim}
-;getWorkspaceNames() ==
-;  NMSORT [n for [n,:.] in CAAR $InteractiveFrame |
-;    (n ^= "--macros--" and n^= "--flags--")]
-\end{verbatim}
-\calls{getWorkspaceNames}{nequal}
-\calls{getWorkspaceNames}{seq}
-\calls{getWorkspaceNames}{nmsort}
-\calls{getWorkspaceNames}{exit}
-\usesdollar{getWorkspaceNames}{InteractiveFrame}
-<<defun getWorkspaceNames>>=
-(defun |getWorkspaceNames| ()
- (PROG (|n|)
-  (declare (special |$InteractiveFrame|))
-    (RETURN
-      (SEQ (NMSORT (PROG (G166322)
-                     (setq G166322 NIL)
-                     (RETURN
-                       (DO ((G166329 (CAAR |$InteractiveFrame|)
-                                (CDR G166329))
-                            (G166313 NIL))
-                           ((OR (ATOM G166329)
-                                (PROGN
-                                  (SETQ G166313 (CAR G166329))
-                                  NIL)
-                                (PROGN
-                                  (PROGN
-                                    (setq |n| (CAR G166313))
-                                    G166313)
-                                  NIL))
-                            (NREVERSE0 G166322))
-                         (SEQ (EXIT (COND
-                                      ((AND (NEQUAL |n| '|--macros--|)
-                                        (NEQUAL |n| '|--flags--|))
-                                       (SETQ G166322
-                                        (CONS |n| G166322))))))))))))))
-
-@
-
-\defun{fixObjectForPrinting}{fixObjectForPrinting}
-The \verb|$msgdbPrims| variable is set to:
-\begin{verbatim}
-(|%b| |%d| |%l| |%i| |%u| %U |%n| |%x| |%ce| |%rj| 
- "%U" "%b" "%d" "%l" "%i" "%u" "%U" "%n" "%x" "%ce" "%rj")
-\end{verbatim}
-\calls{fixObjectForPrinting}{object2Identifier}
-\calls{fixObjectForPrinting}{member}
-\calls{fixObjectForPrinting}{strconc}
-\calls{fixObjectForPrinting}{pname}
-\usesdollar{fixObjectForPrinting}{msgdbPrims}
-<<defun fixObjectForPrinting>>=
-(defun |fixObjectForPrinting| (v)
- (let (vp)
- (declare (special |$msgdbPrims|))
-  (setq vp (|object2Identifier| v))
-  (cond
-   ((eq vp '%) "\\%")
-   ((|member| vp |$msgdbPrims|) (strconc "\\" (pname vp)))
-   (t v))))
-
-@
-
-\defun{displayProperties,sayFunctionDeps}{displayProperties,sayFunctionDeps}
-\begin{verbatim}
-;displayProperties(option,l) ==
-;  $dependentAlist : local := nil
-;  $dependeeAlist  : local := nil
-;  [opt,:vl]:= (l or ['properties])
-;  imacs := getInterpMacroNames()
-;  pmacs := getParserMacroNames()
-;  macros := REMDUP append(imacs, pmacs)
-;  if vl is ['all] or null vl then
-;    vl := MSORT append(getWorkspaceNames(),macros)
-;  if $frameMessages then sayKeyedMsg("S2IZ0065",[$interpreterFrameName])
-;  null vl =>
-;    null $frameMessages => sayKeyedMsg("S2IZ0066",NIL)
-;    sayKeyedMsg("S2IZ0067",[$interpreterFrameName])
-;  interpFunctionDepAlists()
-;  for v in vl repeat
-;    isInternalMapName(v) => 'iterate
-;    pl := getIProplist(v)
-;    option = 'flags =>     getAndSay(v,"flags")
-;    option = 'value =>     displayValue(v,getI(v,'value),nil)
-;    option = 'condition => displayCondition(v,getI(v,"condition"),nil)
-;    option = 'mode =>      displayMode(v,getI(v,'mode),nil)
-;    option = 'type =>      displayType(v,getI(v,'value),nil)
-;    option = 'properties =>
-;      v = "--flags--" => nil
-;      pl is [ ['cacheInfo,:.],:.] => nil
-;      v1 := fixObjectForPrinting(v)
-;      sayMSG ['"Properties of",:bright prefix2String v1,'":"]
-;      null pl =>
-;        v in pmacs =>
-;            sayMSG '"   This is a user-defined macro."
-;            displayParserMacro v
-;        isInterpMacro v =>
-;            sayMSG '"   This is a system-defined macro."
-;            displayMacro v
-;        sayMSG '"   none"
-;      propsSeen:= nil
-;      for [prop,:val] in pl | ^MEMQ(prop,propsSeen) and val repeat
-;        prop in '(alias generatedCode IS_-GENSYM mapBody localVars) =>
-;          nil
-;        prop = 'condition =>
-;          displayCondition(prop,val,true)
-;        prop = 'recursive =>
-;          sayMSG '"   This is recursive."
-;        prop = 'isInterpreterFunction =>
-;          sayMSG '"   This is an interpreter function."
-;          sayFunctionDeps v where
-;            sayFunctionDeps x ==
-;              if dependents := GETALIST($dependentAlist,x) then
-;                null rest dependents =>
-;                  sayMSG ['"   The following function or rule ",
-;                    '"depends on this:",:bright first dependents]
-;                sayMSG
-;                  '"   The following functions or rules depend on this:"
-;                msg := ["%b",'"     "]
-;                for y in dependents repeat msg := ['" ",y,:msg]
-;                sayMSG [:nreverse msg,"%d"]
-;              if dependees := GETALIST($dependeeAlist,x) then
-;                null rest dependees =>
-;                  sayMSG ['"   This depends on the following function ",
-;                    '"or rule:",:bright first dependees]
-;                sayMSG
-;                  '"   This depends on the following functions or rules:"
-;                msg := ["%b",'"     "]
-;                for y in dependees repeat msg := ['" ",y,:msg]
-;                sayMSG [:nreverse msg,"%d"]
-;        prop = 'isInterpreterRule =>
-;          sayMSG '"   This is an interpreter rule."
-;          sayFunctionDeps v
-;        prop = 'localModemap =>
-;          displayModemap(v,val,true)
-;        prop = 'mode =>
-;          displayMode(prop,val,true)
-;        prop = 'value =>
-;          val => displayValue(v,val,true)
-;        sayMSG ['"   ",prop,'":  ",val]
-;        propsSeen:= [prop,:propsSeen]
-;    sayKeyedMsg("S2IZ0068",[option])
-;  terminateSystemCommand()
-\end{verbatim}
-\calls{displayProperties,sayFunctionDeps}{seq}
-\calls{displayProperties,sayFunctionDeps}{getalist}
-\calls{displayProperties,sayFunctionDeps}{exit}
-\calls{displayProperties,sayFunctionDeps}{sayMSG}
-\calls{displayProperties,sayFunctionDeps}{bright}
-\usesdollar{displayProperties,sayFunctionDeps}{dependeeAlist}
-\usesdollar{displayProperties,sayFunctionDeps}{dependentAlist}
-<<defun displayProperties,sayFunctionDeps>>=
-(defun |displayProperties,sayFunctionDeps| (x)
- (prog (dependents dependees msg)
- (declare (special |$dependeeAlist| |$dependentAlist|))
- (return
-  (seq
-   (if (setq dependents (getalist |$dependentAlist| x))
-    (seq 
-     (if (null (cdr dependents))
-      (exit 
-       (|sayMSG| (cons "   The following function or rule "
-                  (cons "depends on this:" (|bright| (car dependents)))))))
-     (|sayMSG| "   The following functions or rules depend on this:")
-     (setq msg (cons '|%b| (cons "     " nil)))
-     (do ((G166397 dependents (cdr G166397)) (y nil))
-         ((or (atom G166397) (progn (setq y (car G166397)) nil)) nil)
-       (seq (exit (setq msg (cons " " (cons y msg))))))
-     (exit (|sayMSG| (append (nreverse msg) (cons '|%d| nil)))))
-    nil)
-   (exit 
-    (if (setq dependees (getalist |$dependeeAlist| x))
-     (seq
-      (if (null (cdr dependees))
-       (exit 
-        (|sayMSG| (cons "   This depends on the following function "
-                   (cons "or rule:" (|bright| (car dependees)))))))
-      (|sayMSG| "   This depends on the following functions or rules:")
-      (setq msg (cons '|%b| (cons "     " nil)))
-      (do ((G166406 dependees (cdr G166406)) (y nil))
-          ((or (atom G166406) (progn (setq y (car G166406)) nil)) nil)
-        (seq (exit (setq msg (cons " " (cons y msg))))))
-      (exit (|sayMSG| (append (nreverse msg) (cons '|%d| nil)))))
-     nil))))))
-
-@
-
-\defun{displayProperties}{displayProperties}
-\calls{displayProperties}{getInterpMacroNames}
-\calls{displayProperties}{getParserMacroNames}
-\calls{displayProperties}{remdup}
-\calls{displayProperties}{pairp}
-\calls{displayProperties}{qcdr}
-\calls{displayProperties}{qcar}
-\calls{displayProperties}{msort}
-\calls{displayProperties}{getWorkspaceNames}
-\calls{displayProperties}{sayKeyedMsg}
-\calls{displayProperties}{interpFunctionDepAlists}
-\calls{displayProperties}{isInternalMapName}
-\calls{displayProperties}{getIProplist}
-\calls{displayProperties}{getAndSay}
-\calls{displayProperties}{displayValue}
-\calls{displayProperties}{getI}
-\calls{displayProperties}{displayCondition}
-\calls{displayProperties}{displayMode}
-\calls{displayProperties}{displayType}
-\calls{displayProperties}{fixObjectForPrinting}
-\calls{displayProperties}{sayMSG}
-\calls{displayProperties}{bright}
-\calls{displayProperties}{prefix2String}
-\calls{displayProperties}{member}
-\calls{displayProperties}{displayParserMacro}
-\calls{displayProperties}{isInterpMacro}
-\calls{displayProperties}{displayMacro}
-\calls{displayProperties}{memq}
-\calls{displayProperties}{displayProperties,sayFunctionDeps}
-\calls{displayProperties}{displayModemap}
-\calls{displayProperties}{exit}
-\calls{displayProperties}{seq}
-\calls{displayProperties}{terminateSystemCommand}
-\usesdollar{displayProperties}{dependentAlist}
-\usesdollar{displayProperties}{dependeeAlist}
-\usesdollar{displayProperties}{frameMessages}
-\usesdollar{displayProperties}{interpreterFrameName}
-<<defun displayProperties>>=
-(defun |displayProperties| (option al)
- (let (|$dependentAlist| |$dependeeAlist| tmp1 opt imacs pmacs macros vl pl 
-       tmp2 vone prop val propsSeen)
- (declare (special |$dependentAlist| |$dependeeAlist| |$frameMessages|
-                    |$interpreterFrameName|))
-  (setq |$dependentAlist| nil)
-  (setq |$dependeeAlist| nil)
-  (setq tmp1 (or al (cons '|properties| nil)))
-  (setq opt (car tmp1))
-  (setq vl (cdr tmp1))
-  (setq imacs (|getInterpMacroNames|))
-  (setq pmacs (|getParserMacroNames|))
-  (setq macros (remdup (append imacs pmacs)))
-  (when (or 
-         (and (pairp vl) (eq (qcdr vl) nil) (eq (qcar vl) '|all|))
-         (null vl))
-    (setq vl (msort (append (|getWorkspaceNames|) macros))))
-   (when |$frameMessages|
-    (|sayKeyedMsg| 'S2IZ0065 (cons |$interpreterFrameName| nil)))
-   (cond
-    ((null vl)
-     (if (null |$frameMessages|) 
-      (|sayKeyedMsg| 'S2IZ0066 nil))
-      (|sayKeyedMsg| 'S2IZ0067 (cons |$interpreterFrameName| nil)))
-    (t 
-     (|interpFunctionDepAlists|)
-     (do ((G166440 vl (cdr G166440)) (v nil))
-         ((or (atom G166440) (progn (setq v (car G166440)) nil)) nil)
-       (seq (exit
-        (cond
-         ((|isInternalMapName| v) '|iterate|)
-         (t
-          (setq pl (|getIProplist| v))
-          (cond
-           ((eq option '|flags|) 
-            (|getAndSay| v '|flags|))
-           ((eq option '|value|) 
-            (|displayValue| v (|getI| v '|value|) nil))
-           ((eq option '|condition|)
-            (|displayCondition| v (|getI| v '|condition|) nil))
-           ((eq option '|mode|)
-            (|displayMode| v (|getI| v '|mode|) nil))
-           ((eq option '|type|)
-            (|displayType| v (|getI| v '|value|) nil))
-           ((eq option '|properties|)
-            (cond
-             ((eq v '|--flags--|)
-               nil)
-             ((and (pairp pl)
-                   (progn
-                    (setq tmp2 (qcar pl))
-                    (and (pairp tmp2) (eq (qcar tmp2) '|cacheInfo|))))
-               nil)
-             (t
-              (setq vone (|fixObjectForPrinting| v))
-              (|sayMSG|
-               (cons "Properties of"
-                (append (|bright| (|prefix2String| vone)) (cons ":" nil))))
-              (cond
-               ((null pl)
-                (cond
-                 ((|member| v pmacs)
-                  (|sayMSG| "   This is a user-defined macro.")
-                  (|displayParserMacro| v))
-                 ((|isInterpMacro| v)
-                  (|sayMSG| "   This is a system-defined macro.")
-                  (|displayMacro| v))
-                 (t
-                  (|sayMSG| "   none"))))
-               (t 
-                (setq propsSeen nil)
-                (do ((G166451 pl (cdr G166451)) (G166425 nil))
-                    ((or (atom G166451)
-                         (progn (setq G166425 (car G166451)) nil)
-                         (progn
-                          (progn
-                           (setq prop (car G166425))
-                           (setq val (cdr G166425))
-                           G166425)
-                          nil))
-                       nil)
-                 (seq (exit
-                  (cond
-                   ((and (null (memq prop propsSeen)) val)
-                    (cond
-                     ((|member| prop 
-                       '(|alias| |generatedCode| IS-GENSYM 
-                         |mapBody| |localVars|))
-                       nil)
-                     ((eq prop '|condition|)
-                      (|displayCondition| prop val t))
-                     ((eq prop '|recursive|)
-                      (|sayMSG| "   This is recursive."))
-                     ((eq prop '|isInterpreterFunction|)
-                      (|sayMSG| "   This is an interpreter function.")
-                      (|displayProperties,sayFunctionDeps| v))
-                     ((eq prop '|isInterpreterRule|)
-                      (|sayMSG| "   This is an interpreter rule.")
-                      (|displayProperties,sayFunctionDeps| v))
-                     ((eq prop '|localModemap|)
-                      (|displayModemap| v val t))
-                     ((eq prop '|mode|)
-                      (|displayMode| prop val t))
-                     (t
-                      (when (eq prop '|value|)
-                        (exit
-                         (when val
-                           (exit (|displayValue| v val t)))))
-                       (|sayMSG| (list "   " prop ":  " val))
-                       (setq propsSeen (cons prop propsSeen))))))))))))))
-           (t
-            (|sayKeyedMsg| 'S2IZ0068 (cons option nil)))))))))
-     (|terminateSystemCommand|)))))
 
 @
 
@@ -28237,6 +28412,11 @@ See Steele Common Lisp 1990 pp305-307
 <<defun coerceTraceArgs2E>>
 <<defun coerceTraceFunValue2E>>
 <<defun commandAmbiguityError>>
+<<defun commandError>>
+<<defun commandErrorIfAmbiguous>>
+<<defun commandErrorMessage>>
+<<defun commandsForUserLevel>>
+<<defun commandUserLevelError>>
 <<defun compareposns>>
 <<defun compileBoot>>
 <<defun compiler>>
@@ -28292,6 +28472,8 @@ See Steele Common Lisp 1990 pp305-307
 <<defun displayHiddenConstructors>>
 <<defun displayMacro>>
 <<defun displayMacros>>
+<<defun displayMode>>
+<<defun displayModemap>>
 <<defun displayOperations>>
 <<defun displayProperties>>
 <<defun displayProperties,sayFunctionDeps>>
@@ -28465,6 +28647,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun insertpile>>
 <<defun insertPos>>
 <<defun InterpExecuteSpadSystemCommand>>
+<<defun interpFunctionDepAlists>>
 <<defun interpOpen>>
 <<defun intloop>>
 <<defun intloopEchoParse>>
@@ -28609,6 +28792,8 @@ See Steele Common Lisp 1990 pp305-307
 <<defun openOutputLibrary>>
 <<defun openserver>>
 <<defun operationOpen>>
+<<defun optionError>>
+<<defun optionUserLevelError>>
 <<defun orderBySlotNumber>>
 
 <<defun parseSystemCmd>>
@@ -28878,6 +29063,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun undoLocalModemapHack>>
 <<defun undoSingleStep>>
 <<defun undoSteps>>
+<<defun unescapeStringsInForm>>
 <<defun unsqueeze>>
 <<defun untrace>>
 <<defun untraceDomainConstructor>>
@@ -28889,6 +29075,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun updateFromCurrentInterpreterFrame>>
 <<defun updateHist>>
 <<defun updateInCoreHist>>
+<<defun userLevelErrorMessage>>
 
 <<defun validateOutputDirectory>>
 
