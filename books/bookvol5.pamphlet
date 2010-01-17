@@ -1733,6 +1733,139 @@ This calls the analysis and output printing routines
 
 @
 
+\defun{interpretTopLevel}{interpretTopLevel}
+\catches{interpretTopLevel}{interpreter}
+\calls{interpretTopLevel}{interpret}
+\calls{interpretTopLevel}{stopTimingProcess}
+\calls{interpretTopLevel}{peekTimedName}
+\calls{interpretTopLevel}{interpretTopLevel}
+\usesdollar{interpretTopLevel}{timedNameStack}
+<<defun interpretTopLevel>>=
+(defun |interpretTopLevel| (x posnForm)
+ (let (savedTimerStack c)
+ (declare (special |$timedNameStack|))
+  (setq savedTimerStack (copy |$timedNameStack|))
+  (setq c (catch '|interpreter| (|interpret| x posnForm)))
+  (do ()
+      ((equal savedTimerStack |$timedNameStack|) nil)
+    (|stopTimingProcess| (|peekTimedName|)))
+  (if (eq c '|tryAgain|) 
+   (|interpretTopLevel| x posnForm)
+   c)))
+
+@
+
+\defdollar{genValue}
+If the \verb|$genValue| variable is true then evaluate generated code,
+otherwise leave code unevaluated. If \verb|$genValue| is false then we
+are compiling. This variable is only defined and used locally.
+<<initvars>>=
+(defvar |$genValue| nil "evaluate generated code if true")
+
+@
+
+\defun{interpret}{Type analyzes and evaluates expression x, returns object}
+\calls{interpret}{pairp}
+\calls{interpret}{interpret1}
+\usesdollar{interpret}{env}
+\usesdollar{interpret}{eval}
+\usesdollar{interpret}{genValue}
+<<defun interpret>>=
+(defun |interpret| (&rest arg &aux restargs x)
+ (dsetq (x . restargs) arg)
+ (let (|$env| |$eval| |$genValue| posnForm)
+ (declare (special |$env| |$eval| |$genValue|))
+  (if (pairp restargs)
+    (setq posnForm (car restargs))
+    (setq posnForm restargs))
+  (setq |$env| (list (list nil)))
+  (setq |$eval| t)      ; generate code -- don't just type analyze
+  (setq |$genValue| t)  ; evaluate all generated code
+  (|interpret1| x nil posnForm)))
+
+@
+
+\defun{interpret1}{Dispatcher for the type analysis routines}
+This is the dispatcher for the type analysis routines. It type analyzes and
+evaluates the expression x in the rootMode (if non-nil)
+which may be \verb|$EmptyMode|. It returns an object if evaluating, and a
+modeset otherwise. It creates the attributed tree.
+\calls{interpret1}{mkAtreeWithSrcPos}
+\calls{interpret1}{putTarget}
+\calls{interpret1}{bottomUp}
+\calls{interpret1}{getArgValue}
+\calls{interpret1}{objNew}
+\calls{interpret1}{getValue}
+\calls{interpret1}{interpret2}
+\calls{interpret1}{keyedSystemError}
+\usesdollar{interpret1}{genValue}
+\usesdollar{interpret1}{eval}
+<<defun interpret1>>=
+(defun |interpret1| (x rootMode posnForm)
+ (let (node modeSet newRootMode argVal val)
+ (declare (special |$genValue| |$eval|))
+  (setq node (|mkAtreeWithSrcPos| x posnForm))
+  (when rootMode (|putTarget| node rootMode))
+  (setq modeSet (|bottomUp| node))
+  (if (null |$eval|)
+   modeSet
+   (progn
+    (if (null rootMode)
+     (setq newRootMode (car modeSet))
+     (setq newRootMode rootMode))
+    (setq argVal (|getArgValue| node newRootMode))
+    (cond
+     ((and argVal (null |$genValue|))
+       (|objNew| argVal newRootMode))
+     ((and argVal (setq val (|getValue| node)))
+       (|interpret2| val newRootMode posnForm))
+     (t
+       (|keyedSystemError| 'S2IS0053 (list x))))))))
+
+@
+
+\defun{interpret2}{interpret2}
+This is the late interpretCoerce. I removed the call to
+coerceInteractive, so it only does the JENKS cases    ALBI
+\calls{interpret2}{objVal}
+\calls{interpret2}{objMode}
+\calls{interpret2}{pairp}
+\calls{interpret2}{member}
+\calls{interpret2}{objNew}
+\calls{interpret2}{systemErrorHere}
+\calls{interpret2}{coerceInteractive}
+\calls{interpret2}{throwKeyedMsgCannotCoerceWithValue}
+\usesdollar{interpret2}{EmptyMode}
+\usesdollar{interpret2}{ThrowAwayMode}
+<<defun interpret2>>=
+(defun |interpret2| (object m1 posnForm)
+ (declare (ignore  posnForm))
+ (let (x m op ans)
+ (declare (special |$EmptyMode| |$ThrowAwayMode|))
+  (cond
+   ((equal m1 |$ThrowAwayMode|) object)
+   (t
+    (setq x (|objVal| object))
+    (setq m (|objMode| object))
+    (cond
+     ((equal m |$EmptyMode|)
+      (cond
+        ((and (pairp x) 
+              (progn (setq op (qcar x)) t)
+              (|member| op '(map stream)))
+          (|objNew| x m1))
+        ((equal m1 |$EmptyMode|)
+          (|objNew| x m))
+        (t
+          (|systemErrorHere| "interpret2"))))
+     (m1
+      (if (setq ans (|coerceInteractive| object m1)) 
+       ans
+       (|throwKeyedMsgCannotCoerceWithValue| x m m1)))
+     (t object))))))
+
+@
+
 \defun{recordAndPrint}{}
 Result Output Printing.
 Prints out the value x which is of type m, and records the changes
@@ -31221,6 +31354,10 @@ See Steele Common Lisp 1990 pp305-307
 <<defun InterpExecuteSpadSystemCommand>>
 <<defun interpFunctionDepAlists>>
 <<defun interpOpen>>
+<<defun interpret>>
+<<defun interpret1>>
+<<defun interpret2>>
+<<defun interpretTopLevel>>
 <<defun intloop>>
 <<defun intloopEchoParse>>
 <<defun intloopInclude>>
@@ -31934,15 +32071,6 @@ recordFrame('normal) is called after (see processInteractive1).
 If no changes are found for former, no special entry is given.
 
 This is part of the undo mechanism.
-
-\subsection{\$genValue}
-If the \verb|$genValue| variable is true then evaluate generated code,
-otherwise leave code unevaluated. If \verb|$genValue| is false then we
-are compiling. This variable is only defined and used locally.
-<<initvars>>=
-(defvar |$genValue| nil "evaluate generated code if true")
-
-@
 
 \subsection{\$HiFiAccess}
 The \verb|$HiFiAccess| is set by initHist to T. It is a flag
