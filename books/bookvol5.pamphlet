@@ -1380,16 +1380,19 @@ this is what the current code does so I won't change it.
 (defvar |$currentFrameNum| 0) 
 
 @
+
 \defdollar{EndServerSession}
 <<initvars>>=
 (defvar |$EndServerSession| nil) 
 
 @
+
 \defdollar{NeedToSignalSessionManager}
 <<initvars>>=
 (defvar |$NeedToSignalSessionManager| nil) 
 
 @
+
 \defdollar{sockBufferLength}
 <<initvars>>=
 (defvar |$sockBufferLength| 9217) 
@@ -1507,6 +1510,499 @@ this is what the current code does so I won't change it.
     (cond
      (line line)
      (t '||))))))
+
+@
+
+\defun{protectedEVAL}{protectedEVAL}
+\calls{protectedEVAL}{resetStackLimits}
+\calls{protectedEVAL}{sendHTErrorSignal}
+<<defun protectedEVAL>>=
+(defun |protectedEVAL| (x)
+ (let (val (error t))
+  (unwind-protect
+   (progn
+    (setq val (eval x))
+    (setq error nil))
+   (when error
+    (|resetStackLimits|)
+    (|sendHTErrorSignal|)))
+  (unless error val)))
+
+@
+
+\defdollar{QuietCommand}
+<<initvars>>=
+(defvar |$QuietCommand| nil "If true, produce no top level output") 
+
+@
+
+\defun{executeQuietCommand}{executeQuietCommand}
+When \verb|$QuiteCommand| is true Spad will not produce any output from
+a top level command
+\catches{executeQuietCommand}{coerceFailure}
+\catches{executeQuietCommand}{top\_level}
+\catches{executeQuietCommand}{spad\_reader}
+\calls{executeQuietCommand}{make-string}
+\calls{executeQuietCommand}{sockGetString}
+\calls{executeQuietCommand}{parseAndInterpret}
+\usesdollar{executeQuietCommand}{MenuServer}
+\usesdollar{executeQuietCommand}{QuietCommand}
+<<defun executeQuietCommand>>=
+(defun |executeQuietCommand| ()
+ (let (|$QuietCommand| stringBuf)
+ (declare (special |$QuietCommand| |$MenuServer|))
+  (setq |$QuietCommand| t)
+  (setq stringBuf (make-string 512))
+  (|sockGetString| |$MenuServer| stringBuf 512)
+  (catch '|coerceFailure|
+   (catch '|top_level|
+    (catch 'spad_reader (|parseAndInterpret| stringBuf))))))
+
+@
+
+\defun{parseAndInterpret}{parseAndInterpret}
+\calls{parseAndInterpret}{ncParseAndInterpretString}
+\calls{parseAndInterpret}{oldParseAndInterpret}
+\usesdollar{parseAndInterpret}{InteractiveMode}
+\usesdollar{parseAndInterpret}{boot}
+\usesdollar{parseAndInterpret}{spad}
+\usesdollar{parseAndInterpret}{e}
+\usesdollar{parseAndInterpret}{useNewParser}
+\usesdollar{parseAndInterpret}{InteractiveFrame}
+<<defun parseAndInterpret>>=
+(defun |parseAndInterpret| (str)
+ (let (|$InteractiveMode| $boot $spad |$e|)
+ (declare (special |$InteractiveMode| $boot $spad |$e| |$useNewParser|
+                   |$InteractiveFrame|))
+  (setq |$InteractiveMode| t)
+  (setq $boot nil)
+  (setq $spad t)
+  (setq |$e| |$InteractiveFrame|)
+  (if |$useNewParser| 
+   (|ncParseAndInterpretString| str))
+   (|oldParseAndInterpret| str)))
+
+
+@
+
+\defun{oldParseAndInterpret}{oldParseAndInterpret}
+\calls{oldParseAndInterpret}{string2SpadTree}
+\calls{oldParseAndInterpret}{processInteractive}
+\calls{oldParseAndInterpret}{parseTransform}
+\calls{oldParseAndInterpret}{postTransform}
+<<defun oldParseAndInterpret>>=
+(defun |oldParseAndInterpret| (str)
+ (let ((tree (|string2SpadTree| str)))
+  (when tree
+   (|processInteractive| (|parseTransform| (|postTransform| tree)) nil))))
+
+@
+
+\defun{processInteractive}{processInteractive}
+Parser Output {\tt -->} Interpreter
+
+Top-level dispatcher for the interpreter.  It sets local variables
+and then calls processInteractive1 to do most of the work.
+This function receives the output from the parser.
+\calls{processInteractive}{initializeTimedNames}
+\calls{processInteractive}{pairp}
+\calls{processInteractive}{qcar}
+\calls{processInteractive}{processInteractive1}
+\calls{processInteractive}{reportInstantiations}
+\calls{processInteractive}{clrhash}
+\calls{processInteractive}{writeHistModesAndValues}
+\calls{processInteractive}{updateHist}
+\usesdollar{processInteractive}{op}
+\usesdollar{processInteractive}{Coerce}
+\usesdollar{processInteractive}{compErrorMessageStack}
+\usesdollar{processInteractive}{freeVars}
+\usesdollar{processInteractive}{mapList}
+\usesdollar{processInteractive}{compilingMap}
+\usesdollar{processInteractive}{compilingLoop}
+\usesdollar{processInteractive}{interpOnly}
+\usesdollar{processInteractive}{whereCacheList}
+\usesdollar{processInteractive}{timeGlobalName}
+\usesdollar{processInteractive}{StreamFrame}
+\usesdollar{processInteractive}{declaredMode}
+\usesdollar{processInteractive}{localVars}
+\usesdollar{processInteractive}{analyzingMapList}
+\usesdollar{processInteractive}{lastLineInSEQ}
+\usesdollar{processInteractive}{instantCoerceCount}
+\usesdollar{processInteractive}{instantCanCoerceCount}
+\usesdollar{processInteractive}{instantMmCondCount}
+\usesdollar{processInteractive}{fortVar}
+\usesdollar{processInteractive}{minivector}
+\usesdollar{processInteractive}{minivectorCode}
+\usesdollar{processInteractive}{minivectorNames}
+\usesdollar{processInteractive}{domPvar}
+\usesdollar{processInteractive}{inRetract}
+\usesdollar{processInteractive}{instantRecord}
+\usesdollar{processInteractive}{reportInstantiations}
+\usesdollar{processInteractive}{ProcessInteractiveValue}
+\usesdollar{processInteractive}{defaultFortVar}
+\usesdollar{processInteractive}{interpreterTimedNames}
+\usesdollar{processInteractive}{interpreterTimedClasses}
+<<defun processInteractive>>=
+(defun |processInteractive| (form posnForm)
+ (let (|$op| |$Coerce| |$compErrorMessageStack| |$freeVars|
+             |$mapList| |$compilingMap| |$compilingLoop|
+             |$interpOnly| |$whereCacheList| |$timeGlobalName|
+             |$StreamFrame| |$declaredMode| |$localVars|
+             |$analyzingMapList| |$lastLineInSEQ|
+             |$instantCoerceCount| |$instantCanCoerceCount|
+             |$instantMmCondCount| |$fortVar| |$minivector|
+             |$minivectorCode| |$minivectorNames| |$domPvar|
+             |$inRetract| object)
+ (declare (special |$op| |$Coerce| |$compErrorMessageStack|
+                   |$freeVars| |$mapList| |$compilingMap|
+                   |$compilingLoop| |$interpOnly| |$whereCacheList|
+                   |$timeGlobalName| |$StreamFrame| |$declaredMode|
+                   |$localVars| |$analyzingMapList| |$lastLineInSEQ|
+                   |$instantCoerceCount| |$instantCanCoerceCount|
+                   |$instantMmCondCount| |$fortVar| |$minivector|
+                   |$minivectorCode| |$minivectorNames| |$domPvar|
+                   |$inRetract| |$instantRecord| |$reportInstantiations|
+                   |$ProcessInteractiveValue| |$defaultFortVar|
+                   |$interpreterTimedNames| |$interpreterTimedClasses|))
+  (|initializeTimedNames| |$interpreterTimedNames| |$interpreterTimedClasses|)
+  (if (pairp form)                        ; compute name of operator
+   (setq |$op| (qcar form))
+   (setq |$op| form))
+  (setq |$Coerce| nil)
+  (setq |$compErrorMessageStack| nil)
+  (setq |$freeVars| nil)
+  (setq |$mapList| nil)                   ; list of maps being type analyzed
+  (setq |$compilingMap| nil)              ; true when compiling a map
+  (setq |$compilingLoop| nil)             ; true when compiling a loop body
+  (setq |$interpOnly| nil)                ; true when in interp only mode
+  (setq |$whereCacheList| nil)            ; maps compiled because of where
+  (setq |$timeGlobalName| '|$compTimeSum|); see incrementTimeSum
+  (setq |$StreamFrame| nil)               ; used in printing streams
+  (setq |$declaredMode| nil)              ; weak type propagation for symbols
+  (setq |$localVars| nil)                 ; list of local variables in function
+  (setq |$analyzingMapList| nil)       ; names of maps currently being analyzed
+  (setq |$lastLineInSEQ| t)               ; see evalIF and friends
+  (setq |$instantCoerceCount| 0)
+  (setq |$instantCanCoerceCount| 0)
+  (setq |$instantMmCondCount| 0)
+  (setq |$defaultFortVar| 'x)             ; default FORTRAN variable name
+  (setq |$fortVar| |$defaultFortVar|)     ; variable name for FORTRAN output
+  (setq |$minivector| nil)
+  (setq |$minivectorCode| nil)
+  (setq |$minivectorNames| nil)
+  (setq |$domPvar| nil)
+  (setq |$inRetract| nil)
+  (setq object (|processInteractive1| form posnForm))
+  (unless |$ProcessInteractiveValue|
+   (when |$reportInstantiations|
+    (|reportInstantiations|) 
+    (clrhash |$instantRecord|))
+   (|writeHistModesAndValues|) 
+   (|updateHist|))
+  object))
+
+@
+
+\defun{processInteractive1}{processInteractive1}
+This calls the analysis and output printing routines
+\calls{processInteractive1}{recordFrame}
+\calls{processInteractive1}{startTimingProcess}
+\calls{processInteractive1}{interpretTopLevel}
+\calls{processInteractive1}{stopTimingProcess}
+\calls{processInteractive1}{recordAndPrint}
+\calls{processInteractive1}{objValUnwrap}
+\calls{processInteractive1}{objMode}
+\usesdollar{processInteractive1}{e}
+\usesdollar{processInteractive1}{ProcessInteractiveValue}
+\usesdollar{processInteractive1}{InteractiveFrame}
+<<defun processInteractive1>>=
+(defun |processInteractive1| (form posnForm)
+ (let (|$e| object)
+ (declare (special |$e| |$ProcessInteractiveValue| |$InteractiveFrame|))
+  (setq |$e| |$InteractiveFrame|)
+  (|recordFrame| '|system|)
+  (|startTimingProcess| '|analysis|)
+  (setq object (|interpretTopLevel| form posnForm))
+  (|stopTimingProcess| '|analysis|)
+  (|startTimingProcess| '|print|)
+  (unless |$ProcessInteractiveValue|
+    (|recordAndPrint| (|objValUnwrap| object) (|objMode| object)))
+  (|recordFrame| '|normal|)
+  (|stopTimingProcess| '|print|)
+  object))
+
+@
+
+\defun{recordAndPrint}{}
+Result Output Printing.
+Prints out the value x which is of type m, and records the changes
+in environment \verb|$e| into \verb|$InteractiveFrame|
+\verb|$printAnyIfTrue| is documented in setvart.boot. 
+It is controlled with the {\tt )se me any} command.
+\calls{recordAndPrint}{nequal}
+\calls{recordAndPrint}{output}
+\calls{recordAndPrint}{putHist}
+\calls{recordAndPrint}{objNewWrap}
+\calls{recordAndPrint}{printTypeAndTime}
+\calls{recordAndPrint}{printStorage}
+\calls{recordAndPrint}{printStatisticsSummary}
+\calls{recordAndPrint}{fixp}
+\calls{recordAndPrint}{mkCompanionPage}
+\calls{recordAndPrint}{recordAndPrintTest}
+\usesdollar{recordAndPrint}{outputMode}
+\usesdollar{recordAndPrint}{mkTestOutputType}
+\usesdollar{recordAndPrint}{runTestFlag}
+\usesdollar{recordAndPrint}{e}
+\usesdollar{recordAndPrint}{mkTestFlag}
+\usesdollar{recordAndPrint}{HTCompanionWindowID}
+\usesdollar{recordAndPrint}{QuietCommand}
+\usesdollar{recordAndPrint}{printStatisticsSummaryIfTrue}
+\usesdollar{recordAndPrint}{printTypeIfTrue}
+\usesdollar{recordAndPrint}{printStorageIfTrue}
+\usesdollar{recordAndPrint}{printTimeIfTrue}
+\usesdollar{recordAndPrint}{Void}
+\usesdollar{recordAndPrint}{algebraOutputStream}
+\usesdollar{recordAndPrint}{collectOutput}
+\usesdollar{recordAndPrint}{EmptyMode}
+\usesdollar{recordAndPrint}{printVoidIfTrue}
+\usesdollar{recordAndPrint}{outputMode}
+\usesdollar{recordAndPrint}{printAnyIfTrue}
+<<defun recordAndPrint>>=
+(defun |recordAndPrint| (x md)
+ (let (|$outputMode| xp mdp mode)
+ (declare (special |$outputMode| |$mkTestOutputType| |$runTestFlag| |$e|
+                   |$mkTestFlag| |$HTCompanionWindowID| |$QuietCommand|
+                   |$printStatisticsSummaryIfTrue| |$printTypeIfTrue|
+                   |$printStorageIfTrue| |$printTimeIfTrue| |$Void|
+                   |$algebraOutputStream| |$collectOutput| |$EmptyMode|
+                   |$printVoidIfTrue| |$outputMode| |$printAnyIfTrue|))
+  (cond
+   ((and (equal md '(|Any|)) |$printAnyIfTrue|)
+    (setq mdp (car x))
+    (setq xp (cdr x)))
+   (t
+    (setq mdp md)
+    (setq xp x)))
+  (setq |$outputMode| md)
+  (if (equal md |$EmptyMode|)
+   (setq mode (|quadSch|))
+   (setq mode md))
+  (when (or (nequal md |$Void|) |$printVoidIfTrue|)
+    (unless |$collectOutput| (terpri |$algebraOutputStream|))
+    (unless |$QuietCommand| (|output| xp mdp)))
+  (|putHist| '% '|value| (|objNewWrap| x md) |$e|)
+  (when (or |$printTimeIfTrue| |$printTypeIfTrue|)
+    (|printTypeAndTime| xp mdp))
+  (when |$printStorageIfTrue| (|printStorage|))
+  (when |$printStatisticsSummaryIfTrue| (|printStatisticsSummary|))
+  (when (fixp |$HTCompanionWindowID|) (|mkCompanionPage| md))
+  (cond
+   (|$mkTestFlag| (|recordAndPrintTest| md))
+   (|$runTestFlag|
+    (setq |$mkTestOutputType| md) 
+    '|done|)
+   (t '|done|))))
+
+@
+
+\defun{printStatisticsSummary}{printStatisticsSummary}
+\calls{printStatisticsSummary}{sayKeyedMsg}
+\calls{printStatisticsSummary}{statisticsSummary}
+\usesdollar{printStatisticsSummary}{collectOutput}
+<<defun printStatisticsSummary>>=
+(defun |printStatisticsSummary| ()
+ (declare (special |$collectOutput|))
+ (unless |$collectOutput| 
+  (|sayKeyedMsg| 'S2GL0017 (list (|statisticsSummary|)))))
+
+@
+
+\defun{printStorage}{printStorage}
+\calls{printStorage}{makeLongSpaceString}
+\usesdollar{printStorage}{interpreterTimedClasses}
+\usesdollar{printStorage}{collectOutput}
+\usesdollar{printStorage}{interpreterTimedNames}
+<<defun printStorage>>=
+(defun |printStorage| ()
+ (declare (special |$interpreterTimedClasses| |$collectOutput|
+                   |$interpreterTimedNames|))
+  (unless |$collectOutput|
+   (|sayKeyedMsg| 'S2GL0016 
+    (list 
+     (|makeLongSpaceString|
+       |$interpreterTimedNames|
+       |$interpreterTimedClasses|)))))
+
+@
+
+\defun{printTypeAndTime}{printTypeAndTime}
+\calls{printTypeAndTime}{printTypeAndTimeSaturn}
+\calls{printTypeAndTime}{printTypeAndTimeNormal}
+\usesdollar{printTypeAndTime}{saturn}
+<<defun printTypeAndTime>>=
+(defun |printTypeAndTime| (x m)
+ (declare (special |$saturn|))
+ (if |$saturn| 
+  (|printTypeAndTimeSaturn| x m)
+  (|printTypeAndTimeNormal| x m)))
+
+@
+
+\defun{printTypeAndTimeNormal}{printTypeAndTimeNormal}
+\calls{printTypeAndTimeNormal}{qcar}
+\calls{printTypeAndTimeNormal}{pairp}
+\calls{printTypeAndTimeNormal}{retract}
+\calls{printTypeAndTimeNormal}{objNewWrap}
+\calls{printTypeAndTimeNormal}{objMode}
+\calls{printTypeAndTimeNormal}{sameUnionBranch}
+\calls{printTypeAndTimeNormal}{makeLongTimeString}
+\calls{printTypeAndTimeNormal}{msgText}
+\calls{printTypeAndTimeNormal}{sayKeyedMsg}
+\calls{printTypeAndTimeNormal}{justifyMyType}
+\usesdollar{printTypeAndTimeNormal}{outputLines}
+\usesdollar{printTypeAndTimeNormal}{collectOutput}
+\usesdollar{printTypeAndTimeNormal}{printTypeIfTrue}
+\usesdollar{printTypeAndTimeNormal}{printTimeIfTrue}
+\usesdollar{printTypeAndTimeNormal}{outputLines}
+\usesdollar{printTypeAndTimeNormal}{interpreterTimedNames}
+\usesdollar{printTypeAndTimeNormal}{interpreterTimedClasses}
+<<defun printTypeAndTimeNormal>>=
+(defun |printTypeAndTimeNormal| (x m)
+ (let (xp mp timeString result)
+ (declare (special |$outputLines| |$collectOutput| |$printTypeIfTrue|
+                   |$printTimeIfTrue| |$outputLines|
+                   |$interpreterTimedNames| |$interpreterTimedClasses|))
+  (cond
+   ((and (pairp m) (eq (qcar m) '|Union|))
+    (setq xp (|retract| (|objNewWrap| x m)))
+    (setq mp (|objMode| xp))
+    (setq m
+     (cons '|Union|
+      (append
+       (dolist (arg (qcdr m) (nreverse result))
+         (when (|sameUnionBranch| arg mp) (push arg result)))
+       (list "..."))))))
+  (when |$printTimeIfTrue|
+   (setq timeString
+    (|makeLongTimeString|
+     |$interpreterTimedNames|
+     |$interpreterTimedClasses|)))
+  (cond
+   ((and |$printTimeIfTrue| |$printTypeIfTrue|)
+    (if |$collectOutput|
+     (push (|msgText| 'S2GL0012 (list m)) |$outputLines|)
+     (|sayKeyedMsg| 'S2GL0014 (list m timeString ))))
+   (|$printTimeIfTrue|
+    (unless |$collectOutput| (|sayKeyedMsg| 'S2GL0013 (list timeString))))
+   (|$printTypeIfTrue|
+    (if |$collectOutput|
+     (push (|justifyMyType| (|msgText| 'S2GL0012 (list m))) |$outputLines|)
+     (|sayKeyedMsg| 'S2GL0012 (list m)))))))
+
+@
+
+\defun{printTypeAndTimeSaturn}{printTypeAndTimeSaturn}
+\calls{printTypeAndTimeSaturn}{makeLongTimeString}
+\calls{printTypeAndTimeSaturn}{form2StringAsTeX}
+\calls{printTypeAndTimeSaturn}{devaluate}
+\calls{printTypeAndTimeSaturn}{printAsTeX}
+\usesdollar{printTypeAndTimeSaturn}{printTimeIfTrue}
+\usesdollar{printTypeAndTimeSaturn}{printTypeIfTrue}
+\usesdollar{printTypeAndTimeSaturn}{interpreterTimedClasses}
+\usesdollar{printTypeAndTimeSaturn}{interpreterTimedNames}
+<<defun printTypeAndTimeSaturn>>=
+(defun |printTypeAndTimeSaturn| (x m)
+ (declare (ignore x))
+ (let (timeString typeString)
+ (declare (special |$printTimeIfTrue| |$printTypeIfTrue|
+                   |$interpreterTimedClasses| |$interpreterTimedNames|))
+  (if |$printTimeIfTrue|
+   (setq timeString
+    (|makeLongTimeString| 
+     |$interpreterTimedNames|
+     |$interpreterTimedClasses|))
+   (setq timeString ""))
+  (if |$printTypeIfTrue|
+   (setq typeString (|form2StringAsTeX| (|devaluate| m)))
+   (setq typeString ""))
+  (when |$printTypeIfTrue|
+   (|printAsTeX| "\\axPrintType{")
+   (if (consp typeString)
+    (mapc #'|printAsTeX| typeString)
+    (|printAsTeX| typeString))
+   (|printAsTeX| "}"))
+  (when |$printTimeIfTrue|
+   (|printAsTeX| "\\axPrintTime{")
+   (|printAsTeX| timeString)
+   (|printAsTeX| "}"))))
+
+@
+
+\defun{printAsTeX}{printAsTeX}
+\usesdollar{printAsTeX}{texOutputStream}
+<<defun printAsTeX>>=
+(defun |printAsTeX| (x)
+ (declare (special |$texOutputStream|)) 
+ (princ x |$texOutputStream|)) 
+
+@
+
+\defun{sameUnionBranch}{sameUnionBranch}
+\begin{verbatim}
+sameUnionBranch(uArg, m) ==
+  uArg is [":", ., t] => t = m
+  uArg = m
+\end{verbatim}
+<<defun sameUnionBranch>>=
+(defun |sameUnionBranch| (uArg m)
+ (let (t1 t2 t3)
+ (cond
+  ((and (pairp uArg) 
+        (eq (qcar uArg) '|:|)
+        (progn
+         (setq t1 (qcdr uArg))
+         (and (pairp t1)
+              (progn
+               (setq t2 (qcdr t1))
+               (and (pairp t2)
+                    (eq (qcdr t2) nil)
+                    (progn (setq t3 (qcar t2)) t))))))
+   (equal t3 m))
+  (t (equal uArg m)))))
+
+
+@
+
+\defun{msgText}{msgText}
+\calls{msgText}{segmentKeyedMsg}
+\calls{msgText}{getKeyedMsg}
+\calls{msgText}{substituteSegmentedMsg}
+\calls{msgText}{flowSegmentedMsg}
+\calls{msgText}{stringimage}
+\usesdollar{msgText}{linelength}
+\usesdollar{msgText}{margin}
+<<defun msgText>>=
+(defun |msgText| (key args)
+ (let (msg)
+ (declare (special $linelength $margin))
+  (setq msg (|segmentKeyedMsg| (|getKeyedMsg| key)))
+  (setq msg (|substituteSegmentedMsg| msg args))
+  (setq msg (|flowSegmentedMsg| msg $linelength $margin))
+  (apply #'concat (mapcar #'stringimage (cdar msg)))))
+
+@
+
+\defun{justifyMyType}{Right-justify the Type output}
+\calls{justifyMyType}{fillerSpaces}
+\usesdollar{justifyMyType}{linelength}
+<<defun justifyMyType>>=
+(defun |justifyMyType| (arg)
+ (let (len)
+ (declare (special $linelength))
+  (setq len (|#| arg))
+  (if (> len $linelength)
+   arg
+   (concat (|fillerSpaces| (- $linelength len)) arg))))
 
 @
 
@@ -3497,8 +3993,8 @@ returning the token-dq and the rest of the line-stream
 \defun{lfid}{lfid}
 To pair badge and badgee
 <<defun lfid>>=
-(defun |lfid| (|x|)
- (list '|id| (intern |x| "BOOT")))
+(defun |lfid| (x)
+ (list '|id| (intern x "BOOT")))
 
 @
 
@@ -30572,6 +31068,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun erMsgSep>>
 <<defun erMsgSort>>
 <<defun ExecuteInterpSystemCommand>>
+<<defun executeQuietCommand>>
 
 <<defun fetchKeyedMsg>>
 <<defun fetchOutput>>
@@ -30747,6 +31244,8 @@ See Steele Common Lisp 1990 pp305-307
 <<defun isTraceGensym>>
 <<defun isUncompiledMap>>
 
+<<defun justifyMyType>>
+
 <<defun KeepPart?>>
 <<defun keyword>>
 <<defun keyword?>>
@@ -30810,6 +31309,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun msgImPr?>>
 <<defun msgNoRep?>>
 <<defun msgOutputter>>
+<<defun msgText>>
 
 <<defun ncAlist>>
 <<defun ncBug>>
@@ -30863,6 +31363,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun npTuple>>
 
 <<defun oldHistFileName>>
+<<defun oldParseAndInterpret>>
 <<defun openOutputLibrary>>
 <<defun openserver>>
 <<defun operationOpen>>
@@ -30870,6 +31371,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun optionUserLevelError>>
 <<defun orderBySlotNumber>>
 
+<<defun parseAndInterpret>>
 <<defun parseSystemCmd>>
 <<defun pcounters>>
 <<defun pfAbSynOp?>>
@@ -30906,12 +31408,21 @@ See Steele Common Lisp 1990 pp305-307
 <<defun pquit>>
 <<defun pquitSpad2Cmd>>
 <<defun previousInterpreterFrame>>
+<<defun printAsTeX>>
 <<defun printLabelledList>>
+<<defun printStatisticsSummary>>
+<<defun printStorage>>
 <<defun printSynonyms>>
+<<defun printTypeAndTime>>
+<<defun printTypeAndTimeNormal>>
+<<defun printTypeAndTimeSaturn>>
 <<defun processChPosesForOneLine>>
+<<defun processInteractive>>
+<<defun processInteractive1>>
 <<defun processKeyedError>>
 <<defun processMsgList>>
 <<defun protectedSymbolsWarning>>
+<<defun protectedEVAL>>
 <<defun processSynonymLine>>
 <<defun processSynonymLine,removeKeyFromLine>>
 <<defun processSynonyms>>
@@ -30938,6 +31449,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun readSpadProfileIfThere>>
 <<defun readSpad2Cmd>>
 <<defun reclaim>>
+<<defun recordAndPrint>>
 <<defun recordFrame>>
 <<defun recordNewValue>>
 <<defun recordNewValue0>>
@@ -30976,6 +31488,7 @@ See Steele Common Lisp 1990 pp305-307
 
 <<defun safeWritify>>
 <<defun sameMsg?>>
+<<defun sameUnionBranch>>
 <<defun satisfiesUserLevel>>
 <<defun saveHistory>>
 <<defun saveMapSig>>
