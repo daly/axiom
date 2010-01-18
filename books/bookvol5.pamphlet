@@ -15755,6 +15755,16 @@ This command is obsolete. Use )library instead.
  
 @ 
 
+\defun{load}{The )load command (obsolete)}
+We keep this command around in case anyone has the original Axiom book.
+\calls{load}{sayKeyedMsg}
+<<defun load>>=
+(defun |load| (&rest ignore)
+ (declare (ignore ignore))
+ (|sayKeyedMsg| 'S2IU0003 nil))
+
+@
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \cmdhead{ltrace help page}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -15784,6 +15794,13 @@ o )trace
 \fnref{boot}
 \fnref{lisp}
 \fnref{trace}}
+
+\defun{ltrace}{The top level )ltrace function}
+\calls{ltrace}{trace}
+<<defun ltrace>>=
+(defun |ltrace| (arg) (|trace| arg)) 
+
+@
 
 \section{Variables Used}
 \section{Functions}
@@ -23429,6 +23446,43 @@ o )what
 
 @
 
+\defun{synonymsForUserLevel}{Return a sublist of applicable synonyms}
+The argument is a list of synonyms, and this returns a sublist of applicable
+synonyms at the current user level.
+\calls{synonymsForUserLevel}{string2id-n}
+\calls{synonymsForUserLevel}{selectOptionLC}
+\calls{synonymsForUserLevel}{commandsForUserLevel}
+\usesdollar{synonymsForUserLevel}{systemCommands}
+\usesdollar{synonymsForUserLevel}{UserLevel}
+<<defun synonymsForUserLevel>>=
+(defun |synonymsForUserLevel| (arg)
+ (let (cmd nl)
+ (declare (special |$systemCommands| |$UserLevel|))
+  (if (eq |$UserLevel| '|development|)
+   arg
+   (dolist (syn (reverse arg))
+    (setq cmd (string2id-n (cdr syn) 1))
+    (when (|selectOptionLC| cmd (|commandsForUserLevel| |$systemCommands|) nil)
+     (push syn nl))))
+   nl))
+
+@
+
+\defun{getSystemCommandLine}{Get the system command from the input line}
+\calls{getSystemCommandLine}{strpos}
+\calls{getSystemCommandLine}{substring}
+\usesdollar{getSystemCommandLine}{currentLine}
+<<defun getSystemCommandLine>>=
+(defun |getSystemCommandLine| ()
+ (let (p maxIndex index line)
+ (declare (special |$currentLine|))
+  (setq p (strpos ")" |$currentLine| 0 nil))
+  (if p
+   (setq line (substring |$currentLine| p nil))
+   (setq line |$currentLine|))
+ (string-left-trim '(#\space) line)))
+
+@
 
 \defun{processSynonymLine,removeKeyFromLine}{}
 \calls{processSynonymLine,removeKeyFromLine}{dropLeadingBlanks}
@@ -27226,6 +27280,23 @@ o )show
 
 @
 
+\defun{reportWhatOptions}{Show keywords for )what command}
+\calls{reportWhatOptions}{sayBrightly}
+\usesdollar{reportWhatOptions}{whatOptions}
+<<defun reportWhatOptions>>=
+(defun |reportWhatOptions| ()
+ (let (optlist)
+ (declare (special |$whatOptions|))
+  (setq optlist
+   (reduce #'append
+    (mapcar #'(lambda (x) `(|%l| "        " ,x)) |$whatOptions|)))
+  (|sayBrightly|
+   `(|%b| "  )what" |%d| "argument keywords are" |%b| ,@optlist |%d|
+     |%l| "   or abbreviations thereof." |%l| |%l| "   Issue" |%b| ")what ?"
+     |%d| "for more information."))))
+
+@
+
 \defun{whatCommands}{The )what commands implementation}
 \calls{whatCommands}{stringimage}
 \calls{whatCommands}{centerAndHighlight}
@@ -27266,6 +27337,49 @@ o )show
 
 @
 
+\defun{filterListOfStrings}{Find all names contained in a pattern}
+Names and patterns are lists of strings. This returns a list of strings 
+in names that contains any of the strings in the patterns
+\calls{filterListOfStrings}{satisfiesRegularExpressions}
+<<defun filterListOfStrings>>=
+(defun |filterListOfStrings| (patterns names)
+ (let (result)
+ (if (or (null patterns) (null names))
+  names
+  (dolist (name (reverse names) result)
+   (when (|satisfiesRegularExpressions| name patterns)
+    (push name result))))))
+
+@
+
+\defun{filterListOfStringsWithFn}{Find function of names contained in pattern}
+The argument names and patterns are lists of strings.
+The argument fn is something like CAR or CADR
+This returns a list of strings in names that contains any of the strings
+in patterns
+\calls{filterListOfStringsWithFn}{satisfiesRegularExpressions}
+<<defun filterListOfStringsWithFn>>=
+(defun |filterListOfStringsWithFn| (patterns names fn)
+ (let (result)
+ (if (or (null patterns) (null names))
+  names
+  (dolist (name (reverse names) result)
+   (when (|satisfiesRegularExpressions| (funcall fn name) patterns)
+    (push name result))))))
+
+@
+
+\defun{satisfiesRegularExpressions}{satisfiesRegularExpressions}
+\calls{satisfiesRegularExpressions}{strpos}
+<<defun satisfiesRegularExpressions>>=
+(defun |satisfiesRegularExpressions| (name patterns)
+ (let ((dname (downcase (copy name))))
+  (dolist (pattern patterns)
+   (when (strpos pattern dname 0 "@")
+    (return-from nil t)))))
+
+@
+
 \defun{filterAndFormatConstructors}{filterAndFormatConstructors}
 \calls{filterAndFormatConstructors}{sayMessage}
 \calls{filterAndFormatConstructors}{blankList}
@@ -27277,16 +27391,16 @@ o )show
 \calls{filterAndFormatConstructors}{function}
 \usesdollar{filterAndFormatConstructors}{linelength}
 <<defun filterAndFormatConstructors>>=
-(defun |filterAndFormatConstructors| (|constrType| label |patterns|)
+(defun |filterAndFormatConstructors| (|constrType| label patterns)
  (prog (l)
  (declare (special $linelength))
   (return
    (progn (|centerAndHighlight| label $linelength (|specialChar| '|hbar|))
     (setq l
-     (|filterListOfStringsWithFn| |patterns|
+     (|filterListOfStringsWithFn| patterns
        (|whatConstructors| |constrType|)
        (|function| cdr)))
-    (cond (|patterns|
+    (cond (patterns
      (cond
       ((null l)
        (|sayMessage|
@@ -27296,7 +27410,7 @@ o )show
            (cons '|%l|
             (cons "   "
              (cons '|%b|
-              (append (|blankList| |patterns|)
+              (append (|blankList| patterns)
                (cons '|%d| nil))))))))))
       (t
         (|sayMessage|
@@ -27305,7 +27419,7 @@ o )show
            (cons '|%l|
             (cons "   "
              (cons '|%b|
-              (append (|blankList| |patterns|)
+              (append (|blankList| patterns)
                (cons '|%d| nil))))))))))))
     (cond (l (|pp2Cols| l)))))))
 
@@ -31219,6 +31333,8 @@ See Steele Common Lisp 1990 pp305-307
 <<defun fetchOutput>>
 <<defun fillerSpaces>>
 <<defun filterAndFormatConstructors>>
+<<defun filterListOfStrings>>
+<<defun filterListOfStringsWithFn>>
 <<defun findFrameInRing>>
 <<defun firstTokPosn>>
 <<defun fixObjectForPrinting>>
@@ -31281,6 +31397,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun getPreviousMapSubNames>>
 <<defun getProplist>>
 <<defun getStFromMsg>>
+<<defun getSystemCommandLine>>
 <<defun getTraceOption>>
 <<defun getTraceOption,hn>>
 <<defun getTraceOptions>>
@@ -31432,9 +31549,11 @@ See Steele Common Lisp 1990 pp305-307
 <<defun lnPlaceOfOrigin>>
 <<defun lnSetGlobalNum>>
 <<defun lnString>>
+<<defun load>>
 <<defun localdatabase>>
 <<defun localnrlib>>
 <<defun lotsof>>
+<<defun ltrace>>
 
 <<defun make-absolute-filename>>
 <<defun make-appendstream>>
@@ -31620,6 +31739,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun reportOpsFromUnitDirectly1>>
 <<defun reportSpadTrace>>
 <<defun reportUndo>>
+<<defun reportWhatOptions>>
 <<defun reroot>>
 <<defun resetCounters>>
 <<defun resethashtables>>
@@ -31638,6 +31758,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun safeWritify>>
 <<defun sameMsg?>>
 <<defun sameUnionBranch>>
+<<defun satisfiesRegularExpressions>>
 <<defun satisfiesUserLevel>>
 <<defun saveHistory>>
 <<defun saveMapSig>>
@@ -31774,6 +31895,7 @@ See Steele Common Lisp 1990 pp305-307
 <<defun subTypes>>
 <<defun summary>>
 <<defun synonym>>
+<<defun synonymsForUserLevel>>
 <<defun synonymSpad2Cmd>>
 <<defun systemCommand>>
 
