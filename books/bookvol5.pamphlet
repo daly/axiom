@@ -6403,6 +6403,38 @@ output is an old-parser-style s-expression.
 
 @
 
+\defun{float2Sex}{Convert a float to an S-expression}
+\usesdollar{float2Sex}{useBFasDefault}
+<<defun float2Sex>>=
+(defun |float2Sex| (num)
+ (let (exp frac bfForm fracPartString intPart dotIndex expPart mantPart eIndex)
+ (declare (special |$useBFasDefault|))
+  (setq eIndex (search "e" num))
+  (if eIndex
+   (setq mantPart (subseq num 0 eIndex))
+   (setq mantPart num))
+  (if eIndex
+   (setq expPart (read-from-string (subseq num (+ eIndex 1))))
+   (setq expPart 0))
+  (setq dotIndex (search "." mantPart))
+  (if dotIndex
+   (setq intPart (read-from-string (subseq mantPart 0 dotIndex)))
+   (setq intPart (read-from-string mantPart)))
+  (if dotIndex
+   (setq fracPartString (subseq mantPart (+ dotIndex 1)))
+   (setq fracPartString 0))
+  (setq bfForm
+   (make-float intPart (read-from-string fracPartString)
+                         (length fracPartString) expPart))
+  (if |$useBFasDefault|
+   (progn
+    (setq frac (cadr bfForm))
+    (setq exp (cddr bfForm))
+    (list (list '|$elt| (list '|Float|) '|float|) frac exp 10))
+   bfForm)))
+
+@
+
 \defun{pfApplication2Sex}{Change an Application node to an S-expression}
 \calls{pfApplication2Sex}{pfOp2Sex}
 \calls{pfApplication2Sex}{pfApplicationOp}
@@ -6486,6 +6518,101 @@ output is an old-parser-style s-expression.
        (list 'seq x)))
      ((eq op '|by|) (list 'by (|pf2Sex1| args)))
      (t (list op (|pf2Sex1| args))))))))
+
+@
+
+\defun{pfSuchThat2Sex}{Convert a SuchThat node to an S-expression}
+\calls{pfSuchThat2Sex}{pf0TupleParts}
+\calls{pfSuchThat2Sex}{pf2Sex1}
+\calls{pfSuchThat2Sex}{pf2Sex}
+\usesdollar{pfSuchThat2Sex}{predicateList}
+<<defun pfSuchThat2Sex>>=
+(defun |pfSuchThat2Sex| (args)
+ (let (rhsSex lhsSex argList name)
+ (declare (special |$predicateList|))
+  (setq name (gentemp))
+  (setq argList (|pf0TupleParts| args))
+  (setq lhsSex (|pf2Sex1| (car argList)))
+  (setq rhsSex (|pf2Sex| (cadr argList)))
+  (setq |$predicateList|
+   (cons (cons name (cons lhsSex rhsSex)) |$predicateList|))
+  name))
+
+@
+
+\defun{pfOp2Sex}{pfOp2Sex}
+\calls{pfOp2Sex}{pf2Sex1}
+\calls{pfOp2Sex}{pmDontQuote?}
+\calls{pfOp2Sex}{pfSymbol?}
+\usesdollar{pfOp2Sex}{quotedOpList}
+\usesdollar{pfOp2Sex}{insideRule}
+<<defun pfOp2Sex>>=
+(defun |pfOp2Sex| (pf)
+ (let (realOp tmp1 op alreadyQuoted)
+ (declare (special |$quotedOpList| |$insideRule|))
+  (setq alreadyQuoted (|pfSymbol?| pf))
+  (setq op (|pf2Sex1| pf))
+  (cond
+   ((and (consp op)
+         (eq (car op) 'quote)
+         (progn
+          (setq tmp1 (cdr op))
+          (and (consp tmp1)
+               (eq (cdr tmp1) nil)
+               (progn
+                (setq realOp (car tmp1)) t))))
+    (cond
+     ((eq |$insideRule| '|left|) realOp)
+     ((eq |$insideRule| '|right|)
+      (cond
+       ((|pmDontQuote?| realOp) realOp)
+       (t
+        (setq |$quotedOpList| (cons op |$quotedOpList|))
+        op)))
+     ((eq realOp '|\||) realOp)
+     ((eq realOp '|:|) realOp)
+     ((eq realOp '?) realOp)
+     (t op)))
+   (t op))))
+
+@
+
+\defun{pmDontQuote?}{pmDontQuote?}
+\calls{pmDontQuote?}{memq}
+<<defun pmDontQuote?>>=
+(defun |pmDontQuote?| (sy)
+ (memq sy
+  '(+ - * ** ^ / |log| |exp| |pi| |sqrt| |ei| |li| |erf| |ci|
+      |si| |dilog| |sin| |cos| |tan| |cot| |sec| |csc| |asin|
+      |acos| |atan| |acot| |asec| |acsc| |sinh| |cosh| |tanh|
+      |coth| |sech| |csch| |asinh| |acosh| |atanh| |acoth|
+      |asech| |acsc|)))
+
+@
+
+\defun{hasOptArgs?}{hasOptArgs?}
+<<defun hasOptArgs?>>=
+(defun |hasOptArgs?| (argSex)
+ (let (rhs  lhs opt nonOpt tmp1 tmp2)
+ (dolist (|arg| argSex)
+  (cond
+   ((and (consp |arg|)
+         (eq (car |arg|) 'optarg)
+         (progn
+          (setq tmp1 (cdr |arg|))
+          (and (consp tmp1)
+               (progn
+                (setq lhs (car tmp1))
+                (setq tmp2 (cdr tmp1))
+                (and (consp tmp2)
+                     (eq (cdr tmp2) nil)
+                     (progn
+                      (setq rhs (car tmp2))
+                      t))))))
+     (setq opt (cons (list lhs rhs) opt)))
+    (t (setq nonOpt (cons |arg| nonOpt)))))
+ (when opt
+  (nconc (nreverse nonOpt) (list (cons '|construct| (nreverse opt)))))))
 
 @
 
@@ -6774,6 +6901,78 @@ output is an old-parser-style s-expression.
 
 @
 
+\defun{pfLambdaTran}{Convert a Lambda node to an S-expression}
+\calls{pfLambdaTran}{pfLambda?}
+\calls{pfLambdaTran}{pf0LambdaArgs}
+\calls{pfLambdaTran}{pfTyped?}
+\calls{pfLambdaTran}{pfCollectArgTran}
+\calls{pfLambdaTran}{pfTypedId}
+\calls{pfLambdaTran}{pfNothing?}
+\calls{pfLambdaTran}{pfTypedType}
+\calls{pfLambdaTran}{pf2Sex1}
+\calls{pfLambdaTran}{systemError}
+\calls{pfLambdaTran}{pfLambdaRets}
+\calls{pfLambdaTran}{pfLambdaBody}
+<<defun pfLambdaTran>>=
+(defun |pfLambdaTran| (pf)
+ (let (retType argList argTypeList)
+  (cond
+   ((|pfLambda?| pf)
+    (dolist (arg (|pf0LambdaArgs| pf))
+     (if (|pfTyped?| arg)
+      (progn
+       (setq argList
+        (cons (|pfCollectArgTran| (|pfTypedId| arg)) argList))
+       (if (|pfNothing?| (|pfTypedType| arg))
+        (setq argTypeList (cons nil argTypeList))
+        (setq argTypeList 
+         (cons (|pf2Sex1| (|pfTypedType| arg)) argTypeList))))
+      (|systemError| "definition args should be typed")))
+    (setq argList (nreverse argList))
+    (unless (|pfNothing?| (|pfLambdaRets| pf))
+     (setq retType (|pf2Sex1| (|pfLambdaRets| pf))))
+    (setq argTypeList (cons retType (nreverse argTypeList)))
+    (cons argList
+     (list argTypeList 
+           (mapcar #'(lambda (x) nil) argTypeList)
+           (|pf2Sex1| (|pfLambdaBody| pf)))))
+   (t (cons '|id| (list '(nil) '(nil) (|pf2Sex1| pf)))))))
+
+@
+
+\defun{pfCollectArgTran}{pfCollectArgTran}
+\calls{pfCollectArgTran}{pfCollect?}
+\calls{pfCollectArgTran}{pf2sex1}
+\calls{pfCollectArgTran}{pfParts}
+\calls{pfCollectArgTran}{pfCollectIterators}
+\calls{pfCollectArgTran}{pfCollectBody}
+<<defun pfCollectArgTran>>=
+(defun |pfCollectArgTran| (pf)
+ (let (cond tmp2 tmp1 id conds)
+  (cond
+   ((|pfCollect?| pf)
+    (setq conds (mapcar #'|pf2sex1| (|pfParts| (|pfCollectIterators| pf))))
+    (setq id (|pf2Sex1| (|pfCollectBody| pf)))
+    (cond
+     ((and (consp conds)                   ; conds is [ ["|", cond] ] 
+           (eq (cdr conds) nil)
+           (progn
+            (setq tmp1 (car conds))
+            (and (consp tmp1) 
+                 (eq (car tmp1) '|\||)
+                 (progn
+                  (setq tmp2 (cdr tmp1))
+                  (and (consp tmp2)
+                       (eq (cdr tmp2) nil)
+                       (progn
+                        (setq cond (car tmp2))
+                        t))))))
+              (list '|\|| id cond))
+     (t (cons id conds))))
+   (t (|pf2Sex1| pf)))))
+
+@
+
 \defun{pfLambda2Sex}{Convert a Lambda node to an S-expression}
 \calls{pfLambda2Sex}{pfLambdaTran}
 <<defun pfLambda2Sex>>=
@@ -6810,6 +7009,194 @@ output is an old-parser-style s-expression.
    (if |$quotedOpList|
     (list '|rule| lhs rhs (cons '|construct| |$quotedOpList|))
     (list '|rule| lhs rhs)))))
+
+@
+
+\defun{pfLhsRule2Sex}{Convert the Lhs of a Rule to an S-expression}
+\calls{pfLhsRule2Sex}{pf2Sex1}
+\usesdollar{pfLhsRule2Sex}{insideRule}
+<<defun pfLhsRule2Sex>>=
+(defun |pfLhsRule2Sex| (lhs)
+ (let (|$insideRule|)
+ (declare (special |$insideRule|))
+  (setq |$insideRule| '|left|)
+  (|pf2Sex1| lhs)))
+
+@
+
+\defun{pfRhsRule2Sex}{Convert the Rhs of a Rule to an S-expression}
+\calls{pfRhsRule2Sex}{pf2Sex1}
+\usesdollar{pfRhsRule2Sex}{insideRule}
+<<defun pfRhsRule2Sex>>=
+(defun |pfRhsRule2Sex| (rhs)
+ (let (|$insideRule|)
+ (declare (special |$insideRule|))
+  (setq |$insideRule| '|right|)
+  (|pf2Sex1| rhs)))
+
+@
+
+\defun{rulePredicateTran}{Convert a Rule predicate to an S-expression}
+\begin{verbatim}
+;rulePredicateTran rule ==
+;  null $multiVarPredicateList => rule
+;  varList := patternVarsOf [rhs for [.,.,:rhs] in $multiVarPredicateList]
+;  predBody :=
+;    CDR $multiVarPredicateList =>
+;      ['AND, :[:pvarPredTran(rhs, varList) for [.,.,:rhs] in
+;        $multiVarPredicateList]]
+;    [ [.,.,:rhs],:.] := $multiVarPredicateList
+;    pvarPredTran(rhs, varList)
+;  ['suchThat, rule,
+;   ['construct, :[ ["QUOTE", var] for var in varList]],
+;    ['ADEF, '(predicateVariable),
+;     '((Boolean) (List (Expression (Integer)))), '(() ()),
+;      predBody]]
+\end{verbatim}
+\calls{rulePredicateTran}{patternVarsOf}
+\calls{rulePredicateTran}{pvarPredTran}
+\usesdollar{rulePredicateTran}{multiVarPredicateList}
+<<defun rulePredicateTran>>=
+(defun |rulePredicateTran| (rule)
+ (let (predBody varList rhs tmp1 result)
+ (declare (special |$multiVarPredicateList|))
+  (if (null |$multiVarPredicateList|) 
+   rule
+   (progn
+   (setq varList
+    (|patternVarsOf|
+     ((lambda (t1 t2 t3)
+      (loop
+       (cond
+        ((or (atom t2)
+             (progn
+              (setq t3 (car t2))
+              nil))
+           (return (nreverse t1)))
+        (t
+         (and (consp t3)
+              (progn
+               (setq tmp1 (cdr t3))
+               (and (consp tmp1)
+                    (progn
+                     (setq rhs (cdr tmp1))
+                     t)))
+              (setq t1 (cons rhs t1)))))
+       (setq t2 (cdr t2))))
+      nil |$multiVarPredicateList| nil)))
+   (setq predBody
+    (cond
+     ((cdr |$multiVarPredicateList|)
+      (cons 'and
+       ((lambda (t4 t5 t6)
+        (loop
+         (cond
+          ((or (atom t5)
+               (progn
+                (setq t6 (car t5))
+                nil))
+            (return (nreverse t4)))
+          (t
+           (and (consp t6)
+                (progn
+                 (setq tmp1 (cdr t6))
+                 (and (consp tmp1)
+                      (progn
+                       (setq rhs (cdr tmp1))
+                       t)))
+                      (setq t4
+                       (append (reverse (|pvarPredTran| rhs varList))
+                               t4)))))
+         (setq t5 (cdr t5))))
+        nil |$multiVarPredicateList| nil)))
+     (t
+      (progn
+       (setq rhs (cddar |$multiVarPredicateList|))
+       (|pvarPredTran| rhs varList)))))
+   (dolist (var varList) (push (list 'quote var) result))
+   (list '|suchThat| rule
+    (cons '|construct| (nreverse result))
+    (list 'adef '(|predicateVariable|)
+                       '((|Boolean|)
+                         (|List| (|Expression| (|Integer|))))
+                       '(nil nil) predBody))))))
+
+@
+
+\defun{patternVarsOf}{patternVarsOf}
+\calls{patternVarsOf}{patternVarsOf1}
+<<defun patternVarsOf>>=
+(defun |patternVarsOf| (expr)
+ (|patternVarsOf1| expr nil))
+
+@
+
+\defun{patternVarsOf1}{patternVarsOf1}
+\calls{patternVarsOf1}{memq}
+\calls{patternVarsOf1}{patternVarsOf1}
+<<defun patternVarsOf1>>=
+(defun |patternVarsOf1| (expr varList)
+ (let (argl op)
+  (cond
+   ((null expr) varList)
+   ((atom expr)
+    (cond
+     ((null (symbolp expr)) varList)
+     ((memq expr varList) varList)
+     (t (cons expr varList))))
+   ((and (consp expr)
+         (progn
+          (setq op (car expr))
+          (setq argl (cdr expr))
+          t))
+         (progn
+           (dolist (arg argl) 
+            (setq varList (|patternVarsOf1| arg varList)))
+            varList))
+   (t varList))))
+
+@
+
+\defun{pvarPredTran}{pvarPredTran}
+<<defun pvarPredTran>>=
+(defun |pvarPredTran| (rhs varList)
+ (let ((i 0))
+  (dolist (var varList rhs)
+   (setq rhs (nsubst (list '|elt| '|predicateVariable| (incf i)) var rhs)))))
+
+@
+
+\defun{ruleLhsTran}{Convert the Lhs of a Rule node to an S-expression}
+\calls{ruleLhsTran}{patternVarsOf}
+\calls{ruleLhsTran}{nsubst}
+\usesdollar{ruleLhsTran}{predicateList}
+\usesdollar{ruleLhsTran}{multiVarPredicateList}
+<<defun ruleLhsTran>>=
+(defun |ruleLhsTran| (ruleLhs)
+ (let (predicate var vars predRhs predLhs name)
+ (declare (special |$predicateList| |$multiVarPredicateList|))
+ (dolist (pred |$predicateList|)
+  (setq name (car pred))
+  (setq predLhs (cadr pred))
+  (setq predRhs (cddr pred))
+  (setq vars (|patternVarsOf| predRhs))
+  (cond
+   ((cdr vars)
+    (setq ruleLhs (nsubst predLhs name ruleLhs))
+    (setq |$multiVarPredicateList| (cons pred |$multiVarPredicateList|)))
+   (t
+    (setq var (cadr predLhs))
+    (setq predicate
+      (list '|suchThat| predLhs (list 'adef (list var)
+            '((|Boolean|) (|Expression| (|Integer|))) '(nil nil) predRhs)))
+    (setq ruleLhs (nsubst predicate name ruleLhs)))))
+  ruleLhs))
+
+@
+
+\defvar{dotdot}
+<<initvars>>=
+(defvar |$dotdot| '|..|)
 
 @
 
@@ -7666,6 +8053,12 @@ Give message and throw to a recovery point.
   ((|isKeyQualityP| erMsgKey '|stifle|) nil)
   ((null (null optCatFlag)) (car optCatFlag))
   (t t)))
+
+@
+
+\defvar{specificMsgTags}
+<<initvars>>=
+(defvar |$specificMsgTags| nil)
 
 @
 
@@ -26804,38 +27197,38 @@ This reports the traced functions
 \calls{traceDomainConstructor}{traceDomainLocalOps}
 \usesdollar{traceDomainConstructor}{ConstructorCache}
 <<defun traceDomainConstructor>>=
-(defun |traceDomainConstructor| (|domainConstructor| options)
- (prog (|listOfLocalOps| |argl| |domain| |innerDomainConstructor|)
+(defun |traceDomainConstructor| (domainConstructor options)
+ (prog (listOfLocalOps argl domain innerDomainConstructor)
  (declare (special |$ConstructorCache|))
   (return
    (seq
     (progn
-     (|loadFunctor| |domainConstructor|)
-     (setq |listOfLocalOps| (|getOption| 'local options))
-     (when |listOfLocalOps| (|traceDomainLocalOps|))
+     (|loadFunctor| domainConstructor)
+     (setq listOfLocalOps (|getOption| 'local options))
+     (when listOfLocalOps (|traceDomainLocalOps|))
      (cond 
-      ((and |listOfLocalOps| (null (|getOption| 'ops options))) nil)
+      ((and listOfLocalOps (null (|getOption| 'ops options))) nil)
       (t
-       (do ((t2 (hget |$ConstructorCache| |domainConstructor|) (cdr t2))
+       (do ((t2 (hget |$ConstructorCache| domainConstructor) (cdr t2))
             (t3 nil))
            ((or (atom t2) 
                 (progn (setq t3 (car t2)) nil)
                 (progn 
                  (progn 
-                  (setq |argl| (car t3))
-                  (setq |domain| (cddr t3)) t3)
+                  (setq argl (car t3))
+                  (setq domain (cddr t3)) t3)
                  nil))
                 nil)
          (seq
           (exit
-           (|spadTrace| |domain| options))))
-       (setq /tracenames (cons |domainConstructor| /tracenames))
-       (setq |innerDomainConstructor|
-         (intern (concat |domainConstructor| ";")))
+           (|spadTrace| domain options))))
+       (setq /tracenames (cons domainConstructor /tracenames))
+       (setq innerDomainConstructor
+         (intern (concat domainConstructor ";")))
        (cond
-        ((fboundp |innerDomainConstructor|)
-          (setq |domainConstructor| |innerDomainConstructor|)))
-       (embed |domainConstructor|
+        ((fboundp innerDomainConstructor)
+          (setq domainConstructor innerDomainConstructor)))
+       (embed domainConstructor
         (cons 'lambda
          (cons 
           (cons '&rest
@@ -26843,18 +27236,18 @@ This reports the traced functions
           (cons
            (cons 'prog
             (cons
-             (cons '|domain| nil)
+             (cons 'domain nil)
              (cons
               (cons 'setq
-               (cons '|domain|
+               (cons 'domain
                 (cons
-                 (cons 'apply (cons |domainConstructor|
+                 (cons 'apply (cons domainConstructor
                   (cons 'args nil))) nil)))
               (cons
                (cons '|spadTrace|
-                (cons '|domain|
+                (cons 'domain
                  (cons (mkq options) nil)))
-               (cons (cons 'return (cons '|domain| nil)) nil)))))
+               (cons (cons 'return (cons 'domain nil)) nil)))))
            nil))))))))))) 
 
 @
@@ -26870,7 +27263,7 @@ This reports the traced functions
 \calls{untraceDomainConstructor,keepTraced?}{exit}
 \calls{untraceDomainConstructor,keepTraced?}{/untrace,0}
 <<defun untraceDomainConstructor,keepTraced?>>=
-(defun |untraceDomainConstructor,keepTraced?| (df |domainConstructor|)
+(defun |untraceDomainConstructor,keepTraced?| (df domainConstructor)
  (prog (dc)
   (return
    (seq
@@ -26878,7 +27271,7 @@ This reports the traced functions
          (and
           (and (pairp df) (progn (setq dc (qcar df)) t))
            (|isDomainOrPackage| dc))
-         (boot-equal (kar (|devaluate| dc)) |domainConstructor|))
+         (boot-equal (kar (|devaluate| dc)) domainConstructor))
      (exit (seq (|/UNTRACE,0| (cons dc nil)) (exit nil))))
     (exit t))))) 
 
@@ -26893,8 +27286,8 @@ This reports the traced functions
 \calls{untraceDomainConstructor}{delete}
 \uses{untraceDomainConstructor}{/tracenames}
 <<defun untraceDomainConstructor>>=
-(defun |untraceDomainConstructor| (|domainConstructor|)
- (prog (|innerDomainConstructor|)
+(defun |untraceDomainConstructor| (domainConstructor)
+ (prog (innerDomainConstructor)
  (declare (special /tracenames))
   (return
    (seq
@@ -26908,14 +27301,14 @@ This reports the traced functions
          (seq
           (exit
            (cond ((|untraceDomainConstructor,keepTraced?|
-                    df |domainConstructor|)
+                    df domainConstructor)
              (setq t0 (cons df t0))))))))))
-     (setq |innerDomainConstructor|
-      (intern (concat |domainConstructor| ";")))
+     (setq innerDomainConstructor
+      (intern (concat domainConstructor ";")))
      (cond
-      ((fboundp |innerDomainConstructor|) (unembed |innerDomainConstructor|))
-      (t (unembed |domainConstructor|)))
-     (setq /tracenames (|delete| |domainConstructor| /tracenames))))))) 
+      ((fboundp innerDomainConstructor) (unembed innerDomainConstructor))
+      (t (unembed domainConstructor)))
+     (setq /tracenames (|delete| domainConstructor /tracenames))))))) 
 
 @
 
@@ -27440,7 +27833,7 @@ to convert the data into type "Expression"
 \usesdollar{spadUntrace}{letAssoc}
 \uses{spadUntrace}{/tracenames}
 <<defun spadUntrace>>=
-(defun |spadUntrace| (|domain| options)
+(defun |spadUntrace| (domain options)
  (prog (anyiftrue listofoperations domainid |pair| sigslotnumberalist 
         op sig n |lv| |bpiPointer| tracename alias |assocPair| 
         |newSigSlotNumberAlist|)
@@ -27448,14 +27841,14 @@ to convert the data into type "Expression"
   (return
    (seq
     (cond
-     ((null (|isDomainOrPackage| |domain|))
+     ((null (|isDomainOrPackage| domain))
        (|userError| "bad argument to untrace"))
      (t
       (setq anyiftrue (null options))
       (setq listofoperations (|getOption| '|ops:| options))
-      (setq domainid (|devaluate| |domain|))
+      (setq domainid (|devaluate| domain))
       (cond
-       ((null (setq |pair| (|assoc| |domain| /tracenames)))
+       ((null (setq |pair| (|assoc| domain /tracenames)))
          (|sayMSG| 
           (cons "   No functions in" 
            (append
@@ -27484,7 +27877,7 @@ to convert the data into type "Expression"
             ((or anyiftrue (memq op listofoperations))
               (progn
                 (bpiuntrace tracename alias)
-                (rplac (car (elt |domain| n)) |bpiPointer|)
+                (rplac (car (elt domain n)) |bpiPointer|)
                 (rplac (cdddr |pair|) nil)
                 (cond
                  ((setq |assocPair|
@@ -27507,7 +27900,7 @@ to convert the data into type "Expression"
          (|newSigSlotNumberAlist| 
           (rplac (cdr |pair|) |newSigSlotNumberAlist|))
          (t 
-          (setq /tracenames (delasc |domain| /tracenames))
+          (setq /tracenames (delasc domain /tracenames))
           (|spadReply|))))))))))) 
 
 @
@@ -34134,6 +34527,7 @@ This needs to work off the internal exposure list, not the file.
 <<defun fixObjectForPrinting>>
 <<defun flatten>>
 <<defun flattenOperationAlist>>
+<<defun float2Sex>>
 <<defun fnameDirectory>>
 <<defun fnameExists?>>
 <<defun fnameMake>>
@@ -34209,6 +34603,7 @@ This needs to work off the internal exposure list, not the file.
 <<defun handleNoParseCommands>>
 <<defun handleParsedSystemCommands>>
 <<defun handleTokensizeSystemCommands>>
+<<defun hasOptArgs?>>
 <<defun hasOption>>
 <<defun hasPair>>
 <<defun help>>
@@ -34489,6 +34884,8 @@ This needs to work off the internal exposure list, not the file.
 <<defun pathnameName>>
 <<defun pathnameType>>
 <<defun pathnameTypeId>>
+<<defun patternVarsOf>>
+<<defun patternVarsOf1>>
 <<defun pcounters>>
 <<defun pfAbSynOp>>
 <<defun pfAbSynOp?>>
@@ -34506,6 +34903,7 @@ This needs to work off the internal exposure list, not the file.
 <<defun pfCoercetoExpr>>
 <<defun pfCoercetoType>>
 <<defun pfCollect?>>
+<<defun pfCollectArgTran>>
 <<defun pfCollect2Sex>>
 <<defun pfDefinition?>>
 <<defun pfDefinition2Sex>>
@@ -34532,7 +34930,9 @@ This needs to work off the internal exposure list, not the file.
 <<defun pfIterate?>>
 <<defun pfLambda?>>
 <<defun pfLambda2Sex>>
+<<defun pfLambdaTran>>
 <<defun pfLeafToken>>
+<<defun pfLhsRule2Sex>>
 <<defun pfListOf>>
 <<defun pfLiteral?>>
 <<defun pfLiteralClass>>
@@ -34550,6 +34950,7 @@ This needs to work off the internal exposure list, not the file.
 <<defun pfNothing?>>
 <<defun pfNovalue?>>
 <<defun pfNovalueExpr>>
+<<defun pfOp2Sex>>
 <<defun pfOr?>>
 <<defun pfOrLeft>>
 <<defun pfOrRight>>
@@ -34562,6 +34963,7 @@ This needs to work off the internal exposure list, not the file.
 <<defun pfRestrictType>>
 <<defun pfReturn?>>
 <<defun pfReturnExpr>>
+<<defun pfRhsRule2Sex>>
 <<defun pfRule?>>
 <<defun pfRule2Sex>>
 <<defun pfSequence?>>
@@ -34569,6 +34971,7 @@ This needs to work off the internal exposure list, not the file.
 <<defun pfSequence2Sex0>>
 <<defun pfSuchthat?>>
 <<defun pfSuchthatCond>>
+<<defun pfSuchThat2Sex>>
 <<defun pfSymbol?>>
 <<defun pfSymbolSymbol>>
 <<defun pfTagged?>>
@@ -34608,6 +35011,7 @@ This needs to work off the internal exposure list, not the file.
 <<defun pilePlusComment>>
 <<defun pilePlusComments>>
 <<defun pileTree>>
+<<defun pmDontQuote?>>
 <<defun poCharPosn>>
 <<defun poFileName>>
 <<defun poGetLineObject>>
@@ -34651,6 +35055,7 @@ This needs to work off the internal exposure list, not the file.
 <<defun punctuation?>>
 <<defun putDatabaseStuff>>
 <<defun putHist>>
+<<defun pvarPredTran>>
 
 <<defun qenum>>
 <<defun queryClients>>
@@ -34702,6 +35107,8 @@ This needs to work off the internal exposure list, not the file.
 <<defun /rf-1>>
 <<defun /rq>>
 <<defun rread>>
+<<defun ruleLhsTran>>
+<<defun rulePredicateTran>>
 <<defun runspad>>
 <<defun rwrite>>
 
