@@ -17,31 +17,6 @@
 ;-- rhs of assignment changed from npStatement to npGives
 ;
 
-;npNext() ==
-;     $inputStream := CDR($inputStream)
-;     npFirstTok()
-
-;npState()==cons($inputStream,$stack)
-(DEFUN |npState| ()
- (PROG NIL
- (DECLARE (SPECIAL |$stack| |$inputStream|))
-  (RETURN
-   (CONS |$inputStream| |$stack|))))
-
-;npRestore(x)==
-;      $inputStream:=CAR x
-;      npFirstTok()
-;      $stack:=CDR x
-;      true
-(DEFUN |npRestore| (|x|)
- (PROG NIL 
- (DECLARE (SPECIAL |$stack| |$inputStream|))
-  (RETURN
-   (PROGN
-    (SETQ |$inputStream| (CAR |x|))
-    (|npFirstTok|)
-    (SETQ |$stack| (CDR |x|)) T))))
-
 ;npPushId()==
 ;   a:=GET($ttok,'INFGENERIC)
 ;   $ttok:= if a then a else $ttok
@@ -507,40 +482,7 @@
     ((|npEqKey| (QUOTE BACKSET)) (|npEqKey| (QUOTE ELSE)))
     ((QUOTE T) (|npEqKey| (QUOTE ELSE)))))))
 
-;npWConditional f==
-;    if npConditional f
-;    then npPush pfTweakIf npPop1()
-;    else false
-(DEFUN |npWConditional| (|f|)
- (PROG NIL
-  (RETURN
-   (COND
-    ((|npConditional| |f|) (|npPush| (|pfTweakIf| (|npPop1|))))
-    ((QUOTE T) NIL)))))
-
 ;-- Parsing functions
-;
-;-- peek for keyword s, no advance of token stream
-;
-;npEqPeek s ==  EQ(CAAR $stok,"key") and EQ(s,$ttok)
-(DEFUN |npEqPeek| (|s|)
- (PROG NIL
- (DECLARE (SPECIAL |$ttok| |$stok|))
-  (RETURN
-   (AND (EQ (CAAR |$stok|) (QUOTE |key|)) (EQ |s| |$ttok|)))))
-
-;-- test for keyword s, if found advance token stream
-;
-;npEqKey s ==
-;    EQ(CAAR $stok,"key") and EQ(s,$ttok) and npNext()
-(DEFUN |npEqKey| (|s|)
- (PROG NIL
- (DECLARE (SPECIAL |$ttok| |$stok|))
-  (RETURN
-   (AND
-    (EQ (CAAR |$stok|) (QUOTE |key|))
-    (EQ |s| |$ttok|)
-    (|npNext|)))))
 
 ;$npTokToNames:= ["~","#","[]","{}", "[||]","{||}"]
 (EVAL-WHEN (EVAL LOAD)
@@ -1066,20 +1008,6 @@
   (RETURN
    (|npLeftAssoc| (QUOTE (IS ISNT)) (FUNCTION |npSuch|)))))
 
-;npType()    ==  npMatch()  and
-;                a:=npPop1()
-;                npWith(a) or npPush a
-(DEFUN |npType| ()
- (PROG (|a|)
-  (RETURN
-   (AND
-    (|npMatch|)
-    (PROGN
-     (SETQ |a| (|npPop1|))
-     (OR
-      (|npWith| |a|)
-      (|npPush| |a|)))))))
-
 ;npADD()    ==   npType() and
 ;                a:=npPop1()
 ;                npAdd(a) or npPush a
@@ -1105,14 +1033,6 @@
  (PROG NIL
   (RETURN
    (OR (|npConditionalStatement|) (|npADD|)))))
-
-;npCommaBackSet()== npEqKey "COMMA" and (npEqKey "BACKSET" or true)
-(DEFUN |npCommaBackSet| ()
- (PROG NIL
-  (RETURN
-   (AND
-    (|npEqKey| (QUOTE COMMA))
-    (OR (|npEqKey| (QUOTE BACKSET)) T)))))
 
 ;npExpress()==
 ;     npExpress1() and
@@ -1302,12 +1222,6 @@
   (RETURN
    (|npListing| (FUNCTION |npAssignVariableName|)))))
 
-;npExit()== npBackTrack(function npAssign,"EXIT",function npPileExit)
-(DEFUN |npExit| ()
- (PROG NIL
-  (RETURN
-   (|npBackTrack| (FUNCTION |npAssign|) 'EXIT (FUNCTION |npPileExit|)))))
-
 ;npPileExit()==
 ;     npAssign() and (npEqKey "EXIT" or npTrap()) and
 ;         (npStatement() or npTrap())
@@ -1320,19 +1234,6 @@
     (OR (|npEqKey| (QUOTE EXIT)) (|npTrap|))
     (OR (|npStatement|) (|npTrap|))
     (|npPush| (|pfExit| (|npPop2|) (|npPop1|)))))))
-
-;npGives()== npBackTrack(function npExit,"GIVES",function npLambda)
-(DEFUN |npGives| ()
- (PROG NIL
-  (RETURN
-   (|npBackTrack| (FUNCTION |npExit|) (QUOTE GIVES) (FUNCTION |npLambda|)))))
-
-;npDefinitionOrStatement()==
-;            npBackTrack(function npGives,"DEF",function npDef)
-(DEFUN |npDefinitionOrStatement| ()
- (PROG NIL
-  (RETURN
-   (|npBackTrack| (FUNCTION |npGives|) (QUOTE DEF) (FUNCTION |npDef|)))))
 
 ;npVoid()== npAndOr("DO",function npStatement,function pfNovalue)
 (DEFUN |npVoid| ()
@@ -1615,99 +1516,6 @@
     (OR (|npDefinitionOrStatement|) (|npTrap|))
     (|npPush| (LIST (|pfAdd| (|pfNothing|) (|npPop1|) (|pfNothing|))))))))
 
-;npWith(extra)==
-;     npEqKey "WITH" and
-;       a:=npState()
-;       npCategoryL() or npTrap()
-;       npEqPeek "IN" =>
-;               npRestore a
-;               (npVariable() or npTrap()) and
-;                     npCompMissing "IN"  and
-;                          (npCategoryL() or npTrap()) and
-;                              npPush pfWith(npPop2(),npPop1(),extra)
-;       npPush pfWith(pfNothing(),npPop1(),extra)
-(DEFUN |npWith| (|extra|)
- (PROG (|a|)
-  (RETURN
-   (AND
-    (|npEqKey| (QUOTE WITH))
-    (PROGN
-     (SETQ |a| (|npState|))
-     (OR (|npCategoryL|) (|npTrap|))
-     (COND
-      ((|npEqPeek| (QUOTE IN))
-       (PROGN
-        (|npRestore| |a|)
-        (AND
-         (OR (|npVariable|) (|npTrap|))
-         (|npCompMissing| (QUOTE IN))
-         (OR (|npCategoryL|) (|npTrap|))
-         (|npPush| (|pfWith| (|npPop2|) (|npPop1|) |extra|)))))
-      ((QUOTE T) (|npPush| (|pfWith| (|pfNothing|) (|npPop1|) |extra|)))))))))
-
-;npCategoryL()== npCategory() and npPush pfUnSequence npPop1 ()
-(DEFUN |npCategoryL| ()
- (PROG NIL
-  (RETURN
-   (AND 
-    (|npCategory|)
-    (|npPush| (|pfUnSequence| (|npPop1|)))))))
-
-;pfUnSequence x==
-;        pfSequence? x =>   pfListOf pfAppend pf0SequenceArgs  x
-;        pfListOf x
-(DEFUN |pfUnSequence| (|x|)
- (PROG NIL
-  (RETURN
-   (COND
-    ((|pfSequence?| |x|) (|pfListOf| (|pfAppend| (|pf0SequenceArgs| |x|))))
-    ((QUOTE T) (|pfListOf| |x|))))))
-
-;npCategory()== npPP function npSCategory
-(DEFUN |npCategory| ()
- (PROG NIL
-  (RETURN
-   (|npPP| (FUNCTION |npSCategory|)))))
-
-;npSCategory()==
-;  if npWConditional function npCategoryL
-;  then  npPush [npPop1()]
-;  else
-;    if npDefaultValue()
-;    then true
-;    else
-;      a:=npState()
-;      if npPrimary()
-;      then if npEqPeek "COLON"
-;           then
-;              npRestore a
-;              npSignature()
-;           else
-;              npRestore a
-;              npApplication() and npPush [pfAttribute (npPop1())]
-;                           or npTrap()
-;
-;      else false
-(DEFUN |npSCategory| ()
- (PROG (|a|)
-  (RETURN
-   (COND
-    ((|npWConditional| (FUNCTION |npCategoryL|)) (|npPush| (LIST (|npPop1|))))
-    ((|npDefaultValue|) T)
-    (#0=(QUOTE T)
-     (SETQ |a| (|npState|))
-     (COND
-      ((|npPrimary|)
-       (COND
-        ((|npEqPeek| (QUOTE COLON)) (|npRestore| |a|) (|npSignature|))
-        (#0#
-         (|npRestore| |a|)
-         (OR
-          (AND (|npApplication|) (|npPush| (LIST (|pfAttribute| (|npPop1|)))))
-          (|npTrap|)))))
-      (#0# NIL)))))))
-
-;
 ;npSignatureDefinee()==
 ;   npName() or npInfixOperator() or npPrefixColon()
 (DEFUN |npSignatureDefinee| ()
@@ -1780,15 +1588,6 @@
    (AND
     (|npName|)
     (OR (|npDecl|) (|npPush| (|pfTyped| (|npPop1|) (|pfNothing|))))))))
-
-;npVariable()== npParenthesized function npVariablelist or
-;      (npVariableName() and npPush pfListOf [npPop1()])
-(DEFUN |npVariable| ()
- (PROG NIL
-  (RETURN
-   (OR
-    (|npParenthesized| (FUNCTION |npVariablelist|))
-    (AND (|npVariableName|) (|npPush| (|pfListOf| (LIST (|npPop1|)))))))))
 
 ;npVariablelist()== npListing function npVariableName
 (DEFUN |npVariablelist| ()
@@ -1977,34 +1776,6 @@
    (AND
     (|npPileBracketed| (FUNCTION |npPileDefinitionlist|))
     (|npPush| (|pfSequence| (|pfListOf| (|npPop1|))))))))
-
-;
-;npLambda()==
-;     (npVariable() and
-;      ((npLambda() or npTrap()) and
-;       npPush pfLam(npPop2(),npPop1()))) or
-;         npEqKey "GIVES" and (npDefinitionOrStatement() or npTrap()) or
-;          npEqKey "COLON" and (npType() or npTrap()) and
-;            npEqKey "GIVES" and (npDefinitionOrStatement() or npTrap())
-;               and
-;                  npPush pfReturnTyped(npPop2(),npPop1())
-(DEFUN |npLambda| ()
- (PROG NIL
-  (RETURN
-   (OR
-    (AND
-     (|npVariable|)
-     (OR (|npLambda|) (|npTrap|))
-     (|npPush| (|pfLam| (|npPop2|) (|npPop1|))))
-    (AND
-     (|npEqKey| (QUOTE GIVES))
-     (OR (|npDefinitionOrStatement|) (|npTrap|)))
-    (AND
-     (|npEqKey| (QUOTE COLON))
-     (OR (|npType|) (|npTrap|))
-     (|npEqKey| (QUOTE GIVES))
-     (OR (|npDefinitionOrStatement|) (|npTrap|))
-     (|npPush| (|pfReturnTyped| (|npPop2|) (|npPop1|))))))))
 
 ;npDef()==
 ;    npMatch() =>
