@@ -18,9 +18,6 @@
   (PROG () (RETURN (|tokPosn| |form|))))
 
 ;--% LEAVES
-;pfId(expr)               == pfLeaf('id, expr)
-
-(DEFUN |pfId| (|expr|) (PROG () (RETURN (|pfLeaf| '|id| |expr|))))
 
 ;pfIdPos(expr,pos)        == pfLeaf('id,expr,pos)
 
@@ -131,10 +128,6 @@
 ;pfParen(a,part)==part
 
 (DEFUN |pfParen| (|a| |part|) (PROG () (RETURN |part|)))
-
-;pfPile(part)==part
-
-(DEFUN |pfPile| (|part|) (PROG () (RETURN |part|)))
 
 ;pfSpread(l,t)==  [pfTyped(i,t) for i in l]
 
@@ -412,14 +405,6 @@
 
 (DEFUN |pfMacroRhs| (|pf|) (PROG () (RETURN (CADDR |pf|))))
 
-;-- Definition  := (LhsItems:  [Typed], Rhs:  Expr)
-
-;pfDefinition(pflhsitems, pfrhs) == pfTree('Definition, [pflhsitems, pfrhs])
-
-(DEFUN |pfDefinition| (|pflhsitems| |pfrhs|)
-  (PROG ()
-    (RETURN (|pfTree| '|Definition| (LIST |pflhsitems| |pfrhs|)))))
-
 ;-- Assign      := (LhsItems:  [AssLhs], Rhs:  Expr)
 ;
 ;pfAssign(pflhsitems, pfrhs) == pfTree('Assign, [pflhsitems, pfrhs])
@@ -476,53 +461,6 @@
 (DEFUN |pfQualType| (|pftype| |pfqual|)
   (PROG () (RETURN (|pfTree| '|QualType| (LIST |pftype| |pfqual|)))))
 
-;pfSuch(x,y)== pfInfApplication(pfId "|",x,y)
-
-(DEFUN |pfSuch| (|x| |y|)
-  (PROG () (RETURN (|pfInfApplication| (|pfId| '|\||) |x| |y|))))
-
-;pfTaggedToTyped x==
-;  rt:=if pfTagged? x then pfTaggedExpr x else pfNothing()
-;  form:= if pfTagged? x then pfTaggedTag x else x
-;  not pfId? form =>
-;      a:=pfId GENSYM()
-;      pfTyped(pfSuch(a,
-;           pfInfApplication (pfId "=", a,form)),rt)
-;  pfTyped(form,rt)
-
-(DEFUN |pfTaggedToTyped| (|x|)
-  (PROG (|a| |form| |rt|)
-    (RETURN
-      (PROGN
-        (SETQ |rt|
-              (COND
-                ((|pfTagged?| |x|) (|pfTaggedExpr| |x|))
-                ('T (|pfNothing|))))
-        (SETQ |form|
-              (COND ((|pfTagged?| |x|) (|pfTaggedTag| |x|)) ('T |x|)))
-        (COND
-          ((NULL (|pfId?| |form|))
-           (PROGN
-             (SETQ |a| (|pfId| (GENSYM)))
-             (|pfTyped|
-                 (|pfSuch| |a|
-                     (|pfInfApplication| (|pfId| '=) |a| |form|))
-                 |rt|)))
-          ('T (|pfTyped| |form| |rt|)))))))
-
-;pfTaggedToTyped1 x==
-;    pfCollect1? x => pfCollectVariable1 x
-;    pfDefinition? x => pfTyped(x,pfNothing())
-;    pfTaggedToTyped x
-
-(DEFUN |pfTaggedToTyped1| (|x|)
-  (PROG ()
-    (RETURN
-      (COND
-        ((|pfCollect1?| |x|) (|pfCollectVariable1| |x|))
-        ((|pfDefinition?| |x|) (|pfTyped| |x| (|pfNothing|)))
-        ('T (|pfTaggedToTyped| |x|))))))
-
 ;pfCollectVariable1 x==
 ;      a := pfApplicationArg x
 ;      var:=first pf0TupleParts a
@@ -540,98 +478,6 @@
         (|pfTyped|
             (|pfSuch| (|pfTypedId| |id|) (CADR (|pf0TupleParts| |a|)))
             (|pfTypedType| |id|))))))
-
-;pfPushBody(t,args,body)==
-;        if null args
-;        then  body
-;        else if null rest args
-;              then  pfLambda(first args,t,body)
-;              else
-;                 pfLambda(first args,pfNothing(),
-;                     pfPushBody(t,rest args,body))
-
-(DEFUN |pfPushBody| (|t| |args| |body|)
-  (PROG ()
-    (RETURN
-      (COND
-        ((NULL |args|) |body|)
-        ((NULL (CDR |args|)) (|pfLambda| (CAR |args|) |t| |body|))
-        ('T
-         (|pfLambda| (CAR |args|) (|pfNothing|)
-             (|pfPushBody| |t| (CDR |args|) |body|)))))))
-
-;pfCheckItOut x ==
-;  rt:=if pfTagged? x then pfTaggedExpr x else pfNothing()
-;  form:= if pfTagged? x then pfTaggedTag x else x
-;  pfId? form => [pfListOf [pfTyped(form,rt)],nil,rt]
-;  pfCollect1? form =>
-;                [pfListOf [pfCollectVariable1 form],nil,rt]
-;  pfTuple? form =>
-;       [pfListOf [pfTaggedToTyped i for i in pf0TupleParts form],nil,rt]
-;  pfDefinition? form =>
-;       [pfListOf [pfTyped(form,pfNothing())],nil,rt]
-;  pfApplication? form =>
-;          ls:=pfFlattenApp form
-;          op:= pfTaggedToTyped1 first ls
-;          args:=[pfTransformArg i for i in rest ls]
-;          [pfListOf [op],args,rt]
-;  npTrapForm form
-
-(DEFUN |pfCheckItOut| (|x|)
-  (PROG (|args| |op| |ls| |form| |rt|)
-    (RETURN
-      (PROGN
-        (SETQ |rt|
-              (COND
-                ((|pfTagged?| |x|) (|pfTaggedExpr| |x|))
-                ('T (|pfNothing|))))
-        (SETQ |form|
-              (COND ((|pfTagged?| |x|) (|pfTaggedTag| |x|)) ('T |x|)))
-        (COND
-          ((|pfId?| |form|)
-           (LIST (|pfListOf| (LIST (|pfTyped| |form| |rt|))) NIL |rt|))
-          ((|pfCollect1?| |form|)
-           (LIST (|pfListOf| (LIST (|pfCollectVariable1| |form|))) NIL
-                 |rt|))
-          ((|pfTuple?| |form|)
-           (LIST (|pfListOf|
-                     ((LAMBDA (|bfVar#6| |bfVar#5| |i|)
-                        (LOOP
-                          (COND
-                            ((OR (ATOM |bfVar#5|)
-                                 (PROGN
-                                   (SETQ |i| (CAR |bfVar#5|))
-                                   NIL))
-                             (RETURN (NREVERSE |bfVar#6|)))
-                            ('T
-                             (SETQ |bfVar#6|
-                                   (CONS (|pfTaggedToTyped| |i|)
-                                    |bfVar#6|))))
-                          (SETQ |bfVar#5| (CDR |bfVar#5|))))
-                      NIL (|pf0TupleParts| |form|) NIL))
-                 NIL |rt|))
-          ((|pfDefinition?| |form|)
-           (LIST (|pfListOf| (LIST (|pfTyped| |form| (|pfNothing|))))
-                 NIL |rt|))
-          ((|pfApplication?| |form|)
-           (PROGN
-             (SETQ |ls| (|pfFlattenApp| |form|))
-             (SETQ |op| (|pfTaggedToTyped1| (CAR |ls|)))
-             (SETQ |args|
-                   ((LAMBDA (|bfVar#8| |bfVar#7| |i|)
-                      (LOOP
-                        (COND
-                          ((OR (ATOM |bfVar#7|)
-                               (PROGN (SETQ |i| (CAR |bfVar#7|)) NIL))
-                           (RETURN (NREVERSE |bfVar#8|)))
-                          ('T
-                           (SETQ |bfVar#8|
-                                 (CONS (|pfTransformArg| |i|)
-                                       |bfVar#8|))))
-                        (SETQ |bfVar#7| (CDR |bfVar#7|))))
-                    NIL (CDR |ls|) NIL))
-             (LIST (|pfListOf| (LIST |op|)) |args| |rt|)))
-          ('T (|npTrapForm| |form|)))))))
 
 ;pfCollect1? x==
 ;        pfApplication? x =>
@@ -651,31 +497,6 @@
              ((|pfId?| |a|) (EQ (|pfIdSymbol| |a|) '|\||))
              ('T NIL))))
         ('T NIL)))))
-
-;pfTransformArg  args==
-;          argl:= if pfTuple? args then pf0TupleParts args else [args]
-;          pfListOf [pfTaggedToTyped1 i for i in argl]
-
-(DEFUN |pfTransformArg| (|args|)
-  (PROG (|argl|)
-    (RETURN
-      (PROGN
-        (SETQ |argl|
-              (COND
-                ((|pfTuple?| |args|) (|pf0TupleParts| |args|))
-                ('T (LIST |args|))))
-        (|pfListOf|
-            ((LAMBDA (|bfVar#10| |bfVar#9| |i|)
-               (LOOP
-                 (COND
-                   ((OR (ATOM |bfVar#9|)
-                        (PROGN (SETQ |i| (CAR |bfVar#9|)) NIL))
-                    (RETURN (NREVERSE |bfVar#10|)))
-                   ('T
-                    (SETQ |bfVar#10|
-                          (CONS (|pfTaggedToTyped1| |i|) |bfVar#10|))))
-                 (SETQ |bfVar#9| (CDR |bfVar#9|))))
-             NIL |argl| NIL))))))
 
 ;pfCheckMacroOut form ==
 ;  pfId? form => [form,nil]
