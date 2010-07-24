@@ -1,4 +1,4 @@
-VERSION:="Axiom (May 2010)"
+VERSION:="Axiom (July 2010)"
 
 ##### special paths
 SPD:=$(shell pwd)
