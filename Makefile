@@ -1,8 +1,43 @@
-VERSION:="Axiom (May 2010)"
+VERSION:="Axiom (July 2010)"
+
+##### special paths
 SPD:=$(shell pwd)
-SYS:=$(notdir $(AXIOM))
-SPAD:=${SPD}/mnt/${SYS}
+SRC:=${SPD}/src
 LSP:=${SPD}/lsp
+INT:=${SPD}/int
+OBJ:=${SPD}/obj
+MNT:=${SPD}/mnt
+TMP:=${OBJ}/tmp
+ZIPS:=${SPD}/zips
+BOOKS:=${SPD}/books
+SPAD:=${SPD}/mnt/${SYS}
+SRCDIRS:="interpdir sharedir algebradir etcdir clefdir docdir \
+          graphdir smandir hyperdir browserdir inputdir"
+
+SYS:=$(notdir $(AXIOM))
+DAASE:=${SRC}/share
+
+SPADBIN:=${MNT}/${SYS}/bin
+DOCUMENT:=${SPADBIN}/document
+
+##### installation paths
+DESTDIR:=/usr/local/axiom
+COMMAND:=${DESTDIR}/mnt/${SYS}/bin/axiom
+
+##### functions we need
+AWK:=gawk 
+PATCH:=patch
+RANLIB:=ranlib
+TAR:=tar
+TOUCH:=touch
+UNCOMPRESS:=gunzip
+
+##### noweb
+TANGLE:=${SPADBIN}/lib/notangle
+WEAVE:=${SPADBIN}/lib/noweave
+
+##### lisp related variables
+BYE:=bye
 #GCLVERSION=gcl-2.4.1
 #GCLVERSION=gcl-2.5
 #GCLVERSION=gcl-2.5.2
@@ -18,37 +53,74 @@ LSP:=${SPD}/lsp
 #GCLVERSION=gcl-2.6.8pre2
 #GCLVERSION=gcl-2.6.8pre3 
 GCLVERSION=gcl-2.6.8pre4
-AWK:=gawk
 GCLDIR:=${LSP}/${GCLVERSION}
-SRC:=${SPD}/src
-INT:=${SPD}/int
-OBJ:=${SPD}/obj
-MNT:=${SPD}/mnt
-ZIPS:=${SPD}/zips
-BOOKS:=${SPD}/books
-TMP:=${OBJ}/tmp
-SPADBIN:=${MNT}/${SYS}/bin
+GCLOPTS="--enable-vssize=65536*2 --enable-locbfd --disable-dynsysbfd \
+         --disable-statsysbfd --enable-maxpage=512*1024 --disable-xgcl \
+         --disable-tkconfig"
+LISP:=lsp
+
+##### C related variables
 INC:=${SPD}/src/include
-CCLBASE:=${OBJ}/${SYS}/ccl/ccllisp
-DESTDIR:=/usr/local/axiom
-COMMAND:=${DESTDIR}/mnt/${SYS}/bin/axiom
-DOCUMENT:=${SPADBIN}/document
-TANGLE:=${SPADBIN}/lib/notangle
-WEAVE:=${SPADBIN}/lib/noweave
+PLF:=LINUXplatform
+CCF:="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
+CC:=gcc
+XLIB:=/usr/X11R6/lib
+#LDF:=" -L/usr/X11R6/lib -L/usr/lib ${XLIB}/libXpm.a -lXpm"
+LDF:=" -L/usr/X11R6/lib -L/usr/lib  -lXpm"
+O:=o
+
+##### command line control
 NOISE:="-o ${TMP}/trace"
-PATCH:=patch
-UNCOMPRESS:=gunzip
+PART:=	cprogs
+SUBPART:= everything
+RUNTYPE:=serial
+TESTSET:=catstests
 
-PART=	cprogs
-SUBPART= everything
 
-
-ENV:= SPAD=${SPAD} SYS=${SYS} SPD=${SPD} LSP=${LSP} GCLDIR=${GCLDIR} \
-     SRC=${SRC} INT=${INT} OBJ=${OBJ} MNT=${MNT} ZIPS=${ZIPS} TMP=${TMP} \
-     SPADBIN=${SPADBIN} INC=${INC} CCLBASE=${CCLBASE} PART=${PART} \
-     SUBPART=${SUBPART} NOISE=${NOISE} GCLVERSION=${GCLVERSION} \
-     TANGLE=${TANGLE} VERSION=${VERSION} PATCH=${PATCH} DOCUMENT=${DOCUMENT} \
-     WEAVE=${WEAVE} UNCOMPRESS=${UNCOMPRESS} BOOKS=${BOOKS}
+ENV:= \
+AWK=${AWK} \
+BOOKS=${BOOKS} \
+BYE=${BYE} \
+CC=${CC} \
+CCF=${CCF} \
+COMMAND=${COMMAND} \
+DAASE=${DAASE} \
+DESTDIR=${DESTDIR} \
+DOCUMENT=${DOCUMENT} \
+GCLDIR=${GCLDIR} \
+GCLOPTS=${GCLOPTS} \
+GCLVERSION=${GCLVERSION} \
+INC=${INC} \
+INT=${INT} \
+LDF=${LDF} \
+LISP=${LISP} \
+LSP=${LSP} \
+MNT=${MNT} \
+NOISE=${NOISE} \
+O=${O} \
+OBJ=${OBJ} \
+PART=${PART} \
+PATCH=${PATCH} \
+PLF=${PLF} \
+RANLIB=${RANLIB} \
+RUNTYPE=${RUNTYPE} \
+SPAD=${SPAD} \
+SPADBIN=${SPADBIN} \
+SPD=${SPD} \
+SRC=${SRC} \
+SRCDIRS=${SRCDIRS} \
+SUBPART=${SUBPART} \
+SYS=${SYS} \
+TANGLE=${TANGLE} \
+TAR=${TAR} \
+TESTSET=${TESTSET} \
+TMP=${TMP} \
+TOUCH=${TOUCH} \
+UNCOMPRESS=${UNCOMPRESS} \
+VERSION=${VERSION} \
+WEAVE=${WEAVE} \
+XLIB=${XLIB} \
+ZIPS=${ZIPS} 
 
 all: noweb ${MNT}/${SYS}/bin/document
 	@ echo p1 making a parallel system build
@@ -58,32 +130,77 @@ all: noweb ${MNT}/${SYS}/bin/document
 	@ ${DOCUMENT} Makefile
 	@ mkdir -p ${MNT}/${SYS}/doc/src
 	@ cp Makefile.dvi ${MNT}/${SYS}/doc/src/root.Makefile.dvi
-	@ echo p2 starting parallel make of books
-	@ echo p3 ${SPD}/books/Makefile from ${SPD}/books/Makefile.pamphlet
-	@ ( cd ${SPD}/books ; \
-           ${DOCUMENT} ${NOISE} Makefile ; \
-           cp Makefile.dvi ${MNT}/${SYS}/doc/src/books.Makefile.dvi ; \
-	   ${ENV} ${MAKE} & )
-	@ echo p4 starting parallel make of input documents
-	@ ${ENV} ${MAKE} parallelinput ${NOISE} &
-	@ echo p5 starting parallel make of xhtml documents
-	@ ${ENV} ${MAKE} parallelxhtml ${NOISE} &
-	@ echo p6 starting parallel make of help
-	@ ${ENV} $(MAKE) parallelhelp ${NOISE} &
-	@ echo p7 starting parallel make of src
+	@ if [ "$RUNTYPE" = "parallel" ] ; then \
+	   ( echo p4 starting parallel make of input files ; \
+	     ${ENV} ${MAKE} input ${NOISE} & ) ; \
+	  else \
+	   ( echo s4 starting serial make of input files ; \
+	     mkdir -p ${MNT}/${SYS}/doc/src/input ; \
+             cd ${MNT}/${SYS}/doc/src/input ; \
+	     cp ${SRC}/scripts/tex/axiom.sty . ; \
+	     for i in `ls ${SRC}/input/*.input.pamphlet` ; \
+               do latex $$i ; \
+               done ; \
+	      rm -f *~ ; \
+	      rm -f *.pamphlet~ ; \
+	      rm -f *.log ; \
+	      rm -f *.tex ; \
+	      rm -f *.toc ; \
+	      rm -f *.aux ) ; \
+	  fi
+	@ if [ "$RUNTYPE" = "parallel" ] ; then \
+	     ( echo p6 starting parallel make of help ; \
+	       ${ENV} $(MAKE) help ${NOISE} & ) ; \
+	  else \
+	    ( echo s6 starting serial make of help ; \
+	      mkdir -p ${MNT}/${SYS}/doc/spadhelp ; \
+	      mkdir -p ${INT}/input ; \
+	      cd ${SRC}/algebra ; \
+	      ${TANGLE} -t8 Makefile.pamphlet >Makefile.help ; \
+	      ${ENV} $(MAKE) -f Makefile.help parallelhelp ) ; \
+	  fi
+	@ if [ "$RUNTYPE" = "parallel" ] ; then \
+	    ( echo s2 starting parallel make of books ; \
+	      echo s3 ${SPD}/books/Makefile from \
+                   ${SPD}/books/Makefile.pamphlet ; \
+	      cd ${SPD}/books ; \
+              ${DOCUMENT} Makefile ; \
+              cp Makefile.dvi ${MNT}/${SYS}/doc/src/books.Makefile.dvi ; \
+	      ${ENV} ${MAKE} & ) ; \
+	  else \
+	    ( echo s2 starting serial make of books ; \
+	      echo s3 ${SPD}/books/Makefile from \
+                   ${SPD}/books/Makefile.pamphlet ; \
+	      cd ${SPD}/books ; \
+              ${DOCUMENT} Makefile ; \
+              cp Makefile.dvi ${MNT}/${SYS}/doc/src/books.Makefile.dvi ; \
+	      ${ENV} ${MAKE} ) ; \
+	  fi
+	@ if [ "$RUNTYPE" = "parallel" ] ; then \
+	    ( echo p5 starting parallel make of xhtml documents ; \
+	      ${ENV} ${MAKE} xhtml ${NOISE} & ) ; \
+	  else \
+	    ( echo s5 starting serial make of xhtml documents ; \
+	      mkdir -p ${MNT}/${SYS}/doc/hypertex/bitmaps ; \
+	      cd ${MNT}/${SYS}/doc/hypertex ; \
+	      ${TANGLE} -t8 ${SPD}/books/bookvol11.pamphlet >Makefile11 ; \
+	      ${ENV} ${MAKE} -j 10 -f Makefile11 ; \
+	      rm -f Makefile11 ) ; \
+	  fi
+	@ echo p7 starting make of src
 	@ ${ENV} $(MAKE) -f Makefile.${SYS} 
 	@ echo 3 finished system build on `date` | tee >lastBuildDate
 
-parallelhelp:
-	@ echo p8 parallel making of help files
+help:
+	@ echo p8 making of help files
 	@ ( mkdir -p ${MNT}/${SYS}/doc/spadhelp ; \
 	    mkdir -p ${INT}/input ; \
 	    cd ${SRC}/algebra ; \
 	    ${TANGLE} -t8 Makefile.pamphlet >Makefile.help ; \
 	    ${ENV} $(MAKE) -f Makefile.help parallelhelp )
 
-parallelinput:
-	@ echo p9 parallel making input documents
+input:
+	@ echo p9 making input documents
 	@ ( mkdir -p ${MNT}/${SYS}/doc/src/input ; \
             cd ${MNT}/${SYS}/doc/src/input ; \
 	    cp ${SRC}/scripts/tex/axiom.sty . ; \
@@ -97,8 +214,8 @@ parallelinput:
 	     rm -f *.toc ; \
 	     rm -f *.aux )
 
-parallelxhtml:
-	@ echo p10 parallel making xhtml pages
+xhtml:
+	@ echo p10 making xhtml pages
 	@mkdir -p ${MNT}/${SYS}/doc/hypertex/bitmaps
 	@(cd ${MNT}/${SYS}/doc/hypertex ; \
 	  ${TANGLE} -t8 ${SPD}/books/bookvol11.pamphlet >Makefile11 ; \
@@ -180,6 +297,7 @@ document: noweb ${MNT}/${SYS}/bin/document
 clean: 
 	@ echo 7 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
 	@ echo 8 Environment ${ENV}
+	@ rm -f src/algebra/book*pamphlet
 	@ rm -f lsp/Makefile.dvi
 	@ rm -f lsp/Makefile
 	@ rm -rf lsp/gcl*

@@ -34,6 +34,9 @@ for the source code. This is independent of using make in parallel and
 instead uses the shell to fork the processes. We have not had much luck
 getting make to build in parallel reliably.
 
+Note that make cannot handle recursively calling itself in the same
+directory so we have to expand the serial forms inline. Cheesy.
+
 <<parallel>>=
 all: noweb ${MNT}/${SYS}/bin/document
 	@ echo p1 making a parallel system build
@@ -43,32 +46,77 @@ all: noweb ${MNT}/${SYS}/bin/document
 	@ ${DOCUMENT} Makefile
 	@ mkdir -p ${MNT}/${SYS}/doc/src
 	@ cp Makefile.dvi ${MNT}/${SYS}/doc/src/root.Makefile.dvi
-	@ echo p2 starting parallel make of books
-	@ echo p3 ${SPD}/books/Makefile from ${SPD}/books/Makefile.pamphlet
-	@ ( cd ${SPD}/books ; \
-           ${DOCUMENT} ${NOISE} Makefile ; \
-           cp Makefile.dvi ${MNT}/${SYS}/doc/src/books.Makefile.dvi ; \
-	   ${ENV} ${MAKE} & )
-	@ echo p4 starting parallel make of input documents
-	@ ${ENV} ${MAKE} parallelinput ${NOISE} &
-	@ echo p5 starting parallel make of xhtml documents
-	@ ${ENV} ${MAKE} parallelxhtml ${NOISE} &
-	@ echo p6 starting parallel make of help
-	@ ${ENV} $(MAKE) parallelhelp ${NOISE} &
-	@ echo p7 starting parallel make of src
+	@ if [ "$RUNTYPE" = "parallel" ] ; then \
+	   ( echo p4 starting parallel make of input files ; \
+	     ${ENV} ${MAKE} input ${NOISE} & ) ; \
+	  else \
+	   ( echo s4 starting serial make of input files ; \
+	     mkdir -p ${MNT}/${SYS}/doc/src/input ; \
+             cd ${MNT}/${SYS}/doc/src/input ; \
+	     cp ${SRC}/scripts/tex/axiom.sty . ; \
+	     for i in `ls ${SRC}/input/*.input.pamphlet` ; \
+               do latex $$i ; \
+               done ; \
+	      rm -f *~ ; \
+	      rm -f *.pamphlet~ ; \
+	      rm -f *.log ; \
+	      rm -f *.tex ; \
+	      rm -f *.toc ; \
+	      rm -f *.aux ) ; \
+	  fi
+	@ if [ "$RUNTYPE" = "parallel" ] ; then \
+	     ( echo p6 starting parallel make of help ; \
+	       ${ENV} $(MAKE) help ${NOISE} & ) ; \
+	  else \
+	    ( echo s6 starting serial make of help ; \
+	      mkdir -p ${MNT}/${SYS}/doc/spadhelp ; \
+	      mkdir -p ${INT}/input ; \
+	      cd ${SRC}/algebra ; \
+	      ${TANGLE} -t8 Makefile.pamphlet >Makefile.help ; \
+	      ${ENV} $(MAKE) -f Makefile.help parallelhelp ) ; \
+	  fi
+	@ if [ "$RUNTYPE" = "parallel" ] ; then \
+	    ( echo s2 starting parallel make of books ; \
+	      echo s3 ${SPD}/books/Makefile from \
+                   ${SPD}/books/Makefile.pamphlet ; \
+	      cd ${SPD}/books ; \
+              ${DOCUMENT} Makefile ; \
+              cp Makefile.dvi ${MNT}/${SYS}/doc/src/books.Makefile.dvi ; \
+	      ${ENV} ${MAKE} & ) ; \
+	  else \
+	    ( echo s2 starting serial make of books ; \
+	      echo s3 ${SPD}/books/Makefile from \
+                   ${SPD}/books/Makefile.pamphlet ; \
+	      cd ${SPD}/books ; \
+              ${DOCUMENT} Makefile ; \
+              cp Makefile.dvi ${MNT}/${SYS}/doc/src/books.Makefile.dvi ; \
+	      ${ENV} ${MAKE} ) ; \
+	  fi
+	@ if [ "$RUNTYPE" = "parallel" ] ; then \
+	    ( echo p5 starting parallel make of xhtml documents ; \
+	      ${ENV} ${MAKE} xhtml ${NOISE} & ) ; \
+	  else \
+	    ( echo s5 starting serial make of xhtml documents ; \
+	      mkdir -p ${MNT}/${SYS}/doc/hypertex/bitmaps ; \
+	      cd ${MNT}/${SYS}/doc/hypertex ; \
+	      ${TANGLE} -t8 ${SPD}/books/bookvol11.pamphlet >Makefile11 ; \
+	      ${ENV} ${MAKE} -j 10 -f Makefile11 ; \
+	      rm -f Makefile11 ) ; \
+	  fi
+	@ echo p7 starting make of src
 	@ ${ENV} $(MAKE) -f Makefile.${SYS} 
 	@ echo 3 finished system build on `date` | tee >lastBuildDate
 
-parallelhelp:
-	@ echo p8 parallel making of help files
+help:
+	@ echo p8 making of help files
 	@ ( mkdir -p ${MNT}/${SYS}/doc/spadhelp ; \
 	    mkdir -p ${INT}/input ; \
 	    cd ${SRC}/algebra ; \
 	    ${TANGLE} -t8 Makefile.pamphlet >Makefile.help ; \
 	    ${ENV} $(MAKE) -f Makefile.help parallelhelp )
 
-parallelinput:
-	@ echo p9 parallel making input documents
+input:
+	@ echo p9 making input documents
 	@ ( mkdir -p ${MNT}/${SYS}/doc/src/input ; \
             cd ${MNT}/${SYS}/doc/src/input ; \
 	    cp ${SRC}/scripts/tex/axiom.sty . ; \
@@ -82,8 +130,8 @@ parallelinput:
 	     rm -f *.toc ; \
 	     rm -f *.aux )
 
-parallelxhtml:
-	@ echo p10 parallel making xhtml pages
+xhtml:
+	@ echo p10 making xhtml pages
 	@mkdir -p ${MNT}/${SYS}/doc/hypertex/bitmaps
 	@(cd ${MNT}/${SYS}/doc/hypertex ; \
 	  ${TANGLE} -t8 ${SPD}/books/bookvol11.pamphlet >Makefile11 ; \
@@ -93,7 +141,8 @@ parallelxhtml:
 @
 
 <<*>>=
-<<environment>>
+<<ENVDEFAULTS>>
+<<ENV>>
 <<parallel>>
 <<book>>
 <<noweb>>
@@ -275,10 +324,6 @@ walking the build subtree.
 The INC directory contains all the include files for the C
 programs.
 
-\subsubsection{CCLBASE}
-The CCLBASE subdirectory contains the path to the CCL
-version of lisp. This was the original lisp used by NAG. 
-
 \subsubsection{The NOISE variable }
 The NOISE variable is used in the calls to the document
 command. In general, where the document command is called in
@@ -329,12 +374,9 @@ one of:
       | clef | input | sman | boot | include | doc | algebra )
 \end{verbatim}
 
-It is possible to be more specific with a directory.
-<<part>>=
-PART=	cprogs
-SUBPART= everything
+It is possible to be more specific with a directory using SUBPART.
 
-@
+
 \subsubsection{DESTDIR and COMMAND}
 The install directory is [[/usr/local/axiom]] by default 
 but this can be changed on the command line by typing:
@@ -348,42 +390,119 @@ variable so we can properly find the axiom command.
 The DOCUMENT variable is now set to replace the direct call
 to the document command. This will allow it to be
 changed on the command line.
-<<environment>>=
-VERSION:="Axiom (May 2010)"
+\section{The Environment}
+<<ENVDEFAULTS>>=
+VERSION:="Axiom (July 2010)"
+
+##### special paths
 SPD:=$(shell pwd)
-SYS:=$(notdir $(AXIOM))
-SPAD:=${SPD}/mnt/${SYS}
-LSP:=${SPD}/lsp
-<<GCLVERSION>>
-AWK:=gawk
-GCLDIR:=${LSP}/${GCLVERSION}
 SRC:=${SPD}/src
+LSP:=${SPD}/lsp
 INT:=${SPD}/int
 OBJ:=${SPD}/obj
 MNT:=${SPD}/mnt
+TMP:=${OBJ}/tmp
 ZIPS:=${SPD}/zips
 BOOKS:=${SPD}/books
-TMP:=${OBJ}/tmp
+SPAD:=${SPD}/mnt/${SYS}
+SRCDIRS:="interpdir sharedir algebradir etcdir clefdir docdir \
+          graphdir smandir hyperdir browserdir inputdir"
+
+SYS:=$(notdir $(AXIOM))
+DAASE:=${SRC}/share
+
 SPADBIN:=${MNT}/${SYS}/bin
-INC:=${SPD}/src/include
-CCLBASE:=${OBJ}/${SYS}/ccl/ccllisp
+DOCUMENT:=${SPADBIN}/document
+
+##### installation paths
 DESTDIR:=/usr/local/axiom
 COMMAND:=${DESTDIR}/mnt/${SYS}/bin/axiom
-DOCUMENT:=${SPADBIN}/document
-TANGLE:=${SPADBIN}/lib/notangle
-WEAVE:=${SPADBIN}/lib/noweave
-NOISE:="-o ${TMP}/trace"
+
+##### functions we need
+AWK:=gawk 
 PATCH:=patch
+RANLIB:=ranlib
+TAR:=tar
+TOUCH:=touch
 UNCOMPRESS:=gunzip
 
-<<part>>
+##### noweb
+TANGLE:=${SPADBIN}/lib/notangle
+WEAVE:=${SPADBIN}/lib/noweave
 
-ENV:= SPAD=${SPAD} SYS=${SYS} SPD=${SPD} LSP=${LSP} GCLDIR=${GCLDIR} \
-     SRC=${SRC} INT=${INT} OBJ=${OBJ} MNT=${MNT} ZIPS=${ZIPS} TMP=${TMP} \
-     SPADBIN=${SPADBIN} INC=${INC} CCLBASE=${CCLBASE} PART=${PART} \
-     SUBPART=${SUBPART} NOISE=${NOISE} GCLVERSION=${GCLVERSION} \
-     TANGLE=${TANGLE} VERSION=${VERSION} PATCH=${PATCH} DOCUMENT=${DOCUMENT} \
-     WEAVE=${WEAVE} UNCOMPRESS=${UNCOMPRESS} BOOKS=${BOOKS}
+##### lisp related variables
+BYE:=bye
+<<GCLVERSION>>
+GCLDIR:=${LSP}/${GCLVERSION}
+<<GCLOPTS-LOCBFD>>
+LISP:=lsp
+
+##### C related variables
+INC:=${SPD}/src/include
+PLF:=LINUXplatform
+CCF:="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
+CC:=gcc
+XLIB:=/usr/X11R6/lib
+#LDF:=" -L/usr/X11R6/lib -L/usr/lib ${XLIB}/libXpm.a -lXpm"
+LDF:=" -L/usr/X11R6/lib -L/usr/lib  -lXpm"
+O:=o
+
+##### command line control
+NOISE:="-o ${TMP}/trace"
+PART:=	cprogs
+SUBPART:= everything
+RUNTYPE:=serial
+# can be richtests, catstests, regresstests (see src/input/Makefile)
+TESTSET:=alltests
+
+@
+\subsection{The ENV variable}
+<<ENV>>=
+
+ENV:= \
+AWK=${AWK} \
+BOOKS=${BOOKS} \
+BYE=${BYE} \
+CC=${CC} \
+CCF=${CCF} \
+COMMAND=${COMMAND} \
+DAASE=${DAASE} \
+DESTDIR=${DESTDIR} \
+DOCUMENT=${DOCUMENT} \
+GCLDIR=${GCLDIR} \
+GCLOPTS=${GCLOPTS} \
+GCLVERSION=${GCLVERSION} \
+INC=${INC} \
+INT=${INT} \
+LDF=${LDF} \
+LISP=${LISP} \
+LSP=${LSP} \
+MNT=${MNT} \
+NOISE=${NOISE} \
+O=${O} \
+OBJ=${OBJ} \
+PART=${PART} \
+PATCH=${PATCH} \
+PLF=${PLF} \
+RANLIB=${RANLIB} \
+RUNTYPE=${RUNTYPE} \
+SPAD=${SPAD} \
+SPADBIN=${SPADBIN} \
+SPD=${SPD} \
+SRC=${SRC} \
+SRCDIRS=${SRCDIRS} \
+SUBPART=${SUBPART} \
+SYS=${SYS} \
+TANGLE=${TANGLE} \
+TAR=${TAR} \
+TESTSET=${TESTSET} \
+TMP=${TMP} \
+TOUCH=${TOUCH} \
+UNCOMPRESS=${UNCOMPRESS} \
+VERSION=${VERSION} \
+WEAVE=${WEAVE} \
+XLIB=${XLIB} \
+ZIPS=${ZIPS} 
 
 @
 \subsection{rootdirs}
@@ -530,8 +649,8 @@ srcdir: rootdirs ${SPD}/src/Makefile
 
 ${SPD}/src/Makefile: ${SPD}/src/Makefile.pamphlet
 	@echo 16 making ${SPD}/src/Makefile from ${SPD}/src/Makefile.pamphlet
-	@( cd src ; \
-	   ${DOCUMENT} ${NOISE} Makefile ; \
+	( cd src ; \
+	   ${DOCUMENT} Makefile ; \
 	   cp Makefile.dvi ${MNT}/${SYS}/doc/src/src.Makefile.dvi )
 
 libspadclean:
@@ -554,9 +673,6 @@ srcsetup: rootdirs ${SPD}/src/Makefile
 \subsection{lsp}
 We delegate the details of constructing common lisp to the Makefiles in
 the subtree. We need only ensure that the Makefiles are up to date.
-
-We build two lisps, Codemist Common Lisp (CCL) and Gnu Common Lisp (GCL)
-at the current time. Carnegie-Mellon University Common Lisp (CMUCL) is planned.
 
 When we first make GCL we the src/Makefile will create a marker file
 called gcldir. This file has the same name as the stanza to create
@@ -684,10 +800,6 @@ of the world. Then it invokes one of these platform Makefiles.
 Each of these Makefiles sets several
 environment variables that are specific to this platform.
 
-\subsubsection{The [[PLF]] variable }
-
-\subsubsection{The [[CCF]] variable }
-
 \subsubsection{The [[LDF]] variable }
 
 The LDF variable is the generic loader flags. This gives information
@@ -696,10 +808,8 @@ linux, for instance, the library [[libXpm.a]] is used by the graphics
 routines. This library is usually found in [[/usr/X11R6/bin/libXpm.a]]. 
 Thus, on the linux platform LDF is defined as
 \begin{verbatim}
-LDF= -L/usr/X11R6/lib
+LDF=" -L/usr/X11R6/lib -L/usr/lib ${XLIB}/libXpm.a -lXpm"
 \end{verbatim}
-
-\subsubsection{The [[CC]] variable }
 
 \subsubsection{The [[AWK]] variable }
 
@@ -715,21 +825,11 @@ On most systems the gnu toolset is the default. Thus we can just use
 specify that we are using the gnu toolset, and we need to use
 [[gpatch]] instead of [[patch]].
 
-\subsubsection{The [[RANLIB]] variable }
-
-\subsubsection{The [[TOUCH]] variable }
-
-\subsubsection{The [[TAR]] variable }
-
-\subsubsection{The [[AXIOMXLROOT]] variable }
-
 \subsubsection{The [[O]] variable }
 Various Common Lisp systems prefer certain filename extensions.
 This defaults to ``o'' so a compile of foo.lisp becomes foo.o
 but other systems prefer .fasl so a compile of foo.lisp becomes
 foo.fasl. Change this based on the target lisp.
-
-\subsubsection{The [[BYE]] variable }
 
 \subsubsection{The [[LISP]] variable }
 There are 3 kinds of "lisp" files in the Axiom build process.
@@ -768,10 +868,7 @@ The [[SRCDIRS]] variable is used in the [[src/Makefile.pamphlet]]
 to decide what directories to build on a given platform. This is
 needed at the moment because certain functions do not yet work on
 all platforms. 
-<<SRCDIRS>>=
-SRCDIRS="interpdir sharedir algebradir etcdir clefdir docdir \
-        graphdir smandir hyperdir browserdir inputdir"
-@
+
 \subsubsection{The [[GCLVERSION]] variable }
 [[GCLVERSION]] is the name of the GCL version. The one we used to
 build the original version of the system is gcl-2.4.1. The system
@@ -848,370 +945,15 @@ GCLOPTS="--enable-vssize=65536*2 --disable-nls  --disable-locbfd \
          --disable-statsysbfd  --enable-custreloc --disable-tkconfig \
          --enable-machine=powerpc-macosx --disable-xgcl --disable-dlopen"
 @
-\subsection{Makefile.axposf1v3}
-<<Makefile.axposf1v3>>=
-# System dependent Makefile for the AXP/OSF platform
-# Platform variable
-PLF= ALPHAplatform
-# C compiler flags
-CCF=" -O2 -Olimit 3000 -std1 -warnprotos -float -ieee_with_no_inexact -D${PLF}"
-# Loader flags
-LDF=
-# C compiler to use
-CC= cc
-AWK="/systems/pub/bin.alpha/gawk -W version -W compat"
-RANLIB=ranlib
-TOUCH=/bin/touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lisp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 24 Makefile.axposf1v3 called
-	@echo 25 Environment : ${ENV} 
-	@echo 26 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
-\subsection{Makefile.axposf1v4}
-<<Makefile.axposf1v4>>=
-# System dependent Makefile for the AXP/OSF platform
-# Platform variable
-PLF= ALPHAplatform
-# C compiler flags
-CCF=" -O2 -Olimit 3000 -std1 -warnprotos -float -ieee_with_no_inexact -D${PLF}"
-# Loader flags
-LDF=
-# C compiler to use
-CC= cc
-AWK=/systems/pub/bin.alpha/gawk -W compat
-RANLIB=ranlib
-TOUCH=/bin/touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lisp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP}  DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 27 Makefile.axposf1v4 called
-	@echo 28 Environment : ${ENV} 
-	@echo 29 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
-\subsection{Makefile.hp10}
-<<Makefile.hp10>>=
-# System dependent Makefile for the HP 9000/730 (700 series) platform
-# Platform variable
-PLF= HP10platform
-# C compiler flags
-CCF=" +O2 +Onolimit -D${PLF} -D_HPUX_SOURCE -I /usr/include/X11R6"
-# Loader flags
-LDF= -L /usr/lib/X11R6 -Wl,+vnocompatwarnings
-# C compiler to use
-CC= c89
-AWK="/usr/local/bin/gawk -W version -W compat"
-RANLIB=ranlib
-TOUCH=touch
-TAR=/usr/local/bin/gnutar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lisp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP}  DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 30 Makefile.hp10 called
-	@echo 31 Environment : ${ENV} 
-	@echo 32 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
-\subsection{Makefile.hp11}
-<<Makefile.hp11>>=
-# System dependent Makefile for the HP 9000/730 (700 series) platform
-# Platform variable
-PLF= HP10platform
-# C compiler flags
-CCF=" +O2 +Onolimit -D${PLF} -D_HPUX_SOURCE -I /usr/include/X11R6"
-# Loader flags
-LDF= -L /usr/lib/X11R6 -Wl,+vnocompatwarnings -lnsl
-# C compiler to use
-CC= c89
-AWK="/usr/local/bin/gawk -W version -W compat"
-RANLIB=ranlib
-TOUCH=touch
-TAR=/usr/local/bin/gnutar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lisp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 33 Makefile.hp11 called
-	@echo 34 Environment : ${ENV} 
-	@echo 35 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
-\subsection{Makefile.hp9}
-<<Makefile.hp9>>=
-# System dependent Makefile for the HP 9000/730 (700 series) platform
-# Platform variable
-PLF= HP9platform
-# C compiler flags
-CCF=" -D${PLF} -Ae -I /usr/include/X11R5"
-# Loader flags
-LDF= -L /usr/lib/X11R5
-# C compiler to use
-CC= cc -O
-AWK="/usr/local/bin/gawk -W version -W compat"
-RANLIB=ranlib
-TOUCH=touch
-TAR=/usr/local/bin/gnutar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lisp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 36 Makefile.hp9 called
-	@echo 37 Environment : ${ENV} 
-	@echo 38 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
-\subsection{Makefile.irixmips1}
-<<Makefile.irixmips1>>=
-# System dependent Makefile for the IP12 IRIX 5.3
-# Platform variable
-PLF= SGIplatform
-# C compiler flags
-CCF=" -O2 -D_SGI_SOURCE -fullwarn  -D${PLF}"
-# Loader flags
-LDF=
-# C compiler to use
-CC= cc
-AWK=awk
-RANLIB=echo
-TOUCH=touch
-TAR=gnutar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lisp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 39 Makefile.irixmips1 called
-	@echo 40 Environment : ${ENV} 
-	@echo 41 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
-\subsection{Makefile.irixmips3}
-<<Makefile.irixmips3>>=
-# System dependent Makefile for the IP26 IRIX 6.2
-# Platform variable
-PLF= SGIplatform
-CCF=" -mips3 -n32 -O -D_SGI_SOURCE -fullwarn -woff all -D${PLF}"
-# Loader flags
-LDF=
-# C compiler to use
-CC= cc -mips3 -n32
-AWK=awk
-RANLIB=echo
-TOUCH=touch
-TAR=gnutar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lisp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 42 Makefile.irixmips3 called
-	@echo 43 Environment : ${ENV} 
-	@echo 44 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
 \subsection{Makefile.freebsd}
-Annoyingly enough it seems that GCL uses a default extension of .lsp
-rather than .lisp so we add the [[LISP]] variable here. We need to
-depend on the default extension behavior because the system build
-will load either the interpreted or compiled form of a file depending
-on which is available. This varies at different stages of the build.
 <<Makefile.freebsd>>=
-# System dependent Makefile for the FreeBSD platform
-# Platform variable
+
+<<ENVDEFAULTS>>
 PLF=BSDplatform
-# C compiler flags
 CCF="-O2 -pipe -fno-strength-reduce -Wall -D_GNU_SOURCE \
      -D${PLF} -I/usr/X11R6/include -I/usr/local/include"
-# Loader flags
 LDF="-L/usr/X11R6/lib -L/usr/local/lib"
-# C compiler to use
-CC=gcc 
-AWK=gawk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH} TANGLE=${TANGLE}
+<<ENV>>
 
 all: rootdirs noweb srcsetup lspdir srcdir
 	@echo 45 Makefile.FreeBSD called
@@ -1238,34 +980,13 @@ two ways. First we add [[--enable-debug]] so more information is
 available for testing and second we removed [[--enable-statsysbfd]].
 
 <<Makefile.windows>>=
-# System dependent Makefile for the Intel/Windows/MSYS platform
-# Platform variable
-PLF=MSYSplatform
-# C compiler flags
-CCF="-O2 -Wall -D_GNU_SOURCE -D${PLF}"
-# Loader flags
-LDF= -L/usr/X11R6/lib 
-# C compiler to use
-CC=gcc 
-AWK=awk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-SRCDIRS=bootdir interpdir sharedir algebradir etcdir docdir inputdir
-PATCH=patch
 
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
+<<ENVDEFAULTS>>
+AWK=awk
+PLF=MSYSplatform
+CCF="-O2 -Wall -D_GNU_SOURCE -D${PLF}"
+SRCDIRS="bootdir interpdir sharedir algebradir etcdir docdir inputdir"
+<<ENV>>
 
 all: rootdirs noweb srcsetup lspdir srcdir
 	@echo 45 Makefile.windows called
@@ -1284,34 +1005,10 @@ all: rootdirs noweb srcsetup lspdir srcdir
 
 @
 <<Makefile.slackware>>=
-# System dependent Makefile for the Intel/Slackware platform
-# Platform variable
-PLF=LINUXplatform
-# C compiler flags
-CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
-# Loader flags, use the shared version of libXpm
-LDF=" -L/usr/lib -lXpm "
-# C compiler to use
-CC=gcc 
-AWK=gawk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/lib
-<<GCLOPTS-LOCBFD>>
-<<SRCDIRS>>
-PATCH=patch
 
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
+<<ENVDEFAULTS>>
+<<ENV>>
+
 
 all: rootdirs noweb srcsetup lspdir srcdir
 	@echo 45 Makefile.slackware called
@@ -1330,50 +1027,10 @@ all: rootdirs noweb srcsetup lspdir srcdir
 
 @
 \subsection{Makefile.linux}
-Annoyingly enough it seems that GCL uses a default extension of .lsp
-rather than .lisp so we add the [[LISP]] variable here. We need to
-depend on the default extension behavior because the system build
-will load either the interpreted or compiled form of a file depending
-on which is available. This varies at different stages of the build.
-
-It turns out that the standard GCL OPTS does not compile with the
-GCL 2.6.8pre version. We changed it from 
-\begin{verbatim}
-@<<GCLOPTS>>
-\end{verbatim}
-to read
-\begin{verbatim}
-@<<GCLOPTS-LOCBFD>>
-\end{verbatim}
 <<Makefile.linux>>=
-# System dependent Makefile for the Intel/Linux platform
-# Platform variable
-PLF=LINUXplatform
-# C compiler flags
-CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
-# Loader flags
-LDF=" -L/usr/X11R6/lib ${XLIB}/libXpm.a "
-# C compiler to use
-CC=gcc 
-AWK=gawk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS-LOCBFD>>
-<<SRCDIRS>>
-PATCH=patch
 
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
+<<ENVDEFAULTS>>
+<<ENV>>
 
 all: rootdirs noweb srcsetup lspdir srcdir
 	@echo 45 Makefile.linux called
@@ -1391,51 +1048,33 @@ all: rootdirs noweb srcsetup lspdir srcdir
 <<clean>>
 
 @
+\subsection{Makefile.mandriva}
+<<Makefile.mandriva>>=
+
+<<ENVDEFAULTS>>
+<<ENV>>
+
+all: rootdirs noweb srcsetup lspdir srcdir
+	@echo 45 Makefile.mandriva called
+	@echo 46 Environment : ${ENV} 
+	@echo 47 finished system build on `date` | tee >lastBuildDate
+	@- grep "result FAILED" int/input/*.regress
+
+<<rootdirs>>
+<<noweb>>
+<<literate commands>>
+<<srcsetup>>
+<<src>>
+<<lsp>>
+<<document>>
+<<clean>>
+
+@
 \subsection{Makefile.vector}
-Annoyingly enough it seems that GCL uses a default extension of .lsp
-rather than .lisp so we add the [[LISP]] variable here. We need to
-depend on the default extension behavior because the system build
-will load either the interpreted or compiled form of a file depending
-on which is available. This varies at different stages of the build.
-
-It turns out that the standard GCL OPTS does not compile with the
-GCL 2.6.8pre version. We changed it from 
-\begin{verbatim}
-@<<GCLOPTS>>
-\end{verbatim}
-to read
-\begin{verbatim}
-@<<GCLOPTS-LOCBFD>>
-\end{verbatim}
 <<Makefile.vector>>=
-# System dependent Makefile for the Intel/Linux platform
-# Platform variable
-PLF=LINUXplatform
-# C compiler flags
-CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
-# Loader flags
-LDF=" -L/usr/X11R6/lib ${XLIB}/libXpm.a "
-# C compiler to use
-CC=gcc 
-AWK=gawk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS-LOCBFD>>
-<<SRCDIRS>>
-PATCH=patch
 
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
+<<ENVDEFAULTS>>
+<<ENV>>
 
 all: rootdirs noweb srcsetup lspdir srcdir
 	@echo 45 Makefile.linux called
@@ -1455,34 +1094,9 @@ all: rootdirs noweb srcsetup lspdir srcdir
 @
 \subsection{Makefile.redhat72}
 <<Makefile.redhat72>>=
-# System dependent Makefile for the Intel/Linux platform
-# Platform variable
-PLF=LINUXplatform
-# C compiler flags
-CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
-# Loader flags
-LDF=" -L/usr/X11R6/lib ${XLIB}/libXpm.a "
-# C compiler to use
-CC=gcc 
-AWK=gawk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS-LOCBFD>>
-<<SRCDIRS>>
-PATCH=patch
 
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
+<<ENVDEFAULTS>>
+<<ENV>>
 
 all: rootdirs noweb srcsetup lspdir srcdir
 	@echo 45 Makefile.linux called
@@ -1502,34 +1116,9 @@ all: rootdirs noweb srcsetup lspdir srcdir
 @
 \subsection{Makefile.redhat9}
 <<Makefile.redhat9>>=
-# System dependent Makefile for the Intel/Linux platform
-# Platform variable
-PLF=LINUXplatform
-# C compiler flags
-CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
-# Loader flags
-LDF=" -L/usr/X11R6/lib ${XLIB}/libXpm.a "
-# C compiler to use
-CC=gcc 
-AWK=gawk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS-LOCBFD>>
-<<SRCDIRS>>
-PATCH=patch
 
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
+<<ENVDEFAULTS>>
+<<ENV>>
 
 all: rootdirs noweb srcsetup lspdir srcdir
 	@echo 45 Makefile.linux called
@@ -1549,34 +1138,9 @@ all: rootdirs noweb srcsetup lspdir srcdir
 @
 \subsection{Makefile.debian}
 <<Makefile.debian>>=
-# System dependent Makefile for the Intel/Linux platform
-# Platform variable
-PLF=LINUXplatform
-# C compiler flags
-CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
-# Loader flags
-LDF=" -L/usr/X11R6/lib -L/usr/lib ${XLIB}/libXpm.a "
-# C compiler to use
-CC=gcc 
-AWK=gawk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/lib
-<<GCLOPTS-LOCBFD>>
-<<SRCDIRS>>
-PATCH=patch
 
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
+<<ENVDEFAULTS>>
+<<ENV>>
 
 all: rootdirs noweb srcsetup lspdir srcdir
 	@echo 45 Makefile.linux called
@@ -1595,38 +1159,10 @@ all: rootdirs noweb srcsetup lspdir srcdir
 
 @
 \subsection{Makefile.opensuse}
-GCLVERSION=gcl-2.6.8pre causes the failure "I am not an object".
-This is fixed in GCLVERSION=gcl-2.6.8pre2.
 <<Makefile.opensuse>>=
-# System dependent Makefile for the Intel/Linux platform
-# Platform variable
-PLF=LINUXplatform
-# C compiler flags
-CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
-# Loader flags
-LDF=" -L/usr/lib ${XLIB}/libXpm.a "
-# C compiler to use
-CC=gcc 
-AWK=gawk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/lib
-<<GCLOPTS-LOCBFD>>
-<<SRCDIRS>>
-PATCH=patch
-GCLVERSION=gcl-2.6.8pre2
 
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
+<<ENVDEFAULTS>>
+<<ENV>>
 
 all: rootdirs noweb srcsetup lspdir srcdir
 	@echo 45 Makefile.linux called
@@ -1646,34 +1182,9 @@ all: rootdirs noweb srcsetup lspdir srcdir
 @
 \subsection{Makefile.ubuntu}
 <<Makefile.ubuntu>>=
-# System dependent Makefile for the Intel/Linux platform
-# Platform variable
-PLF=LINUXplatform
-# C compiler flags
-CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
-# Loader flags
-LDF=" -L/usr/X11R6/lib -L/usr/lib ${XLIB}/libXpm.a "
-# C compiler to use
-CC=gcc 
-AWK=gawk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/lib
-<<GCLOPTS-LOCBFD>>
-<<SRCDIRS>>
-PATCH=patch
 
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
+<<ENVDEFAULTS>>
+<<ENV>>
 
 all: rootdirs noweb srcsetup lspdir srcdir
 	@echo 45 Makefile.linux called
@@ -1693,34 +1204,11 @@ all: rootdirs noweb srcsetup lspdir srcdir
 @
 \subsection{Makefile.ubuntu64}
 <<Makefile.ubuntu64>>=
-# System dependent Makefile for the Intel/Linux platform
-# Platform variable
-PLF=LINUXplatform
-# C compiler flags
-CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
-# Loader flags
-LDF=" -L/usr/X11R6/lib -L/usr/lib ${XLIB}/libXpm.a "
-# C compiler to use
-CC=gcc 
-AWK=gawk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/lib
-<<GCLOPTS-LOCBFD>>
-<<SRCDIRS>>
-PATCH=patch
 
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
+<<ENVDEFAULTS>>
+XLIB=/usr/lib
+LDF:=" -L/usr/X11R6/lib -L/usr/lib ${XLIB}/libXpm.a -lXpm"
+<<ENV>>
 
 all: rootdirs noweb srcsetup lspdir srcdir
 	@echo 45 Makefile.linux called
@@ -1740,37 +1228,16 @@ all: rootdirs noweb srcsetup lspdir srcdir
 @
 \subsection{Makefile.macosxppc}
 <<Makefile.macosxppc>>=
-# System dependent Makefile for the MAC/BSD platform
-# Platform variable
-PLF=MACOSXplatform
-# C compiler flags
-CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include -I/usr/include/sys"
-# Loader flags
-LDF=" -L/usr/X11R6/lib ${XLIB}/libXpm.a "
-# C compiler to use
-CC=gcc 
-AWK=awk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS-CUSTRELOC>>
-<<SRCDIRS>>
-PATCH=patch
 
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH} PATH=${PATH}
+<<ENVDEFAULTS>>
+PLF=MACOSXplatform
+CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
+<<GCLOPTS-CUSTRELOC>>
+<<ENV>>
+
 
 all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 45 Makefile.linux called
+	@echo 45 Makefile.macosxppc called
 	@echo 46 Environment : ${ENV} 
 	@echo 47 finished system build on `date` | tee >lastBuildDate
 	@- grep "result FAILED" int/input/*.regress
@@ -1787,32 +1254,13 @@ all: rootdirs noweb srcsetup lspdir srcdir
 @
 \subsection{Makefile.fedora}
 <<Makefile.fedora>>=
-PLF=LINUXplatform
-CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
-LDF=" -L/usr/X11R6/lib -l Xpm "
-CC=gcc 
-AWK=gawk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS-LOCBFD>>
-<<SRCDIRS>>
-PATCH=patch
 
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
+<<ENVDEFAULTS>>
+<<ENV>>
+
 
 all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 45 Makefile.linux called
+	@echo 45 Makefile.fedora called
 	@echo 46 Environment : ${ENV} 
 	@echo 47 finished system build on `date` | tee >lastBuildDate
 	@- grep "result FAILED" int/input/*.regress
@@ -1846,36 +1294,10 @@ all: rootdirs noweb srcsetup lspdir srcdir
 \subsection{Makefile.fedora8-64}
 Fedora 8 on a 64 bit machine requires gcl-2.6.8pre2
 <<Makefile.fedora8-64>>=
-GCLVERSION=gcl-2.6.8pre2
-GCLDIR=${LSP}/${GCLVERSION}
-# System dependent Makefile for the Intel/Linux platform
-# Platform variable
-PLF=LINUXplatform
-# C compiler flags
-CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
-# Loader flags
-LDF=" -L/usr/X11R6/lib -l Xpm "
-# C compiler to use
-CC=gcc 
-AWK=gawk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS-LOCBFD>>
-<<SRCDIRS>>
-PATCH=patch
 
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
+<<ENVDEFAULTS>>
+<<ENV>>
+
 
 all: rootdirs noweb srcsetup lspdir srcdir
 	@echo 45 Makefile.linux called
@@ -1914,45 +1336,11 @@ all: rootdirs noweb srcsetup lspdir srcdir
 <<Makefile.fedora>>
 @
 \subsection{Makefile.gentoo}
-Annoyingly enough it seems that GCL uses a default extension of .lsp
-rather than .lisp so we add the [[LISP]] variable here. We need to
-depend on the default extension behavior because the system build
-will load either the interpreted or compiled form of a file depending
-on which is available. This varies at different stages of the build.
-
-We've modified the [[GCLOPTS]] variable because [[bfd]] does not seem
-to work on Solaris 9. So we use a local version shipped with GCL.
-
-The gentoo build needs -lXpm on the loader flags (LDF).
 <<Makefile.gentoo>>=
-# System dependent Makefile for the Intel/Linux/Gentoo platform
-# Platform variable
-PLF=LINUXplatform
-# C compiler flags
-CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
-# Loader flags
-LDF= -L/usr/X11R6/lib -lXpm
-# C compiler to use
-CC=gcc 
-AWK=gawk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS-LOCBFD>>
-<<SRCDIRS>>
-PATCH=patch
 
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
+<<ENVDEFAULTS>>
+<<ENV>>
+
 
 all: rootdirs noweb srcsetup lspdir srcdir
 	@echo 45 Makefile.linux called
@@ -1971,40 +1359,13 @@ all: rootdirs noweb srcsetup lspdir srcdir
 
 @
 \subsection{Makefile.fedora64}
-Fedora Core 2 on the AMD 64 uses 64 bit libraries. We need to change the
-loader flags so these libraries are used otherwise the graphics won't build.
-<<fedora64 loader flags>>=
-LDF="-L/usr/X11R6/lib64 -L/usr/local/lib64 -L/usr/openwin/lib64 -L/usr/lib64 "
-@
 <<Makefile.fedora64>>=
-# System dependent Makefile for the Intel/Linux platform
-# Platform variable
-PLF=LINUXplatform
-# C compiler flags
-CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
-# Loader flags
-<<fedora64 loader flags>>
-# C compiler to use
-CC=gcc 
-AWK=gawk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
 
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
+<<ENVDEFAULTS>>
+<<GCLOPTS>>
+LDF="-L/usr/X11R6/lib64 -L/usr/local/lib64 -L/usr/openwin/lib64 -L/usr/lib64 "
+<<ENV>>
+
 
 all: rootdirs noweb srcsetup lspdir srcdir
 	@echo 45 Makefile.linux called
@@ -2025,564 +1386,16 @@ all: rootdirs noweb srcsetup lspdir srcdir
 \subsection{Makefile.fedora3}
 Fedora Core 3 needs special GCL options for local bfd.
 <<Makefile.fedora3>>=
-# System dependent Makefile for the Intel/Linux platform (Fedora Core 3)
-# Platform variable
-PLF=LINUXplatform
-# C compiler flags
-CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
-# Loader flags
-LDF= -L/usr/X11R6/lib 
-# C compiler to use
-CC=gcc 
-AWK=gawk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS-LOCBFD>>
-<<SRCDIRS>>
-PATCH=patch
 
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
+<<ENVDEFAULTS>>
+<<GCLOPTS-LOCBFD>>
+<<ENV>>
+
 
 all: rootdirs noweb srcsetup lspdir srcdir
 	@echo 45 Makefile.linux called
 	@echo 46 Environment : ${ENV} 
 	@echo 47 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
-\subsection{Makefile.linuxglibc}
-<<Makefile.linuxglibc>>=
-# System dependent Makefile for the SPARC SUNOS 4.1.2 platform
-# Platform variable
-PLF= LINUXplatform
-# C compiler flags
-CCF=" -O2 -fno-strength-reduce -Wall -D_GNU_SOURCE \
-      -D${PLF} -I/usr/X11R6/include"
-# Loader flags
-LDF= -L/usr/X11R6/lib #-lefence
-# C compiler to use
-CC= gcc 
-AWK=awk
-RANLIB=ranlib
-TOUCH=/usr/5bin/touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lisp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 48 Makefile.linuxglibc called
-	@echo 49 Environment : ${ENV} 
-	@echo 50 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
-\subsection{Makefile.linuxglibc2.1}
-<<Makefile.linuxglibc2.1>>=
-# System dependent Makefile for the SPARC SUNOS 4.1.2 platform
-# Platform variable
-PLF= LINUXplatform
-# C compiler flags
-CCF=" -g  -Wall -D_GNU_SOURCE  -D${PLF} -I/usr/X11R6/include"
-# Loader flags
-LDF= -L/usr/X11R6/lib
-# C compiler to use
-CC= gcc 
-AWK=awk
-RANLIB=ranlib
-TOUCH=/usr/5bin/touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lisp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 51 Makefile.linuxglibc2.1 called
-	@echo 52 Environment : ${ENV} 
-	@echo 53 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
-\subsection{Makefile.solaris9}
-Annoyingly enough it seems that GCL uses a default extension of .lsp
-rather than .lisp so we add the [[LISP]] variable here. We need to
-depend on the default extension behavior because the system build
-will load either the interpreted or compiled form of a file depending
-on which is available. This varies at different stages of the build.
-<<Makefile.solaris9>>=
-# System dependent Makefile for the Intel/Linux platform
-# Platform variable
-PLF=LINUXplatform
-# C compiler flags
-CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
-# Loader flags
-LDF= -L/usr/X11R6/lib 
-# C compiler to use
-CC=gcc 
-AWK=gawk
-RANLIB=ranlib
-TOUCH=touch
-TAR=gtar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS-LOCBFD>>
-<<SRCDIRS>>
-PATCH=gpatch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 45 Makefile.linux called
-	@echo 46 Environment : ${ENV} 
-	@echo 47 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
-\subsection{Makefile.rs6000aix3}
-<<Makefile.rs6000aix3>>=
-# System dependent Makefile for the IBM Risc System/6000 platform
-# Platform variable
-PLF= RIOSplatform
-# C compiler flags
-CCF=" -O3 -qstrict -qlanglvl=ansi -qextchk -D_ALL_SOURCE -D${PLF}"
-# Loader flags
-LDF=
-# C compiler to use
-CC=c89
-AWK="/systems/pub/rios/gawk -W version -W compat"
-TOUCH=/bin/touch
-TAR=/usr/local/bin/gtar
-RANLIB=ranlib
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lisp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 54 Makefile.rs6000aix3 called
-	@echo 55 Environment : ${ENV} 
-	@echo 56 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
-\subsection{Makefile.rs6000aix4}
-<<Makefile.rs6000aix4>>=
-# System dependent Makefile for the IBM Risc System/6000 platform
-# Platform variable
-PLF= RIOSplatform
-# C compiler flags
-CCF=" -O3 -qstrict -qlanglvl=ansi -qextchk -D_ALL_SOURCE -D${PLF}"
-# Loader flags
-LDF=
-# C compiler to use
-CC=c89
-AWK="/systems/pub/rios/gawk -W version -W compat"
-TOUCH=/bin/touch
-TAR=/usr/local/bin/gtar
-RANLIB=ranlib
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lisp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 57 Makefile.rs6000aix4 called
-	@echo 58 Environment : ${ENV} 
-	@echo 59 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
-\subsection{Makefile.rs6000aix4.1}
-<<Makefile.rs6000aix4.1>>=
-# System dependent Makefile for the IBM Risc System/6000 platform
-# Platform variable
-PLF= RIOSplatform
-# C compiler flags
-CCF=" -O3 -qstrict -qlanglvl=ansi -qextchk -D_ALL_SOURCE -D${PLF}"
-# Loader flags
-LDF=
-# C compiler to use
-CC=c89
-AWK="/systems/pub/rios/gawk -W version -W compat"
-TOUCH=/bin/touch
-TAR=/usr/local/bin/gtar
-RANLIB=ranlib
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lisp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 60 Makefile.rs6000aix4.1 called
-	@echo 61 Environment : ${ENV} 
-	@echo 62 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
-\subsection{Makefile.rs6000aix4.3}
-<<Makefile.rs6000aix4.3>>=
-# System dependent Makefile for the IBM Risc System/6000 platform
-# Platform variable
-PLF= RIOSplatform
-# C compiler flags
-CCF=" -O3 -qstrict -qlanglvl=ansi -qextchk -D_ALL_SOURCE -D${PLF}"
-# Loader flags
-LDF=
-# C compiler to use
-CC=c89
-AWK="/systems/pub/rios/gawk -W version -W compat"
-TOUCH=/bin/touch
-TAR=/usr/local/bin/gtar
-RANLIB=ranlib
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lisp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 63 Makefile.rs6000aix4.3 called
-	@echo 64 Environment : ${ENV} 
-	@echo 65 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
-\subsection{Makefile.sun4os55c}
-<<Makefile.sun4os55c>>=
-# System dependent Makefile for the SPARC SUNOS 5.5 
-# platform with SPARCworks compiler
-# Platform variable
-PLF= SUN4OS5platform
-# C compiler flags
-CCF=" -xO4 -Xa  -D${PLF} -I /usr/openwin/include"
-# Loader flags
-LDF=-L /usr/openwin/lib -lnsl -lsocket 
-# C compiler to use
-CC= cc
-AWK=/systems/pub/sun4/gawk
-TOUCH=/bin/touch
-TAR=tar
-RANLIB= ar tvs 
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lisp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 66 Makefile.sun4os55c called
-	@echo 67 Environment : ${ENV} 
-	@echo 68 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
-\subsection{Makefile.sun4os55g}
-<<Makefile.sun4os55g>>=
-# System dependent Makefile for the SPARC SUNOS 5.5 platform with GNU compiler
-# Platform variable
-PLF= SUN4OS5platform
-# C compiler flags
-CCF=" -O3 -D__EXTENSIONS__ -Wall -ansi -D${PLF} -I /usr/openwin/include"
-# Loader flags
-LDF=-L /usr/openwin/lib -lnsl -lsocket 
-# C compiler to use
-CC= gcc
-AWK=/systems/pub/sun4/gawk
-TOUCH=/bin/touch
-TAR=tar
-RANLIB= ar tvs 
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lisp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 69 Makefile.sun4os55g called
-	@echo 70 Environment : ${ENV} 
-	@echo 71 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
-\subsection{Makefile.sun4os58c}
-<<Makefile.sun4os58c>>=
-# System dependent Makefile for the SPARC SUNOS 5.5 
-# platform with SPARCworks compiler
-# Platform variable
-PLF= SUN4OS5platform
-# C compiler flags
-CCF=" -xO4 -Xa  -D${PLF} -I /usr/openwin/include"
-# Loader flags
-LDF=-L /usr/openwin/lib -lnsl -lsocket 
-# C compiler to use
-CC= cc
-AWK=/systems/pub/sun4/gawk
-TOUCH=/bin/touch
-TAR=tar
-RANLIB= ar tvs 
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lisp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 72 Makefile.sun4os58c called
-	@echo 73 Environment : ${ENV} 
-	@echo 74 finished system build on `date` | tee >lastBuildDate
-	@- grep "result FAILED" int/input/*.regress
-
-<<rootdirs>>
-<<noweb>>
-<<literate commands>>
-<<srcsetup>>
-<<src>>
-<<lsp>>
-<<document>>
-<<clean>>
-
-@
-\subsection{Makefile.sung}
-<<Makefile.sung>>=
-# System dependent Makefile for the SPARC SUNOS 4.1.2 platform
-# Platform variable
-PLF= SUNplatform
-# C compiler flags
-CCF=" -O -D${PLF} -I/usr/openwin/include"
-# Loader flags
-LDF= -L/usr/openwin/lib
-# C compiler to use
-CC= gcc
-AWK="/systems/pub/sun4/gawk -W version -W compat"
-RANLIB=ranlib
-TOUCH=/usr/5bin/touch
-TAR=/usr/local/bin/gnutar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lisp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
-<<GCLOPTS>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
-
-all: rootdirs noweb srcsetup lspdir srcdir
-	@echo 75 Makefile.sung called
-	@echo 76 Environment : ${ENV} 
-	@echo 77 finished system build on `date` | tee >lastBuildDate
 	@- grep "result FAILED" int/input/*.regress
 
 <<rootdirs>>
@@ -2613,35 +1426,14 @@ We need to search includes (``-I'') in /usr/include before
 different order than linux systems. The sys versions of 
 the include files are broken, at least for Axiom use.
 <<Makefile.MACOSX>>=
-# System dependent Makefile for the MAC OSX platform
-# Platform variable
+
+<<ENVDEFAULTS>>
+AWK=awk
 PLF=MACOSXplatform
-# C compiler flags
 CCF="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} \
      -I/usr/X11/include -I/usr/include -I/usr/include/sys"
-# Loader flags
-LDF= -L/usr/X11R6/lib 
-# C compiler to use
-CC=gcc 
-AWK=awk
-RANLIB=ranlib
-TOUCH=touch
-TAR=tar
-AXIOMXLROOT=${AXIOM}/compiler
-O=o
-BYE=bye
-LISP=lsp
-DAASE=${SRC}/share
-# where the libXpm.a library lives
-XLIB=/usr/X11R6/lib
 <<GCLOPTS-CUSTRELOC>>
-<<SRCDIRS>>
-PATCH=patch
-
-ENV=PLF=${PLF} CCF=${CCF} LDF=${LDF} CC=${CC} AWK=${AWK} RANLIB=${RANLIB} \
-    TOUCH=${TOUCH} TAR=${TAR} AXIOMXLROOT=${AXIOMXLROOT} O=${O} BYE=${BYE} \
-    LISP=${LISP} DAASE=${DAASE} XLIB=${XLIB} GCLOPTS=${GCLOPTS} \
-    SRCDIRS=${SRCDIRS} PATCH=${PATCH}
+<<ENV>>
 
 all: rootdirs noweb srcsetup lspdir srcdir
 	@echo 45 Makefile.linux called
