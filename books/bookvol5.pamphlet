@@ -34564,6 +34564,18 @@ Compile with noisy output
 
 @
 
+\defun{ncINTERPFILE}{Interpreter interface to the compiler}
+\calls{ncINTERPFILE}{SpadInterpretStream}
+\usesdollar{ncINTERPFILE}{EchoLines}
+\usesdollar{ncINTERPFILE}{ReadingFile}
+<<defun ncINTERPFILE>>=
+(defun |ncINTERPFILE| (file echo)
+ (let ((|$EchoLines| echo) (|$ReadingFile| t))
+ (declare (special |$EchoLines| |$ReadingFile|))
+  (|SpadInterpretStream| 1 file nil)))
+
+@
+
 \defvar{boot-line-stack}
 <<initvars>>=
 (defvar boot-line-stack nil "List of lines returned from preparse")
@@ -34620,6 +34632,7 @@ Compile with noisy output
 \uses{spad}{*eof*}
 \uses{spad}{file-closed}
 \uses{spad}{xcape}
+\catches{spad}{spad-reader}
 <<defun spad>>=
 (defun spad (&optional (*spad-input-file* nil) (*spad-output-file* nil)
              &aux (*comp370-apply* #'print-defun)
@@ -34806,6 +34819,7 @@ searchCurrentEnv(x,currentEnv) ==
 
 @
 
+\chapter{File Parsing}
 \defun{addBindingInteractive}{Bind a variable in the interactive environment}
 \calls{addBindingInteractive}{assq}
 <<defun addBindingInteractive>>=
@@ -34870,6 +34884,227 @@ searchCurrentEnv(x,currentEnv) ==
 
 @
 
+<<initvars>>=
+(defvar $index 0 "File line number of most recently read line")
+
+@
+
+<<initvars>>=
+(defvar $linelist nil "Stack of preparsed lines")
+
+@
+
+<<initvars>>=
+(defvar echolinestack nil "Stack of lines to list")
+
+@
+
+<<initvars>>=
+(defvar $preparse-last-line nil "Most recently read line")
+
+@
+
+\defun{initialize-preparse}{initialize-preparse}
+\calls{initialize-preparse}{get-a-line}
+\usesdollar{initialize-preparse}{index}
+\usesdollar{initialize-preparse}{linelist}
+\usesdollar{initialize-preparse}{echolinestack}
+\usesdollar{initialize-preparse}{preparse-last-line}
+<<defun initialize-preparse>>=
+(defun initialize-preparse (strm)
+  (setq $index 0)
+  (setq $linelist nil)
+  (setq $echolinestack nil)
+  (setq $preparse-last-line (get-a-line strm)))
+
+@
+
+\defun{preparse}{preparse}
+\calls{preparse}{preparse}
+\calls{preparse}{preparse1}
+\calls{preparse}{parseprint}
+\calls{preparse}{ifcar}
+\usesdollar{preparse}{comblocklist}
+\usesdollar{preparse}{skipme}
+\usesdollar{preparse}{preparse-last-line}
+\usesdollar{preparse}{index}
+\usesdollar{preparse}{docList}
+\usesdollar{preparse}{preparseReportIfTrue}
+\usesdollar{preparse}{headerDocumentation}
+\usesdollar{preparse}{maxSignatureLineNumber}
+\usesdollar{preparse}{constructorLineNumber}
+<<defun preparse>>=
+(defun preparse (strm &aux (stack ()))
+ (declare (special $comblocklist $skipme $preparse-last-line $index |$docList|
+            $preparseReportIfTrue |$headerDocumentation|
+            |$maxSignatureLineNumber| |$constructorLineNumber|))
+  (setq $comblocklist nil)
+  (setq $skipme nil)
+  (when $preparse-last-line
+   (if (pairp $preparse-last-line)
+    (setq stack $preparse-last-line)
+    (push $preparse-last-line stack))
+   (setq $index (- $index (length stack))))
+  (let ((u (preparse1 stack)))
+   (if $skipme 
+    (preparse strm)
+    (progn
+      (when $preparseReportIfTrue (parseprint u))
+      (setq |$headerDocumentation| nil)
+      (setq |$docList| nil)
+      (setq |$maxSignatureLineNumber| 0)
+      (setq |$constructorLineNumber| (ifcar (ifcar u)))
+      u))))
+
+@
+
+\defun{preparse1}{Build the lines from the input for piles}
+\calls{preparse1}{preparseReadLine}
+\calls{preparse1}{atEndOfUnit}
+\calls{preparse1}{preparse-echo}
+\calls{preparse1}{fincomblock}
+\calls{preparse1}{parsepiles}
+\calls{preparse1}{doSystemCommand}
+\calls{preparse1}{escaped}
+\calls{preparse1}{instring}
+\calls{preparse1}{indent-pos}
+\calls{preparse1}{getfullstr}
+\calls{preparse1}{droptrailingblanks}
+\calls{preparse1}{maxindex}
+\calls{preparse1}{strposl}
+\calls{preparse1}{is-console}
+\catches{preparse1}{spad-reader}
+\usesdollar{preparse1}{linelist}
+\usesdollar{preparse1}{echolinestack}
+\usesdollar{preparse1}{byConstructors}
+\usesdollar{preparse1}{skipme}
+\usesdollar{preparse1}{constructorsSeen}
+\usesdollar{preparse1}{preparse-last-line}
+<<defun preparse1>>=
+(defun preparse1 (linelist)
+ (prog (($linelist linelist) $echolinestack num a i l psloc
+        instring pcount comsym strsym oparsym cparsym n ncomsym
+        (sloc -1) (continue nil)  (parenlev 0) (ncomblock ())
+        (lines ()) (locs ()) (nums ()) functor)
+ (declare (special $linelist $echolinestack |$byConstructors| $skipme
+           |$constructorsSeen| $preparse-last-line))
+READLOOP 
+  (dcq (num . a) (preparseReadLine linelist))
+  (when (atEndOfUnit a)
+    (preparse-echo linelist)
+    (cond 
+     ((null lines) (return nil))
+     (ncomblock    (fincomblock nil nums locs ncomblock nil)))
+    (return
+     (pair (nreverse nums) (parsepiles (nreverse locs) (nreverse lines)))))
+  ; this is a command line, don't parse it
+  (when (and (null lines) (> (length a) 0) (eq (char a 0) #\) ))
+    (preparse-echo linelist)
+    (setq $preparse-last-line nil) ;don't reread this line
+    (setq line a)
+    (catch 'spad_reader (|doSystemCommand| (subseq line 1)))
+    (go READLOOP))
+  (setq l (length a))
+  ; if we get a null line, read the next line
+  (when (eq l 0) (go READLOOP))
+  ; otherwise we have to parse this line
+  (setq psloc sloc)
+  (setq i 0)
+  (setq instring nil)
+  (setq pcount 0)
+STRLOOP ;; handle things that need ignoring, quoting, or grouping
+  ; are we in a comment, quoting, or grouping situation?
+  (setq strsym (or (position #\" a :start i ) l))
+  (setq comsym (or (search "--" a :start2 i ) l))
+  (setq ncomsym (or (search "++" a :start2 i ) l))
+  (setq oparsym (or (position #\( a :start i ) l))
+  (setq cparsym (or (position #\) a :start i ) l))
+  (setq n (min strsym comsym ncomsym oparsym cparsym))
+  (cond 
+   ; nope, we found no comment, quoting, or grouping
+   ((= n l) (go NOCOMS))
+   ((escaped a n))
+   ; scan until we hit the end of the string
+   ((= n strsym) (setq instring (not instring)))
+   (instring)
+   ;; handle -- comments by ignoring them
+   ((= n comsym)
+    (setq a (subseq a 0 n))
+    (go NOCOMS)) ; discard trailing comment
+   ;; handle ++ comments by chunking them together
+   ((= n ncomsym)
+    (setq sloc (indent-pos a))
+    (cond
+     ((= sloc n)
+      (when (and ncomblock (not (= n (car ncomblock))))
+       (fincomblock num nums locs ncomblock linelist)
+       (setq ncomblock nil))
+      (setq ncomblock (cons n (cons a (ifcdr ncomblock))))
+      (setq a ""))
+     (t 
+      (push (strconc (getfullstr n " ") (substring a n ())) $linelist)
+      (setq $index (1- $index))
+      (setq a (subseq a 0 n))))
+    (go NOCOMS))
+   ; know how deep we are into parens
+   ((= n oparsym) (setq pcount (1+ pcount)))
+   ((= n cparsym) (setq pcount (1- pcount))))
+  (setq i (1+ n))
+  (go STRLOOP)
+NOCOMS 
+  ; remember the indentation level
+  (setq sloc (indent-pos a))
+  (setq a (droptrailingblanks a))
+  (when (null sloc)
+   (setq sloc psloc)
+   (go READLOOP))
+  ; handle line that ends in a continuation character
+  (cond
+   ((eq (elt a (maxindex a)) xcape)
+    (setq continue t)
+    (setq a (subseq a (maxindex a))))
+   ((setq continue nil)))
+  ; test for skipping constructors
+  (when (and (null lines) (= sloc 0))
+    (if (and |$byConstructors|
+             (null (search "==>" a))
+             (not 
+              (member 
+               (setq functor 
+                (intern (substring a 0 (strposl ": (=" a 0 nil))))
+                |$byConstructors|)))
+       (setq $skipme 't)
+       (progn
+        (push functor |$constructorsSeen|)
+        (setq $skipme nil))))
+  ; is this thing followed by ++ comments?
+  (when (and lines (eql sloc 0))
+   (when (and ncomblock (not (zerop (car ncomblock))))
+    (fincomblock num nums locs ncomblock linelist))
+   (when (not (is-console in-stream))
+    (setq $preparse-last-line (nreverse $echolinestack)))
+   (return
+    (pair (nreverse nums) (parsepiles (nreverse locs) (nreverse lines)))))
+  (when (> parenlev 0)
+   (push nil locs)
+   (setq sloc psloc)
+   (go REREAD))
+  (when ncomblock
+   (fincomblock num nums locs ncomblock linelist)
+   (setq ncomblock ()))
+  (push sloc locs)
+REREAD 
+  (preparse-echo linelist)
+  (push a lines)
+  (push num nums)
+  (setq parenlev (+ parenlev pcount))
+  (when (and (is-console in-stream) (not continue))
+   (setq $preparse-last-line nil)
+   (return
+    (pair (nreverse nums) (parsepiles (nreverse locs) (nreverse lines)))))
+  (go READLOOP)))
+
+@
 
 \chapter{Handling output}
 \section{Special Character Tables}
@@ -40039,6 +40274,7 @@ This needs to work off the internal exposure list, not the file.
 <<defun initHistList>>
 <<defun initial-getdatabase>>
 <<defun initializeInterpreterFrameRing>>
+<<defun initialize-preparse>>
 <<defun initializeSetVariables>>
 <<defun initImPr>>
 <<defun init-memory-config>>
@@ -40216,6 +40452,7 @@ This needs to work off the internal exposure list, not the file.
 <<defun ncEltQ>>
 <<defun ncError>>
 <<defun ncHardError>>
+<<defun ncINTERPFILE>>
 <<defun ncIntLoop>>
 <<defun ncloopCommand>>
 <<defun ncloopDQlines>>
@@ -40714,6 +40951,8 @@ This needs to work off the internal exposure list, not the file.
 <<defun ppos>>
 <<defun pquit>>
 <<defun pquitSpad2Cmd>>
+<<defun preparse>>
+<<defun preparse1>>
 <<defun previousInterpreterFrame>>
 <<defun printAsTeX>>
 <<defun printLabelledList>>
@@ -40914,6 +41153,7 @@ This needs to work off the internal exposure list, not the file.
 <<defun Skipping?>>
 <<defun spad>>
 <<defun spadClosure?>>
+<<defun spad-fixed-arg>>
 <<defun SpadInterpretStream>>
 <<defun spadReply>>
 <<defun spadReply,printName>>
