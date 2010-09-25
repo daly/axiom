@@ -1385,7 +1385,8 @@ foo defined inside of fum gets renamed as fum,foo.")
 
 (defun smint-able (x)
   (or (typep x 'fixnum)
-      (and (pairp x) (memq (car x) '(|One| |Zero| LENGTH \# QCSIZE QVSIZE QLENGTH)))))
+      (and (pairp x) (member (car x)
+                       '(|One| |Zero| LENGTH \# QCSIZE QVSIZE QLENGTH)))))
 
 (defun DEF-PROCESS (X &aux $MACROASSOC)
   (COND ((EQCAR X 'DEF) (DEF (SECOND X) (THIRD X) (FIRST (CDDDDR X))))
@@ -3211,16 +3212,8 @@ preparse
 <<*>>=
 ; Global storage
  
-(defparameter $INDEX 0                          "File line number of most recently read line.")
-(defparameter $preparse-last-line ()            "Most recently read line.")
 (defparameter $preparseReportIfTrue NIL         "Should we print listings?")
-(defparameter $LineList nil                     "Stack of preparsed lines.")
-(defparameter $EchoLineStack nil                "Stack of lines to list.")
 (defparameter $IOIndex 0                        "Number of latest terminal input line.")
- 
-(defun Initialize-Preparse (strm)
-  (setq $INDEX 0 $LineList nil $EchoLineStack nil)
-  (setq $preparse-last-line (get-a-line strm)))
  
 (defmacro pptest () `(/rp ">scratchpad>test.boot"))
  
@@ -3238,114 +3231,6 @@ preparse
       (initialize-preparse in-stream)
       (do ((lines (PREPARSE in-stream) (PREPARSE in-stream))) ((null lines)))))
   T)
- 
-(defun PREPARSE (Strm &aux (stack ()))
-  (SETQ $COMBLOCKLIST NIL $skipme NIL)
-  (when $preparse-last-line
-	(if (pairp $preparse-last-line)
-	    (setq stack $preparse-last-line)
-	  (push $preparse-last-line stack))
-        (setq $INDEX (- $INDEX (length stack))))
-  (let ((U (PREPARSE1 stack)))
-    (if $skipme (preparse strm)
-      (progn
-	(if $preparseReportIfTrue (PARSEPRINT U))
-	(setq |$headerDocumentation| NIL)
-	(SETQ |$docList| NIL)
-	(SETQ |$maxSignatureLineNumber| 0)
-	(SETQ |$constructorLineNumber| (IFCAR (IFCAR U)))
-	U))))
- 
-(defun PREPARSE1 (LineList)
- (PROG (($LINELIST LineList) $EchoLineStack NUM A I L PSLOC
-        INSTRING PCOUNT COMSYM STRSYM OPARSYM CPARSYM N NCOMSYM
-        (SLOC -1) (CONTINUE NIL)  (PARENLEV 0) (NCOMBLOCK ())
-        (LINES ()) (LOCS ()) (NUMS ()) functor  )
- READLOOP (DCQ (NUM . A) (preparseReadLine LineList))
-         (cond ((atEndOfUnit A)
-                (PREPARSE-ECHO LineList)
-                (COND ((NULL LINES) (RETURN NIL))
-                      (NCOMBLOCK
-                       (FINCOMBLOCK NIL NUMS LOCS NCOMBLOCK NIL)))
-                (RETURN (PAIR (NREVERSE NUMS)
-                              (PARSEPILES (NREVERSE LOCS) (NREVERSE LINES))))))
-         (cond ((and (NULL LINES) (> (LENGTH A) 0) (EQ (CHAR A 0) #\) ))
-                ; this is a command line, don't parse it
-                (PREPARSE-ECHO LineList)
-                (setq $preparse-last-line nil) ;don't reread this line
-                (SETQ LINE a)
-		(CATCH 'SPAD_READER (|doSystemCommand| (subseq LINE 1)))
-		(GO READLOOP)))
-         (setq L (LENGTH A))
-         (if (EQ L 0) (GO READLOOP))
-         (setq PSLOC SLOC)
-         (setq I 0 INSTRING () PCOUNT 0)
- STRLOOP (setq STRSYM (OR (position #\" A :start I ) L))
-         (setq COMSYM (OR (search "--" A :start2 I ) L))
-         (setq NCOMSYM (OR (search "++" A :start2 I ) L))
-         (setq OPARSYM (OR (position #\( A :start I ) L))
-         (setq CPARSYM (OR (position #\) A :start I ) L))
-         (setq N (MIN STRSYM COMSYM NCOMSYM OPARSYM CPARSYM))
-         (cond ((= N L) (GO NOCOMS))
-               ((ESCAPED A N))
-               ((= N STRSYM) (setq INSTRING (NOT INSTRING)))
-               (INSTRING)
-               ((= N COMSYM) (setq A (subseq A 0 N)) (GO NOCOMS)) ; discard trailing comment
-               ((= N NCOMSYM)
-                (setq SLOC (INDENT-POS A))
-                (COND
-                  ((= SLOC N)
-                   (COND ((AND NCOMBLOCK (NOT (= N (CAR NCOMBLOCK))))
-                          (FINCOMBLOCK NUM NUMS LOCS NCOMBLOCK linelist)
-                          (SETQ NCOMBLOCK NIL)))
-                   (SETQ NCOMBLOCK (CONS N (CONS A (IFCDR NCOMBLOCK))))
-                   (SETQ A ""))
-                  ('T (PUSH (STRCONC (GETFULLSTR N " ")
-                                  (SUBSTRING A N ())) $LINELIST)
-                      (SETQ $INDEX (SUB1 $INDEX))
-                      (SETQ A (SUBSEQ A 0 N))))
-         (GO NOCOMS))
-               ((= N OPARSYM) (setq PCOUNT (1+ PCOUNT)))
-               ((= N CPARSYM) (setq PCOUNT (1- PCOUNT))))
-         (setq I (1+ N))
-         (GO STRLOOP)
- NOCOMS  (setq SLOC (INDENT-POS A))
-         (setq A (DROPTRAILINGBLANKS A))
-         (cond ((NULL SLOC) (setq SLOC PSLOC) (GO READLOOP)))
-         (cond ((EQ (ELT A (MAXINDEX A)) XCAPE)
-                (setq CONTINUE T a (subseq A (MAXINDEX A))))
-               ((setq CONTINUE NIL)))
-         (if (and (null LINES) (= SLOC 0)) ;;test for skipping constructors
-             (if (and |$byConstructors|
-                      (null (search "==>" a))
-                      (not (member (setq functor (intern
-                                    (substring a 0 (STRPOSL ": (=" A 0 NIL))))
-                                   |$byConstructors|)))
-                 (setq $skipme 't)
-               (progn (push functor |$constructorsSeen|) (setq $skipme nil))))
-         (when (and LINES (EQL SLOC 0))
-             (IF (AND NCOMBLOCK (NOT (ZEROP (CAR NCOMBLOCK))))
-               (FINCOMBLOCK NUM NUMS LOCS NCOMBLOCK linelist))
-	     (IF (NOT (IS-CONSOLE in-stream))
-		 (setq $preparse-last-line
-		       (nreverse $echolinestack)))
-             (RETURN (PAIR (NREVERSE NUMS)
-                        (PARSEPILES (NREVERSE LOCS) (NREVERSE LINES)))))
-         (cond ((> PARENLEV 0) (PUSH NIL LOCS) (setq SLOC PSLOC) (GO REREAD)))
-         (COND (NCOMBLOCK
-                (FINCOMBLOCK NUM NUMS LOCS NCOMBLOCK linelist)
-                (setq NCOMBLOCK ())))
-         (PUSH SLOC LOCS)
- REREAD  (PREPARSE-ECHO LineList)
-         (PUSH A LINES)
-         (PUSH NUM NUMS)
-         (setq PARENLEV (+ PARENLEV PCOUNT))
-         (when (and (is-console in-stream) (not continue))
-            (setq $preparse-last-line nil)
-             (RETURN (PAIR (NREVERSE NUMS)
-                           (PARSEPILES (NREVERSE LOCS) (NREVERSE LINES)))))
- 
-         (GO READLOOP)))
  
 ;; NUM is the line number of the current line
 ;; OLDNUMS is the list of line numbers of previous lines
@@ -4703,7 +4588,7 @@ postpar
 
 ;;;     ***       |postJoin| REDEFINED
 
-(DEFUN |postJoin| (#0=#:G167191) (PROG (|a| |b| |name| |l| |c| |al|) (RETURN (PROGN (SPADLET |a| (CADR #0#)) (SPADLET |l| (CDDR #0#)) (SPADLET |a| (|postTran| |a|)) (SPADLET |l| (|postTranList| |l|)) (COND ((AND (PAIRP |l|) (EQ (QCDR |l|) NIL) (PROGN (SPADLET |b| (QCAR |l|)) (QUOTE T)) (PAIRP |b|) (PROGN (SPADLET |name| (QCAR |b|)) (QUOTE T)) (MEMQ |name| (QUOTE (ATTRIBUTE SIGNATURE)))) (SPADLET |l| (LIST (CONS (QUOTE CATEGORY) (CONS |b| NIL)))))) (SPADLET |al| (COND ((AND (PAIRP |a|) (EQ (QCAR |a|) (QUOTE |@Tuple|)) (PROGN (SPADLET |c| (QCDR |a|)) (QUOTE T))) |c|) ((QUOTE T) (LIST |a|)))) (CONS (QUOTE |Join|) (APPEND |al| |l|)))))) 
+(DEFUN |postJoin| (#0=#:G167191) (PROG (|a| |b| |name| |l| |c| |al|) (RETURN (PROGN (SPADLET |a| (CADR #0#)) (SPADLET |l| (CDDR #0#)) (SPADLET |a| (|postTran| |a|)) (SPADLET |l| (|postTranList| |l|)) (COND ((AND (PAIRP |l|) (EQ (QCDR |l|) NIL) (PROGN (SPADLET |b| (QCAR |l|)) (QUOTE T)) (PAIRP |b|) (PROGN (SPADLET |name| (QCAR |b|)) (QUOTE T)) (member |name| (QUOTE (ATTRIBUTE SIGNATURE)))) (SPADLET |l| (LIST (CONS (QUOTE CATEGORY) (CONS |b| NIL)))))) (SPADLET |al| (COND ((AND (PAIRP |a|) (EQ (QCAR |a|) (QUOTE |@Tuple|)) (PROGN (SPADLET |c| (QCDR |a|)) (QUOTE T))) |c|) ((QUOTE T) (LIST |a|)))) (CONS (QUOTE |Join|) (APPEND |al| |l|)))))) 
 ;postMapping u  ==
 ;  u isnt ["->",source,target] => u
 ;  ['Mapping,postTran target,:unTuple postTran source]
@@ -4920,7 +4805,7 @@ postpar
 
 ;;;     ***       |postWith| REDEFINED
 
-(DEFUN |postWith| (#0=#:G167795) (PROG (|$insidePostCategoryIfTrue| |a| |op| |b|) (DECLARE (SPECIAL |$insidePostCategoryIfTrue|)) (RETURN (PROGN (SPADLET |a| (CADR #0#)) (SPADLET |$insidePostCategoryIfTrue| (QUOTE T)) (SPADLET |a| (|postTran| |a|)) (COND ((AND (PAIRP |a|) (PROGN (SPADLET |op| (QCAR |a|)) (QUOTE T)) (MEMQ |op| (QUOTE (SIGNATURE ATTRIBUTE IF)))) (CONS (QUOTE CATEGORY) (CONS |a| NIL))) ((AND (PAIRP |a|) (EQ (QCAR |a|) (QUOTE PROGN)) (PROGN (SPADLET |b| (QCDR |a|)) (QUOTE T))) (CONS (QUOTE CATEGORY) |b|)) ((QUOTE T) |a|)))))) 
+(DEFUN |postWith| (#0=#:G167795) (PROG (|$insidePostCategoryIfTrue| |a| |op| |b|) (DECLARE (SPECIAL |$insidePostCategoryIfTrue|)) (RETURN (PROGN (SPADLET |a| (CADR #0#)) (SPADLET |$insidePostCategoryIfTrue| (QUOTE T)) (SPADLET |a| (|postTran| |a|)) (COND ((AND (PAIRP |a|) (PROGN (SPADLET |op| (QCAR |a|)) (QUOTE T)) (member |op| (QUOTE (SIGNATURE ATTRIBUTE IF)))) (CONS (QUOTE CATEGORY) (CONS |a| NIL))) ((AND (PAIRP |a|) (EQ (QCAR |a|) (QUOTE PROGN)) (PROGN (SPADLET |b| (QCDR |a|)) (QUOTE T))) (CONS (QUOTE CATEGORY) |b|)) ((QUOTE T) |a|)))))) 
 ;postTransformCheck x ==
 ;  $defOp: local:= nil
 ;  postcheck x
