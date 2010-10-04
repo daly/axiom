@@ -1063,7 +1063,6 @@ For instance, for the file {\tt EQ.spad}, we get:
 
 \defun{preparse1}{Build the lines from the input for piles}
 \calls{preparse1}{preparseReadLine}
-\calls{preparse1}{atEndOfUnit}
 \calls{preparse1}{preparse-echo}
 \calls{preparse1}{fincomblock}
 \calls{preparse1}{parsepiles}
@@ -1072,7 +1071,6 @@ For instance, for the file {\tt EQ.spad}, we get:
 \calls{preparse1}{instring}
 \calls{preparse1}{indent-pos}
 \calls{preparse1}{getfullstr}
-\calls{preparse1}{droptrailingblanks}
 \calls{preparse1}{maxindex}
 \calls{preparse1}{strposl}
 \calls{preparse1}{is-console}
@@ -1093,7 +1091,7 @@ For instance, for the file {\tt EQ.spad}, we get:
            |$constructorsSeen| $preparse-last-line))
 READLOOP 
   (dcq (num . a) (preparseReadLine linelist))
-  (when (atEndOfUnit a)
+  (unless (stringp a)
     (preparse-echo linelist)
     (cond 
      ((null lines) (return nil))
@@ -1157,7 +1155,7 @@ STRLOOP ;; handle things that need ignoring, quoting, or grouping
 NOCOMS 
   ; remember the indentation level
   (setq sloc (indent-pos a))
-  (setq a (droptrailingblanks a))
+  (setq a (string-right-trim " " a))
   (when (null sloc)
    (setq sloc psloc)
    (go READLOOP))
@@ -1209,7 +1207,58 @@ REREAD
 
 @
 
-\defun{preparseReadLine}{preparseReadLine}
+\defun{parsepiles}{parsepiles}
+Add parens and semis to lines to aid parsing.
+\calls{parsepiles}{add-parens-and-semis-to-line}
+<<defun parsepiles>>=
+(defun parsepiles (locs lines)
+  (mapl #'add-parens-and-semis-to-line
+    (nconc lines '(" ")) (nconc locs '(nil)))
+  lines)
+
+@
+ 
+\defun{add-parens-and-semis-to-line}{add-parens-and-semis-to-line}
+The line to be worked on is (CAR SLINES).  It's indentation is (CAR SLOCS).
+There is a notion of current indentation. Then:
+\begin{itemize}
+\item Add open paren to beginning of following line if following line's 
+indentation is greater than current, and add close paren to end of 
+last succeeding line with following line's indentation.
+\item Add semicolon to end of line if following line's indentation is the same.
+\item If the entire line consists of the single keyword then or else, 
+leave it alone."
+\end{itemize}
+\calls{add-parens-and-semis-to-line}{infixtok}
+\calls{add-parens-and-semis-to-line}{drop}
+\calls{add-parens-and-semis-to-line}{addclose}
+\calls{add-parens-and-semis-to-line}{nonblankloc}
+<<defun add-parens-and-semis-to-line>>=
+(defun add-parens-and-semis-to-line (slines slocs)
+ (let ((start-column (car slocs)))
+  (when (and start-column (> start-column 0))
+   (let ((count 0) (i 0))
+    (seq
+     (mapl #'(lambda (next-lines nlocs)
+              (let ((next-line (car next-lines)) (next-column (car nlocs)))
+               (incf i)
+               (when next-column
+                (setq next-column (abs next-column))
+                (when (< next-column start-column) (exit nil))
+                (cond
+                 ((and (eq next-column start-column)
+                       (rplaca nlocs (- (car nlocs)))
+                       (not (infixtok next-line)))
+                   (setq next-lines (drop (1- i) slines))
+                   (rplaca next-lines (addclose (car next-lines) #\;))
+                   (setq count (1+ count)))))))
+                 (cdr slines) (cdr slocs)))
+     (when (> count 0)
+      (setf (char (car slines) (1- (nonblankloc (car slines)))) #\( )
+      (setq slines (drop (1- i) slines))
+      (rplaca slines (addclose (car slines) #\) )))))))
+ 
+@\defun{preparseReadLine}{preparseReadLine}
 \calls{preparseReadLine}{dcq}
 \calls{preparseReadLine}{preparseReadLine1}
 \calls{preparseReadLine}{initial-substring}
@@ -1243,7 +1292,6 @@ REREAD
 \defun{preparseReadLine1}{preparseReadLine1}
 \calls{preparseReadLine1}{get-a-line}
 \calls{preparseReadLine1}{expand-tabs}
-\calls{preparseReadLine1}{droptrailingblanks}
 \calls{preparseReadLine1}{maxindex}
 \calls{preparseReadLine1}{strconc}
 \calls{preparseReadLine1}{preparseReadLine1}
@@ -1263,7 +1311,7 @@ REREAD
   (if (stringp line)
    (progn
     (incf $index)
-    (setq line (droptrailingblanks line))
+    (setq line (string-right-trim " " line))
     (push (copy-seq line) $EchoLineStack)
     (cons $index
      (if (and (> (setq ind (maxindex line)) -1) (char= (elt line ind) #\_))
@@ -1291,13 +1339,6 @@ REREAD
 (defun initial-substring (pattern line)
    (let ((ind (mismatch pattern line)))
      (or (null ind) (eql ind (size pattern)))))
-
-@
- 
-\defun{atEndOfUnit}{atEndOfUnit}
-<<defun atEndOfUnit>>=
-(defun atEndOfUnit (x)
- (null (stringp x)))
 
 @
  
@@ -4417,8 +4458,8 @@ if \verb|$InteractiveMode| then use a null outputstream
 
 <<initvars>>
 
+<<defun add-parens-and-semis-to-line>>
 <<defun argsToSig>>
-<<defun atEndOfUnit>>
 
 <<defun comp>>
 <<defun comp2>>
@@ -4475,6 +4516,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 
 <<defun ncINTERPFILE>>
 
+<<defun parsepiles>>
 <<defun preparse>>
 <<defun preparse1>>
 <<defun preparseReadLine>>
