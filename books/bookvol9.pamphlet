@@ -1371,6 +1371,41 @@ Symbolics read-line returns embedded newlines in a c-m-Y.")
 
 \section{Line Handling}
 
+\subsection{Line Buffer}
+The philosophy of lines is that
+\begin{itemize}
+\item NEXT LINE will always return a non-blank line or fail.
+\item Every line is terminated by a blank character.
+\end{itemize}
+Hence there is always a current character, because there is never a 
+non-blank line, and there is always a separator character between tokens 
+on separate lines. Also, when a line is read, the character pointer is 
+always positioned ON the first character.
+\defstruct{Line}
+<<initvars>>=
+;(defstruct Line "Line of input file to parse."
+;           (Buffer (make-string 0) :type string)
+;           (Current-Char #\Return :type character)
+;           (Current-Index 1 :type fixnum)
+;           (Last-Index 0 :type fixnum)
+;           (Number 0 :type fixnum))
+
+@
+
+\defun{Line-New-Line}{Line-New-Line}
+\usesstruct{Line-New-Line}{Line}
+<<defun Line-New-Line>>=
+(defun Line-New-Line (string line &optional (linenum nil))
+  "Sets string to be the next line stored in line."
+  (setf (Line-Last-Index line) (1- (length string)))
+  (setf (Line-Current-Index line) 0)
+  (setf (Line-Current-Char line)
+        (or (and (> (length string) 0) (elt string 0)) #\Return))
+  (setf (Line-Buffer line) string)
+  (setf (Line-Number line) (or linenum (1+ (Line-Number line)))))
+
+@
+
 \defun{storeblanks}{storeblanks}
 <<defun storeblanks>>=
 (defun storeblanks (line n)
@@ -1598,6 +1633,22 @@ Symbolics read-line returns embedded newlines in a c-m-Y.")
 
 @
 
+\defun{postError}{postError}
+\calls{postError}{nequal}
+\calls{postError}{bumperrorcount}
+<<defun postError>>=
+(defun |postError| (msg)
+ (let (xmsg)
+  (bumperrorcount '|precompilation|)
+  (setq xmsg
+   (if (and (nequal |$defOp| '|$defOp|) (null |InteractiveMode|))
+    (cons |$defOp| (cons ": " msg))
+    msg))
+  (push xmsg |$postStack|)
+  nil))
+
+@
+
 \defun{setDefOp}{setDefOp}
 \usesdollar{setDefOp}{defOp}
 \usesdollar{setDefOp}{topOp}
@@ -1813,6 +1864,64 @@ Symbolics read-line returns embedded newlines in a c-m-Y.")
     (stringimage (fn a)))
    (t
     (stringimage 1)))))
+
+@
+
+
+\chapter{DEF forms}
+
+\defun{def-process}{def-process}
+\calls{def-process}{def}
+\calls{def-process}{b-mdef}
+\calls{def-process}{eqcar}
+\calls{def-process}{def-process}
+\calls{def-process}{is-console}
+\calls{def-process}{say}
+\calls{def-process}{deftran}
+\calls{def-process}{print-full}
+\calls{def-process}{deftran}
+\usesdollar{def-process}{macroassoc}
+<<defun def-process>>=
+(defun def-process (x &aux $macroassoc)
+ (cond
+  ((eqcar x 'def)
+   (def (second x) (third x) (first (cddddr x))))
+  ((eqcar x 'mdef)
+   (b-mdef (second x) (third x) (first (cddddr x))))
+  ((and (eqcar x 'where) (eqcar (second x) 'def))
+   (let* ((u (second x)) (y (cdr u)))
+    (def-process
+     (list 'def
+      (car y)
+      (car (setq y (cdr y)))
+      (car (setq y (cdr y)))
+      (cons 'where (cons (car (setq y (cdr y))) (cddr x)))))))
+  ((is-console *standard-output*)
+   (say "  VALUE = " (eval (deftran x))))
+  ((print-full (deftran x)))))
+
+@
+
+\defun{def-rename}{def-rename}
+\calls{def-rename}{def-rename1}
+<<defun def-rename>>=
+(defun def-rename (x)
+ (def-rename1 x))
+
+@
+
+\defun{def-rename1}{def-rename1}
+\calls{def-rename1}{def-rename1}
+<<defun def-rename1>>=
+(defun def-rename1 (x)
+ (cond
+  ((symbolp x)
+   (let ((y (get x 'rename))) (if y (first y) x)))
+  ((and (listp x) x)
+   (if (eqcar x 'quote)
+       x
+       (cons (def-rename1 (first x)) (def-rename1 (cdr x)))))
+  (x)))
 
 @
 
@@ -4878,8 +4987,8 @@ if \verb|$InteractiveMode| then use a null outputstream
 
 <<defun add-parens-and-semis-to-line>>
 <<defun aplTran>>
-<<defun aplTranList>>
 <<defun aplTran1>>
+<<defun aplTranList>>
 <<defun argsToSig>>
 
 <<defun comp>>
@@ -4924,6 +5033,9 @@ if \verb|$InteractiveMode| then use a null outputstream
 
 <<defun decodeScripts>>
 <<defun deepestExpression>>
+<<defun def-process>>
+<<defun def-rename>>
+<<defun def-rename1>>
 
 <<defun extractCodeAndConstructTriple>>
 
@@ -4938,6 +5050,8 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun initialize-preparse>>
 <<defun initial-substring>>
 
+<<defun Line-New-Line>>
+
 <<defun make-string-adjustable>>
 <<defun modifyModeStack>>
 
@@ -4946,6 +5060,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun parsepiles>>
 <<defun postAtom>>
 <<defun postcheck>>
+<<defun postError>>
 <<defun postOp>>
 <<defun postScriptsForm>>
 <<defun postTran>>
