@@ -283,17 +283,6 @@ Current-Line an explicit optional parameter for reasons of efficiency.
 <<*>>=
 (defparameter Current-Line (make-line)  "Current input line.")
 
-(defmacro current-line-print () '(Line-Print Current-Line))
-
-(defmacro current-line-show ()
-  `(if (line-past-end-p current-line)
-    (format t "~&The current line is empty.~%")
-    (progn
-     (format t "~&The current line is:~%~%")
-     (current-line-print))))
-
-(defmacro current-line-clear () `(Line-Clear Current-Line))
-
 @
 \subsection{Manipulating the token stack and reading tokens}
 This section is broken up into 3 levels:
@@ -428,21 +417,21 @@ can be shoved back on the input stream (to the current line) with Unget-Tokens.
  (case Valid-Tokens
   (0 t)
   (1 (let* ((cursym (quote-if-string current-token))
-            (curline (line-current-segment current-line))
+            (curline (line-current-segment Current-Line))
             (revised-line (strconc cursym curline (copy-seq " "))))
-         (line-new-line revised-line current-line (line-number current-line))
+         (line-new-line revised-line current-line (line-number Current-Line))
          (setq NonBlank (token-nonblank current-token))
          (setq Valid-Tokens 0)))
   (2 (let* ((cursym (quote-if-string current-token))
             (nextsym (quote-if-string next-token))
-            (curline (line-current-segment current-line))
+            (curline (line-current-segment Current-Line))
             (revised-line
              (strconc (if (token-nonblank current-token) "" " ")
                       cursym
                       (if (token-nonblank next-token) "" " ")
                       nextsym curline " ")))
       (setq NonBlank (token-nonblank current-token))
-      (line-new-line revised-line current-line (line-number current-line))
+      (line-new-line revised-line current-line (line-number Current-Line))
       (setq Valid-Tokens 0)))
   (t (error "How many tokens do you think you have?"))))
 
@@ -547,11 +536,6 @@ can be shoved back on the input stream (to the current line) with Unget-Tokens.
 @
 \subsubsection{Line handling}
 <<*>>=
-
-(defun next-line (&optional (in-stream t))
- (funcall Line-Handler in-stream))
-
-(defun input-clear () (setq Current-Fragment nil))
 
 (defparameter Printer-Line-Stack (make-stack)
   "Stack of output listing lines waiting to print. [local to PRINT-NEW-LINE]")
@@ -861,7 +845,11 @@ This state may be examined and reset with the procedures IOSTAT and IOCLEAR.
 (defun IOStat ()
   "Tell me what the current state of the parsing world is."
   ;(IOStreams-show)
-  (current-line-show)
+  (if (line-past-end-p Current-Line)
+    (format t "~&The current line is empty.~%")
+    (progn
+     (format t "~&The current line is:~%~%")
+     (Line-Print Current-Line)))
   (if (or $BOOT $SPAD) (next-lines-show))
   (token-stack-show)
   ;(reduce-stack-show)
@@ -869,8 +857,8 @@ This state may be examined and reset with the procedures IOSTAT and IOCLEAR.
 
 (defun IOClear (&optional (in t) (out t))
   ;(IOStreams-clear in out)
-  (input-clear)
-  (current-line-clear)
+  (setq Current-Fragment nil)
+  (Line-Clear Current-Line)
   (token-stack-clear)
   (reduce-stack-clear)
   (if (or $BOOT $SPAD) (next-lines-clear))
@@ -1252,7 +1240,12 @@ or the chracters ?, !, ' or %"
     (SPAD_ERROR_LOC OUT-STREAM)
     (TERPRI OUT-STREAM)))
 
-(defun SPAD_SHORT_ERROR () (current-line-show))
+(defun SPAD_SHORT_ERROR ()
+ (if (line-past-end-p Current-Line)
+    (format t "~&The current line is empty.~%")
+    (progn
+     (format t "~&The current line is:~%~%")
+     (Line-Print Current-Line))))
 
 (defun SPAD_ERROR_LOC (STR)
   (format str "******** Boot Syntax Error detected ********"))
@@ -1288,17 +1281,6 @@ foo defined inside of fum gets renamed as fum,foo.")
 "$OPASSOC is a renaming accumulator to be used with SUBLIS.")
 
 (defparameter $BODY nil)
-
-(defun DEF (FORM SIGNATURE $BODY)
-  (declare (ignore SIGNATURE))
-  (let* ($opassoc
-         ($op (first form))
-         (argl (rest form))
-         ($body (deftran $body))
-         (argl (DEF-INSERT_LET argl))
-         (arglp (DEF-STRINGTOQUOTE argl))
-         ($body (|bootTransform| $body)))
-      (COMP (SUBLIS $OPASSOC (list (list $OP (list 'LAM arglp $body)))))))
 
 ; We are making shallow binding cells for these functions as well
 
@@ -1347,15 +1329,15 @@ foo defined inside of fum gets renamed as fum,foo.")
 (defun DEF-INNER (FORM SIGNATURE $BODY)
   "Same as DEF but assumes body has already been DEFTRANned"
  (let ($OpAssoc ($op (first form)) (argl (rest form)))
-   (let* ((ARGL (DEF-INSERT_LET ARGL))
+   (let* ((ARGL (DEF-INSERT-LET ARGL))
           (ARGLP (DEF-STRINGTOQUOTE ARGL)))
     (COMP (SUBLIS $OPASSOC `((,$OP (LAM ,ARGLP ,$BODY))))))))
 
-(defun DEF-INSERT_LET (X)
+(defun DEF-INSERT-LET (X)
   (if (ATOM X) X
-      (CONS (DEF-INSERT_LET1 (FIRST X)) (DEF-INSERT_LET (CDR X)))))
+      (CONS (DEF-INSERT-LET1 (FIRST X)) (DEF-INSERT-LET (CDR X)))))
 
-(defun DEF-INSERT_LET1 (Y)
+(defun DEF-INSERT-LET1 (Y)
   (if (EQCAR Y 'SPADLET)
       (COND ((IDENTP (SECOND Y))
              (setq $BODY
@@ -1406,36 +1388,6 @@ foo defined inside of fum gets renamed as fum,foo.")
           (^ NULL) (|not| NULL) (NOT NULL) (REDUCE spadReduce) (DO spadDo)
           (|atom| ATOM) (|nil| NIL) (|null| NULL) (GET GETL)
           (T T$)))
-
-; This two-level call allows DEF-RENAME to be locally bound to do
-; nothing (see boot2Lisp) yet still allow function call (lisp2BootAndComp)
-
-(defun DEFTRAN (X)
- (let (op Y)
-   (COND ((STRINGP X) (DEF-STRING X))
-         ((IDENTP X) (COND ((LASSOC X $MACROASSOC)) (X)))
-         ((ATOM X) X)
-         ((EQ (setq OP (FIRST X)) 'WHERE) (DEF-WHERE (CDR X)))
-         ((EQ OP 'REPEAT) (DEF-REPEAT (CDR X)))
-         ((EQ OP 'COLLECT) (DEF-COLLECT (CDR X)))
-         ((EQ OP 'MAKESTRING)
-          (COND ((STRINGP (SECOND X)) X)
-                ((EQCAR (SECOND X) 'QUOTE)
-                 (LIST 'MAKESTRING (STRINGIMAGE (CADADR X))))
-                ((LIST 'MAKESTRING (DEFTRAN (SECOND X)) )) ))
-         ((EQ OP 'QUOTE)
-          (if (STRINGP (setq y (SECOND X))) (LIST 'MAKESTRING y)
-             (if (and (identp y) (char= (elt (pname y) 0) #\.))
-                 `(intern ,(pname y) ,(package-name *package*)) x)))
-         ((EQ OP 'IS) (|defIS| (CADR X) (CADDR X)))
-         ((EQ OP 'SPADLET) (DEF-LET (CADR X) (caddr x)))
-         ((EQ OP 'DCQ) (LIST 'DCQ (SECOND X) (DEFTRAN (THIRD X))))
-         ((EQ OP 'COND) (CONS 'COND (DEF-COND (CDR X))))
-         ((member (FIRST X) '(|sayBrightly| SAY MOAN CROAK) :test #'eq)
-          (DEF-MESSAGE X))
-         ((setq Y (GETL (FIRST X) 'DEF-TRAN))
-          (funcall Y (MAPCAR #'DEFTRAN (CDR X))))
-         ((mapcar #'DEFTRAN X)))))
 
 (defun DEF-SEQ (U) (SEQOPT (CONS 'SEQ U)))
 
@@ -3121,8 +3073,8 @@ special character be the atom whose print name is the character itself."
             (parsing (format out-stream "while parsing ~A.~%" parsing)))
       (progn (format out-stream "~:[here~;wanted ~A here~]" wanted wanted)
              (format out-stream "~:[~; while parsing ~A~]:~%" parsing parsing)
-             (current-line-print)
-             (current-line-clear)
+             (Line-Print Current-Line)
+             (Line-Clear Current-Line)
              (current-token)
              (incf $num_of_meta_errors)
              (setq Meta_Errors_Occurred t)))
@@ -4498,13 +4450,6 @@ parse
 ;;;     ***       |isPackageType| REDEFINED
 
 (DEFUN |isPackageType| (|x|) (NULL (CONTAINED (QUOTE $) |x|))) 
-;unTuple x ==
-;  x is ['Tuple,:y] => y
-;  LIST x
-
-;;;     ***       |unTuple| REDEFINED
-
-(DEFUN |unTuple| (|x|) (PROG (|y|) (RETURN (COND ((AND (PAIRP |x|) (EQ (QCAR |x|) (QUOTE |@Tuple|)) (PROGN (SPADLET |y| (QCDR |x|)) (QUOTE T))) |y|) ((QUOTE T) (LIST |x|)))))) 
 ;--% APL TRANSFORMATION OF INPUT
 @
 \eject
