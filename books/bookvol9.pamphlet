@@ -1921,7 +1921,7 @@ nothing (see boot2Lisp) yet still allow function call (lisp2BootAndComp).
           (cond ((stringp (second x)) x)
                 ((eqcar (second x) 'quote)
                  (list 'makestring (stringimage (cadadr x))))
-                ((list 'makestring (deftran (second x)) )) ))
+                ((list 'makestring (deftran (second x))))))
    ((eq op 'quote)
           (if (stringp (setq y (second x))) (list 'makestring y)
              (if (and (identp y) (char= (elt (pname y) 0) #\.))
@@ -1991,6 +1991,129 @@ nothing (see boot2Lisp) yet still allow function call (lisp2BootAndComp).
   (x)))
 
 @
+
+\defun{def-insert-let}{def-insert-let}
+\calls{def-insert-let}{def-insert-let}
+\calls{def-insert-let}{deftran}
+\calls{def-insert-let}{def-let}
+\calls{def-insert-let}{errhuh}
+<<defun def-insert-let>>=
+(defun def-insert-let (x)
+ (labels (
+  (insert-let1 (y)
+   (declare (special $body))
+    (if (and (consp y) (eq (qcar y) 'spadlet))
+     (cond 
+      ((identp (second y))
+       (setq $body (cons 'progn (list (def-let (third y) (second y)) $body)))
+       (setq y (second y)))
+      ((identp (third y))
+       (setq $body (cons 'progn (list (deftran y) $body))) (setq y (third y)))
+      ((errhuh)))
+     y)))
+ (if (atom x) 
+  x
+  (cons (insert-let1 (first x)) (def-insert-let (cdr x))))))
+
+@
+
+\defun{def-let}{def-let}
+\calls{def-let}{deftran}
+\calls{def-let}{defLET}
+<<defun def-let>>=
+(defun def-let (form rhs)
+ (let (f1 f2)
+  (unless (and (consp form) (eq (qcar form) '\:))
+   (setq form (macroexpand form)))
+  (cond
+   ((and (consp form) (eq (qcar form) '\:))
+    (setq f1 (deftran form))
+    (setq f2 (deftran (list 'spadlet (second form) rhs)))
+    (if (and (eq (car f2) 'spadlet) (equal (second f2) (second form)))
+      (list 'spadlet (second f1) (third f2))
+      (list 'progn f1 f2)))
+   ((and (consp form) (eq (qcar form) 'elt))
+     (deftran (list 'setelt (second form) (third form) rhs)))
+   (t 
+     (|defLET| form (deftran rhs))))))
+
+@
+
+\defun{defLET}{defLET}
+\calls{defLET}{defLET1}
+\usesdollar{defLET}{letGenVarCounter}
+\usesdollar{defLET}{inDefLET}
+<<defun defLET>>=
+(defun |defLET| (lhs rhs)
+ (let (|$letGenVarCounter| |$inDefLET|)
+ (declare (special |$letGenVarCounter| |$inDefLET|))
+  (setq |$letGenVarCounter| 1)
+  (setq |$inDefLET| t)
+  (|defLET1| lhs rhs)))
+
+@
+
+\defun{defLET1}{defLET1}
+\calls{defLET1}{identp}
+\calls{defLET1}{defLetForm}
+\calls{defLET1}{contained}
+\calls{defLET1}{defLet2}
+\calls{defLET1}{mkprogn}
+\calls{defLET1}{defLET1}
+\calls{defLET1}{strconc}
+\calls{defLET1}{stringimage}
+\usesdollar{defLET1}{let}
+\usesdollar{defLET1}{letGenVarCounter}
+<<defun defLET1>>=
+(defun |defLET1| (lhs rhs)
+ (let (name l1 l2 g rhsprime letprime)
+ (declare (special $let |$letGenVarCounter|))
+  (cond
+   ((identp lhs) (|defLetForm| lhs rhs))
+   ((and (pairp lhs) (eq (qcar lhs) 'fluid)
+         (pairp (qcdr lhs)) (eq (qcdr (qcdr lhs)) nil))
+     (|defLetForm| lhs rhs))
+   ((and (identp rhs) (null (contained rhs lhs)))
+    (setq rhsprime (|defLET2| lhs rhs))
+    (cond
+     ((and (consp rhsprime) (eql (qcar rhsprime) $let))
+       (mkprogn (list rhsprime rhs)))
+     ((and (consp rhsprime) (eq (qcar rhsprime) 'progn))
+      (append rhsprime (list rhs)))
+     (t
+      (when (identp (car rhsprime)) (setq rhsprime (list rhsprime)))
+      (mkprogn (append rhsprime (list rhs))))))
+   ((and (pairp rhs) (eqcar rhs $let) (identp (setq name (cadr rhs))))
+     (setq l1 (|defLET1| name (third rhs)))
+     (setq l2 (|defLET1| lhs name))
+     (if (and (consp l2) (eq (qcar l2) 'progn))
+      (mkprogn (cons l1 (cdr l2)))
+      (progn
+        (when (identp (car l2)) (setq l2 (list l2)))
+        (mkprogn (cons l1 (append l2 (list name)))))))
+   (t
+    (setq g (intern (strconc "LETTMP#" (stringimage |$letGenVarCounter|))))
+    (setq |$letGenVarCounter| (1+ |$letGenVarCounter|))
+    (setq rhsprime (list $let g rhs))
+    (setq letprime (|defLET1| lhs g))
+    (if (and (consp letprime) (eq (qcar letprime) 'progn))
+     (mkprogn (cons rhsprime (cdr letprime)))
+     (progn
+      (when (identp (car letprime)) (setq letprime (list letprime)))
+      (mkprogn (cons rhsprime (append letprime (list g))))))))))
+
+
+@
+
+\defun{defLetForm}{defLetForm}
+\usesdollar{defLetForm}{let}
+<<defun defLetForm>>=
+(defun |defLetForm| (lhs rhs)
+ (declare (special $let))
+ (list $let lhs rhs))
+
+@
+
 
 ;unTuple x ==
 ;  x is ['Tuple,:y] => y
@@ -5115,6 +5238,11 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun decodeScripts>>
 <<defun deepestExpression>>
 <<defun def>>
+<<defun def-insert-let>>
+<<defun def-let>>
+<<defun defLET>>
+<<defun defLET1>>
+<<defun defLetForm>>
 <<defun def-process>>
 <<defun def-rename>>
 <<defun def-rename1>>
