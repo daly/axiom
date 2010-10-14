@@ -2211,6 +2211,54 @@ nothing (see boot2Lisp) yet still allow function call (lisp2BootAndComp).
 
 @
 
+\defun{def-where}{def-where}
+\calls{def-where}{def-whereclauselist}
+\calls{def-where}{def-inner}
+\calls{def-where}{sublis}
+\calls{def-where}{mkprogn}
+\calls{def-where}{deftran}
+\usesdollar{def-where}{defstack}
+\usesdollar{def-where}{opassoc}
+<<defun def-where>>=
+(defun def-where (args)
+ (let ((x (car args)) (y (cdr args)) $defstack)
+ (declare (special $defstack $opassoc))
+  (let ((u (def-whereclauselist y)))
+   (mapc #'(lambda (X) (def-inner (first x) nil (sublis $opassoc (second x))))
+         $defstack)
+   (mkprogn (nconc u (list (deftran x)))))))
+
+@
+
+\defun{def-whereclauselist}{def-whereclauselist}
+\calls{def-whereclauselist}{def-whereclause}
+\calls{def-whereclauselist}{deftran}
+<<defun def-whereclauselist>>=
+(defun def-whereclauselist (l)
+ (if (not (cdr l))
+  (def-whereclause (deftran (first l)))
+  (reduce #'append (mapcar #'(lambda (u) (def-whereclause (deftran u))) l))))
+
+@
+
+\defun{def-whereclause}{def-whereclause}
+\calls{def-whereclause}{eqcar}
+\calls{def-whereclause}{def-whereclause}
+\calls{def-whereclause}{whdef}
+<<defun def-whereclause>>=
+(defun def-whereclause (x)
+ (cond 
+  ((or (eqcar x 'seq) (eqcar x 'progn))
+   (reduce #'append (mapcar #'def-whereclause (cdr x))))
+  ((eqcar x 'def)
+   (whdef (second x) (first (cddddr x))) nil)
+  ((and (eqcar x '|exit|) (eqcar (second x) 'def))
+   (whdef (cadadr x) (first (cddddr (second x)) )) nil)
+  ((list x))))
+
+@
+
+
 \defun{addCARorCDR}{addCARorCDR}
 \calls{addCARorCDR}{eqcar}
 \calls{addCARorCDR}{qcdr}
@@ -2242,6 +2290,47 @@ nothing (see boot2Lisp) yet still allow function call (lisp2BootAndComp).
 @
 
 \subsection{IS}
+\defun{def-is}{def-is}
+\calls{def-is}{def-is2}
+\usesdollar{def-is}{is-gensymlist}
+\uses{def-is}{Initial-Gensym}
+<<defun def-is>>=
+(defun def-is (x)
+ (let (($is-gensymlist Initial-Gensym))
+  (declare (special is-gensymlist Initial-Gensym))
+  (def-is2 (first X) (second x))))
+
+@
+
+\defun{def-is2}{def-is2}
+\calls{def-is2}{eqcar}
+\calls{def-is2}{moan}
+\calls{def-is2}{def-is-eqlist}
+\calls{def-is2}{def-is-remdup}
+\calls{def-is2}{mkpf}
+\calls{def-is2}{subst}
+\calls{def-is2}{dcq}
+\calls{def-is2}{listofatoms}
+\calls{def-is2}{/tracelet-print}
+\usesdollar{def-is2}{is-eqlist}
+\usesdollar{def-is2}{is-spill-list}
+<<defun def-is2>>=
+(defun def-is2 (form struct)
+ (let ($is-eqlist $is-spill-list (form (deftran form)))
+  (when (eqcar struct '|@Tuple|)
+   (moan "you must use square brackets around right arg. to" '%b "is" '%d))
+  (let* ((x (def-is-eqlist (def-is-remdup struct)))
+         (code (if (identp x)
+                     (mkpf (subst form x $is-eqlist) 'and)
+                     (mkpf `((dcq ,x ,form) . ,$is-eqlist) 'and))))
+   (let ((code (mkpf `(,code . ,$is-spill-list) 'and)))
+    (if $traceletflag
+     (let ((l (remove-if #'gensymp (listofatoms x))))
+      `(prog1 ,code ,@(mapcar #'(lambda (y) `(/tracelet-print ,y ,y)) L)))
+     code)))))
+
+@
+
 \defun{defIS}{defIS}
 \calls{defIS}{deftran}
 \calls{defIS}{defIS1}
@@ -2361,6 +2450,7 @@ nothing (see boot2Lisp) yet still allow function call (lisp2BootAndComp).
    (def-is (list lhs rhs))))))
 
 @
+
 \defun{defISReverse}{defISReverse}
 This reverses forms coming from APPENDs in patterns. 
 It is pretty much just a translation of DEF-IS-REV
@@ -2380,11 +2470,43 @@ It is pretty much just a translation of DEF-IS-REV
 
 @
 
-;unTuple x ==
-;  x is ['Tuple,:y] => y
-;  LIST x
+\defun{def-collect}{def-collect}
+\calls{def-collect}{def-it}
+\calls{def-collect}{deftran}
+\calls{def-collect}{hackforis}
+<<defun def-collect>>=
+(defun def-collect (l)
+ (def-it 'collect (mapcar #'deftran (hackforis l))))
 
-;;;     ***       |unTuple| REDEFINED
+@
+
+\defun{def-repeat}{def-repeat}
+\calls{def-repeat}{def-it}
+\calls{def-repeat}{deftran}
+\calls{def-repeat}{hackforis}
+<<defun def-repeat>>=
+(defun def-repeat (l)
+ (def-it 'repeat (mapcar #'deftran (hackforis l))))
+
+@
+
+\defun{hackforis}{hackforis}
+\calls{hackforis}{hackforis1}
+<<defun hackforis>>=
+(defun hackforis (l) (mapcar #'hackforis1 L))
+
+@
+
+\defun{hackforis1}{hackforis1}
+\calls{hackforis1}{kar}
+\calls{hackforis1}{eqcar}
+<<defun hackforis1>>=
+(defun hackforis1 (x)
+ (if (and (member (kar x) '(in on)) (eqcar (second x) 'is))
+  (cons (first x) (cons (cons 'spadlet (cdadr x)) (cddr x)))
+  x))
+
+@
 
 \defun{unTuple}{unTuple}
 <<defun unTuple>>=
@@ -2392,6 +2514,14 @@ It is pretty much just a translation of DEF-IS-REV
  (if (and (pairp x) (eq (qcar x) '|@Tuple|))
   (qcdr x)
   (list x)))
+
+@
+
+\defun{errhuh}{errhuh}
+\calls{errhuh}{systemError}
+<<defun errhuh>>=
+(defun errhuh ()
+ (|systemError| "problem with BOOT to LISP translation"))
 
 @
 
@@ -5504,7 +5634,10 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun decodeScripts>>
 <<defun deepestExpression>>
 <<defun def>>
+<<defun def-collect>>
 <<defun def-insert-let>>
+<<defun def-is>>
+<<defun def-is2>>
 <<defun defIS>>
 <<defun defIS1>>
 <<defun defISReverse>>
@@ -5516,8 +5649,13 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun def-process>>
 <<defun def-rename>>
 <<defun def-rename1>>
+<<defun def-repeat>>
 <<defun deftran>>
+<<defun def-where>>
+<<defun def-whereclause>>
+<<defun def-whereclauselist>>
 
+<<defun errhuh>>
 <<defun extractCodeAndConstructTriple>>
 
 <<defun freelist>>
@@ -5525,6 +5663,8 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun get-a-line>>
 <<defun getScriptName>>
 
+<<defun hackforis>>
+<<defun hackforis1>>
 <<defun hasAplExtension>>
 <<defun hasFormalMapVariable>>
 
