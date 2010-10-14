@@ -2201,6 +2201,7 @@ nothing (see boot2Lisp) yet still allow function call (lisp2BootAndComp).
     (list 'cond (list isPred rhs))))))
 
 @
+
 \defun{defLetForm}{defLetForm}
 \usesdollar{defLetForm}{let}
 <<defun defLetForm>>=
@@ -2210,6 +2211,174 @@ nothing (see boot2Lisp) yet still allow function call (lisp2BootAndComp).
 
 @
 
+\defun{addCARorCDR}{addCARorCDR}
+\calls{addCARorCDR}{eqcar}
+\calls{addCARorCDR}{qcdr}
+\calls{addCARorCDR}{qcar}
+<<defun addCARorCDR>>=
+(defun |addCARorCDR| (acc expr)
+ (let (funs p funsA funsR)
+  (cond
+   ((null (pairp expr)) (list acc expr))
+   ((and (eq acc 'car) (eqcar expr 'reverse)) (cons '|last| (qcdr expr)))
+   (t
+    (setq funs
+     '(car cdr caar cdar cadr cddr caaar cadar caadr caddr
+       cdaar cddar cdadr cdddr))
+    (setq p (position (qcar expr) funs))
+    (if (null p)
+     (list acc expr)
+     (progn
+      (setq funsA
+       '(caar cadr caaar cadar caadr caddr caaaar caadar caaadr caaddr
+         cadaar caddar cadadr cadddr))
+      (setq funsR
+       '(cdar cddr cdaar cddar cdadr cdddr cdaaar cdadar cdaadr cdaddr
+         cddaar cdddar cddadr cddddr))
+      (if (eq acc 'car)
+       (cons (elt funsA p) (qcdr expr))
+       (cons (elt funsR p) (qcdr expr)))))))))
+
+@
+
+\subsection{IS}
+\defun{defIS}{defIS}
+\calls{defIS}{deftran}
+\calls{defIS}{defIS1}
+\usesdollar{defIS}{isGenVarCounter}
+\usesdollar{defIS}{inDefIS}
+<<defun defIS>>=
+(defun |defIS| (lhs rhs)
+ (let (|$isGenVarCounter| |$inDefIS|)
+ (declare (special |$isGenVarCounter| |$inDefIS|))
+  (setq |$isGenVarCounter| 1)
+  (setq |$inDefIS| t)
+  (|defIS1| (deftran lhs) rhs)))
+
+@
+
+\defun{defIS1}{defIS1}
+\calls{defIS1}{defLetForm}
+\calls{defIS1}{defLET1}
+\calls{defIS1}{defLET}
+\calls{defIS1}{defIS1}
+\calls{defIS1}{mkprogn}
+\calls{defIS1}{strconc}
+\calls{defIS1}{stringimage}
+\calls{defIS1}{qcar}
+\calls{defIS1}{qcdr}
+\calls{defIS1}{defISReverse}
+\calls{defIS1}{say}
+\calls{defIS1}{def-is}
+\usesdollar{defIS1}{let}
+\usesdollar{defIS1}{isGenVarCounter}
+\usesdollar{defIS1}{inDefLET}
+<<defun defIS1>>=
+(defun |defIS1| (lhs rhs)
+ (let (d l a1 b1 c cls a b patrev g rev l2)
+ (declare (special $let |$isGenVarCounter| |$inDefLET|))
+ (cond
+  ((null rhs) (list 'null lhs))
+  ((stringp rhs) (list 'eq lhs (list 'quote (intern rhs))))
+  ((numberp rhs) (list 'equal lhs rhs))
+  ((atom rhs) (list 'progn (|defLetForm| rhs lhs) 't))
+  ((and (pairp rhs) (eq (qcar rhs) 'quote)
+        (pairp (qcdr rhs)) (eq (qcdr (qcdr rhs)) nil))
+    (if (identp (qcar (qcdr rhs)))
+     (list 'eq lhs rhs)
+     (list 'equal lhs rhs)))
+  ((and (pairp rhs) (equal (qcar rhs) $let)
+         (pairp (qcdr rhs)) (pairp (qcdr (qcdr rhs)))
+         (eq (qcdr (qcdr (qcdr rhs))) nil))
+    (setq c (qcar (qcdr rhs)))
+    (setq d (qcar (qcdr (qcdr rhs))))
+    (setq l
+     (if |$inDefLET|
+      (|defLET1| c lhs)
+      (|defLET| c lhs)))
+    (list 'and (|defIS1| lhs d) (mkprogn (list l t))))
+  ((and (pairp rhs) (eq (qcar rhs) 'equal)
+        (pairp (qcdr rhs)) (eq (qcdr (qcdr rhs)) nil))
+   (setq a (qcar (qcdr rhs)))
+   (list 'equal lhs a ))
+  ((pairp lhs)
+   (setq g (intern (strconc "ISTMP#" (stringimage |$isGenVarCounter|))))
+   (setq |$isGenVarCounter| (1+ |$isGenVarCounter|))
+   (mkprogn (list (list $let g lhs) (|defIS1| g rhs))))
+  ((and (pairp rhs) (eq (qcar rhs) 'cons) (pairp (qcdr rhs))
+        (pairp (qcdr (qcdr rhs))) (eq (qcdr (qcdr (qcdr rhs))) nil))
+    (setq a (qcar (qcdr rhs)))
+    (setq b (qcar (qcdr (qcdr rhs))))
+    (cond
+     ((eq a (intern "." "BOOT"))
+      (if (null b)
+       (list 'and (list 'pairp lhs) (list 'eq (list 'qcdr lhs) nil))
+       (list 'and (list 'pairp lhs) (|defIS1| (list 'qcdr lhs) b))))
+     ((null b)
+      (list 'and (list 'pairp lhs) 
+                 (list 'eq (list 'qcdr lhs) nil)
+                 (|defIS1| (list 'qcar lhs) a)))
+     ((eq b (intern "." "BOOT"))
+       (list 'and (list 'pairp lhs) (|defIS1| (list 'qcar lhs) a)))
+     (t
+      (setq a1 (|defIS1| (list 'qcar lhs) a))
+      (setq b1 (|defIS1| (list 'qcdr lhs) b))
+      (cond
+       ((and (pairp a1) (eq (qcar a1) 'progn)
+             (pairp (qcdr a1)) (pairp (qcdr (qcdr a1)))
+             (eq (qcdr (qcdr (qcdr a1))) nil)
+             (equal (qcar (qcdr (qcdr a1))) t)
+             (pairp b1) (eq (qcar b1) 'progn))
+         (setq c (qcar (qcdr a1)))
+         (setq cls (qcdr b1))
+         (list 'and (list 'pairp lhs) (mkprogn (cons c cls))))
+       (t
+        (list 'and (list 'pairp lhs) a1 b1))))))
+  ((and (pairp rhs) (eq (qcar rhs) 'append) (pairp (qcdr rhs))
+        (pairp (qcdr (qcdr rhs))) (eq (qcdr (qcdr (qcdr rhs))) nil))
+    (setq a (qcar (qcdr rhs)))
+    (setq b (qcar (qcdr (qcdr rhs))))
+    (setq patrev (|defISReverse| b a))
+    (setq g (intern (strconc "ISTMP#" (stringimage |$isGenVarCounter|))))
+    (setq |$isGenVarCounter| (1+ |$isGenVarCounter|))
+    (setq rev
+     (list 'and
+       (list 'pairp lhs)
+       (list 'progn (list $let g  (list 'reverse lhs)) t)))
+    (setq l2 (|defIS1| g patrev))
+    (when  (and (pairp l2) (atom (car l2))) (setq l2 (list l2)))
+    (cond
+     ((eq a (intern "." "BOOT"))
+      (cons 'and (cons rev l2)))
+     (t
+      (cons 'and
+       (cons rev
+        (append l2
+         (list
+          (list 'progn (list (|defLetForm| a (list 'nreverse a )) t)))))))))
+  (t
+   (say "WARNING (defIS1): possibly bad IS code being generated")
+   (def-is (list lhs rhs))))))
+
+@
+\defun{defISReverse}{defISReverse}
+This reverses forms coming from APPENDs in patterns. 
+It is pretty much just a translation of DEF-IS-REV
+\calls{defISReverse}{defISReverse}
+\calls{defISReverse}{errhuh}
+<<defun defISReverse>>=
+(defun |defISReverse| (x a)
+ (let (y)
+  (if (and (pairp x) (eq (qcar x) 'cons))
+   (if (null (caddr x))
+     (list 'cons (cadr x) a)
+     (progn 
+      (setq y (|defISReverse| (caddr x) nil))
+      (rplac (caddr y) (list 'cons (cadr x) a))
+      y))
+   (errhuh))))
+
+@
 
 ;unTuple x ==
 ;  x is ['Tuple,:y] => y
@@ -5285,6 +5454,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 
 <<initvars>>
 
+<<defun addCARorCDR>>
 <<defun add-parens-and-semis-to-line>>
 <<defun aplTran>>
 <<defun aplTran1>>
@@ -5335,6 +5505,9 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun deepestExpression>>
 <<defun def>>
 <<defun def-insert-let>>
+<<defun defIS>>
+<<defun defIS1>>
+<<defun defISReverse>>
 <<defun def-let>>
 <<defun defLET>>
 <<defun defLET1>>
