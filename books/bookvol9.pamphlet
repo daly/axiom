@@ -1702,7 +1702,7 @@ always positioned ON the first character.
 \usesdollar{aplTran1}{boot}
 <<defun aplTran1>>=
 (defun |aplTran1| (x)
- (let (op argl1 argl f y opprime yprime tmp1 arglAssoc futureArgl g a tmp2)
+ (let (op argl1 argl f y opprime yprime tmp1 arglAssoc futureArgl g)
  (declare (special $boot))
   (if (atom x)
    x
@@ -2122,7 +2122,7 @@ nothing (see boot2Lisp) yet still allow function call (lisp2BootAndComp).
 \usesdollar{defLET2}{letGenVarCounter}
 <<defun defLET2>>=
 (defun |defLET2| (lhs rhs)
- (let (id a b l1 var2 patrev rev g l2 tmp2 tmp3 val1 tmp1 var1 isPred)
+ (let (a b l1 var2 patrev rev g l2 val1 var1 isPred)
  (declare (special |$inDefIS| $let |$letGenVarCounter|))
   (cond
    ((identp lhs) (|defLetForm| lhs rhs))
@@ -2211,6 +2211,11 @@ nothing (see boot2Lisp) yet still allow function call (lisp2BootAndComp).
 
 @
 
+\defdollar{defstack}
+<<initvars>>=
+(defparameter $defstack nil)
+
+@
 \defun{def-where}{def-where}
 \calls{def-where}{def-whereclauselist}
 \calls{def-where}{def-inner}
@@ -2289,6 +2294,16 @@ nothing (see boot2Lisp) yet still allow function call (lisp2BootAndComp).
 
 @
 
+<<initvars>>=
+(defparameter $IS-GENSYMLIST nil)
+
+@
+
+<<initvars>>=
+(defparameter Initial-Gensym (list (gensym)))
+
+@
+
 \subsection{IS}
 \defun{def-is}{def-is}
 \calls{def-is}{def-is2}
@@ -2299,6 +2314,18 @@ nothing (see boot2Lisp) yet still allow function call (lisp2BootAndComp).
  (let (($is-gensymlist Initial-Gensym))
   (declare (special is-gensymlist Initial-Gensym))
   (def-is2 (first X) (second x))))
+
+@
+
+\defdollar{is-eqlist}
+<<initvars>>=
+(defparameter $is-eqlist nil)
+
+@
+
+\defdollar{is-spill-list}
+<<initvars>>=
+(defparameter $is-spill-list nil)
 
 @
 
@@ -2451,6 +2478,22 @@ nothing (see boot2Lisp) yet still allow function call (lisp2BootAndComp).
 
 @
 
+\defun{def-is-rev}{def-is-rev}
+\calls{def-is-rev}{def-is-rev}
+\calls{def-is-rev}{errhuh}
+<<defun def-is-rev>>=
+(defun def-is-rev (x a)
+ (let (y)
+  (if (eq (first x) 'cons)
+   (cond
+    ((not (third x)) (list 'cons (second x) a))
+    ((setq y (def-is-rev (third x) nil))
+      (setf (third y) (list 'cons (second x) a))
+      y))
+   (errhuh))))
+
+@
+
 \defun{defISReverse}{defISReverse}
 This reverses forms coming from APPENDs in patterns. 
 It is pretty much just a translation of DEF-IS-REV
@@ -2480,6 +2523,38 @@ It is pretty much just a translation of DEF-IS-REV
 
 @
 
+\defun{def-it}{def-it}
+\calls{def-it}{def-in2on}
+\calls{def-it}{deftran}
+\calls{def-it}{reset}
+\calls{def-it}{def-let}
+\calls{def-it}{errhuh}
+<<defun def-it>>=
+(defun def-it (fn l)
+ (setq l (reverse l))
+ (let ((b (first l)))
+  (let ((it (def-in2on (nreverse (rest l)))))
+   (let ((itp
+          (apply #'append
+           (mapcar
+             #'(lambda (x &aux op y g)
+                (if (and (member (setq op (first x)) '(in on))
+                         (not (atom (second x))))
+                  (if (eqcar (setq y (second x)) 'spadlet)
+                   (if (atom (setq g (second y)))
+                    (list 
+                     `(,op ,g ,(deftran (third x)))
+                     `(reset ,(def-let (deftran (third y)) g)))
+                    (errhuh))
+                   (list
+                    `(,op ,(setq g (gensym)) ,(deftran (third x)))
+                    `(reset ,(def-let (deftran (second x)) g))))
+                  `(,x)))
+            it))))
+    (cons fn (nconc itp (list b)))))))
+
+@
+
 \defun{def-repeat}{def-repeat}
 \calls{def-repeat}{def-it}
 \calls{def-repeat}{deftran}
@@ -2487,6 +2562,30 @@ It is pretty much just a translation of DEF-IS-REV
 <<defun def-repeat>>=
 (defun def-repeat (l)
  (def-it 'repeat (mapcar #'deftran (hackforis l))))
+
+@
+
+\defun{def-string}{def-string}
+\calls{def-string}{deftran}
+\uses{def-string}{*package*}
+<<defun def-string>>=
+(defun def-string (x)
+ ;; following patches needed to fix reader bug in Lucid Common Lisp
+  (if (and (> (size x) 0) (or (char= (elt x 0) #\.) (char= (elt x 0) #\Page)))
+   `(intern ,X ,(package-name *package*))
+   `(quote ,(deftran (intern x)))))
+
+@
+
+\defun{def-stringtoquote}{def-stringtoquote}
+\calls{def-stringtoquote}{def-addlet}
+\calls{def-stringtoquote}{def-stringtoquote}
+<<defun def-stringtoquote>>=
+(defun def-stringtoquote (x)
+ (cond
+  ((stringp x) (list 'quote (intern x)))
+  ((atom x) x)
+  ((cons (def-addlet (first x)) (def-stringtoquote (cdr x))))))
 
 @
 
@@ -5641,6 +5740,8 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun defIS>>
 <<defun defIS1>>
 <<defun defISReverse>>
+<<defun def-is-rev>>
+<<defun def-it>>
 <<defun def-let>>
 <<defun defLET>>
 <<defun defLET1>>
@@ -5650,6 +5751,8 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun def-rename>>
 <<defun def-rename1>>
 <<defun def-repeat>>
+<<defun def-string>>
+<<defun def-stringtoquote>>
 <<defun deftran>>
 <<defun def-where>>
 <<defun def-whereclause>>
