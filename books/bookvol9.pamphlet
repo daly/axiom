@@ -2625,6 +2625,256 @@ It is pretty much just a translation of DEF-IS-REV
 @
 
 \chapter{PARSE forms}
+\begin{verbatim}
+%       Scratchpad II Boot Language Grammar, Common Lisp Version
+%       IBM Thomas J. Watson Research Center
+%       Summer, 1986
+%
+%       NOTE: Substantially different from VM/LISP version, due to
+%             different parser and attempt to render more within META proper.
+
+.META(New NewExpr Process)
+.PACKAGE 'BOOT'
+.DECLARE(tmptok TOK ParseMode DEFINITION_NAME LABLASOC)
+.PREFIX 'PARSE-'
+
+NewExpr:        =')' .(processSynonyms) Command
+              / .(SETQ DEFINITION_NAME (CURRENT-SYMBOL)) Statement ;
+
+Command:        ')' SpecialKeyWord SpecialCommand +() ;
+
+SpecialKeyWord: =(MATCH-CURRENT-TOKEN "IDENTIFIER)
+                .(SETF (TOKEN-SYMBOL (CURRENT-TOKEN)) (unAbbreviateKeyword (CURRENT-SYMBOL))) ;
+
+SpecialCommand: 'show' <'?' / Expression>! +(show #1) CommandTail
+              / ?(MEMBER (CURRENT-SYMBOL) \$noParseCommands)
+                 .(FUNCALL (CURRENT-SYMBOL))
+              / ?(MEMBER (CURRENT-SYMBOL) \$tokenCommands) TokenList
+                  TokenCommandTail
+              / PrimaryOrQM* CommandTail ;
+
+TokenList:      (^?(isTokenDelimiter) +=(CURRENT-SYMBOL) .(ADVANCE-TOKEN))* ;
+
+TokenCommandTail:
+                <TokenOption*>! ?(atEndOfLine) +(#2 -#1) .(systemCommand #1) ;
+
+TokenOption:    ')' TokenList ;
+
+CommandTail:    <Option*>! ?(atEndOfLine) +(#2 -#1) .(systemCommand #1) ;
+
+PrimaryOrQM:    '?' +\? / Primary ;
+
+Option:         ')' PrimaryOrQM* ;
+
+Statement:      Expr{0} <(',' Expr{0})* +(Series #2 -#1)>;
+
+InfixWith:      With +(Join #2 #1) ;
+
+With:           'with' Category +(with #1) ;
+
+Category:      'if' Expression 'then' Category <'else' Category>! +(if #3 #2 #1)
+              / '(' Category <(';' Category)*>! ')' +(CATEGORY #2 -#1)
+              / .(SETQ $1 (LINE-NUMBER CURRENT-LINE)) Application 
+                   ( ':' Expression +(Signature #2 #1)
+                             .(recordSignatureDocumentation ##1 $1)
+                           / +(Attribute #1)
+                             .(recordAttributeDocumentation ##1 $1));
+
+Expression:   Expr{(PARSE-rightBindingPowerOf (MAKE-SYMBOL-OF PRIOR-TOKEN) ParseMode)}
+                +#1 ;
+
+Import:         'import' Expr{1000} <(',' Expr{1000})*>! +(import #2 -#1) ;
+
+Infix:          =TRUE +=(CURRENT-SYMBOL) .(ADVANCE-TOKEN) <TokTail>
+                Expression +(#2 #2 #1) ;
+
+Prefix:         =TRUE +=(CURRENT-SYMBOL) .(ADVANCE-TOKEN) <TokTail>
+                Expression +(#2 #1) ;
+
+Suffix:         +=(CURRENT-SYMBOL) .(ADVANCE-TOKEN) <TokTail> +(#1 #1) ;
+
+TokTail:        ?(AND (NULL \$BOOT) (EQ (CURRENT-SYMBOL) "\$)
+                      (OR (ALPHA-CHAR-P (CURRENT-CHAR))
+                          (CHAR-EQ (CURRENT-CHAR) '$')
+                          (CHAR-EQ (CURRENT-CHAR) '\%')
+                          (CHAR-EQ (CURRENT-CHAR) '(')))
+                .(SETQ $1 (COPY-TOKEN PRIOR-TOKEN)) Qualification
+                .(SETQ PRIOR-TOKEN $1) ;
+
+Qualification:  '$' Primary1 +=(dollarTran #1 #1) ;
+
+SemiColon:      ';' (Expr{82} / + \/throwAway) +(\; #2 #1) ;
+
+Return:         'return' Expression +(return #1) ;
+
+Exit:           'exit' (Expression / +\$NoValue) +(exit #1) ;
+
+Leave:          'leave' ( Expression / +\$NoValue )
+                ('from' Label +(leaveFrom #1 #1) / +(leave #1)) ;
+
+Seg:            GliphTok{"\.\.} <Expression>! +(SEGMENT #2 #1) ;
+
+Conditional:    'if' Expression 'then' Expression <'else' ElseClause>!
+                   +(if #3 #2 #1) ;
+
+ElseClause:     ?(EQ (CURRENT-SYMBOL) "if) Conditional / Expression ;
+
+Loop:           Iterator* 'repeat' Expr{110} +(REPEAT -#2 #1)
+              / 'repeat' Expr{110} +(REPEAT #1) ;
+
+Iterator:       'for' Primary 'in' Expression
+                ( 'by' Expr{200} +(INBY #3 #2 #1) / +(IN #2 #1) )
+                < '\|' Expr{111} +(\| #1) >
+              / 'while' Expr{190} +(WHILE #1)
+              / 'until' Expr{190} +(UNTIL #1) ;
+
+Expr{RBP}:      NudPart{RBP} <LedPart{RBP}>* +#1;
+
+LabelExpr:      Label Expr{120} +(LABEL #2 #1) ;
+
+Label:          '@<<' Name '>>' ;
+
+LedPart{RBP}:   Operation{"Led RBP} +#1;
+
+NudPart{RBP}:   (Operation{"Nud RBP} / Reduction / Form) +#1 ;
+
+Operation{ParseMode RBP}:
+        ^?(MATCH-CURRENT-TOKEN "IDENTIFIER)
+        ?(GETL (SETQ tmptok (CURRENT-SYMBOL)) ParseMode)
+        ?(LT RBP (PARSE-leftBindingPowerOf tmptok ParseMode))
+        .(SETQ RBP (PARSE-rightBindingPowerOf tmptok ParseMode))
+        getSemanticForm{tmptok ParseMode (ELEMN (GETL tmptok ParseMode) 5 NIL)} ;
+
+% Binding powers stored under the Led and Red properties of an operator
+% are set up by the file BOTTOMUP.LISP.  The format for a Led property
+% is <Operator Left-Power Right-Power>, and the same for a Nud, except that
+% it may also have a fourth component <Special-Handler>. ELEMN attempts to
+% get the Nth indicator, counting from 1.
+
+leftBindingPowerOf{X IND}: =(LET ((Y (GETL X IND))) (IF Y (ELEMN Y 3 0) 0)) ;
+
+rightBindingPowerOf{X IND}: =(LET ((Y (GETL X IND))) (IF Y (ELEMN Y 4 105) 105)) ;
+
+getSemanticForm{X IND Y}:
+                ?(AND Y (EVAL Y)) / ?(EQ IND "Nud) Prefix / ?(EQ IND "Led) Infix ;
+
+
+Reduction:      ReductionOp Expr{1000} +(Reduce #2 #1) ;
+
+ReductionOp:    ?(AND (GETL (CURRENT-SYMBOL) "Led)
+                      (MATCH-NEXT-TOKEN "SPECIAL-CHAR (CODE-CHAR 47))) % Forgive me!
+                +=(CURRENT-SYMBOL) .(ADVANCE-TOKEN) .(ADVANCE-TOKEN) ;
+
+Form:           'iterate' < 'from' Label +(#1) >! +(iterate -#1)
+              / 'yield' Application +(yield #1)
+              / Application ;
+
+Application: Primary <Selector>* <Application +(#2 #1)>;
+
+Selector: ?NONBLANK ?(EQ (CURRENT-SYMBOL) "\.) ?(CHAR-NE (CURRENT-CHAR) "\ )
+                 '.' PrimaryNoFloat (=\$BOOT +(ELT #2 #1)/ +(#2 #1))
+          / (Float /'.' Primary) (=\$BOOT +(ELT #2 #1)/ +(#2 #1));
+
+PrimaryNoFloat: Primary1 <TokTail> ;
+
+Primary: Float /PrimaryNoFloat ;
+
+Primary1: VarForm <=(AND NONBLANK (EQ (CURRENT-SYMBOL) "\()) Primary1 +(#2 #1)>
+        /Quad
+        /String
+        /IntegerTok
+        /FormalParameter
+        /='\'' (?\$BOOT Data / '\'' Expr{999} +(QUOTE #1))
+        /Sequence
+        /Enclosure ;
+
+Float: FloatBase (?NONBLANK FloatExponent / +0) +=(MAKE-FLOAT #4 #2 #2 #1) ;
+
+FloatBase: ?(FIXP (CURRENT-SYMBOL)) ?(CHAR-EQ (CURRENT-CHAR) '.')
+           ?(CHAR-NE (NEXT-CHAR) '.')
+              IntegerTok FloatBasePart
+          /?(FIXP (CURRENT-SYMBOL)) ?(CHAR-EQ (CHAR-UPCASE (CURRENT-CHAR)) "E)
+              IntegerTok +0 +0
+         /?(DIGITP (CURRENT-CHAR)) ?(EQ (CURRENT-SYMBOL) "\.)
+              +0 FloatBasePart ;
+
+FloatBasePart: '.'
+  (?(DIGITP (CURRENT-CHAR)) +=(TOKEN-NONBLANK (CURRENT-TOKEN)) IntegerTok
+  / +0 +0);
+
+
+FloatExponent: =(AND (MEMBER (CURRENT-SYMBOL) "(E e))
+                     (FIND (CURRENT-CHAR) '+-'))
+                 .(ADVANCE-TOKEN)
+        (IntegerTok/'+' IntegerTok/'-' IntegerTok +=(MINUS #1)/+0)
+       /?(IDENTP (CURRENT-SYMBOL)) =(SETQ $1 (FLOATEXPID (CURRENT-SYMBOL)))
+       .(ADVANCE-TOKEN) +=$1 ;
+
+Enclosure:      '(' ( Expr{6} ')' / ')' +(Tuple) )
+              / '{' ( Expr{6} '}' +(brace (construct #1)) / '}' +(brace)) ;
+
+IntegerTok:     NUMBER ;
+
+FloatTok:       NUMBER +=(IF \$BOOT #1 (BFP- #1)) ;
+
+FormalParameter: FormalParameterTok ;
+
+FormalParameterTok: ARGUMENT-DESIGNATOR ;
+
+Quad:           '$' +\$ / ?\$BOOT GliphTok{"\.} +\. ;
+
+String:         SPADSTRING ;
+
+VarForm:        Name <Scripts +(Scripts #2 #1) > +#1 ;
+
+Scripts:        ?NONBLANK '[' ScriptItem ']' ;
+
+ScriptItem:     Expr{90} <(';' ScriptItem)* +(\; #2 -#1)>
+              / ';' ScriptItem +(PrefixSC #1) ;
+
+Name:           IDENTIFIER +#1 ;
+
+Data:           .(SETQ LABLASOC NIL) Sexpr +(QUOTE =(TRANSLABEL #1 LABLASOC)) ;
+
+Sexpr:          .(ADVANCE-TOKEN) Sexpr1 ;
+
+Sexpr1:       AnyId
+              < NBGliphTok{"\=} Sexpr1
+                 .(SETQ LABLASOC (CONS (CONS #2 ##1) LABLASOC))>
+              / '\'' Sexpr1 +(QUOTE #1)
+              / IntegerTok
+              / '-' IntegerTok +=(MINUS #1)
+              / String
+              / '<' <Sexpr1*>! '>' +=(LIST2VEC #1)
+              / '(' <Sexpr1* <GliphTok{"\.} Sexpr1 +=(NCONC #2 #1)>>! ')' ;
+
+NBGliphTok{tok}:   ?(AND (MATCH-CURRENT-TOKEN "GLIPH tok) NONBLANK)
+                    .(ADVANCE-TOKEN) ;
+
+GliphTok{tok}:     ?(MATCH-CURRENT-TOKEN "GLIPH tok) .(ADVANCE-TOKEN) ;
+
+AnyId:          IDENTIFIER
+              / (='$' +=(CURRENT-SYMBOL) .(ADVANCE-TOKEN) / KEYWORD) ;
+
+Sequence:       OpenBracket Sequence1 ']'
+              / OpenBrace Sequence1 '}' +(brace #1) ;
+
+Sequence1:     (Expression +(#2 #1) / +(#1)) <IteratorTail +(COLLECT -#1 #1)>  ;
+
+OpenBracket:    =(EQ (getToken (SETQ $1 (CURRENT-SYMBOL))) "\[ )
+                      (=(EQCAR $1 "elt) +(elt =(CADR $1) construct)
+                        / +construct) .(ADVANCE-TOKEN) ;
+
+OpenBrace:      =(EQ (getToken (SETQ $1 (CURRENT-SYMBOL))) "\{ )
+                      (=(EQCAR $1 "elt) +(elt =(CADR $1) brace)
+                        / +construct) .(ADVANCE-TOKEN) ;
+
+IteratorTail:   ('repeat' <Iterator*>! / Iterator*) ;
+
+.FIN ;
+
+\end{verbatim}
+
 \defun{PARSE-NewExpr}{PARSE-NewExpr}
 \calls{PARSE-NewExpr}{match-string}
 \calls{PARSE-NewExpr}{action}
@@ -3019,6 +3269,547 @@ It is pretty much just a translation of DEF-IS-REV
       (action (setq rbp (|PARSE-rightBindingPowerOf| |tmptok| |ParseMode|)))
       (|PARSE-getSemanticForm| |tmptok| |ParseMode|
           (elemn (getl |tmptok| |ParseMode|) 5 nil))))
+
+@
+
+\defun{PARSE-leftBindingPowerOf}{PARSE-leftBindingPowerOf}
+\calls{PARSE-leftBindingPowerOf}{getl}
+\calls{PARSE-leftBindingPowerOf}{elemn}
+<<defun PARSE-leftBindingPowerOf>>=
+(defun |PARSE-leftBindingPowerOf| (x ind)
+ (declare (special x ind))
+ (let ((y (getl x ind))) (if y (elemn y 3 0) 0)))
+
+@
+
+\defun{PARSE-rightBindingPowerOf}{PARSE-rightBindingPowerOf}
+\calls{PARSE-rightBindingPowerOf}{getl}
+\calls{PARSE-rightBindingPowerOf}{elemn}
+<<defun PARSE-rightBindingPowerOf>>=
+(defun |PARSE-rightBindingPowerOf| (x ind)
+  (declare (special x ind))
+  (let ((y (getl x ind))) (if y (elemn y 4 105) 105)))
+
+@
+
+\defun{PARSE-getSemanticForm}{PARSE-getSemanticForm}
+\calls{PARSE-getSemanticForm}{PARSE-Prefix}
+\calls{PARSE-getSemanticForm}{PARSE-Infix}
+<<defun PARSE-getSemanticForm>>=
+(defun |PARSE-getSemanticForm| (x ind y)
+  (declare (special x ind y))
+  (or (and y (eval y)) (and (eq ind '|Nud|) (|PARSE-Prefix|))
+      (and (eq ind '|Led|) (|PARSE-Infix|))))
+
+@
+
+\defun{PARSE-Prefix}{PARSE-Prefix}
+\calls{PARSE-Prefix}{push-reduction}
+\calls{PARSE-Prefix}{current-symbol}
+\calls{PARSE-Prefix}{action}
+\calls{PARSE-Prefix}{advance-token}
+\calls{PARSE-Prefix}{optional}
+\calls{PARSE-Prefix}{PARSE-TokTail}
+\calls{PARSE-Prefix}{must}
+\calls{PARSE-Prefix}{PARSE-Expression}
+\calls{PARSE-Prefix}{push-reduction}
+\calls{PARSE-Prefix}{pop-stack-2}
+\calls{PARSE-Prefix}{pop-stack-1}
+<<defun PARSE-Prefix>>=
+(defun |PARSE-Prefix| ()
+  (and (push-reduction '|PARSE-Prefix| (current-symbol))
+       (action (advance-token)) (optional (|PARSE-TokTail|))
+       (must (|PARSE-Expression|))
+       (push-reduction '|PARSE-Prefix|
+           (cons (pop-stack-2) (cons (pop-stack-1) nil)))))
+
+@
+
+\defun{PARSE-Infix}{PARSE-Infix}
+\calls{PARSE-Infix}{push-reduction}
+\calls{PARSE-Infix}{current-symbol}
+\calls{PARSE-Infix}{action}
+\calls{PARSE-Infix}{advance-token}
+\calls{PARSE-Infix}{optional}
+\calls{PARSE-Infix}{PARSE-TokTail}
+\calls{PARSE-Infix}{must}
+\calls{PARSE-Infix}{PARSE-Expression}
+\calls{PARSE-Infix}{pop-stack-2}
+\calls{PARSE-Infix}{pop-stack-1}
+<<defun PARSE-Infix>>=
+(defun |PARSE-Infix| ()
+  (and (push-reduction '|PARSE-Infix| (current-symbol))
+       (action (advance-token)) (optional (|PARSE-TokTail|))
+       (must (|PARSE-Expression|))
+       (push-reduction '|PARSE-Infix|
+           (list (pop-stack-2) (pop-stack-2) (pop-stack-1) ))))
+
+@
+
+\defun{PARSE-TokTail}{PARSE-TokTail}
+\calls{PARSE-TokTail}{current-symbol}
+\calls{PARSE-TokTail}{current-char}
+\calls{PARSE-TokTail}{char-eq}
+\calls{PARSE-TokTail}{copy-token}
+\calls{PARSE-TokTail}{action}
+\calls{PARSE-TokTail}{PARSE-Qualification}
+\usesdollar{PARSE-TokTail}{boot}
+<<defun PARSE-TokTail>>=
+(defun |PARSE-TokTail| ()
+ (let (g1)
+  (and (null $boot) (eq (current-symbol) '$)
+       (or (alpha-char-p (current-char))
+           (char-eq (current-char) "$")
+           (char-eq (current-char) "%")
+           (char-eq (current-char) "("))
+       (action (setq g1 (copy-token prior-token)))
+       (|PARSE-Qualification|) (action (setq prior-token g1)))))
+
+@
+
+\defun{PARSE-Qualification}{PARSE-Qualification}
+\calls{PARSE-Qualification}{match-advance-string}
+\calls{PARSE-Qualification}{must}
+\calls{PARSE-Qualification}{PARSE-Primary1}
+\calls{PARSE-Qualification}{push-reduction}
+\calls{PARSE-Qualification}{dollarTran}
+\calls{PARSE-Qualification}{pop-stack-1}
+<<defun PARSE-Qualification>>=
+(defun |PARSE-Qualification| ()
+  (and (match-advance-string "$") (must (|PARSE-Primary1|))
+       (push-reduction '|PARSE-Qualification|
+           (|dollarTran| (pop-stack-1) (pop-stack-1)))))
+
+@
+
+\defun{PARSE-Reduction}{PARSE-Reduction}
+\calls{PARSE-Reduction}{PARSE-ReductionOp}
+\calls{PARSE-Reduction}{must}
+\calls{PARSE-Reduction}{PARSE-Expr}
+\calls{PARSE-Reduction}{push-reduction}
+\calls{PARSE-Reduction}{pop-stack-2}
+\calls{PARSE-Reduction}{pop-stack-1}
+<<defun PARSE-Reduction>>=
+(defun |PARSE-Reduction| ()
+ (and (|PARSE-ReductionOp|) (must (|PARSE-Expr| 1000))
+      (push-reduction '|PARSE-Reduction|
+          (list '|Reduce| (pop-stack-2) (pop-stack-1) ))))
+
+@
+
+\defun{PARSE-ReductionOp}{PARSE-ReductionOp}
+\calls{PARSE-ReductionOp}{getl}
+\calls{PARSE-ReductionOp}{current-symbol}
+\calls{PARSE-ReductionOp}{match-next-token}
+\calls{PARSE-ReductionOp}{action}
+\calls{PARSE-ReductionOp}{advance-token}
+<<defun PARSE-ReductionOp>>=
+(defun |PARSE-ReductionOp| ()
+  (and (getl (current-symbol) '|Led|)
+       (match-next-token 'special-char (code-char 47))
+       (push-reduction '|PARSE-ReductionOp| (current-symbol))
+       (action (advance-token)) (action (advance-token))))
+
+@
+
+\defun{PARSE-Form}{PARSE-Form}
+\calls{PARSE-Form}{match-advance-string}
+\calls{PARSE-Form}{bang}
+\calls{PARSE-Form}{optional}
+\calls{PARSE-Form}{must}
+\calls{PARSE-Form}{push-reduction}
+\calls{PARSE-Form}{pop-stack-1}
+\calls{PARSE-Form}{PARSE-Application}
+<<defun PARSE-Form>>=
+(defun |PARSE-Form| ()
+  (or (and (match-advance-string "iterate")
+           (bang fil_test
+                 (optional
+                     (and (match-advance-string "from")
+                          (must (|PARSE-Label|))
+                          (push-reduction '|PARSE-Form|
+                             (list (pop-stack-1))))))
+           (push-reduction '|PARSE-Form|
+               (cons '|iterate| (append (pop-stack-1) nil))))
+      (and (match-advance-string "yield") (must (|PARSE-Application|))
+           (push-reduction '|PARSE-Form|
+               (list '|yield| (pop-stack-1))))
+      (|PARSE-Application|)))
+
+@
+
+\defun{PARSE-Application}{PARSE-Application}
+\calls{PARSE-Application}{PARSE-Primary}
+\calls{PARSE-Application}{optional}
+\calls{PARSE-Application}{star}
+\calls{PARSE-Application}{PARSE-Selector}
+\calls{PARSE-Application}{PARSE-Application}
+\calls{PARSE-Application}{push-reduction}
+\calls{PARSE-Application}{pop-stack-2}
+\calls{PARSE-Application}{pop-stack-1}
+<<defun PARSE-Application>>=
+(defun |PARSE-Application| ()
+ (and (|PARSE-Primary|) (optional (star opt_expr (|PARSE-Selector|)))
+      (optional
+          (and (|PARSE-Application|)
+               (push-reduction '|PARSE-Application|
+                   (list (pop-stack-2) (pop-stack-1)))))))
+
+@
+
+\defun{PARSE-Label}{PARSE-Label}
+\calls{PARSE-Label}{match-advance-string}
+\calls{PARSE-Label}{must}
+\calls{PARSE-Label}{PARSE-Name}
+<<defun PARSE-Label>>=
+(defun |PARSE-Label| ()
+  (and (match-advance-string "<<") (must (|PARSE-Name|))
+       (must (match-advance-string ">>"))))
+
+@
+
+\defun{PARSE-Selector}{PARSE-Selector}
+\calls{PARSE-Selector}{current-symbol}
+\calls{PARSE-Selector}{char-ne}
+\calls{PARSE-Selector}{current-char}
+\calls{PARSE-Selector}{match-advance-string}
+\calls{PARSE-Selector}{must}
+\calls{PARSE-Selector}{PARSE-PrimaryNoFloat}
+\calls{PARSE-Selector}{push-reduction}
+\calls{PARSE-Selector}{pop-stack-2}
+\calls{PARSE-Selector}{pop-stack-1}
+\calls{PARSE-Selector}{PARSE-Float}
+\calls{PARSE-Selector}{PARSE-Primary}
+\usesdollar{PARSE-Selector}{boot}
+<<defun PARSE-Selector>>=
+(defun |PARSE-Selector| ()
+  (or (and nonblank (eq (current-symbol) '|.|)
+           (char-ne (current-char) '| |) (match-advance-string ".")
+           (must (|PARSE-PrimaryNoFloat|))
+           (must (or (and $boot
+                          (push-reduction '|PARSE-Selector|
+                              (list 'elt (pop-stack-2) (pop-stack-1))))
+                     (push-reduction '|PARSE-Selector|
+                         (list (pop-stack-2) (pop-stack-1))))))
+      (and (or (|PARSE-Float|)
+               (and (match-advance-string ".")
+                    (must (|PARSE-Primary|))))
+           (must (or (and $boot
+                          (push-reduction '|PARSE-Selector|
+                              (list 'elt (pop-stack-2) (pop-stack-1))))
+                     (push-reduction '|PARSE-Selector|
+                         (list (pop-stack-2) (pop-stack-1))))))))
+
+@
+
+\defun{PARSE-PrimaryNoFloat}{PARSE-PrimaryNoFloat}
+\calls{PARSE-PrimaryNoFloat}{PARSE-Primary1}
+\calls{PARSE-PrimaryNoFloat}{optional}
+\calls{PARSE-PrimaryNoFloat}{PARSE-TokTail}
+<<defun PARSE-PrimaryNoFloat>>=
+(defun |PARSE-PrimaryNoFloat| ()
+  (and (|PARSE-Primary1|) (optional (|PARSE-TokTail|))))
+
+@
+
+\defun{PARSE-Primary}{PARSE-Primary}
+\calls{PARSE-Primary}{}
+\calls{PARSE-Primary}{}
+<<defun PARSE-Primary>>=
+(defun |PARSE-Primary| ()
+  (or (|PARSE-Float|) (|PARSE-PrimaryNoFloat|)))
+
+@
+
+\defun{PARSE-Primary1}{PARSE-Primary1}
+\calls{PARSE-Primary1}{PARSE-VarForm}
+\calls{PARSE-Primary1}{optional}
+\calls{PARSE-Primary1}{current-symbol}
+\calls{PARSE-Primary1}{PARSE-Primary1}
+\calls{PARSE-Primary1}{must}
+\calls{PARSE-Primary1}{pop-stack-2}
+\calls{PARSE-Primary1}{pop-stack-1}
+\calls{PARSE-Primary1}{push-reduction}
+\calls{PARSE-Primary1}{PARSE-Quad}
+\calls{PARSE-Primary1}{PARSE-String}
+\calls{PARSE-Primary1}{PARSE-IntegerTok}
+\calls{PARSE-Primary1}{PARSE-FormalParameter}
+\calls{PARSE-Primary1}{match-string}
+\calls{PARSE-Primary1}{PARSE-Data}
+\calls{PARSE-Primary1}{match-advance-string}
+\calls{PARSE-Primary1}{PARSE-Expr}
+\calls{PARSE-Primary1}{PARSE-Sequence}
+\calls{PARSE-Primary1}{PARSE-Enclosure}
+\usesdollar{PARSE-Primary1}{boot}
+<<defun PARSE-Primary1>>=
+(defun |PARSE-Primary1| ()
+  (or (and (|PARSE-VarForm|)
+           (optional
+               (and nonblank (eq (current-symbol) '|(|)
+                    (must (|PARSE-Primary1|))
+                    (push-reduction '|PARSE-Primary1|
+                        (list (pop-stack-2) (pop-stack-1))))))
+      (|PARSE-Quad|) (|PARSE-String|) (|PARSE-IntegerTok|)
+      (|PARSE-FormalParameter|)
+      (and (match-string "'")
+           (must (or (and $boot (|PARSE-Data|))
+                     (and (match-advance-string "'")
+                          (must (|PARSE-Expr| 999))
+                          (push-reduction '|PARSE-Primary1|
+                              (list 'quote (pop-stack-1)))))))
+      (|PARSE-Sequence|) (|PARSE-Enclosure|))) 
+
+@
+
+\defun{PARSE-Float}{PARSE-Float}
+\calls{PARSE-Float}{PARSE-FloatBase}
+\calls{PARSE-Float}{must}
+\calls{PARSE-Float}{PARSE-FloatExponent}
+\calls{PARSE-Float}{push-reduction}
+\calls{PARSE-Float}{make-float}
+\calls{PARSE-Float}{pop-stack-4}
+\calls{PARSE-Float}{pop-stack-3}
+\calls{PARSE-Float}{pop-stack-2}
+\calls{PARSE-Float}{pop-stack-1}
+<<defun PARSE-Float>>=
+(defun |PARSE-Float| ()
+  (and (|PARSE-FloatBase|)
+       (must (or (and nonblank (|PARSE-FloatExponent|))
+                 (push-reduction '|PARSE-Float| 0)))
+       (push-reduction '|PARSE-Float|
+           (make-float (pop-stack-4) (pop-stack-2) (pop-stack-2)
+               (pop-stack-1)))))
+
+@
+
+\defun{PARSE-FloatBase}{PARSE-FloatBase}
+\calls{PARSE-FloatBase}{integerp}
+\calls{PARSE-FloatBase}{current-symbol}
+\calls{PARSE-FloatBase}{char-eq}
+\calls{PARSE-FloatBase}{current-char}
+\calls{PARSE-FloatBase}{char-ne}
+\calls{PARSE-FloatBase}{next-char}
+\calls{PARSE-FloatBase}{PARSE-IntegerTok}
+\calls{PARSE-FloatBase}{must}
+\calls{PARSE-FloatBase}{PARSE-FloatBasePart}
+\calls{PARSE-FloatBase}{char-upcase}
+\calls{PARSE-FloatBase}{PARSE-IntegerTok}
+\calls{PARSE-FloatBase}{push-reduction}
+\calls{PARSE-FloatBase}{digitp}
+<<defun PARSE-FloatBase>>=
+(defun |PARSE-FloatBase| ()
+  (or (and (integerp (current-symbol)) (char-eq (current-char) ".")
+           (char-ne (next-char) ".") (|PARSE-IntegerTok|)
+           (must (|PARSE-FloatBasePart|)))
+      (and (integerp (current-symbol))
+           (char-eq (char-upcase (current-char)) 'e)
+           (|PARSE-IntegerTok|) (push-reduction '|PARSE-FloatBase| 0)
+           (push-reduction '|PARSE-FloatBase| 0))
+      (and (digitp (current-char)) (eq (current-symbol) '|.|)
+           (push-reduction '|PARSE-FloatBase| 0)
+           (|PARSE-FloatBasePart|))))
+
+@
+
+\defun{PARSE-FloatBasePart}{PARSE-FloatBasePart}
+\calls{PARSE-FloatBasePart}{match-advance-string}
+\calls{PARSE-FloatBasePart}{must}
+\calls{PARSE-FloatBasePart}{digitp}
+\calls{PARSE-FloatBasePart}{current-char}
+\calls{PARSE-FloatBasePart}{push-reduction}
+\calls{PARSE-FloatBasePart}{token-nonblank}
+\calls{PARSE-FloatBasePart}{current-token}
+\calls{PARSE-FloatBasePart}{PARSE-IntegerTok}
+<<defun PARSE-FloatBasePart>>=
+(defun |PARSE-FloatBasePart| ()
+  (and (match-advance-string ".")
+       (must (or (and (digitp (current-char))
+                      (push-reduction '|PARSE-FloatBasePart|
+                          (token-nonblank (current-token)))
+                      (|PARSE-IntegerTok|))
+                 (and (push-reduction '|PARSE-FloatBasePart| 0)
+                      (push-reduction '|PARSE-FloatBasePart| 0))))))
+
+@
+
+\defun{PARSE-FloatExponent}{PARSE-FloatExponent}
+\calls{PARSE-FloatExponent}{current-symbol}
+\calls{PARSE-FloatExponent}{current-char}
+\calls{PARSE-FloatExponent}{action}
+\calls{PARSE-FloatExponent}{advance-token}
+\calls{PARSE-FloatExponent}{PARSE-IntegerTok}
+\calls{PARSE-FloatExponent}{match-advance-string}
+\calls{PARSE-FloatExponent}{must}
+\calls{PARSE-FloatExponent}{push-reduction}
+\calls{PARSE-FloatExponent}{identp}
+\calls{PARSE-FloatExponent}{floatexpid}
+<<defun PARSE-FloatExponent>>=
+(defun |PARSE-FloatExponent| ()
+ (let (g1)
+  (or (and (member (current-symbol) '(e |e|))
+           (find (current-char) "+-") (action (advance-token))
+           (must (or (|PARSE-IntegerTok|)
+                     (and (match-advance-string "+")
+                          (must (|PARSE-IntegerTok|)))
+                     (and (match-advance-string "-")
+                          (must (|PARSE-IntegerTok|))
+                          (push-reduction '|PARSE-FloatExponent|
+                              (- (pop-stack-1))))
+                     (push-reduction '|PARSE-FloatExponent| 0))))
+      (and (identp (current-symbol))
+           (setq g1 (floatexpid (current-symbol)))
+           (action (advance-token))
+           (push-reduction '|PARSE-FloatExponent| g1)))))
+
+@
+
+\defun{PARSE-Enclosure}{PARSE-Enclosure}
+\calls{PARSE-Enclosure}{match-advance-string}
+\calls{PARSE-Enclosure}{must}
+\calls{PARSE-Enclosure}{PARSE-Expr}
+\calls{PARSE-Enclosure}{push-reduction}
+\calls{PARSE-Enclosure}{pop-stack-1}
+<<defun PARSE-Enclosure>>=
+(defun |PARSE-Enclosure| ()
+  (or (and (match-advance-string "(")
+           (must (or (and (|PARSE-Expr| 6)
+                          (must (match-advance-string ")")))
+                     (and (match-advance-string ")")
+                          (push-reduction '|PARSE-Enclosure|
+                              (list '|@Tuple|))))))
+      (and (match-advance-string "{")
+           (must (or (and (|PARSE-Expr| 6)
+                          (must (match-advance-string "}"))
+                          (push-reduction '|PARSE-Enclosure|
+                              (cons '|brace|
+                               (list (list '|construct| (pop-stack-1))))))
+                     (and (match-advance-string "}")
+                          (push-reduction '|PARSE-Enclosure|
+                              (list '|brace|))))))))
+
+@
+
+\defun{PARSE-IntegerTok}{PARSE-IntegerTok}
+\calls{PARSE-IntegerTok}{parse-number}
+<<defun PARSE-IntegerTok>>=
+(defun |PARSE-IntegerTok| () (parse-number))
+
+@
+
+\defun{PARSE-FormalParameter}{PARSE-FormalParameter}
+\calls{PARSE-FormalParameter}{PARSE-FormalParameterTok}
+<<defun PARSE-FormalParameter>>=
+(defun |PARSE-FormalParameter| () (|PARSE-FormalParameterTok|))
+
+@
+
+\defun{PARSE-FormalParameterTok}{PARSE-FormalParameterTok}
+\calls{PARSE-FormalParameterTok}{parse-argument-designator}
+<<defun PARSE-FormalParameterTok>>=
+(defun |PARSE-FormalParameterTok| () (parse-argument-designator))
+
+@
+
+\defun{PARSE-Quad}{PARSE-Quad}
+\calls{PARSE-Quad}{match-advance-string}
+\calls{PARSE-Quad}{push-reduction}
+\calls{PARSE-Quad}{PARSE-GliphTok}
+\usesdollar{PARSE-Quad}{boot}
+<<defun PARSE-Quad>>=
+(defun |PARSE-Quad| ()
+ (or (and (match-advance-string "$")
+          (push-reduction '|PARSE-Quad| '$))
+     (and $boot (|PARSE-GliphTok| '|.|)
+          (push-reduction '|PARSE-Quad| '|.|))))
+
+@
+
+\defun{PARSE-String}{PARSE-String}
+\calls{PARSE-String}{parse-spadstring}
+<<defun PARSE-String>>=
+(defun |PARSE-String| () (parse-spadstring))
+
+@
+
+\defun{PARSE-VarForm}{PARSE-VarForm}
+\calls{PARSE-VarForm}{PARSE-Name}
+\calls{PARSE-VarForm}{optional}
+\calls{PARSE-VarForm}{PARSE-Scripts}
+\calls{PARSE-VarForm}{push-reduction}
+\calls{PARSE-VarForm}{pop-stack-2}
+\calls{PARSE-VarForm}{pop-stack-1}
+<<defun PARSE-VarForm>>=
+(defun |PARSE-VarForm| ()
+  (and (|PARSE-Name|)
+       (optional
+           (and (|PARSE-Scripts|)
+                (push-reduction '|PARSE-VarForm|
+                    (list '|Scripts| (pop-stack-2) (pop-stack-1)))))
+       (push-reduction '|PARSE-VarForm| (pop-stack-1))))
+
+@
+
+\defun{PARSE-Scripts}{PARSE-Scripts}
+\calls{PARSE-Scripts}{match-advance-string}
+\calls{PARSE-Scripts}{must}
+\calls{PARSE-Scripts}{PARSE-ScriptItem}
+<<defun PARSE-Scripts>>=
+(defun |PARSE-Scripts| ()
+ (and nonblank (match-advance-string "[") (must (|PARSE-ScriptItem|))
+      (must (match-advance-string "]"))))
+
+@
+
+\defun{PARSE-ScriptItem}{PARSE-ScriptItem}
+\calls{PARSE-ScriptItem}{PARSE-Expr}
+\calls{PARSE-ScriptItem}{optional}
+\calls{PARSE-ScriptItem}{star}
+\calls{PARSE-ScriptItem}{match-advance-string}
+\calls{PARSE-ScriptItem}{must}
+\calls{PARSE-ScriptItem}{PARSE-ScriptItem}
+\calls{PARSE-ScriptItem}{push-reduction}
+\calls{PARSE-ScriptItem}{pop-stack-2}
+\calls{PARSE-ScriptItem}{pop-stack-1}
+<<defun PARSE-ScriptItem>>=
+(defun |PARSE-ScriptItem| ()
+  (or (and (|PARSE-Expr| 90)
+           (optional
+               (and (star repeator
+                          (and (match-advance-string ";")
+                               (must (|PARSE-ScriptItem|))))
+                    (push-reduction '|PARSE-ScriptItem|
+                        (cons '|;|
+                              (cons (pop-stack-2)
+                                    (append (pop-stack-1) nil)))))))
+      (and (match-advance-string ";") (must (|PARSE-ScriptItem|))
+           (push-reduction '|PARSE-ScriptItem|
+               (list '|PrefixSC| (pop-stack-1))))))
+
+@
+
+\defun{PARSE-Name}{PARSE-Name}
+\calls{PARSE-Name}{parse-identifier}
+\calls{PARSE-Name}{push-reduction}
+\calls{PARSE-Name}{pop-stack-1}
+<<defun PARSE-Name>>=
+(defun |PARSE-Name| ()
+  (and (parse-identifier) (push-reduction '|PARSE-Name| (pop-stack-1))))
+
+@
+
+\defun{PARSE-Data}{PARSE-Data}
+\calls{PARSE-Data}{action}
+\calls{PARSE-Data}{PARSE-Sexpr}
+\calls{PARSE-Data}{push-reduction}
+\calls{PARSE-Data}{translabel}
+\calls{PARSE-Data}{pop-stack-1}
+\uses{PARSE-Data}{labasoc}
+<<defun PARSE-Data>>=
+(defun |PARSE-Data| ()
+  (declare (special lablasoc))
+  (and (action (setq lablasoc nil)) (|PARSE-Sexpr|)
+       (push-reduction '|PARSE-Data|
+           (list 'quote (translabel (pop-stack-1) lablasoc)))))
 
 @
 
@@ -6180,24 +6971,54 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun next-line>>
 <<defun ncINTERPFILE>>
 
+<<defun PARSE-Application>>
 <<defun PARSE-Category>>
 <<defun PARSE-Command>>
 <<defun PARSE-CommandTail>>
+<<defun PARSE-Enclosure>>
 <<defun PARSE-Expr>>
 <<defun PARSE-Expression>>
+<<defun PARSE-Float>>
+<<defun PARSE-FloatBase>>
+<<defun PARSE-FloatBasePart>>
+<<defun PARSE-FloatExponent>>
+<<defun PARSE-Form>>
+<<defun PARSE-FormalParameter>>
+<<defun PARSE-FormalParameterTok>>
+<<defun PARSE-getSemanticForm>>
 <<defun PARSE-Import>>
+<<defun PARSE-Infix>>
 <<defun PARSE-InfixWith>>
+<<defun PARSE-IntegerTok>>
+<<defun PARSE-Label>>
 <<defun PARSE-LedPart>>
+<<defun PARSE-leftBindingPowerOf>>
+<<defun PARSE-Name>>
 <<defun PARSE-NewExpr>>
 <<defun PARSE-NudPart>>
 <<defun PARSE-Operation>>
 <<defun PARSE-Option>>
+<<defun PARSE-Prefix>>
+<<defun PARSE-Primary>>
+<<defun PARSE-Primary1>>
+<<defun PARSE-PrimaryNoFloat>>
 <<defun PARSE-PrimaryOrQM>>
+<<defun PARSE-Qualification>>
+<<defun PARSE-Quad>>
+<<defun PARSE-Reduction>>
+<<defun PARSE-ReductionOp>>
+<<defun PARSE-rightBindingPowerOf>>
+<<defun PARSE-ScriptItem>>
+<<defun PARSE-Scripts>>
+<<defun PARSE-Selector>>
 <<defun PARSE-SpecialCommand>>
 <<defun PARSE-SpecialKeyWord>>
 <<defun PARSE-Statement>>
+<<defun PARSE-String>>
 <<defun PARSE-TokenCommandTail>>
 <<defun PARSE-TokenList>>
+<<defun PARSE-TokTail>>
+<<defun PARSE-VarForm>>
 <<defun PARSE-With>>
 <<defun parsepiles>>
 <<defun postAtom>>
