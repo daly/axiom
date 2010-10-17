@@ -2589,6 +2589,40 @@ It is pretty much just a translation of DEF-IS-REV
 
 @
 
+\defun{def-addlet}{def-addlet}
+\calls{def-addlet}{mkprogn}
+\calls{def-addlet}{def-let}
+\calls{def-addlet}{compfluidize}
+\usesdollar{def-addlet}{body}
+<<defun def-addlet>>=
+(defun def-addlet (x)
+ (declare (special $body))
+ (if (atom x)
+  (if (stringp x) `(quote ,(intern x))  x)
+  (let ((g (gensym)))
+   (setq $body (mkprogn (list (def-let (compfluidize x) g) $body)))
+   g)))
+
+@
+
+\defun{def-inner}{def-inner}
+\calls{def-inner}{def-insert-let}
+\calls{def-inner}{def-stringtoquote}
+\calls{def-inner}{sublis}
+\calls{def-inner}{comp}
+\usesdollar{def-inner}{body}
+\usesdollar{def-inner}{OpAssoc}
+\usesdollar{def-inner}{op}
+<<defun def-inner>>=
+(defun def-inner (form signature $body)
+  "Same as DEF but assumes body has already been DEFTRANned"
+ (declare (special $body))
+ (let ($OpAssoc ($op (first form)) (argl (rest form)))
+ (declare (special $OpAssoc $op))
+   (let* ((argl (def-insert-let argl))
+          (arglp (def-stringtoquote argl)))
+    (comp (sublis $opassoc `((,$op (lam ,arglp ,$body))))))))
+
 \defun{hackforis}{hackforis}
 \calls{hackforis}{hackforis1}
 <<defun hackforis>>=
@@ -2626,6 +2660,15 @@ It is pretty much just a translation of DEF-IS-REV
 
 \chapter{PARSE forms}
 \section{The original meta specification}
+This package provides routines to support the Metalanguage
+translator writing system.   Metalanguage is described
+in META/LISP, R.D. Jenks, Tech Report, 
+IBM T.J. Watson Research Center, 1969.  
+Familiarity with this document is assumed.
+
+Note that META/LISP and the meta parser/generator were removed from Axiom.
+This information is only for documentation purposes.
+
 \begin{verbatim}
 %       Scratchpad II Boot Language Grammar, Common Lisp Version
 %       IBM Thomas J. Watson Research Center
@@ -2636,11 +2679,11 @@ It is pretty much just a translation of DEF-IS-REV
 
 .META(New NewExpr Process)
 .PACKAGE 'BOOT'
-.DECLARE(tmptok TOK ParseMode DEFINITION_NAME LABLASOC)
+.DECLARE(tmptok TOK ParseMode DEFINITION-NAME LABLASOC)
 .PREFIX 'PARSE-'
 
 NewExpr:        =')' .(processSynonyms) Command
-              / .(SETQ DEFINITION_NAME (CURRENT-SYMBOL)) Statement ;
+              / .(SETQ DEFINITION-NAME (CURRENT-SYMBOL)) Statement ;
 
 Command:        ')' SpecialKeyWord SpecialCommand +() ;
 
@@ -2877,6 +2920,35 @@ IteratorTail:   ('repeat' <Iterator*>! / Iterator*) ;
 \end{verbatim}
 \section{The PARSE code}
 
+\defvar{tmptok}
+<<initvars>>=
+(defvar |tmptok| nil)
+
+@
+
+\defvar{tok}
+<<initvars>>=
+(defvar tok nil)
+
+@
+
+\defvar{ParseMode}
+<<initvars>>=
+(defvar |ParseMode| nil)
+
+@
+
+\defvar{definition-name}
+<<initvars>>=
+(defvar definition-name nil)
+
+@
+
+\defvar{lablasoc}
+<<initvars>>=
+(defvar lablasoc nil)
+
+@
 \defun{PARSE-NewExpr}{PARSE-NewExpr}
 \calls{PARSE-NewExpr}{match-string}
 \calls{PARSE-NewExpr}{action}
@@ -2889,7 +2961,7 @@ IteratorTail:   ('repeat' <Iterator*>! / Iterator*) ;
 (defun |PARSE-NewExpr| ()
  (or (and (match-string ")") (action (|processSynonyms|))
           (must (|PARSE-Command|)))
-     (and (action (setq definition_name (current-symbol)))
+     (and (action (setq definition-name (current-symbol)))
           (|PARSE-Statement|))))
 
 @
@@ -2951,7 +3023,7 @@ IteratorTail:   ('repeat' <Iterator*>! / Iterator*) ;
                     (or (match-advance-string "?")
                         (|PARSE-Expression|))))
           (push-reduction '|PARSE-SpecialCommand|
-              (cons '|show| (cons (pop-stack-1) nil)))
+              (list '|show| (pop-stack-1)))
           (must (|PARSE-CommandTail|)))
      (and (member (current-symbol) |$noParseCommands|)
           (action (funcall (current-symbol))))
@@ -3089,7 +3161,7 @@ IteratorTail:   ('repeat' <Iterator*>! / Iterator*) ;
 (defun |PARSE-InfixWith| ()
   (and (|PARSE-With|)
        (push-reduction '|PARSE-InfixWith|
-           (cons '|Join| (cons (pop-stack-2) (cons (pop-stack-1) nil))))))
+           (list '|Join| (pop-stack-2) (pop-stack-1)))))
 
 @
 
@@ -3323,7 +3395,7 @@ IteratorTail:   ('repeat' <Iterator*>! / Iterator*) ;
        (action (advance-token)) (optional (|PARSE-TokTail|))
        (must (|PARSE-Expression|))
        (push-reduction '|PARSE-Prefix|
-           (cons (pop-stack-2) (cons (pop-stack-1) nil)))))
+           (list (pop-stack-2) (pop-stack-1)))))
 
 @
 
@@ -3485,6 +3557,7 @@ IteratorTail:   ('repeat' <Iterator*>! / Iterator*) ;
 \usesdollar{PARSE-Selector}{boot}
 <<defun PARSE-Selector>>=
 (defun |PARSE-Selector| ()
+  (declare (special $boot))
   (or (and nonblank (eq (current-symbol) '|.|)
            (char-ne (current-char) '| |) (match-advance-string ".")
            (must (|PARSE-PrimaryNoFloat|))
@@ -3871,6 +3944,380 @@ IteratorTail:   ('repeat' <Iterator*>! / Iterator*) ;
 
 @
 
+\defun{PARSE-NBGliphTok}{PARSE-NBGliphTok}
+\calls{PARSE-NBGliphTok}{match-current-token}
+\calls{PARSE-NBGliphTok}{action}
+\calls{PARSE-NBGliphTok}{advance-token}
+\uses{PARSE-NBGliphTok}{tok}
+<<defun PARSE-NBGliphTok>>=
+(defun |PARSE-NBGliphTok| (|tok|)
+ (declare (special |tok|))
+ (and (match-current-token 'gliph |tok|) nonblank (action (advance-token))))
+
+@
+
+\defun{PARSE-GliphTok}{PARSE-GliphTok}
+\calls{PARSE-GliphTok}{match-current-token}
+\calls{PARSE-GliphTok}{action}
+\calls{PARSE-GliphTok}{advance-token}
+\uses{PARSE-GliphTok}{tok}
+<<defun PARSE-GliphTok>>=
+(defun |PARSE-GliphTok| (|tok|)
+ (declare (special |tok|))
+ (and (match-current-token 'gliph |tok|) (action (advance-token))))
+
+@
+
+\defun{PARSE-AnyId}{PARSE-AnyId}
+\calls{PARSE-AnyId}{parse-identifier}
+\calls{PARSE-AnyId}{match-string}
+\calls{PARSE-AnyId}{push-reduction}
+\calls{PARSE-AnyId}{current-symbol}
+\calls{PARSE-AnyId}{action}
+\calls{PARSE-AnyId}{advance-token}
+\calls{PARSE-AnyId}{parse-keyword}
+<<defun PARSE-AnyId>>=
+(defun |PARSE-AnyId| ()
+  (or (parse-identifier)
+      (or (and (match-string "$")
+               (push-reduction '|PARSE-AnyId| (current-symbol))
+               (action (advance-token)))
+          (parse-keyword))))
+
+@
+
+\defun{PARSE-Sequence}{PARSE-Sequence}
+\calls{PARSE-Sequence}{PARSE-OpenBracket}
+\calls{PARSE-Sequence}{must}
+\calls{PARSE-Sequence}{PARSE-Sequence1}
+\calls{PARSE-Sequence}{match-advance-string}
+\calls{PARSE-Sequence}{PARSE-OpenBrace}
+\calls{PARSE-Sequence}{push-reduction}
+\calls{PARSE-Sequence}{pop-stack-1}
+<<defun PARSE-Sequence>>=
+(defun |PARSE-Sequence| ()
+  (or (and (|PARSE-OpenBracket|) (must (|PARSE-Sequence1|))
+           (must (match-advance-string "]")))
+      (and (|PARSE-OpenBrace|) (must (|PARSE-Sequence1|))
+           (must (match-advance-string "}"))
+           (push-reduction '|PARSE-Sequence|
+               (list '|brace| (pop-stack-1))))))
+
+@
+
+\defun{PARSE-Sequence1}{PARSE-Sequence1}
+\calls{PARSE-Sequence1}{PARSE-Expression}
+\calls{PARSE-Sequence1}{push-reduction}
+\calls{PARSE-Sequence1}{pop-stack-2}
+\calls{PARSE-Sequence1}{pop-stack-1}
+\calls{PARSE-Sequence1}{optional}
+\calls{PARSE-Sequence1}{PARSE-IteratorTail}
+<<defun PARSE-Sequence1>>=
+(defun |PARSE-Sequence1| ()
+  (and (or (and (|PARSE-Expression|)
+                (push-reduction '|PARSE-Sequence1|
+                    (list (pop-stack-2) (pop-stack-1))))
+           (push-reduction '|PARSE-Sequence1| (list (pop-stack-1))))
+       (optional
+           (and (|PARSE-IteratorTail|)
+                (push-reduction '|PARSE-Sequence1|
+                    (cons 'collect
+                          (append (pop-stack-1)
+                                  (list (pop-stack-1)))))))))
+
+@
+
+\defun{PARSE-OpenBracket}{PARSE-OpenBracket}
+\calls{PARSE-OpenBracket}{getToken}
+\calls{PARSE-OpenBracket}{current-symbol}
+\calls{PARSE-OpenBracket}{eqcar}
+\calls{PARSE-OpenBracket}{push-reduction}
+\calls{PARSE-OpenBracket}{action}
+\calls{PARSE-OpenBracket}{advance-token}
+<<defun PARSE-OpenBracket>>=
+(defun |PARSE-OpenBracket| ()
+ (let (g1)
+  (and (eq (|getToken| (setq g1 (current-symbol))) '[)
+       (must (or (and (eqcar g1 '|elt|)
+                      (push-reduction '|PARSE-OpenBracket|
+                          (list '|elt| (second g1) '|construct|)))
+                 (push-reduction '|PARSE-OpenBracket| '|construct|)))
+       (action (advance-token)))))) 
+
+@
+
+\defun{PARSE-OpenBrace}{PARSE-OpenBrace}
+\calls{PARSE-OpenBrace}{getToken}
+\calls{PARSE-OpenBrace}{current-symbol}
+\calls{PARSE-OpenBrace}{eqcar}
+\calls{PARSE-OpenBrace}{push-reduction}
+\calls{PARSE-OpenBrace}{action}
+\calls{PARSE-OpenBrace}{advance-token}
+<<defun PARSE-OpenBrace>>=
+(defun |PARSE-OpenBrace| ()
+ (let (g1)
+  (and (eq (|getToken| (setq g1 (current-symbol))) '{)
+       (must (or (and (eqcar g1 '|elt|)
+                      (push-reduction '|PARSE-OpenBrace|
+                          (list '|elt| (second g1) '|brace|)))
+                 (push-reduction '|PARSE-OpenBrace| '|construct|)))
+       (action (advance-token)))))) 
+
+@
+
+\defun{PARSE-IteratorTail}{PARSE-IteratorTail}
+\calls{PARSE-IteratorTail}{match-advance-string}
+\calls{PARSE-IteratorTail}{bang}
+\calls{PARSE-IteratorTail}{optional}
+\calls{PARSE-IteratorTail}{star}
+\calls{PARSE-IteratorTail}{PARSE-Iterator}
+<<defun PARSE-IteratorTail>>=
+(defun |PARSE-IteratorTail| ()
+ (or (and (match-advance-string "repeat")
+          (bang fil_test (optional (star repeator (|PARSE-Iterator|)))))
+     (star repeator (|PARSE-Iterator|))))
+
+@
+
+\defun{PARSE-Iterator}{PARSE-Iterator}
+\calls{PARSE-Iterator}{match-advance-string}
+\calls{PARSE-Iterator}{must}
+\calls{PARSE-Iterator}{PARSE-Primary}
+\calls{PARSE-Iterator}{PARSE-Expression}
+\calls{PARSE-Iterator}{PARSE-Expr}
+\calls{PARSE-Iterator}{pop-stack-3}
+\calls{PARSE-Iterator}{pop-stack-2}
+\calls{PARSE-Iterator}{pop-stack-1}
+\calls{PARSE-Iterator}{optional}
+<<defun PARSE-Iterator>>=
+(defun |PARSE-Iterator| ()
+  (or (and (match-advance-string "for") (must (|PARSE-Primary|))
+           (must (match-advance-string "in"))
+           (must (|PARSE-Expression|))
+           (must (or (and (match-advance-string "by")
+                          (must (|PARSE-Expr| 200))
+                          (push-reduction '|PARSE-Iterator|
+                           (list 'inby (pop-stack-3)
+                                       (pop-stack-2) (pop-stack-1))))
+                     (push-reduction '|PARSE-Iterator|
+                         (list 'in (pop-stack-2) (pop-stack-1)))))
+           (optional
+               (and (match-advance-string "|")
+                    (must (|PARSE-Expr| 111))
+                    (push-reduction '|PARSE-Iterator|
+                        (list '|\|| (pop-stack-1))))))
+      (and (match-advance-string "while") (must (|PARSE-Expr| 190))
+           (push-reduction '|PARSE-Iterator|
+               (list 'while (pop-stack-1))))
+      (and (match-advance-string "until") (must (|PARSE-Expr| 190))
+           (push-reduction '|PARSE-Iterator|
+               (list 'until (pop-stack-1))))))
+
+@
+\subsection{The PARSE implicit routines}
+These symbols are not explicitly referenced in the source.
+Nevertheless, they are called during runtime. For example,
+PARSE-SemiColon is called in the chain:
+\begin{verbatim}
+  PARSE-Enclosure {loc0=nil,loc1="(V  ==> Vector; "} [ihs=35]
+   PARSE-Expr
+    PARSE-LedPart
+     PARSE-Operation
+      PARSE-getSemanticForm
+       PARSE-SemiColon
+\end{verbatim}
+so there is a bit of indirection involved in the call.
+
+\defun{PARSE-Suffix}{PARSE-Suffix}
+\calls{PARSE-Suffix}{push-reduction}
+\calls{PARSE-Suffix}{current-symbol}
+\calls{PARSE-Suffix}{action}
+\calls{PARSE-Suffix}{advance-token}
+\calls{PARSE-Suffix}{optional}
+\calls{PARSE-Suffix}{PARSE-TokTail}
+\calls{PARSE-Suffix}{pop-stack-1}
+<<defun PARSE-Suffix>>=
+(defun |PARSE-Suffix| ()
+  (and (push-reduction '|PARSE-Suffix| (current-symbol))
+       (action (advance-token)) (optional (|PARSE-TokTail|))
+       (push-reduction '|PARSE-Suffix|
+           (list (pop-stack-1) (pop-stack-1)))))
+
+@
+
+\defun{PARSE-SemiColon}{PARSE-SemiColon}
+\calls{PARSE-SemiColon}{match-advance-string}
+\calls{PARSE-SemiColon}{must}
+\calls{PARSE-SemiColon}{PARSE-Expr}
+\calls{PARSE-SemiColon}{push-reduction}
+\calls{PARSE-SemiColon}{pop-stack-2}
+\calls{PARSE-SemiColon}{pop-stack-1}
+<<defun PARSE-SemiColon>>=
+(defun |PARSE-SemiColon| ()
+  (and (match-advance-string ";")
+       (must (or (|PARSE-Expr| 82)
+                 (push-reduction '|PARSE-SemiColon| '|/throwAway|)))
+       (push-reduction '|PARSE-SemiColon|
+           (list '|;| (pop-stack-2) (pop-stack-1)))))
+
+@
+
+\defun{PARSE-Return}{PARSE-Return}
+\calls{PARSE-Return}{match-advance-string}
+\calls{PARSE-Return}{must}
+\calls{PARSE-Return}{PARSE-Expression}
+\calls{PARSE-Return}{push-reduction}
+\calls{PARSE-Return}{pop-stack-1}
+<<defun PARSE-Return>>=
+(defun |PARSE-Return| ()
+  (and (match-advance-string "return") (must (|PARSE-Expression|))
+       (push-reduction '|PARSE-Return|
+           (list '|return| (pop-stack-1)))))
+
+@
+
+\defun{PARSE-Exit}{PARSE-Exit}
+\calls{PARSE-Exit}{match-advance-string}
+\calls{PARSE-Exit}{must}
+\calls{PARSE-Exit}{PARSE-Expression}
+\calls{PARSE-Exit}{push-reduction}
+\calls{PARSE-Exit}{pop-stack-1}
+<<defun PARSE-Exit>>=
+(defun |PARSE-Exit| ()
+  (and (match-advance-string "exit")
+       (must (or (|PARSE-Expression|)
+                 (push-reduction '|PARSE-Exit| '|$NoValue|)))
+       (push-reduction '|PARSE-Exit|
+           (list '|exit| (pop-stack-1)))))
+
+@
+
+\defun{PARSE-Leave}{PARSE-Leave}
+\calls{PARSE-Leave}{match-advance-string}
+\calls{PARSE-Leave}{PARSE-Expression}
+\calls{PARSE-Leave}{must}
+\calls{PARSE-Leave}{push-reduction}
+\calls{PARSE-Leave}{PARSE-Label}
+\calls{PARSE-Leave}{pop-stack-1}
+<<defun PARSE-Leave>>=
+(defun |PARSE-Leave| ()
+  (and (match-advance-string "leave")
+       (must (or (|PARSE-Expression|)
+                 (push-reduction '|PARSE-Leave| '|$NoValue|)))
+       (must (or (and (match-advance-string "from")
+                      (must (|PARSE-Label|))
+                      (push-reduction '|PARSE-Leave|
+                          (list '|leaveFrom| (pop-stack-1) (pop-stack-1))))
+                 (push-reduction '|PARSE-Leave|
+                     (list '|leave| (pop-stack-1)))))))
+
+@
+
+\defun{PARSE-Seg}{PARSE-Seg}
+\calls{PARSE-Seg}{PARSE-GliphTok}
+\calls{PARSE-Seg}{bang}
+\calls{PARSE-Seg}{optional}
+\calls{PARSE-Seg}{PARSE-Expression}
+\calls{PARSE-Seg}{push-reduction}
+\calls{PARSE-Seg}{pop-stack-2}
+\calls{PARSE-Seg}{pop-stack-1}
+<<defun PARSE-Seg>>=
+(defun |PARSE-Seg| ()
+  (and (|PARSE-GliphTok| '|..|)
+       (bang fil_test (optional (|PARSE-Expression|)))
+       (push-reduction '|PARSE-Seg|
+           (list 'segment (pop-stack-2) (pop-stack-1)))))
+
+@
+
+\defun{PARSE-Conditional}{PARSE-Conditional}
+\calls{PARSE-Conditional}{match-advance-string}
+\calls{PARSE-Conditional}{must}
+\calls{PARSE-Conditional}{PARSE-Expression}
+\calls{PARSE-Conditional}{bang}
+\calls{PARSE-Conditional}{optional}
+\calls{PARSE-Conditional}{PARSE-ElseClause}
+\calls{PARSE-Conditional}{push-reduction}
+\calls{PARSE-Conditional}{pop-stack-3}
+\calls{PARSE-Conditional}{pop-stack-2}
+\calls{PARSE-Conditional}{pop-stack-1}
+<<defun PARSE-Conditional>>=
+(defun |PARSE-Conditional| ()
+  (and (match-advance-string "if") (must (|PARSE-Expression|))
+       (must (match-advance-string "then")) (must (|PARSE-Expression|))
+       (bang fil_test
+             (optional
+                 (and (match-advance-string "else")
+                      (must (|PARSE-ElseClause|)))))
+       (push-reduction '|PARSE-Conditional|
+           (list '|if| (pop-stack-3) (pop-stack-2) (pop-stack-1)))))
+
+@
+
+\defun{PARSE-ElseClause}{PARSE-ElseClause}
+\calls{PARSE-ElseClause}{current-symbol}
+\calls{PARSE-ElseClause}{PARSE-Conditional}
+\calls{PARSE-ElseClause}{PARSE-Expression}
+<<defun PARSE-ElseClause>>=
+(defun |PARSE-ElseClause| ()
+  (or (and (eq (current-symbol) '|if|) (|PARSE-Conditional|))
+      (|PARSE-Expression|)))
+
+@
+
+\defun{PARSE-Loop}{PARSE-Loop}
+\calls{PARSE-Loop}{star}
+\calls{PARSE-Loop}{PARSE-Iterator}
+\calls{PARSE-Loop}{must}
+\calls{PARSE-Loop}{match-advance-string}
+\calls{PARSE-Loop}{PARSE-Expr}
+\calls{PARSE-Loop}{push-reduction}
+\calls{PARSE-Loop}{pop-stack-2}
+\calls{PARSE-Loop}{pop-stack-1}
+<<defun PARSE-Loop>>=
+(defun |PARSE-Loop| ()
+  (or (and (star repeator (|PARSE-Iterator|))
+           (must (match-advance-string "repeat"))
+           (must (|PARSE-Expr| 110))
+           (push-reduction '|PARSE-Loop|
+               (cons 'repeat
+                     (append (pop-stack-2) (list (pop-stack-1))))))
+      (and (match-advance-string "repeat") (must (|PARSE-Expr| 110))
+           (push-reduction '|PARSE-Loop|
+               (list 'repeat (pop-stack-1))))))
+
+@
+
+\defun{PARSE-LabelExpr}{PARSE-LabelExpr}
+\calls{PARSE-LabelExpr}{PARSE-Label}
+\calls{PARSE-LabelExpr}{must}
+\calls{PARSE-LabelExpr}{PARSE-Expr}
+\calls{PARSE-LabelExpr}{push-reduction}
+\calls{PARSE-LabelExpr}{pop-stack-2}
+\calls{PARSE-LabelExpr}{pop-stack-1}
+<<defun PARSE-LabelExpr>>=
+(defun |PARSE-LabelExpr| ()
+  (and (|PARSE-Label|) (must (|PARSE-Expr| 120))
+       (push-reduction '|PARSE-LabelExpr|
+           (list 'label (pop-stack-2) (pop-stack-1)))))
+
+@
+
+\defun{PARSE-FloatTok}{PARSE-FloatTok}
+\calls{PARSE-FloatTok}{parse-number}
+\calls{PARSE-FloatTok}{push-reduction}
+\calls{PARSE-FloatTok}{pop-stack-1}
+\calls{PARSE-FloatTok}{bfp-}
+\usesdollar{PARSE-FloatTok}{boot}
+<<defun PARSE-FloatTok>>=
+(defun |PARSE-FloatTok| ()
+  (and (parse-number)
+       (push-reduction '|PARSE-FloatTok|
+           (if $boot (pop-stack-1) (bfp- (pop-stack-1))))))
+
+@
+
+
 \section{The PARSE support routines}
 \subsection{Applying metagrammatical elements of a production (e.g., Star).}
 \begin{itemize}
@@ -3888,8 +4335,8 @@ are performed upon recognizing the head and tail.
 \defmacro{Bang}
 If the execution of prod does not result in an increase in the size of
 the stack, then stack a NIL. Return the value of prod.
-<<defmacro Bang>>=
-(defmacro Bang (lab prod)
+<<defmacro bang>>=
+(defmacro bang (lab prod)
  `(progn
    (setf (stack-updated reduce-stack) nil)
    (let* ((prodvalue ,prod) (updated (stack-updated reduce-stack)))
@@ -7003,6 +7450,9 @@ if \verb|$InteractiveMode| then use a null outputstream
 
 <<initvars>>
 
+<<defmacro bang>>
+<<defmacro must>>
+<<defmacro star>>
 
 <<defun action>>
 <<defun addCARorCDR>>
@@ -7055,7 +7505,9 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun decodeScripts>>
 <<defun deepestExpression>>
 <<defun def>>
+<<defun def-addlet>>
 <<defun def-collect>>
+<<defun def-inner>>
 <<defun def-insert-let>>
 <<defun def-is>>
 <<defun def-is2>>
@@ -7106,31 +7558,46 @@ if \verb|$InteractiveMode| then use a null outputstream
 
 <<defun optional>>
 
+<<defun PARSE-AnyId>>
 <<defun PARSE-Application>>
 <<defun PARSE-Category>>
 <<defun PARSE-Command>>
 <<defun PARSE-CommandTail>>
+<<defun PARSE-Conditional>>
+<<defun PARSE-Data>>
+<<defun PARSE-ElseClause>>
 <<defun PARSE-Enclosure>>
+<<defun PARSE-Exit>>
 <<defun PARSE-Expr>>
 <<defun PARSE-Expression>>
 <<defun PARSE-Float>>
 <<defun PARSE-FloatBase>>
 <<defun PARSE-FloatBasePart>>
 <<defun PARSE-FloatExponent>>
+<<defun PARSE-FloatTok>>
 <<defun PARSE-Form>>
 <<defun PARSE-FormalParameter>>
 <<defun PARSE-FormalParameterTok>>
 <<defun PARSE-getSemanticForm>>
+<<defun PARSE-GliphTok>>
 <<defun PARSE-Import>>
 <<defun PARSE-Infix>>
 <<defun PARSE-InfixWith>>
 <<defun PARSE-IntegerTok>>
+<<defun PARSE-Iterator>>
+<<defun PARSE-IteratorTail>>
 <<defun PARSE-Label>>
+<<defun PARSE-LabelExpr>>
+<<defun PARSE-Leave>>
 <<defun PARSE-LedPart>>
 <<defun PARSE-leftBindingPowerOf>>
+<<defun PARSE-Loop>>
 <<defun PARSE-Name>>
+<<defun PARSE-NBGliphTok>>
 <<defun PARSE-NewExpr>>
 <<defun PARSE-NudPart>>
+<<defun PARSE-OpenBrace>>
+<<defun PARSE-OpenBracket>>
 <<defun PARSE-Operation>>
 <<defun PARSE-Option>>
 <<defun PARSE-Prefix>>
@@ -7142,18 +7609,25 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun PARSE-Quad>>
 <<defun PARSE-Reduction>>
 <<defun PARSE-ReductionOp>>
+<<defun PARSE-Return>>
 <<defun PARSE-rightBindingPowerOf>>
 <<defun PARSE-ScriptItem>>
 <<defun PARSE-Scripts>>
+<<defun PARSE-Seg>>
 <<defun PARSE-Selector>>
+<<defun PARSE-SemiColon>>
+<<defun PARSE-Sequence>>
+<<defun PARSE-Sequence1>>
 <<defun PARSE-Sexpr>>
 <<defun PARSE-Sexpr1>>
 <<defun PARSE-SpecialCommand>>
 <<defun PARSE-SpecialKeyWord>>
 <<defun PARSE-Statement>>
 <<defun PARSE-String>>
+<<defun PARSE-Suffix>>
 <<defun PARSE-TokenCommandTail>>
 <<defun PARSE-TokenList>>
+<<defun PARSE-TokenOption>>
 <<defun PARSE-TokTail>>
 <<defun PARSE-VarForm>>
 <<defun PARSE-With>>
