@@ -2625,6 +2625,7 @@ It is pretty much just a translation of DEF-IS-REV
 @
 
 \chapter{PARSE forms}
+\section{The original meta specification}
 \begin{verbatim}
 %       Scratchpad II Boot Language Grammar, Common Lisp Version
 %       IBM Thomas J. Watson Research Center
@@ -2874,6 +2875,7 @@ IteratorTail:   ('repeat' <Iterator*>! / Iterator*) ;
 .FIN ;
 
 \end{verbatim}
+\section{The PARSE code}
 
 \defun{PARSE-NewExpr}{PARSE-NewExpr}
 \calls{PARSE-NewExpr}{match-string}
@@ -3583,7 +3585,6 @@ IteratorTail:   ('repeat' <Iterator*>! / Iterator*) ;
 @
 
 \defun{PARSE-FloatBase}{PARSE-FloatBase}
-\calls{PARSE-FloatBase}{integerp}
 \calls{PARSE-FloatBase}{current-symbol}
 \calls{PARSE-FloatBase}{char-eq}
 \calls{PARSE-FloatBase}{current-char}
@@ -3592,7 +3593,6 @@ IteratorTail:   ('repeat' <Iterator*>! / Iterator*) ;
 \calls{PARSE-FloatBase}{PARSE-IntegerTok}
 \calls{PARSE-FloatBase}{must}
 \calls{PARSE-FloatBase}{PARSE-FloatBasePart}
-\calls{PARSE-FloatBase}{char-upcase}
 \calls{PARSE-FloatBase}{PARSE-IntegerTok}
 \calls{PARSE-FloatBase}{push-reduction}
 \calls{PARSE-FloatBase}{digitp}
@@ -3813,6 +3813,137 @@ IteratorTail:   ('repeat' <Iterator*>! / Iterator*) ;
 
 @
 
+\defun{PARSE-Sexpr}{PARSE-Sexpr}
+\calls{PARSE-Sexpr}{PARSE-Sexpr1}
+<<defun PARSE-Sexpr>>=
+(defun |PARSE-Sexpr| ()
+  (and (action (advance-token)) (|PARSE-Sexpr1|)))
+
+@
+
+\defun{PARSE-Sexpr1}{PARSE-Sexpr1}
+\calls{PARSE-Sexpr1}{PARSE-AnyId}
+\calls{PARSE-Sexpr1}{optional}
+\calls{PARSE-Sexpr1}{PARSE-NBGliphTok}
+\calls{PARSE-Sexpr1}{must}
+\calls{PARSE-Sexpr1}{PARSE-Sexpr1}
+\calls{PARSE-Sexpr1}{action}
+\calls{PARSE-Sexpr1}{pop-stack-2}
+\calls{PARSE-Sexpr1}{nth-stack}
+\calls{PARSE-Sexpr1}{match-advance-string}
+\calls{PARSE-Sexpr1}{push-reduction}
+\calls{PARSE-Sexpr1}{PARSE-IntegerTok}
+\calls{PARSE-Sexpr1}{pop-stack-1}
+\calls{PARSE-Sexpr1}{PARSE-String}
+\calls{PARSE-Sexpr1}{bang}
+\calls{PARSE-Sexpr1}{star}
+\calls{PARSE-Sexpr1}{PARSE-GliphTok}
+<<defun PARSE-Sexpr1>>=
+(defun |PARSE-Sexpr1| ()
+  (or (and (|PARSE-AnyId|)
+           (optional
+               (and (|PARSE-NBGliphTok| '=) (must (|PARSE-Sexpr1|))
+                    (action (setq lablasoc
+                                  (cons (cons (pop-stack-2)
+                                         (nth-stack 1))
+                                        lablasoc))))))
+      (and (match-advance-string "'") (must (|PARSE-Sexpr1|))
+           (push-reduction '|PARSE-Sexpr1|
+               (list 'quote (pop-stack-1))))
+      (|PARSE-IntegerTok|)
+      (and (match-advance-string "-") (must (|PARSE-IntegerTok|))
+           (push-reduction '|PARSE-Sexpr1| (- (pop-stack-1))))
+      (|PARSE-String|)
+      (and (match-advance-string "<")
+           (bang fil_test (optional (star repeator (|PARSE-Sexpr1|))))
+           (must (match-advance-string ">"))
+           (push-reduction '|PARSE-Sexpr1| (list2vec (pop-stack-1))))
+      (and (match-advance-string "(")
+           (bang fil_test
+                 (optional
+                     (and (star repeator (|PARSE-Sexpr1|))
+                          (optional
+                              (and (|PARSE-GliphTok| '|.|)
+                                   (must (|PARSE-Sexpr1|))
+                                   (push-reduction '|PARSE-Sexpr1|
+                                    (nconc (pop-stack-2) (pop-stack-1))))))))
+           (must (match-advance-string ")")))))
+
+@
+
+\section{The PARSE support routines}
+\subsection{Applying metagrammatical elements of a production (e.g., Star).}
+\begin{itemize}
+\item {\bf must} means that if it is not present in the token stream, 
+it is a syntax error.
+\item {\bf optional} means that if it is present in the token stream, 
+that is a good thing, otherwise don't worry (like [ foo ] in BNF notation).
+\item {\bf action} is something we do as a consequence of successful 
+parsing; it is inserted at the end of the conjunction of requirements 
+for a successful parse, and so should return T.
+\item {\bf sequence} consists of a head, which if recognized implies that the
+tail must follow.   Following tail are actions, which
+are performed upon recognizing the head and tail.
+\end{itemize}
+\defmacro{Bang}
+If the execution of prod does not result in an increase in the size of
+the stack, then stack a NIL. Return the value of prod.
+<<defmacro Bang>>=
+(defmacro Bang (lab prod)
+ `(progn
+   (setf (stack-updated reduce-stack) nil)
+   (let* ((prodvalue ,prod) (updated (stack-updated reduce-stack)))
+    (unless updated (push-reduction ',lab nil))
+    prodvalue)))
+
+@
+
+\defmacro{must}
+<<defmacro must>>=
+(defmacro must (dothis &optional (this-is nil) (in-rule nil))
+  `(or ,dothis (meta-syntax-error ,this-is ,in-rule)))
+
+@
+
+\defun{action}{action}
+<<defun action>>=
+(defun action (dothis) (or dothis t))
+
+@
+
+\defun{optional}{optional}
+<<defun optional>>=
+(defun optional (dothis) (or dothis t))
+
+@
+
+\defmacro{star}
+Succeeds if there are one or more of PROD, stacking as one unit
+the sub-reductions of PROD and labelling them with LAB.
+E.G., {\tt (Star IDs (parse-id))} with A B C will stack (3 IDs (A B C)),
+where (parse-id) would stack (1 ID (A)) when applied once.
+\calls{star}{stack-size}
+\calls{star}{push-reduction}
+\calls{star}{push}
+\calls{star}{pop-stack-1}
+<<defmacro star>>=
+(defmacro star (lab prod)
+  `(prog ((oldstacksize (stack-size reduce-stack)))
+     (if (not ,prod) (return nil))
+loop
+     (if (not ,prod)
+      (let* ((newstacksize (stack-size reduce-stack))
+             (number-of-new-reductions (- newstacksize oldstacksize)))
+        (if (> number-of-new-reductions 0)
+         (return (do ((i 0 (1+ i)) (accum nil))
+                     ((= i number-of-new-reductions)
+                       (push-reduction ',lab accum)
+                       (return t))
+                   (push (pop-stack-1) accum)))
+         (return t)))
+      (go loop))))
+
+@
 \chapter{The Compiler}
 
 \section{Compiling EQ.spad}
@@ -6872,6 +7003,8 @@ if \verb|$InteractiveMode| then use a null outputstream
 
 <<initvars>>
 
+
+<<defun action>>
 <<defun addCARorCDR>>
 <<defun add-parens-and-semis-to-line>>
 <<defun aplTran>>
@@ -6971,6 +7104,8 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun next-line>>
 <<defun ncINTERPFILE>>
 
+<<defun optional>>
+
 <<defun PARSE-Application>>
 <<defun PARSE-Category>>
 <<defun PARSE-Command>>
@@ -7011,6 +7146,8 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun PARSE-ScriptItem>>
 <<defun PARSE-Scripts>>
 <<defun PARSE-Selector>>
+<<defun PARSE-Sexpr>>
+<<defun PARSE-Sexpr1>>
 <<defun PARSE-SpecialCommand>>
 <<defun PARSE-SpecialKeyWord>>
 <<defun PARSE-Statement>>

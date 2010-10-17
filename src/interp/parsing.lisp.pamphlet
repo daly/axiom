@@ -20,7 +20,34 @@ translator writing system.   Metalanguage is described
 in META/LISP, R.D. Jenks, Tech Report, 
 IBM T.J. Watson Research Center, 1969.  
 Familiarity with this document is assumed.
+<<*>>=
+(defmacro star (lab prod)
+  `(prog ((oldstacksize (stack-size reduce-stack)))
+     (if (not ,prod) (return nil))
+loop
+     (if (not ,prod)
+      (let* ((newstacksize (stack-size reduce-stack))
+             (number-of-new-reductions (- newstacksize oldstacksize)))
+        (if (> number-of-new-reductions 0)
+         (return (do ((i 0 (1+ i)) (accum nil))
+                     ((= i number-of-new-reductions)
+                       (push-reduction ',lab accum)
+                       (return t))
+                   (push (pop-stack-1) accum)))
+         (return t)))
+      (go loop))))
 
+(defmacro must (dothis &optional (this-is nil) (in-rule nil))
+  `(or ,dothis (meta-syntax-error ,this-is ,in-rule)))
+
+(defmacro Bang (lab prod)
+ `(progn
+   (setf (stack-updated reduce-stack) nil)
+   (let* ((prodvalue ,prod) (updated (stack-updated reduce-stack)))
+    (unless updated (push-reduction ',lab nil))
+    prodvalue)))
+
+@
 \section{Current I/O Stream definition}
 <<*>>=
 (defun IOStreams-Show ()
@@ -217,57 +244,8 @@ Familiarity with this document is assumed.
   `(reduction-value (nth (1- ,x) (stack-store Reduce-Stack))))
 
 @
-\subsection{Applying metagrammatical elements of a production (e.g., Star).}
-\begin{itemize}
-\item {\bf Must} means that if it is not present in the token stream, 
-it is a syntax error.
-\item {\bf Optional} means that if it is present in the token stream, 
-that is a good thing, otherwise don't worry (like [ foo ] in BNF notation).
-\item {\bf Action} is something we do as a consequence of successful 
-parsing; it is inserted at the end of the conjunction of requirements 
-for a successful parse, and so should return T.
-\item {\bf sequence} consists of a head, which if recognized implies that the
-tail must follow.   Following tail are actions, which
-are performed upon recognizing the head and tail.
-\end{itemize}
 
 <<*>>=
-(defmacro Star (lab prod)
-  "Succeeds if there are one or more of PROD, stacking as one unit
-   the sub-reductions of PROD and labelling them with LAB.
-   E.G., (Star IDs (parse-id)) with A B C will stack (3 IDs (A B C)),
-   where (parse-id) would stack (1 ID (A)) when applied once."
-  `(prog ((oldstacksize (stack-size reduce-stack)))
-     (if (not ,prod) (return nil))
-loop
-     (if (not ,prod)
-      (let* ((newstacksize (stack-size reduce-stack))
-             (number-of-new-reductions (- newstacksize oldstacksize)))
-        (if (> number-of-new-reductions 0)
-         (return (do ((i 0 (1+ i)) (accum nil))
-                     ((= i number-of-new-reductions)
-                       (Push-Reduction ',lab accum)
-                       (return t))
-                   (push (pop-stack-1) accum)))
-         (return t)))
-      (go loop))))
-
-(defmacro Bang (lab prod)
-  "If the execution of prod does not result in an increase in the size of
-  the stack, then stack a NIL. Return the value of prod."
- `(progn
-   (setf (stack-updated reduce-stack) nil)
-   (let* ((prodvalue ,prod) (updated (stack-updated reduce-stack)))
-    (unless updated (push-reduction ',lab nil))
-    prodvalue)))
-
-(defmacro must (dothis &optional (this-is nil) (in-rule nil))
-  `(or ,dothis (meta-syntax-error ,this-is ,in-rule)))
-
-(defun Optional (dothis) (or dothis t))
-
-(defun action (dothis) (or dothis t))
-
 (defmacro sequence (subrules &optional (actions nil))
   `(and ,(pop subrules) .
         ,(append (mapcar #'(lambda (x) (list 'must x)) subrules)
@@ -1808,43 +1786,6 @@ except that elements are separated by commas."
        (PUSH-REDUCTION '|PARSE-FloatTok|
            (IF $BOOT (POP-STACK-1) (BFP- (POP-STACK-1))))))
 (trace |PARSE-FloatTok|) 
-
-
-(DEFUN |PARSE-Sexpr| ()
-  (AND (ACTION (ADVANCE-TOKEN)) (|PARSE-Sexpr1|)))
-(trace |PARSE-Sexpr|) 
-
-
-(DEFUN |PARSE-Sexpr1| ()
-  (OR (AND (|PARSE-AnyId|)
-           (OPTIONAL
-               (AND (|PARSE-NBGliphTok| '=) (MUST (|PARSE-Sexpr1|))
-                    (ACTION (SETQ LABLASOC
-                                  (CONS (CONS (POP-STACK-2)
-                                         (NTH-STACK 1))
-                                        LABLASOC))))))
-      (AND (MATCH-ADVANCE-STRING "'") (MUST (|PARSE-Sexpr1|))
-           (PUSH-REDUCTION '|PARSE-Sexpr1|
-               (CONS 'QUOTE (CONS (POP-STACK-1) NIL))))
-      (|PARSE-IntegerTok|)
-      (AND (MATCH-ADVANCE-STRING "-") (MUST (|PARSE-IntegerTok|))
-           (PUSH-REDUCTION '|PARSE-Sexpr1| (MINUS (POP-STACK-1))))
-      (|PARSE-String|)
-      (AND (MATCH-ADVANCE-STRING "<")
-           (BANG FIL_TEST (OPTIONAL (STAR REPEATOR (|PARSE-Sexpr1|))))
-           (MUST (MATCH-ADVANCE-STRING ">"))
-           (PUSH-REDUCTION '|PARSE-Sexpr1| (LIST2VEC (POP-STACK-1))))
-      (AND (MATCH-ADVANCE-STRING "(")
-           (BANG FIL_TEST
-                 (OPTIONAL
-                     (AND (STAR REPEATOR (|PARSE-Sexpr1|))
-                          (OPTIONAL
-                              (AND (|PARSE-GliphTok| '|.|)
-                                   (MUST (|PARSE-Sexpr1|))
-                                   (PUSH-REDUCTION '|PARSE-Sexpr1|
-                                    (NCONC (POP-STACK-2) (POP-STACK-1))))))))
-           (MUST (MATCH-ADVANCE-STRING ")")))))
-(trace |PARSE-Sexpr1|) 
 
 
 (DEFUN |PARSE-NBGliphTok| (|tok|)
