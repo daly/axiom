@@ -165,9 +165,6 @@
 <<*>>=
 (defparameter Reduce-Stack (make-stack) "Stack of results of reduced productions.")
 
-(defun Push-Reduction (rule redn)
-  (stack-push (make-reduction :rule rule :value redn) Reduce-Stack))
-
 (defun reduce-stack-show ()
  (let ((store (stack-store reduce-stack)) (*print-pretty* t))
   (if store
@@ -239,42 +236,7 @@ This section is broken up into 3 levels:
 \item Random Stuff
 \end{itemize}
 \subsubsection{String grabbing}
-String grabbing is the art of matching initial segments of the current
-line, and removing them from the line before the get tokenized if they
-match (or removing the corresponding current tokens).
 <<*>>=
-(defun Match-String (x)
-  "Returns length of X if X matches initial segment of inputstream."
-  (unget-tokens) ; So we don't get out of synch with token stream
-  (skip-blanks)
-  (if (and (not (Line-Past-End-P Current-Line)) (Current-Char) )
-    (initial-substring-p x
-     (subseq (Line-Buffer Current-Line) (Line-Current-Index Current-Line)))))
-
-(defun Match-Advance-String (x)
-  "Same as MATCH-STRING except if successful, advance inputstream past X."
-  (let ((y (if (>= (length (string x))
-                   (length (string (quote-if-string (current-token)))))
-               (Match-String x)
-               nil))) ; must match at least the current token
-    (when y
-      (incf (Line-Current-Index Current-Line) y)
-      (if (not (Line-Past-End-P Current-Line))
-       (setf (Line-Current-Char Current-Line)
-             (elt (Line-Buffer Current-Line)
-                  (Line-Current-Index Current-Line)))
-       (setf (Line-Current-Char Current-Line) #\Space))
-      (setq prior-token
-       (make-token :Symbol (intern (string x))
-                   :Type 'identifier
-                   :nonBlank nonblank))
-      t)))
-
-(defun initial-substring-p (part whole)
-  "Returns length of part if part matches initial segment of whole."
-  (let ((x (string-not-greaterp part whole)))
-    (and x (= x (length part)) x)))
-
 @
 \subsubsection{Token handling}
 Tokens are acquired from a stream of characters.  Lexical analysis is performed
@@ -314,141 +276,6 @@ can be shoved back on the input stream (to the current line) with Unget-Tokens.
    (token-install nil nil current-token nil)
    (token-install nil nil next-token nil)
    (token-install nil nil prior-token nil)))
-
-@
-{\bf Unget-Tokens}
-<<*>>=
-
-(defun quote-if-string (token)
- (when token   ;only use token-type on non-null tokens
-  (case (token-type token)
-   (bstring      (strconc "[" (token-symbol token) "]*"))
-   (string       (strconc "'" (token-symbol token) "'"))
-   (spadstring   (strconc "\"" (underscore (token-symbol token)) "\""))
-   (number       (format nil "~v,'0D" (token-nonblank token)
-                                (token-symbol token)))
-   (special-char (string (token-symbol token)))
-   (identifier   (let ((id (symbol-name (token-symbol token)))
-                           (pack (package-name (symbol-package
-                                                (token-symbol token)))))
-                  (if (or $BOOT $SPAD)
-                   (if (string= pack "BOOT")
-                    (escape-keywords (underscore id) (token-symbol token))
-                    (concatenate 'string
-                      (underscore pack) "'" (underscore id)))
-                   id)))
-   (t            (token-symbol token)))))
-
-(defun escape-keywords (pname id)
-  (if (member id keywords)
-   (concatenate 'string "_" pname)
-   pname))
-
-(defun underscore (string)
- (if (every #'alpha-char-p string) 
-  string
-  (let* ((size (length string))
-         (out-string (make-array (* 2 size)
-                                 :element-type 'string-char
-                                 :fill-pointer 0))
-         next-char)
-   (dotimes (i size)
-    (setq next-char (char string i))
-    (unless (alpha-char-p next-char) (vector-push #\_ out-string))
-    (vector-push next-char out-string))
-   out-string)))
-
-(defun Unget-Tokens ()
- (case Valid-Tokens
-  (0 t)
-  (1 (let* ((cursym (quote-if-string current-token))
-            (curline (line-current-segment Current-Line))
-            (revised-line (strconc cursym curline (copy-seq " "))))
-         (line-new-line revised-line current-line (line-number Current-Line))
-         (setq NonBlank (token-nonblank current-token))
-         (setq Valid-Tokens 0)))
-  (2 (let* ((cursym (quote-if-string current-token))
-            (nextsym (quote-if-string next-token))
-            (curline (line-current-segment Current-Line))
-            (revised-line
-             (strconc (if (token-nonblank current-token) "" " ")
-                      cursym
-                      (if (token-nonblank next-token) "" " ")
-                      nextsym curline " ")))
-      (setq NonBlank (token-nonblank current-token))
-      (line-new-line revised-line current-line (line-number Current-Line))
-      (setq Valid-Tokens 0)))
-  (t (error "How many tokens do you think you have?"))))
-
-@
-{\bf Match Token}
-<<*>>=
-
-(defun match-token (token type &optional (symbol nil))
-  (when (and token (eq (token-type token) type))
-   (if symbol
-    (when (equal symbol (token-symbol token)) token)
-    token)))
-
-(defun match-current-token (type &optional (symbol nil))
-  "Returns the current token if it has EQ type and (optionally) equal symbol."
-  (match-token (current-token) type symbol))
-
-(defun match-next-token (type &optional (symbol nil))
-  "Returns the next token if it has equal type and (optionally) equal symbol."
-  (match-token (next-token) type symbol))
-
-@
-{\bf Current Token, Next Token, Advance Token}
-<<*>>=
-
-(defun try-get-token (token)
- (let ((tok (get-token token)))
-  (when tok
-   (incf Valid-Tokens)
-   token)))
-
-(defun current-symbol () (make-symbol-of (current-token)))
-
-(defun make-symbol-of (token)
- (let ((u (and token (token-symbol token))))
-  (cond
-   ((not u) nil)
-   ((characterp u) (intern (string u)))
-   (u))))
-
-(defun current-token ()
-  "Returns the current token getting a new one if necessary."
- (if (> Valid-Tokens 0)
-  Current-Token
-  (try-get-token Current-Token)))
-
-(defun next-token ()
-  "Returns the token after the current token, or NIL if there is none after."
- (current-token)
- (if (> Valid-Tokens 1)
-  Next-Token
-  (try-get-token Next-Token)))
-
-(defun advance-token ()
-  "Makes the next token be the current token."
-  (current-token)                        ;don't know why this is needed
-  (case Valid-Tokens
-    (0 (try-get-token (Current-Token)))
-    (1 (decf Valid-Tokens)
-       (setq Prior-Token (copy-token Current-Token))
-       (try-get-token Current-Token))
-    (2 (setq Prior-Token (copy-token Current-Token))
-       (setq Current-Token (copy-token Next-Token))
-       (decf Valid-Tokens))))
-
-(defparameter XTokenReader 'get-meta-token "Name of tokenizing function")
-
-@
-{\bf Get Token}
-<<*>>=
-
-(defun get-token (token) (funcall XTokenReader token))
 
 @
 \subsubsection{Character handling}

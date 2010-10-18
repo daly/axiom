@@ -4490,6 +4490,319 @@ so there is a bit of indirection involved in the call.
 
 
 \section{The PARSE support routines}
+This section is broken up into 3 levels:
+\begin{itemize}
+\item String grabbing:    Match String, Match Advance String
+\item Token handling:     Current Token, Next Token, Advance Token
+\item Character handling: Current Char, Next Char, Advance Char
+\item Line handling:      Next Line, Print Next Line
+\item Random Stuff
+\end{itemize}
+\subsection{String grabbing}
+String grabbing is the art of matching initial segments of the current
+line, and removing them from the line before the get tokenized if they
+match (or removing the corresponding current tokens).
+
+\defun{match-string}{match-string}
+The match-string function returns length of X 
+if X matches initial segment of inputstream.
+\calls{match-string}{unget-tokens}
+\calls{match-string}{skip-blanks}
+\calls{match-string}{line-past-end-p}
+\calls{match-string}{current-char}
+\calls{match-string}{initial-substring-p}
+\calls{match-string}{subseq}
+\calls{match-string}{line-buffer}
+\calls{match-string}{line-current-index}
+\uses{match-string}{line}
+<<defun match-string>>=
+(defun match-string (x)
+  (unget-tokens) ; So we don't get out of synch with token stream
+  (skip-blanks)
+  (if (and (not (line-past-end-p current-line)) (current-char) )
+    (initial-substring-p x
+     (subseq (line-buffer current-line) (line-current-index current-line)))))
+
+@
+
+\defun{match-advance-string}{match-advance-string}
+The match-string function returns length of X 
+if X matches initial segment of inputstream.
+If it is successful, advance inputstream past X.
+\calls{match-advance-string}{quote-if-string}
+\calls{match-advance-string}{current-token}
+\calls{match-advance-string}{match-string}
+\calls{match-advance-string}{line-current-index}
+\calls{match-advance-string}{line-past-end-p}
+\calls{match-advance-string}{line-current-char}
+\calls{match-advance-string}{line-buffer}
+\calls{match-advance-string}{make-token}
+\calls{match-advance-string}{}
+\calls{match-advance-string}{}
+\usesstruct{match-advance-string}{token}
+\usesstruct{match-advance-string}{line}
+<<defun match-advance-string>>=
+(defun match-advance-string (x)
+  (let ((y (if (>= (length (string x))
+                   (length (string (quote-if-string (current-token)))))
+               (match-string x)
+               nil))) ; must match at least the current token
+    (when y
+      (incf (line-current-index current-line) y)
+      (if (not (line-past-end-p current-line))
+       (setf (line-current-char current-line)
+             (elt (line-buffer current-line)
+                  (line-current-index current-line)))
+       (setf (line-current-char current-line) #\space))
+      (setq prior-token
+       (make-token :symbol (intern (string x))
+                   :type 'identifier
+                   :nonblank nonblank))
+      t)))
+
+@
+
+\defun{initial-substring-p}{initial-substring-p}
+\calls{initial-substring-p}{string-not-greaterp}
+<<defun initial-substring-p>>=
+(defun initial-substring-p (part whole)
+  "Returns length of part if part matches initial segment of whole."
+  (let ((x (string-not-greaterp part whole)))
+    (and x (= x (length part)) x)))
+
+@
+
+\defun{quote-if-string}{quote-if-string}
+\calls{quote-if-string}{token-type}
+\calls{quote-if-string}{strconc}
+\calls{quote-if-string}{token-symbol}
+\calls{quote-if-string}{underscore}
+\calls{quote-if-string}{token-nonblank}
+\calls{quote-if-string}{pack}
+\calls{quote-if-string}{escape-keywords}
+\usesdollar{quote-if-string}{boot}
+\usesdollar{quote-if-string}{spad}
+<<defun quote-if-string>>=
+(defun quote-if-string (token)
+ (declare (special $boot $spad))
+ (when token   ;only use token-type on non-null tokens
+  (case (token-type token)
+   (bstring      (strconc "[" (token-symbol token) "]*"))
+   (string       (strconc "'" (token-symbol token) "'"))
+   (spadstring   (strconc "\"" (underscore (token-symbol token)) "\""))
+   (number       (format nil "~v,'0D" (token-nonblank token)
+                                (token-symbol token)))
+   (special-char (string (token-symbol token)))
+   (identifier   (let ((id (symbol-name (token-symbol token)))
+                           (pack (package-name (symbol-package
+                                                (token-symbol token)))))
+                  (if (or $boot $spad)
+                   (if (string= pack "BOOT")
+                    (escape-keywords (underscore id) (token-symbol token))
+                    (concatenate 'string
+                      (underscore pack) "'" (underscore id)))
+                   id)))
+   (t            (token-symbol token)))))
+
+@
+
+\defun{escape-keywords}{escape-keywords}
+\calls{escape-keywords}{}
+<<defun escape-keywords>>=
+(defun escape-keywords (pname id)
+  (if (member id keywords)
+   (concatenate 'string "_" pname)
+   pname))
+
+@
+
+\defun{underscore}{underscore}
+\calls{underscore}{}
+<<defun underscore>>=
+(defun underscore (string)
+ (if (every #'alpha-char-p string) 
+  string
+  (let* ((size (length string))
+         (out-string (make-array (* 2 size)
+                                 :element-type 'string-char
+                                 :fill-pointer 0))
+         next-char)
+   (dotimes (i size)
+    (setq next-char (char string i))
+    (unless (alpha-char-p next-char) (vector-push #\_ out-string))
+    (vector-push next-char out-string))
+   out-string)))
+
+@
+
+\subsection{Token Handling}
+
+\defun{unget-tokens}{unget-tokens}
+\calls{unget-tokens}{quote-if-string}
+\calls{unget-tokens}{line-current-segment}
+\calls{unget-tokens}{strconc}
+\calls{unget-tokens}{line-number}
+\calls{unget-tokens}{token-nonblank}
+\calls{unget-tokens}{line-new-line}
+\calls{unget-tokens}{line-number}
+\uses{unget-tokens}{valid-tokens}
+<<defun unget-tokens>>=
+(defun unget-tokens ()
+ (case valid-tokens
+  (0 t)
+  (1 (let* ((cursym (quote-if-string current-token))
+            (curline (line-current-segment current-line))
+            (revised-line (strconc cursym curline (copy-seq " "))))
+         (line-new-line revised-line current-line (line-number current-line))
+         (setq nonblank (token-nonblank current-token))
+         (setq valid-tokens 0)))
+  (2 (let* ((cursym (quote-if-string current-token))
+            (nextsym (quote-if-string next-token))
+            (curline (line-current-segment Current-Line))
+            (revised-line
+             (strconc (if (token-nonblank current-token) "" " ")
+                      cursym
+                      (if (token-nonblank next-token) "" " ")
+                      nextsym curline " ")))
+      (setq nonblank (token-nonblank current-token))
+      (line-new-line revised-line current-line (line-number current-line))
+      (setq valid-tokens 0)))
+  (t (error "How many tokens do you think you have?"))))
+
+@
+
+\defun{match-current-token}{match-current-token}
+This returns the current token if it has EQ type and (optionally) equal symbol.
+\calls{match-current-token}{current-token}
+\calls{match-current-token}{match-token}
+<<defun match-current-token>>=
+(defun match-current-token (type &optional (symbol nil))
+  (match-token (current-token) type symbol))
+
+@
+
+\defun{match-token}{match-token}
+\calls{match-token}{token-type}
+\calls{match-token}{token-symbol}
+<<defun match-token>>=
+(defun match-token (token type &optional (symbol nil))
+  (when (and token (eq (token-type token) type))
+   (if symbol
+    (when (equal symbol (token-symbol token)) token)
+    token)))
+
+@
+
+\defun{match-next-token}{match-next-token}
+This returns the next token if it has equal type and (optionally) equal symbol.
+\calls{match-next-token}{next-token}
+\calls{match-next-token}{match-token}
+<<defun match-next-token>>=
+(defun match-next-token (type &optional (symbol nil))
+  (match-token (next-token) type symbol))
+
+@
+
+\defun{current-symbol}{current-symbol}
+\calls{current-symbol}{make-symbol-of}
+\calls{current-symbol}{current-token}
+<<defun current-symbol>>=
+(defun current-symbol ()
+ (make-symbol-of (current-token)))
+
+@
+
+\defun{make-symbol-of}{make-symbol-of}
+\calls{make-symbol-of}{token-symbol}
+<<defun make-symbol-of>>=
+(defun make-symbol-of (token)
+ (let ((u (and token (token-symbol token))))
+  (cond
+   ((not u) nil)
+   ((characterp u) (intern (string u)))
+   (u))))
+
+@
+
+\defun{current-token}{current-token}
+This returns the current token getting a new one if necessary.
+\calls{current-token}{try-get-token}
+\uses{current-token}{valid-tokens}
+\uses{current-token}{current-token}
+<<defun current-token>>=
+(defun current-token ()
+ (declare (special valid-tokens current-token))
+ (if (> valid-tokens 0)
+  current-token
+  (try-get-token current-token)))
+
+@
+
+\defun{try-get-token}{try-get-token}
+\calls{try-get-token}{get-token}
+\uses{try-get-token}{valid-tokens}
+<<defun try-get-token>>=
+(defun try-get-token (token)
+ (declare (special valid-tokens))
+ (let ((tok (get-token token)))
+  (when tok
+   (incf valid-tokens)
+   token)))
+
+@
+
+\defun{next-token}{next-token}
+This returns the token after the current token, or NIL if there is none after.
+\calls{next-token}{try-get-token}
+\calls{next-token}{current-token}
+\uses{next-token}{valid-tokens}
+\uses{next-token}{next-token}
+<<defun next-token>>=
+(defun next-token ()
+ (declare (special valid-tokens next-token))
+ (current-token)
+ (if (> valid-tokens 1)
+  next-token
+  (try-get-token next-token)))
+
+@
+
+\defun{advance-token}{advance-token}
+This makes the next token be the current token.
+\calls{advance-token}{current-token}
+\calls{advance-token}{copy-token}
+\calls{advance-token}{try-get-token}
+\uses{advance-token}{valid-tokens}
+\uses{advance-token}{current-token}
+<<defun advance-token>>=
+(defun advance-token ()
+  (current-token)                        ;don't know why this is needed
+  (case valid-tokens
+    (0 (try-get-token (current-token)))
+    (1 (decf valid-tokens)
+       (setq prior-token (copy-token current-token))
+       (try-get-token current-token))
+    (2 (setq prior-token (copy-token current-token))
+       (setq current-token (copy-token next-token))
+       (decf valid-tokens))))
+
+@
+
+\defvar{XTokenReader}
+<<initvars>>=
+(defvar XTokenReader 'get-meta-token "Name of tokenizing function")
+
+@
+
+\defun{get-token}{get-token}
+\calls{get-token}{XTokenReader}
+\uses{get-token}{XTokenReader}
+<<defun get-token>>=
+(defun get-token (token)
+ (funcall XTokenReader token))
+
+@
+
 \subsection{Applying metagrammatical elements of a production (e.g., Star).}
 \begin{itemize}
 \item {\bf must} means that if it is not present in the token stream, 
@@ -4562,6 +4875,18 @@ loop
       (go loop))))
 
 @
+\subsection{Stacking and retrieving reductions of rules.}
+
+\defun{push-reduction}{push-reduction}
+\calls{push-reduction}{stack-push}
+\calls{push-reduction}{make-reduction}
+\uses{push-reduction}{reduce-stack}
+<<defun push-reduction>>=
+(defun push-reduction (rule redn)
+  (stack-push (make-reduction :rule rule :value redn) reduce-stack))
+
+@
+
 \chapter{The Compiler}
 
 \section{Compiling EQ.spad}
@@ -7628,6 +7953,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun action>>
 <<defun addCARorCDR>>
 <<defun add-parens-and-semis-to-line>>
+<<defun advance-token>>
 <<defun aplTran>>
 <<defun aplTran1>>
 <<defun aplTranList>>
@@ -7672,6 +7998,8 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun compWithMappingMode1>>
 <<defun containsBang>>
 <<defun convert>>
+<<defun current-symbol>>
+<<defun current-token>>
 
 <<defun decodeScripts>>
 <<defun deepestExpression>>
@@ -7711,12 +8039,14 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun def-whereclauselist>>
 
 <<defun errhuh>>
+<<defun escape-keywords>>
 <<defun extractCodeAndConstructTriple>>
 
 <<defun freelist>>
 
 <<defun get-a-line>>
 <<defun getScriptName>>
+<<defun get-token>>
 
 <<defun hackforis>>
 <<defun hackforis1>>
@@ -7725,13 +8055,21 @@ if \verb|$InteractiveMode| then use a null outputstream
 
 <<defun initialize-preparse>>
 <<defun initial-substring>>
+<<defun initial-substring-p>>
 
 <<defun Line-New-Line>>
 
 <<defun make-string-adjustable>>
+<<defun make-symbol-of>>
+<<defun match-advance-string>>
+<<defun match-current-token>>
+<<defun match-next-token>>
+<<defun match-string>>
+<<defun match-token>>
 <<defun modifyModeStack>>
 
 <<defun next-line>>
+<<defun next-token>>
 <<defun ncINTERPFILE>>
 
 <<defun optional>>
@@ -7826,6 +8164,9 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun preparseReadLine>>
 <<defun preparseReadLine1>>
 <<defun primitiveType>>
+<<defun push-reduction>>
+
+<<defun quote-if-string>>
 
 <<defun read-a-line>>
 <<defun recompile-lib-file-if-necessary>>
@@ -7838,6 +8179,10 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun storeblanks>>
 <<defun s-process>>
 
+<<defun try-get-token>>
+
+<<defun underscore>>
+<<defun unget-tokens>>
 <<defun unTuple>>
 
 @
