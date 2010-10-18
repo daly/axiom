@@ -2263,6 +2263,183 @@ nothing (see boot2Lisp) yet still allow function call (lisp2BootAndComp).
 
 @
 
+\defun{def-message}{def-message}
+\calls{def-message}{def-message1}
+<<defun def-message>>=
+(defun def-message (u)
+ (cons (first u) (mapcar #'def-message1 (cdr u))))
+
+@
+
+\defun{def-message1}{def-message1}
+\calls{def-message1}{eqcar}
+\calls{def-message1}{def-message1}
+\calls{def-message1}{deftran}
+<<defun def-message1>>=
+(defun def-message1 (v)
+ (cond
+  ((and (stringp v) (> (size v) 0) (not (eq (elt v 0) '\%)))
+   (list 'makestring v))
+  ((eqcar v 'cons)
+   (list 'cons (def-message1 (second v)) (def-message1 (third v))))
+  ((deftran v))))
+
+@
+
+\defun{def-in2on}{def-in2on}
+\calls{def-in2on}{eqcar}
+<<defun def-in2on>>=
+(defun def-in2on (it)
+ (mapcar 
+  #'(lambda (x) (let (u)
+     (cond
+      ((and (eqcar x 'in) (eqcar (third x) '|tails|))
+       (list 'on (second x) (second (third x))))
+      ((and (eqcar x 'in) (eqcar (setq u (third x)) 'segment))
+       (cond
+        ((third u) (list 'step (second x) (second u) 1 (third u)))
+        ((list 'step (second x) (second u) 1))))
+      ((and (eqcar x 'inby) (eqcar (setq u (third x)) 'segment))
+       (cond
+        ((third u) (list 'step (second x) (second u) (|last| x) (third u)))
+        ((list 'step (second x) (second u) (|last| x)))))
+      (x))))
+    it))
+
+@
+
+\defun{def-cond}{def-cond}
+\calls{def-cond}{deftran}
+\calls{def-cond}{def-cond}
+<<defun def-cond>>=
+(defun def-cond (l)
+ (cond
+  ((not l) nil)
+  ((cons (mapcar #'deftran (first l)) (def-cond (cdr l))))))
+
+@
+
+\defdollar{is-spill}
+<<initvars>>=
+(defvar $is-spill nil)
+
+@
+
+\defdollar{is-spill-list}
+<<initvars>>=
+(defvar $is-spill-list nil)
+
+@
+
+\defun{def-is-eqlist}{def-is-eqlist}
+\calls{def-is-eqlist}{}
+\usesdollar{def-is-eqlist}{is-eqlist}
+\usesdollar{def-is-eqlist}{is-spill-list}
+<<defun def-is-eqlist>>=
+(defun def-is-eqlist (str)
+ (let (g e)
+  (declare (special $is-eqlist $is-spill-list))
+  (cond
+   ((not str) (push `(eq ,(setq g (is-gensym)) nil) $is-eqlist) g)
+   ((eq str '\.) (is-gensym))
+   ((identp str) str)
+   ((stringp str)
+     (setq e (def-string str))
+     (push (list (if (atom (second e)) 'eq 'equal)
+                 (setq g (is-gensym)) e)
+        $is-eqlist)
+     g)
+   ((or (numberp str) (member str '((|Zero|) (|One|))))
+    (push (list 'eq (setq g (is-gensym)) str) $is-eqlist)
+    g)
+   ((atom str) (errhuh))
+   ((eqcar str 'spadlet)
+    (cond
+     ((identp (second str))
+      (push (def-is2 (second str) (third str)) $is-spill-list)
+      (second str))
+     ((identp (third str))
+       (push (deftran str) $is-spill-list) (third str))
+     ((errhuh))))
+   ((eqcar str 'quote)
+    (push (list (cond ((atom (second str)) 'eq) ('equal))
+                (setq g (is-gensym)) str) 
+          $is-eqlist) 
+     g)
+   ((eqcar str 'list) (def-is-eqlist (list2cons str)))
+   ((or (eqcar str 'cons) (eqcar str 'vcons))
+     (cons (def-is-eqlist (second str)) (def-is-eqlist (third str))))
+   ((eqcar str 'append)
+     (unless (identp (second str)) (error "CANT!"))
+     (push (def-is2 (list 'reverse (setq g (is-gensym)))
+                    (def-is-rev (third str) (second str)))
+       $is-eqlist)
+     (cond ((eq (second str) '\.) ''t)
+      ((push (subst (second str) 'l '(or (setq l (nreverse l)) t))
+         $is-spill-list)))
+     g)
+   ((errhuh)))))
+
+@
+
+\defdollar{vl}
+<<initvars>>=
+(defparameter $vl nil)
+
+@
+
+\defun{def-is-remdup}{def-is-remdup}
+\calls{def-is-remdup}{def-is-remdup1}
+\usesdollar{def-is-remdup}{vl}
+<<defun def-is-remdup>>=
+(defun def-is-remdup (x)
+ (let ($vl)
+  (def-is-remdup1 x)))
+
+@
+
+\defun{def-is-remdup1}{def-is-remdup1}
+\calls{def-is-remdup1}{is-gensym}
+\calls{def-is-remdup1}{eqcar}
+\calls{def-is-remdup1}{def-is-remdup1}
+\calls{def-is-remdup1}{errhuh}
+\usesdollar{def-is-remdup1}{vl}
+\usesdollar{def-is-remdup1}{is-eqlist}
+<<defun def-is-remdup1>>=
+(defun def-is-remdup1 (x)
+ (let (rhs lhs g)
+ (declare (special $vl $is-eqlist))
+  (cond
+   ((not x) nil)
+   ((eq x '\.) x)
+   ((identp x)
+    (cond
+     ((member x $vl)
+      (push (list 'equal (setq g (is-gensym)) x) $is-eqlist)
+      g)
+     ((push x $vl)
+      x)))
+   ((member x '((|Zero|) (|One|))) x)
+   ((atom x) x)
+   ((eqcar x 'spadlet)
+     (setq rhs (def-is-remdup1 (third x)))
+     (setq lhs (def-is-remdup1 (second x)))
+     (list 'spadlet lhs rhs))
+   ((eqcar x 'let)
+     (setq rhs (def-is-remdup1 (third x)))
+     (setq lhs (def-is-remdup1 (second x)))
+     (list 'let lhs rhs))
+   ((eqcar x 'quote) x)
+   ((and (eqcar x 'equal) (not (cddr x)))
+     (push (list 'equal (setq g (is-gensym)) (second x)) $is-eqlist)
+     g)
+   ((member (first x) '(list append cons vcons))
+    (cons
+     (cond ((eq (first x) 'vcons) 'cons) ( (first x)))
+     (mapcar #'def-is-remdup1 (cdr x))))
+   ((errhuh)))))
+
+@
 
 \defun{addCARorCDR}{addCARorCDR}
 \calls{addCARorCDR}{eqcar}
@@ -2320,12 +2497,6 @@ nothing (see boot2Lisp) yet still allow function call (lisp2BootAndComp).
 \defdollar{is-eqlist}
 <<initvars>>=
 (defparameter $is-eqlist nil)
-
-@
-
-\defdollar{is-spill-list}
-<<initvars>>=
-(defparameter $is-spill-list nil)
 
 @
 
@@ -7507,13 +7678,18 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun def>>
 <<defun def-addlet>>
 <<defun def-collect>>
+<<defun def-cond>>
 <<defun def-inner>>
 <<defun def-insert-let>>
+<<defun def-in2on>>
 <<defun def-is>>
 <<defun def-is2>>
+<<defun def-is-eqlist>>
 <<defun defIS>>
 <<defun defIS1>>
 <<defun defISReverse>>
+<<defun def-is-remdup>>
+<<defun def-is-remdup1>>
 <<defun def-is-rev>>
 <<defun def-it>>
 <<defun def-let>>
@@ -7521,6 +7697,8 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun defLET1>>
 <<defun defLET2>>
 <<defun defLetForm>>
+<<defun def-message>>
+<<defun def-message1>>
 <<defun def-process>>
 <<defun def-rename>>
 <<defun def-rename1>>
