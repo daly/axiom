@@ -1456,7 +1456,123 @@ always positioned ON the first character.
 
 @
 
-\chapter{Transformers}
+\chapter{Parse Transformers}
+\defun{parseTransform}{parseTransform}
+\calls{parseTransform}{msubst}
+\calls{parseTransform}{parseTran}
+\usesdollar{parseTransform}{defOp}
+<<defun parseTransform>>=
+(defun |parseTransform| (x)
+ (let (|$defOp|)
+ (declare (special |$defOp|))
+  (setq |$defOp| nil)
+  (setq x (msubst '$ '% x)) ; for new compiler compatibility
+  (|parseTran| x)))
+
+@
+
+
+\defun{parseTran}{parseTran}
+\calls{parseTran}{parseAtom}
+\calls{parseTran}{parseConstruct}
+\calls{parseTran}{parseTran}
+\calls{parseTran}{parseTranList}
+\calls{parseTran}{getl}
+\usesdollar{parseTran}{op}
+<<defun parseTran>>=
+(defun |parseTran| (x)
+ (labels (
+  (g (op)
+   (let (tmp1 tmp2 x)
+    (seq
+     (if (and (pairp op) (eq (qcar op) '|elt|)
+         (progn
+          (setq tmp1 (qcdr op))
+          (and (pairp tmp1)
+               (progn
+                (setq op (qcar tmp1))
+                (setq tmp2 (qcdr tmp1))
+                (and (pairp tmp2)
+                     (eq (qcdr tmp2) nil)
+                         (progn (setq x (qcar tmp2)) t))))))
+        (exit (g x)))
+     (exit op)))))
+ (let (|$op| argl u r fn)
+ (declare (special |$op|))
+  (setq |$op| nil)
+  (if (atom x) 
+   (|parseAtom| x)
+   (progn
+    (setq |$op| (car x)) 
+    (setq argl (cdr x))
+    (setq u (g |$op|))
+    (cond
+     ((eq u '|construct|)
+       (setq r (|parseConstruct| argl))
+       (if (and (pairp |$op|) (eq (qcar |$op|) '|elt|))
+        (cons (|parseTran| |$op|) (cdr r))
+        r))
+     ((and (atom u) (setq fn (getl u '|parseTran|)))
+       (funcall fn argl))
+     (t (cons (|parseTran| |$op|) (|parseTranList| argl)))))))))
+
+@
+
+\defun{parseAtom}{parseAtom}
+\calls{parseAtom}{parseLeave}
+\usesdollar{parseAtom}{NoValue}
+<<defun parseAtom>>=
+(defun |parseAtom| (x)
+ (declare (special |$NoValue|))
+ (if (eq x '|break|)
+  (|parseLeave| (list '|$NoValue|))
+  x))
+
+@
+
+\defun{parseTranList}{parseTranList}
+\calls{parseTranList}{parseTran}
+\calls{parseTranList}{parseTranList}
+<<defun parseTranList>>=
+(defun |parseTranList| (x)
+ (if (atom x)
+  (|parseTran| x)
+  (cons (|parseTran| (car x)) (|parseTranList| (cdr x)))))
+
+@
+
+\defun{parseConstruct}{parseConstruct}
+\calls{parseConstruct}{parseTranList}
+\usesdollar{parseConstruct}{insideConstructIfTrue}
+<<defun parseConstruct>>=
+(defun |parseConstruct| (u)
+ (let (|$insideConstructIfTrue| x)
+ (declare (special |$insideConstructIfTrue|))
+  (setq |$insideConstructIfTrue| t)
+  (setq x (|parseTranList| u))
+  (cons '|construct| x)))
+
+@
+
+\defun{parseLeave}{parseLeave}
+\calls{parseLeave}{parseTran}
+<<defun parseLeave>>=
+(defun |parseLeave| (arg)
+ (let (a b)
+  (setq a (|parseTran| (car arg)))
+  (setq b (|parseTran| (cdr arg)))
+  (cond
+   (b
+    (cond
+     ((null (integerp a))
+      (moan "first arg " a " for 'leave' must be integer")
+      (list '|leave| 1 a))
+     (t (list '|leave| (cons a b)))))
+   (t (list '|leave| 1 a)))))
+
+@
+
+\chapter{Post Transformers}
 \defun{postTransform}{postTransform}
 \calls{postTransform}{postTran}
 \calls{postTransform}{identp}
@@ -1653,6 +1769,59 @@ always positioned ON the first character.
     msg))
   (push xmsg |$postStack|)
   nil))
+
+@
+
+\defun{postForm}{postForm}
+\calls{postForm}{postTranList}
+\calls{postForm}{internl}
+\calls{postForm}{postTran}
+\calls{postForm}{postError}
+\calls{postForm}{bright}
+\usesdollar{postForm}{boot}
+<<defun postForm>>=
+;(DEFUN |postForm| (|u|) (PROG (|op| |argl| |argl'| |l| |numOfArgs| |op'| |x| |ISTMP#1| |ISTMP#2| |y|) (RETURN (SEQ (PROGN (SPADLET |op| (CAR |u|)) (SPADLET |argl| (CDR |u|)) (SPADLET |x| (COND ((ATOM |op|) (SPADLET |argl'| (|postTranList| |argl|)) (SPADLET |op'| (SEQ (EXIT |op|) (COND ($BOOT (EXIT |op|))) (COND ((OR (GETL |op| (QUOTE |Led|)) (GETL |op| (QUOTE |Nud|)) (BOOT-EQUAL |op| (QUOTE IN))) (EXIT |op|))) (SPADLET |numOfArgs| (COND ((AND (PAIRP |argl'|) (EQ (QCDR |argl'|) NIL) (PROGN (SPADLET |ISTMP#1| (QCAR |argl'|)) (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) (QUOTE |@Tuple|)) (PROGN (SPADLET |l| (QCDR |ISTMP#1|)) (QUOTE T))))) (|#| |l|)) ((QUOTE T) 1))) (INTERNL (QUOTE *) (STRINGIMAGE |numOfArgs|) (PNAME |op|)))) (CONS |op'| |argl'|)) ((AND (PAIRP |op|) (EQ (QCAR |op|) (QUOTE |Scripts|))) (APPEND (|postTran| |op|) (|postTranList| |argl|))) ((QUOTE T) (SPADLET |u| (|postTranList| |u|)) (COND ((AND (PAIRP |u|) (PROGN (SPADLET |ISTMP#1| (QCAR |u|)) (AND (PAIRP |ISTMP#1|) (EQ (QCAR |ISTMP#1|) (QUOTE |@Tuple|))))) (|postError| (CONS "  " (APPEND (|bright| |u|) (CONS "is illegal because tuples cannot be applied!" (CONS (QUOTE |%l|) (CONS "   Did you misuse infix dot?" NIL)))))))) |u|))) (COND ((AND (PAIRP |x|) (PROGN (SPADLET |ISTMP#1| (QCDR |x|)) (AND (PAIRP |ISTMP#1|) (EQ (QCDR |ISTMP#1|) NIL) (PROGN (SPADLET |ISTMP#2| (QCAR |ISTMP#1|)) (AND (PAIRP |ISTMP#2|) (EQ (QCAR |ISTMP#2|) (QUOTE |@Tuple|)) (PROGN (SPADLET |y| (QCDR |ISTMP#2|)) (QUOTE T))))))) (CONS (CAR |x|) |y|)) ((QUOTE T) |x|))))))) 
+
+(defun |postForm| (u)
+ (let (op argl arglp z numOfArgs opp x)
+ (declare (special $boot))
+  (seq
+   (setq op (car u))
+   (setq argl (cdr u))
+   (setq x
+    (cond
+     ((atom op)
+       (setq arglp (|postTranList| argl))
+       (setq opp
+         (seq 
+          (exit op)
+          (when $boot (exit op))
+          (when (or (getl op '|Led|)  (getl op '|Nud|) (eq op 'in)) (exit op))
+          (setq numOfArgs
+           (cond
+            ((and (pairp arglp) (eq (qcdr arglp) nil) (pairp (qcar arglp)) 
+                  (eq (qcar (qcar arglp)) '|@Tuple|))
+              (|#| (qcdr (qcar arglp))))
+            (t 1)))
+          (internl '* (stringimage numOfArgs) (pname op))))
+       (cons opp arglp))
+     ((and (pairp op) (eq (qcar op) '|Scripts|))
+       (append (|postTran| op) (|postTranList| argl)))
+     (t
+      (setq u (|postTranList| u))
+      (cond
+       ((and (pairp u) (pairp (qcar u)) (eq (qcar (qcar u)) '|@Tuple|))
+         (|postError|
+          (cons "  "
+           (append (|bright| u)
+            (list "is illegal because tuples cannot be applied!" '|%l| 
+                  "   Did you misuse infix dot?"))))))
+       u)))
+   (cond
+    ((and (pairp x) (pairp (qcdr x)) (eq (qcdr (qcdr x)) nil)
+          (pairp (qcar (qcdr x))) (eq (qcar (qcar (qcdr x))) '|@Tuple|))
+     (cons (car x) (qcdr (qcar (qcdr x)))))
+    (t x)))))
 
 @
 
@@ -8262,6 +8431,13 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun PARSE-VarForm>>
 <<defun PARSE-With>>
 <<defun parsepiles>>
+<<defun parseAtom>>
+<<defun parseConstruct>>
+<<defun postForm>>
+<<defun parseLeave>>
+<<defun parseTran>>
+<<defun parseTranList>>
+<<defun parseTransform>>
 <<defun postAtom>>
 <<defun postcheck>>
 <<defun postError>>
