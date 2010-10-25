@@ -9,7 +9,9 @@
 ;  8 GCL-EXPAND
 ;  9 ISCHUNK-LATEX
 ; 10 ISCHUNK-NOWEB
-
+; 11 ALLCHUNKS
+; 12 makeHelpFiles
+; 13 makeInputFiles
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -348,5 +350,103 @@
       (values 'end nil))
     (t (values nil nil)))))
   
- 
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; 11 allchunks
+;;; 
+;;; allchunks will make a single pass over a book extracting any chunk
+;;; that fits the PATTERN from the FROMFILE to the TODIR. The chunk
+;;; format is either noweb (if true) or latex (if false).
+;;;
+;;; allchunks takes 4 arguments,
+;;; the PATTERN (a string like ".help>>"
+;;; the FROMFILE (a string like "/axiom/books/bookvol5.pamphlet")
+;;; the TODIR (a string like "/axiom/mnt/ubuntu/doc/spadhelp")
+;;; and a boolean NOWEB? (true is noweb format chunks, false is latex style)
+;;;
+;;; a chunk name is expected to be of the form:
+;;; <<FROMFILE.PATTERN>>=
+;;; which means that a chunk matching the pattern (e.g. ".input>>") 
+;;; will be extracted to the file TODIR/FROMFILE.PATTERN
+;;; 
+;;; This is used for <<foo.help>> and <<foo.input>> file extraction.
+;;; allchunks is used to extract help files and input files in a single
+;;; pass over the books. Since there are hundreds of input files and
+;;; help files this is a significant speedup.
+
+(defun allchunks (pattern fromfile todir noweb?)
+  (setq *chunkhash* (make-hash-table :test #'equal))
+  (when *chunknoise* (format t "PASS 1~%"))
+  (gcl-hashchunks (gcl-read-file fromfile) noweb?)
+  (when *chunknoise* (format t "PASS 2~%"))
+  (maphash #'(lambda (key value)
+              (if (search pattern key)
+               (let ((helpfile  (concatenate 'string todir "/" 
+                           (subseq key 2 (- (length key) 2)))))
+               (with-open-file (out helpfile :direction :output)
+                (format t "extracting ~a~%" helpfile)
+                (gcl-expand key noweb? out)))))
+       *chunkhash*))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; 12 makeHelpFiles
+;;;
+;;; The makeHelpFiles function creates all of the help files in a single
+;;; pass over the file. The usual method of extracting each individual
+;;; help file requires hundreds of passes over the file.
+;;;
+;;; An example call is:
+;;;
+;;; (makeHelpFiles)
+;;;
+;;; This will find all of the .help chunks in books of interest
+;;; and write each chunk to the target directory in its own filename.
+;;; So if a chunk name is <<somedomain.help>> the above call will create
+;;; the file "/tmp/help/somedomain.help" containing the chunk value.
+
+;;; Help documentation for algebra
+
+;;; The help documentation for algebra files lives within the algebra
+;;; pamphlet. The help chunk contains the name of the domain, thus:
+
+;;; <<thisdomain.help>>=
+;;; ====================================================================
+;;; thisdomain examples
+;;; ====================================================================
+;;; 
+;;;    (documentation for this domain)
+;;; 
+;;;   examplefunction foo
+;;;    output
+;;;                 Type: thetype
+;;; 
+;;; See Also:
+;;; o )show thisdomain
+;;; o $AXIOM/bin/src/doc/algebra/thisfile.spad.dvi
+;;; 
+;;; @
+
+;;; The .help files are automatically extracted by code in books/tangle.lisp
+;;; and placed in the directory \verb|${HELP}|.
+;;; 
+;;; The documentation starts off with the domain enclosed in two lines
+;;; of equal signs. The documentation is free format. Generally the
+;;; functions are indented two spaces, the output is indented 3 spaces,
+;;; and the Type field has been moved toward the center of the line.
+;;; 
+;;; The ``See Also:'' section lists the domain with the ``show'' command
+;;; and the path to the source file in dvi format.
+
+(defun makeHelpFiles ()
+ (let ((AXIOM (si::getenv "AXIOM")) (BOOKS (si::getenv "BOOKS")) HELP PAT)
+  (setq HELP (concatenate 'string AXIOM "/doc/spadhelp"))
+  (setq PAT ".help>>")
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol5.pamphlet") HELP t)
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.2.pamphlet") HELP t)
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.3.pamphlet") HELP t)
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.4.pamphlet") HELP t)
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.5.pamphlet") HELP t)))
+
+
+
 
