@@ -447,6 +447,30 @@
   (allchunks PAT (concatenate 'string BOOKS "/bookvol10.4.pamphlet") HELP t)
   (allchunks PAT (concatenate 'string BOOKS "/bookvol10.5.pamphlet") HELP t)))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; 13 makeInputFiles
+;;;
+;;; The makeInputFiles function creates all of the input files in a single
+;;; pass over the file. The usual method of extracting each individual
+;;; input file requires hundreds of passes over the file.
+;;;
+;;; An example call is:
+;;;
+;;; (makeInputFiles)
+;;;
+;;; This will find all of the .input chunks in the books
+;;; and write each chunk to the target directory in its own filename.
+;;; So if a chunk name is <<somedomain.input>> the above call will create
+;;; the file "/tmp/help/somedomain.input" containing the chunk value.
+
+(defun makeInputFiles ()
+ (let ((SPD (si::getenv "SPD")) (BOOKS (si::getenv "BOOKS")) INPUT PAT)
+  (setq INPUT (concatenate 'string SPD "/int/input"))
+  (setq PAT ".input>>")
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.2.pamphlet") INPUT t)
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.3.pamphlet") INPUT t)
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.4.pamphlet") INPUT t)
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.5.pamphlet") INPUT t)))
 
 
 
