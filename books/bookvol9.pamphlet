@@ -1328,7 +1328,7 @@ leave it alone."
 \usesdollar{preparse-echo}{EchoLineStack}
 <<defun preparse-echo>>=
 (defun preparse-echo (linelist)
- (declare (special $EchoLineStack Echo-Meta))
+ (declare (special $EchoLineStack Echo-Meta) (ignore linelist))
  (if Echo-Meta 
   (dolist (x (reverse $EchoLineStack))
    (format out-stream "~&;~A~%" x)))
@@ -1769,9 +1769,13 @@ always positioned ON the first character.
 \defun{postError}{postError}
 \calls{postError}{nequal}
 \calls{postError}{bumperrorcount}
+\usesdollar{postError}{defOp}
+% \usesdollar{postError}{InteractiveMode} original source code bug
+\usesdollar{postError}{postStack}
 <<defun postError>>=
 (defun |postError| (msg)
  (let (xmsg)
+  (declare (special |$defOp| |$postStack|))
   (bumperrorcount '|precompilation|)
   (setq xmsg
    (if (and (nequal |$defOp| '|$defOp|) (null |InteractiveMode|))
@@ -1791,7 +1795,7 @@ always positioned ON the first character.
 \usesdollar{postForm}{boot}
 <<defun postForm>>=
 (defun |postForm| (u)
- (let (op argl arglp z numOfArgs opp x)
+ (let (op argl arglp numOfArgs opp x)
  (declare (special $boot))
   (seq
    (setq op (car u))
@@ -1844,37 +1848,324 @@ The functions in this section are called through the symbol-plist
 of the symbol being parsed. The original list read:
 
 \begin{verbatim}
-  |add|          |postAdd|
-  @              |postAtSign|
-  |:BF:|         |postBigFloat|
-  |Block|        |postBlock|
-  CATEGORY       |postCategory|
-  COLLECT        |postCollect|
-  \:             |postColon|
-  |::|           |postColonColon|
-  \,             |postComma|
-  |construct|    |postConstruct|
-  ==             |postDef|
-  |=>|           |postExit|
-  |if|           |postIf|
-  |in|           |postin|       ;" the infix operator version of in"
-  IN             |postIn|       ;" the iterator form of in"
-  |Join|         |postJoin|
-  |->|           |postMapping|
-  |==>|          |postMDef|
-  |pretend|      |postPretend|
-  QUOTE          |postQUOTE|
-  |Reduce|       |postReduce|
-  REPEAT         |postRepeat|
-  |Scripts|      |postScripts|
-  \;             |postSemiColon|
-  |Signature|    |postSignature|
-  /              |postSlash|
-  |@Tuple|       |postTuple|
-  |TupleCollect| |postTupleCollect|
-  |where|        |postWhere|
-  |with|         |postWith|
+  add            postAdd
+  @              postAtSign
+  :BF:           postBigFloat
+  Block          postBlock
+  CATEGORY       postCategory
+  COLLECT        postCollect
+  :              postColon
+  ::             postColonColon
+  ,              postComma
+  construct      postConstruct
+  ==             postDef
+  =>             postExit
+  if             postIf
+  in             postin       ;" the infix operator version of in"
+  IN             postIn       ;" the iterator form of in"
+  Join           postJoin
+  ->             postMapping
+  ==>            postMDef
+  pretend        postPretend
+  QUOTE          postQUOTE
+  Reduce         postReduce
+  REPEAT         postRepeat
+  Scripts        postScripts
+  ;              postSemiColon
+  Signature      postSignature
+  /              postSlash
+  @Tuple         postTuple
+  TupleCollect   postTupleCollect
+  where          postWhere
+  with           postWith
 \end{verbatim}
+
+@
+
+\defplist{add}{postAdd}
+<<postvars>>=
+(eval-when (eval load)
+ (setf (get '|add| '|postTran|) '|postAdd|))
+
+@
+
+\defun{postAdd}{postAdd}
+\calls{postAdd}{postTran}
+\calls{postAdd}{postCapsule}
+<<defun postAdd>>=
+(defun |postAdd| (arg)
+ (if (null (cddr arg))
+  (|postCapsule| (second arg))
+  (list '|add| (|postTran| (second arg)) (|postCapsule| (third arg)))))
+
+@
+
+\defplist{@}{postAtSign}
+<<postvars>>=
+(eval-when (eval load)
+ (setf (get '@ '|postTran|) '|postAtSign|))
+
+@
+
+\defun{postAtSign}{postAtSign}
+\calls{postAtSign}{postTran}
+\calls{postAtSign}{postType}
+<<defun postAtSign>>=
+(defun |postAtSign| (arg)
+ (cons '@ (cons (|postTran| (second arg)) (|postType| (third arg)))))
+
+@
+
+\defplist{:BF:}{postBigFloat}
+<<postvars>>=
+(eval-when (eval load)
+ (setf (get '|:BF:| '|postTran|) '|postBigFloat|))
+
+@
+
+\defun{postBigFloat}{postBigFloat}
+\calls{postBigFloat}{postTran}
+\usesdollar{postBigFloat}{boot}
+\usesdollar{postBigFloat}{InteractiveMode}
+<<defun postBigFloat>>=
+(defun |postBigFloat| (arg)
+ (let (mant expon eltword)
+  (declare (special $boot |$InteractiveMode|))
+  (setq mant (second arg))
+  (setq expon (cddr arg))
+  (if $boot 
+   (times (float mant) (expt (float 10) expon))
+   (progn
+    (setq eltword (if |$InteractiveMode| '|$elt| '|elt|))
+    (|postTran|
+     (list (list eltword '(|Float|) '|float|)
+       (list '|,| (list '|,| mant expon) 10)))))))
+
+@
+
+\defplist{Block}{postBlock}
+<<postvars>>=
+(eval-when (eval load)
+ (setf (get '|Block| '|postTran|) '|postBlock|))
+
+@
+
+\defun{postBlock}{postBlock}
+\calls{postBlock}{postBlockItemList}
+\calls{postBlock}{postTran}
+<<defun postBlock>>=
+(defun |postBlock| (arg)
+ (let (tmp1 x y)
+  (setq tmp1 (reverse (cdr arg)))
+  (setq x (car tmp1))
+  (setq y (nreverse (cdr tmp1)))
+  (cons 'seq
+   (append (|postBlockItemList| y) (list (list '|exit| (|postTran| x)))))))
+
+@
+
+\defplist{category}{postCategory}
+<<postvars>>=
+(eval-when (eval load)
+ (setf (get 'category '|postTran|) '|postCategory|))
+
+@
+
+\defun{postCategory}{postCategory}
+\calls{postCategory}{postTran}
+\calls{postCategory}{nreverse0}
+\usesdollar{postCategory}{insidePostCategoryIfTrue}
+<<defun postCategory>>=
+(defun |postCategory| (u)
+ (labels (
+  (fn (arg)
+   (let (|$insidePostCategoryIfTrue|)
+   (declare (special |$insidePostCategoryIfTrue|))
+    (setq |$insidePostCategoryIfTrue| t)
+    (|postTran| arg))) )
+ (let ((z (cdr u)) op tmp1)
+  (if (null z)
+   u
+   (progn
+     (setq op (if |$insidePostCategoryIfTrue| 'progn 'category))
+     (cons op
+       (dolist (x z (nreverse0 tmp1))
+        (push (fn |x|) tmp1))))))))
+
+@
+
+\defun{postCollect,finish}{postCollect,finish}
+<<defun postCollect,finish>>=
+(defun |postCollect,finish| (op itl y)
+ (let (tmp2 tmp5 newBody)
+  (cond
+   ((and (pairp y) (eq (qcar y) '|:|)
+         (pairp (qcdr y)) (eq (qcdr (qcdr y)) nil))
+    (list 'reduce '|append| 0 (cons op (append itl (list (qcar (qcdr y)))))))
+   ((and (pairp y) (eq (qcar y) '|Tuple|))
+    (setq newBody
+     (cond
+      ((dolist (x (qcdr y) tmp2)
+        (setq tmp2
+         (or tmp2 (and (pairp x) (eq (qcar x) '|:|)
+                       (pairp (qcdr x)) (eq (qcdr (qcdr x)) nil)))))
+       (|postMakeCons| (qcdr y)))
+      ((dolist (x (qcdr y) tmp5)
+         (setq tmp5 (or tmp5 (and (pairp x) (eq (qcar x) 'segment)))))
+        (|tuple2List| (qcdr y)))
+      (t (cons '|construct| (|postTranList| l)))))
+     (list 'reduce '|append| 0 (cons op (append itl (list newBody)))))
+   (t (cons op (append itl (list y)))))))
+
+@
+
+\defplist{collect}{postCollect}
+<<postvars>>=
+(eval-when (eval load)
+ (setf (get 'collect '|postTran|) '|postCollect|))
+
+@
+
+\defun{postCollect}{postCollect}
+\calls{postCollect}{postCollect,finish}
+\calls{postCollect}{postCollect}
+\calls{postCollect}{postIteratorList}
+\calls{postCollect}{postTran}
+<<defun postCollect>>=
+(defun |postCollect| (arg)
+ (let (constructOp tmp3 m d itl x)
+  (setq constructOp (car arg))
+  (setq tmp3 (reverse (cdr arg)))
+  (setq x (car tmp3))
+  (setq m (nreverse (cdr tmp3)))
+  (cond
+   ((and (pairp x) (pairp (qcar x)) (eq (qcar (qcar x)) '|elt|)
+         (pairp (qcdr (qcar x))) (pairp (qcdr (qcdr (qcar x))))
+         (eq (qcdr (qcdr (qcdr (qcar x)))) nil)
+         (eq (qcar (qcdr (qcdr (qcar x)))) '|construct|))
+    (|postCollect|
+     (cons (list '|elt| (qcar (qcdr (qcar x))) 'collect)
+      (append m (list (cons '|construct| (qcdr x)))))))
+   (t
+    (setq itl (|postIteratorList| m))
+    (setq x
+     (if (and (pairp x) (eq (qcar x) '|construct|)
+              (pairp (qcdr x)) (eq (qcdr (qcdr x)) nil))
+       (qcar (qcdr x))
+       x))
+    (|postCollect,finish| constructOp itl (|postTran| x))))))
+
+@
+
+\defplist{:}{postColon}
+<<postvars>>=
+(eval-when (eval load)
+ (setf (get '|:| '|postTran|) '|postColon|))
+
+@
+
+\defun{postColon}{postColon}
+\calls{postColon}{postTran}
+\calls{postColon}{postType}
+<<defun postColon>>=
+(defun |postColon| (u)
+ (cond
+  ((and (pairp u) (eq (qcar u) '|:|)
+        (pairp (qcdr u)) (eq (qcdr (qcdr u)) nil))
+    (list '|:| (|postTran| (qcar (qcdr u)))))
+  ((and (pairp u) (eq (qcar u) '|:|) (pairp (qcdr u))
+        (pairp (qcdr (qcdr u))) (eq (qcdr (qcdr (qcdr u))) nil))
+   (cons '|:| (cons (|postTran| (second u)) (|postType| (third u)))))))
+
+@
+
+\defplist{::}{postColonColon}
+<<postvars>>=
+(eval-when (eval load)
+ (setf (get '|::| '|postTran|) '|postColonColon|))
+
+@
+
+\defun{postColonColon}{postColonColon}
+\calls{postColonColon}{stringimage}
+\calls{postColonColon}{postForm}
+\usesdollar{postColonColon}{boot}
+<<defun postColonColon>>=
+(defun |postColonColon| (u)
+  (if (and $boot (pairp u) (eq (qcar u) '|::|) (pairp (qcdr u))
+           (pairp (qcdr (qcdr u))) (eq (qcdr (qcdr (qcdr u))) nil))
+   (intern (stringimage (third u)) (second u))
+   (|postForm| u)))
+
+@
+
+\defplist{,}{postComma}
+<<postvars>>=
+(eval-when (eval load)
+ (setf (get '|,| '|postTran|) '|postComma|))
+
+@
+
+\defun{postComma}{postComma}
+\calls{postComma}{postTuple}
+\calls{postComma}{comma2Tuple}
+<<defun postComma>>=
+(defun |postComma| (u)
+ (|postTuple| (|comma2Tuple| u))) 
+
+@
+
+\defun{comma2Tuple}{comma2Tuple}
+\calls{comma2Tuple}{postFlatten}
+<<defun comma2Tuple>>=
+(defun |comma2Tuple| (u)
+ (cons '|@Tuple| (|postFlatten| u '|,|))) 
+
+@
+
+\defplist{construct}{postConstruct}
+<<postvars>>=
+(eval-when (eval load)
+ (setf (get '|construct| '|postTran|) '|postConstruct|))
+
+@
+
+\defun{postConstruct}{postConstruct}
+\calls{postConstruct}{comma2Tuple}
+\calls{postConstruct}{postTranSegment}
+\calls{postConstruct}{postMakeCons}
+\calls{postConstruct}{tuple2List}
+\calls{postConstruct}{postTranList}
+\calls{postConstruct}{postTran}
+<<defun postConstruct>>=
+(defun |postConstruct| (u)
+ (let (b a tmp4 tmp7)
+  (cond
+   ((and (pairp u) (eq (qcar u) '|construct|)
+         (pairp (qcdr u)) (eq (qcdr (qcdr u)) nil))
+     (setq b (qcar (qcdr u)))
+     (setq a
+      (if (and (pairp b) (eq (qcar b) '|,|)) 
+       (|comma2Tuple| b)
+       b))
+     (cond
+      ((and (pairp a) (eq (qcar a) 'segment) (pairp (qcdr a))
+            (pairp (qcdr (qcdr a))) (eq (qcdr (qcdr (qcdr a))) nil))
+       (list '|construct| (|postTranSegment| (second a) (third a))))
+      ((and (pairp a) (eq (qcar a) '|@Tuple|))
+        (cond
+         ((dolist (x (qcdr a) tmp4)
+           (setq tmp4
+            (or tmp4
+             (and (pairp x) (eq (qcar x) '|:|)
+                  (pairp (qcdr x)) (eq (qcdr (qcdr x)) nil)))))
+          (|postMakeCons| (qcdr a)))
+         ((dolist (x (qcdr a) tmp7)
+            (setq tmp7 (or tmp7 (and (pairp x) (eq (qcar x) 'segment)))))
+          (|tuple2List| (qcdr a)))
+         (t (cons '|construct| (|postTranList| (qcdr a))))))
+      (t (list '|construct| (|postTran| a)))))
+   (t u))))
 
 @
 
@@ -1910,7 +2201,7 @@ of the symbol being parsed. The original list read:
 \usesdollar{setDefOp}{topOp}
 <<defun setDefOp>>=
 (defun |setDefOp| (f)
- (let (tmp1 g)
+ (let (tmp1)
   (declare (special |$defOp| |$topOp|))
   (when (and (pairp f) (eq (qcar f) '|:|)
              (pairp (setq tmp1 (qcdr f))))
@@ -2381,7 +2672,7 @@ nothing (see boot2Lisp) yet still allow function call (lisp2BootAndComp).
      (|defLetForm| lhs rhs))
    ((and (pairp lhs) (equal (qcar lhs) $let)
          (pairp (qcdr lhs)) (pairp (qcdr (qcdr lhs))) 
-         (eq (qcdr (qcdr (qcdr lhs)))))
+         (eq (qcdr (qcdr (qcdr lhs))) nil))
      (setq a (|defLET2| (qcar (qcdr lhs)) rhs))
      (setq b (qcar (qcdr (qcdr lhs))))
      (cond
@@ -3036,7 +3327,7 @@ It is pretty much just a translation of DEF-IS-REV
 <<defun def-inner>>=
 (defun def-inner (form signature $body)
   "Same as DEF but assumes body has already been DEFTRANned"
- (declare (special $body))
+ (declare (special $body) (ignore signature))
  (let ($OpAssoc ($op (first form)) (argl (rest form)))
  (declare (special $OpAssoc $op))
    (let* ((argl (def-insert-let argl))
@@ -5745,7 +6036,7 @@ This function simply calls {\bf \verb|/rf-1|}.
 \usesdollar{/RQ,LIB}{lisplib}
 <<defun /RQ,LIB>>=
 (defun |/RQ,LIB| (&rest foo &aux (echo-meta nil) ($lisplib t))
- (declare (special echo-meta $lisplib))
+ (declare (special echo-meta $lisplib) (ignore foo))
   (/rf-1 nil))
 
 @
@@ -6329,6 +6620,7 @@ And the {\bf s-process} function which returns a parsed version of the input.
 \usesdollar{s-process}{VariableCount}
 \usesdollar{s-process}{previousTime}
 \usesdollar{s-process}{LocalFrame}
+\usesdollar{s-process}{Translation}
 \uses{s-process}{curoutstream}
 <<defun s-process>>=
 (defun s-process (x)
@@ -6367,7 +6659,7 @@ And the {\bf s-process} function which returns a parsed version of the input.
             |$insideCategoryIfTrue| |$insideCapsuleFunctionIfTrue| |$form|
             |$DomainFrame| |$e| |$EmptyEnvironment| |$genFVar| |$genSDVar| 
             |$VariableCount| |$previousTime| |$LocalFrame|
-            curstrm |$s| |$x| |$m| curoutstream $traceflag))
+            curstrm |$s| |$x| |$m| curoutstream $traceflag |$Translation|))
    (setq $traceflag t)
    (if (not x) (return nil))
    (if $boot
@@ -8316,6 +8608,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 
 <<defun char-eq>>
 <<defun char-ne>>
+<<defun comma2Tuple>>
 <<defun comp>>
 <<defun comp2>>
 <<defun comp3>>
@@ -8518,8 +8811,19 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun parseTran>>
 <<defun parseTranList>>
 <<defun parseTransform>>
+<<defun postAdd>>
 <<defun postAtom>>
+<<defun postAtSign>>
+<<defun postBigFloat>>
+<<defun postBlock>>
+<<defun postCategory>>
 <<defun postcheck>>
+<<defun postCollect>>
+<<defun postCollect,finish>>
+<<defun postColon>>
+<<defun postColonColon>>
+<<defun postComma>>
+<<defun postConstruct>>
 <<defun postError>>
 <<defun postOp>>
 <<defun postScriptsForm>>
