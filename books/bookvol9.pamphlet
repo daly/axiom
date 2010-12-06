@@ -4124,6 +4124,51 @@ An angry JHD - August 15th., 1984
 
 @
 
+\defplist{return}{compReturn}
+<<postvars>>=
+(eval-when (eval load)
+ (setf (get '|return| 'special) '|compReturn|))
+
+@
+
+\defun{compReturn}{compReturn}
+\calls{compReturn}{stackSemanticError}
+\calls{compReturn}{nequal}
+\calls{compReturn}{userError}
+\calls{compReturn}{resolve}
+\calls{compReturn}{comp}
+\calls{compReturn}{modifyModeStack}
+\usesdollar{compReturn}{exitModeStack}
+\usesdollar{compReturn}{returnMode}
+<<defun compReturn>>=
+(defun |compReturn| (arg m e)
+ (let (level x index u xp mp ep)
+ (declare (special |$returnMode| |$exitModeStack|))
+  (setq level (second arg))
+  (setq x (third arg))
+  (cond
+   ((null |$exitModeStack|)
+    (|stackSemanticError|
+      (list '|the return before| '|%b| x '|%d| '|is unneccessary|) nil)
+    nil)
+   ((nequal level 1)
+     (|userError| "multi-level returns not supported"))
+   (t
+    (setq index (max 0 (1- (|#| |$exitModeStack|))))
+    (when (>= index 0)
+      (setq |$returnMode|
+       (|resolve| (elt |$exitModeStack| index) |$returnMode|)))
+    (when (setq u (|comp| x |$returnMode| e))
+     (setq xp (first u))
+     (setq mp (second u))
+     (setq ep (third u))
+     (when (>= index 0)
+       (setq |$returnMode| (|resolve| mp |$returnMode|))
+       (|modifyModeStack| mp index))
+     (list (list '|TAGGEDreturn| 0 u) m ep))))))
+
+@
+
 \defplist{seq}{compSeq}
 <<postvars>>=
 (eval-when (eval load)
@@ -4178,6 +4223,148 @@ An angry JHD - August 15th., 1984
 <<defun compSeqItem>>=
 (defun |compSeqItem| (x m e)
   (|comp| (|macroExpand| x e) m e))
+
+@
+
+\defplist{let}{compSetq}
+<<postvars>>=
+(eval-when (eval load)
+ (setf (get 'let 'special) '|compSetq|))
+
+@
+
+\defplist{setq}{compSetq}
+<<postvars>>=
+(eval-when (eval load)
+ (setf (get 'setq 'special) '|compSetq|))
+
+@
+
+\defun{compSetq}{compSetq}
+\calls{compSetq}{compSetq1}
+<<defun compSetq>>=
+(defun |compSetq| (arg m e)
+ (|compSetq1| (second arg) (third arg) m e))
+
+@
+
+\defun{compSetq1}{compSetq1}
+\calls{compSetq1}{setqSingle}
+\calls{compSetq1}{identp}
+\calls{compSetq1}{compMakeDeclaration}
+\calls{compSetq1}{compSetq}
+\calls{compSetq1}{qcar}
+\calls{compSetq1}{qcdr}
+\calls{compSetq1}{setqMultiple}
+\calls{compSetq1}{setqSetelt}
+\usesdollar{compSetq1}{EmptyMode}
+<<defun compSetq1>>=
+(defun |compSetq1| (form val m e)
+ (let (x y ep op z)
+ (declare (special |$EmptyMode|))
+ (cond
+  ((identp form) (|setqSingle| form val m e))
+  ((and (pairp form) (eq (qcar form) '|:|) (pairp (qcdr form))
+        (pairp (qcdr (qcdr form))) (eq (qcdr (qcdr (qcdr form))) nil))
+    (setq x (second form))
+    (setq y (third form))
+    (setq ep (third (|compMakeDeclaration| form |$EmptyMode| e)))
+    (|compSetq| (list 'let x val) m ep))
+  ((pairp form)
+    (setq op (qcar form))
+    (setq z (qcdr form))
+    (cond
+     ((eq op 'cons)     (|setqMultiple| (|uncons| form) val m e))
+     ((eq op '|@Tuple|) (|setqMultiple| z val m e))
+     (t                 (|setqSetelt| form val m e)))))))
+
+@
+
+\defun{setqSetelt}{setqSetelt}
+\calls{setqSetelt}{comp}
+<<defun setqSetelt>>=
+(defun |setqSetelt| (arg val m e)
+ (|comp| (cons '|setelt| (cons (car arg) (append (cdr arg) (list val)))) m e))
+
+@
+
+\defun{setqSingle}{setqSingle}
+\calls{setqSingle}{getProplist}
+\calls{setqSingle}{getmode}
+\calls{setqSingle}{get}
+\calls{setqSingle}{nequal}
+\calls{setqSingle}{maxSuperType}
+\calls{setqSingle}{comp}
+\calls{setqSingle}{getmode}
+\calls{setqSingle}{assignError}
+\calls{setqSingle}{convert}
+\calls{setqSingle}{identp}
+\calls{setqSingle}{profileRecord}
+\calls{setqSingle}{consProplistOf}
+\calls{setqSingle}{removeEnv}
+\calls{setqSingle}{addBinding}
+\calls{setqSingle}{isDomainForm}
+\calls{setqSingle}{isDomainInScope}
+\calls{setqSingle}{stackWarning}
+\calls{setqSingle}{augModemapsFromDomain1}
+\calls{setqSingle}{NRTassocIndex}
+\calls{setqSingle}{isDomainForm}
+\calls{setqSingle}{outputComp}
+\usesdollar{setqSingle}{insideSetqSingleIfTrue}
+\usesdollar{setqSingle}{QuickLet}
+\usesdollar{setqSingle}{form}
+\usesdollar{setqSingle}{profileCompiler}
+\usesdollar{setqSingle}{EmptyMode}
+\usesdollar{setqSingle}{NoValueMode}
+<<defun setqSingle>>=
+(defun |setqSingle| (id val m e)
+ (let (|$insideSetqSingleIfTrue| currentProplist mpp maxmpp td x mp tp key 
+       newProplist ep k form)
+ (declare (special |$insideSetqSingleIfTrue| |$QuickLet| |$form|
+                   |$profileCompiler| |$EmptyMode| |$NoValueMode|))
+  (setq |$insideSetqSingleIfTrue| t)
+  (setq currentProplist (|getProplist| id e))
+  (setq mpp
+   (or (|get| id '|mode| e) (|getmode| id e)
+       (if (equal m |$NoValueMode|) |$EmptyMode| m)))
+  (when (setq td
+         (cond
+          ((setq td (|comp| val mpp e)) 
+           td)
+          ((and (null (|get| id '|mode| e))
+                (nequal mpp (setq maxmpp (|maxSuperType| mpp e)))
+                (setq td (|comp| val maxmpp e)))
+           td)
+          ((and (setq td (|comp| val |$EmptyMode| e))
+                (|getmode| (second td) e))
+           (|assignError| val (second td) id mpp))))
+   (when (setq tp (|convert| td m))
+    (setq x (first tp))
+    (setq mp (second tp))
+    (setq ep (third tp))
+    (when (and |$profileCompiler| (identp id))
+      (setq key (if (member id (cdr |$form|)) '|arguments| '|locals|))
+      (|profileRecord| key id (second td)))
+    (setq newProplist
+     (|consProplistOf| id currentProplist '|value|
+      (|removeEnv| (cons val (cdr td)))))
+    (setq ep (if (pairp id) ep (|addBinding| id newProplist ep)))
+    (when (|isDomainForm| val ep)
+     (when (|isDomainInScope| id ep)
+      (|stackWarning|
+       (list '|domain valued variable| '|%b| id '|%d| 
+              '|has been reassigned within its scope| )))
+      (setq ep (|augModemapsFromDomain1| id val ep)))
+    (if (setq k (|NRTassocIndex| id))
+      (setq form (list 'setelt '$ k x))
+      (setq form
+       (if |$QuickLet| 
+        (list 'let id x)
+        (list 'let id x
+          (if (|isDomainForm| x ep) 
+            (list 'elt id 0)
+            (car (|outputComp| id ep)))))))
+    (list form mp ep)))))
 
 @
 
@@ -11430,9 +11617,14 @@ if \verb|$InteractiveMode| then use a null outputstream
 <<defun compRepeatOrCollect>>
 <<defun compReduce>>
 <<defun compReduce1>>
+<<defun compReturn>>
 <<defun compSeq>>
 <<defun compSeqItem>>
 <<defun compSeq1>>
+<<defun setqSetelt>>
+<<defun setqSingle>>
+<<defun compSetq>>
+<<defun compSetq1>>
 <<defun compSymbol>>
 <<defun compTopLevel>>
 <<defun compTypeOf>>
