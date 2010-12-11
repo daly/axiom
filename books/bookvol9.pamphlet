@@ -399,12 +399,10 @@ says that such files should not be created.  The default is
 {\tt )nolibrary} for the new Aldor compiler and for the old system 
 compiler are completely different.
 
-The {\tt )vartrace} option causes the compiler to generate
-extra code for the constructor to support conditional tracing of
-variable assignments. (see 
-\ref{ugSysCmdtrace} on page~\pageref{ugSysCmdtrace}). Without
-this option, this code is suppressed and one cannot use
-the {\tt )vars} option for the trace command.
+The {\tt )vartrace} option causes the compiler to generate extra code
+for the constructor to support conditional tracing of variable
+assignments. Without this option, this code is suppressed and one
+cannot use the {\tt )vars} option for the trace command.
 
 The {\tt )constructor} option is used to
 specify a particular constructor to compile.
@@ -426,6 +424,200 @@ the spad compiler does when it encounters an error.
 {\tt )break} is the default and it indicates that processing
 should stop at the first error.
 The value of the {\tt )set break} variable then controls what happens.
+
+\section{Operator Precedence Table Initialization} 
+\begin{verbatim}
+; PURPOSE: This file sets up properties which are used by the Boot lexical
+;          analyzer for bottom-up recognition of operators.  Also certain
+;          other character-class definitions are included, as well as
+;          table accessing functions.
+;
+; ORGANIZATION: Each section is organized in terms of Creation and Access code.
+;
+;               1. Led and Nud Tables
+;               2. GLIPH  Table
+;               3. RENAMETOK Table
+;               4. GENERIC Table
+;               5. Character syntax class predicates
+\end{verbatim}
+\subsection{LED and NUD Tables}
+\begin{verbatim}
+; **** 1. LED and NUD Tables
+ 
+; ** TABLE PURPOSE
+ 
+; Led and Nud have to do with operators. An operator with a Led property takes
+; an operand on its left (infix/suffix operator).
+ 
+; An operator with a Nud takes no operand on its left (prefix/nilfix).
+; Some have both (e.g. - ).  This terminology is from the Pratt parser.
+; The translator for Scratchpad II is a modification of the Pratt parser which
+; branches to special handlers when it is most convenient and practical to
+; do so (Pratt's scheme cannot handle local contexts very easily).
+ 
+; Both LEDs and NUDs have right and left binding powers.  This is meaningful 
+; for prefix and infix operators.  These powers are stored as the values of 
+; the LED and NUD properties of an atom, if the atom has such a property. 
+; The format is:
+ 
+;       <Operator Left-Binding-Power  Right-Binding-Power <Special-Handler>>
+ 
+; where the Special-Handler is the name of a function to be evaluated when that
+; keyword is encountered.
+ 
+; The default values of Left and Right Binding-Power are NIL.  NIL is a 
+; legitimate value signifying no precedence.  If the Special-Handler is NIL,
+; this is just an ordinary operator (as opposed to a surfix operator like 
+; if-then-else).
+;
+; The Nud value gives the precedence when the operator is a prefix op.
+; The Led value gives the precedence when the operator is an infix op.
+; Each op has 2 priorities, left and right. 
+; If the right priority of the first is greater than or equal to the
+; left priority of the second then collect the second operator into
+; the right argument of the first operator. 
+ 
+\end{verbatim}
+<<LEDNUDTables>>=
+; ** TABLE CREATION
+ 
+(defun makenewop (x y) (makeop x y '|PARSE-NewKEY|))
+ 
+(defun makeop (x y keyname)
+  (if (or (not (cdr x)) (numberp (second x)))
+      (setq x (cons (first x) x)))
+  (if (and (alpha-char-p (elt (stringimage (first x)) 0))
+           (not (member (first x) (eval keyname))))
+      (set keyname (cons (first x) (eval keyname))))
+  (makeprop (first x) y x)
+  (second x))
+ 
+(setq |PARSE-NewKEY| nil) ;;list of keywords
+ 
+(mapcar #'(LAMBDA(J) (MAKENEWOP J '|Led|))
+        '((* 800 801)   (|rem| 800 801)   (|mod| 800 801)
+          (|quo| 800 801)   (|div| 800 801)
+          (/ 800 801)    (** 900 901)  (^ 900 901)
+          (|exquo| 800 801) (+ 700 701)
+          (\- 700 701)    (\-\> 1001 1002)  (\<\- 1001 1002)
+          (\: 996 997)    (\:\: 996 997)
+          (\@ 996 997)    (|pretend| 995 996)
+          (\.)            (\! \! 1002 1001)
+          (\, 110 111)
+          (\; 81 82 (|PARSE-SemiColon|))
+          (\< 400 400)    (\> 400 400)
+          (\<\< 400 400)  (\>\> 400 400)
+          (\<= 400 400)   (\>= 400 400)
+          (= 400 400)     (^= 400 400)
+          (\~= 400 400)
+          (|in| 400 400)    (|case| 400 400)
+          (|add| 400 120)   (|with| 2000 400 (|PARSE-InfixWith|))
+          (|has| 400 400)
+          (|where| 121 104)     ; must be 121 for SPAD, 126 for boot--> nboot
+          (|when| 112 190)
+          (|otherwise| 119 190 (|PARSE-Suffix|))
+          (|is| 400 400)    (|isnt| 400 400)
+          (|and| 250 251)   (|or| 200 201)
+          (/\\ 250 251)   (\\/ 200 201)
+          (\.\. SEGMENT 401 699 (|PARSE-Seg|))
+          (=\> 123 103)
+          (+-\> 995 112)
+          (== DEF 122 121)
+          (==\> MDEF 122 121)
+          (\| 108 111)                          ;was 190 190
+          (\:- LETD 125 124) (\:= LET 125 124)))
+ 
+(mapcar #'(LAMBDA (J) (MAKENEWOP J `|Nud|))
+        '((|for| 130 350 (|PARSE-Loop|))
+          (|while| 130 190 (|PARSE-Loop|))
+          (|until| 130 190 (|PARSE-Loop|))
+          (|repeat| 130 190 (|PARSE-Loop|))
+          (|import| 120 0 (|PARSE-Import|) )
+          (|unless|)
+          (|add| 900 120)
+          (|with| 1000 300 (|PARSE-With|))
+          (|has| 400 400)
+          (\- 701 700)  ; right-prec. wants to be -1 + left-prec
+;;        (\+ 701 700)
+          (\# 999 998)
+          (\! 1002 1001)
+          (\' 999 999 (|PARSE-Data|))
+          (\<\< 122 120 (|PARSE-LabelExpr|))
+          (\>\>)
+          (^ 260 259 NIL)
+          (\-\> 1001 1002)
+          (\: 194 195)
+          (|not| 260 259 NIL)
+          (\~ 260 259 nil)
+          (\= 400 700)
+          (|return| 202 201 (|PARSE-Return|))
+          (|leave| 202 201 (|PARSE-Leave|))
+          (|exit| 202 201 (|PARSE-Exit|))
+          (|from|)
+          (|iterate|)
+          (|yield|)
+          (|if| 130 0 (|PARSE-Conditional|))    ; was 130
+          (\| 0 190)
+          (|suchthat|)
+          (|then| 0 114)
+          (|else| 0 114)))
+
+@ 
+\section{Gliph Table}
+Gliphs are symbol clumps. The gliph property of a symbol gives
+the tree describing the tokens which begin with that symbol.
+The token reader uses the gliph property to determine the longest token.
+Thus [[:=]] is read as one token not as [[:]] followed by [[=]].
+ 
+<<GLIPHTable>>=
+(mapcar #'(lambda (x) (makeprop (car x) 'gliph (cdr x)))
+        `(
+          ( \| (\))        )
+          ( *  (*)         )
+          ( \( (<) (\|)    )
+          ( +  (- (>))     )
+          ( -  (>)         )
+          ( <  (=) (<)     )
+     ;;     ( /  (\\)        ) breaks */xxx
+          ( \\ (/)         )
+          ( >  (=) (>) (\)))
+          ( =  (= (>)) (>) )
+          ( \. (\.)        )
+          ( ^  (=)         )
+          ( \~ (=)         )
+          ( \: (=) (-) (\:))))
+ 
+@
+\subsection{Rename Token Table} 
+RENAMETOK defines alternate token strings which can be used for different
+keyboards which define equivalent tokens.
+<<RENAMETOKTable>>=
+(mapcar 
+  #'(lambda (x) (makeprop (car x) 'renametok (cadr x)) (makenewop x nil))
+        '((\(\| \[)                     ; (| |) means []
+          (\|\) \])
+          (\(< \{)                      ; (< >) means {}
+          (>\) \})))
+ 
+@
+\subsection{Generic function table}
+GENERIC operators be suffixed by [[$]] qualifications in SPAD code.  
+[[$]] is then followed by a domain label, such as I for Integer, which 
+signifies which domain the operator refers to.  For example [[+$Integer]] 
+is [[+]] for Integers.
+<<GENERICTable>>=
+(mapcar #'(lambda (x) (makeprop x 'generic 'true))
+        '(- = * |rem| |mod| |quo| |div| / ** |exquo| + - < > <= >= ^= ))
+
+@  
+\subsection{Character Syntax Table}
+<<CharacterSyntaxTable>>=
+(defun specialcasesyntax () (or (and (char= tok '#\#) (digitp chr))))
+ 
+(defun terminator (chr)
+  (member chr '(#\  #\( #\) #\. #\; #\, #\Return)) :test #'char=)
+ 
+@  
 
 \chapter{The Parser}
 \section{EQ.spad}
@@ -646,21 +838,25 @@ Equation(S: Type): public == private where
 
 \end{verbatim}
 
+\defdollar{index}
 <<initvars>>=
 (defvar $index 0 "File line number of most recently read line")
 
 @
 
+\defdollar{linelist}
 <<initvars>>=
 (defvar $linelist nil "Stack of preparsed lines")
 
 @
 
+\defdollar{echolinestack}
 <<initvars>>=
 (defvar $echolinestack nil "Stack of lines to list")
 
 @
 
+\defdollar{preparse-last-line}
 <<initvars>>=
 (defvar $preparse-last-line nil "Most recently read line")
 
@@ -7776,8 +7972,8 @@ IteratorTail:   ('repeat' <Iterator*>! / Iterator*) ;
 @
 
 \defun{PARSE-Primary}{PARSE-Primary}
-\calls{PARSE-Primary}{}
-\calls{PARSE-Primary}{}
+\calls{PARSE-Primary}{PARSE-Float}
+\calls{PARSE-Primary}{PARSE-PrimaryNoFloat}
 <<defun PARSE-Primary>>=
 (defun |PARSE-Primary| ()
   (or (|PARSE-Float|) (|PARSE-PrimaryNoFloat|)))
@@ -8531,8 +8727,7 @@ if X matches initial segment of inputstream.
 \calls{match-string}{current-char}
 \calls{match-string}{initial-substring-p}
 \calls{match-string}{subseq}
-\calls{match-string}{line-buffer}
-\calls{match-string}{line-current-index}
+\usesstruct{match-string}{line}
 \uses{match-string}{line}
 <<defun match-string>>=
 (defun match-string (x)
@@ -8554,10 +8749,6 @@ If it is successful, advance inputstream past X.
 \calls{match-advance-string}{line-current-index}
 \calls{match-advance-string}{line-past-end-p}
 \calls{match-advance-string}{line-current-char}
-\calls{match-advance-string}{line-buffer}
-\calls{match-advance-string}{make-token}
-\calls{match-advance-string}{}
-\calls{match-advance-string}{}
 \usesstruct{match-advance-string}{token}
 \usesstruct{match-advance-string}{line}
 <<defun match-advance-string>>=
@@ -8626,7 +8817,6 @@ If it is successful, advance inputstream past X.
 @
 
 \defun{escape-keywords}{escape-keywords}
-\calls{escape-keywords}{}
 <<defun escape-keywords>>=
 (defun escape-keywords (pname id)
   (if (member id keywords)
@@ -8636,7 +8826,7 @@ If it is successful, advance inputstream past X.
 @
 
 \defun{underscore}{underscore}
-\calls{underscore}{}
+\calls{underscore}{vector-push}
 <<defun underscore>>=
 (defun underscore (string)
  (if (every #'alpha-char-p string) 
@@ -8740,7 +8930,7 @@ This returns the next token if it has equal type and (optionally) equal symbol.
 @
 
 \defun{make-symbol-of}{make-symbol-of}
-\calls{make-symbol-of}{token-symbol}
+\usesstruct{make-symbol-of}{token}
 <<defun make-symbol-of>>=
 (defun make-symbol-of (token)
  (let ((u (and token (token-symbol token))))
@@ -8835,8 +9025,7 @@ This makes the next token be the current token.
 \defun{current-char}{current-char}
 This returns the current character of the line, initially blank for an 
 unread line.
-\calls{current-char}{line-past-end-p}
-\calls{current-char}{line-current-char}
+\usesstruct{current-char}{line}
 \uses{current-char}{current-line}
 <<defun current-char>>=
 (defun current-char ()
@@ -8888,6 +9077,7 @@ equivalent to.
 \uses{meta-syntax-error}{meta-error-handler}
 <<defun meta-syntax-error>>=
 (defun meta-syntax-error (&optional (wanted nil) (parsing nil))
+  (declare (special meta-error-handler))
   (funcall meta-error-handler wanted parsing))
 
 @
@@ -8953,6 +9143,7 @@ the stack, then stack a NIL. Return the value of prod.
 @
 
 \defmacro{must}
+\calls{must}{meta-syntax-error}
 <<defmacro must>>=
 (defmacro must (dothis &optional (this-is nil) (in-rule nil))
   `(or ,dothis (meta-syntax-error ,this-is ,in-rule)))
@@ -8978,7 +9169,6 @@ E.G., {\tt (Star IDs (parse-id))} with A B C will stack (3 IDs (A B C)),
 where (parse-id) would stack (1 ID (A)) when applied once.
 \calls{star}{stack-size}
 \calls{star}{push-reduction}
-\calls{star}{push}
 \calls{star}{pop-stack-1}
 <<defmacro star>>=
 (defmacro star (lab prod)
@@ -9052,6 +9242,12 @@ Return a pointer to the Nth cons of X, counting 0 as the first cons.
 (defun escaped (str n)
  (declare (special xcape))
  (and (> n 0) (eq (char str (1- n)) xcape)))
+
+@
+
+\defdollar{comblocklist}
+<<initvars>>=
+(defvar $comblocklist nil "a dynamic lists of comments for this block")
 
 @
  
@@ -9132,6 +9328,8 @@ Return a pointer to the Nth cons of X, counting 0 as the first cons.
 <<defun nonblankloc>>=
 (defun nonblankloc (str)
  (position-if-not #'blankp str))
+
+@
  
 \defun{parseprint}{parseprint}
 <<defun parseprint>>=
@@ -9619,7 +9817,7 @@ combination of operations was requested. For this case we see:
 \end{verbatim}
 
 \defun{compilerDoit}{compilerDoit}
-\calls{compilerDoit}{/rq(5)}
+\calls{compilerDoit}{/rq}
 \calls{compilerDoit}{/rf(5)}
 \calls{compilerDoit}{member(5)}
 \calls{compilerDoit}{sayBrightly}
@@ -9658,7 +9856,7 @@ This function simply calls {\bf \verb|/rf-1|}.
 \end{verbatim}
 
 \defun{/RQ,LIB}{/RQ,LIB}
-\calls{/RQ,LIB}{/rf-1(5)}
+\calls{/RQ,LIB}{/rf-1}
 \uses{/RQ,LIB}{echo-meta(5)}
 \usesdollar{/RQ,LIB}{lisplib}
 <<defun /RQ,LIB>>=
@@ -11845,9 +12043,16 @@ if \verb|$InteractiveMode| then use a null outputstream
 
 <<initvars>>
 
+<<LEDNUDTables>>
+<<GLIPHTable>>
+<<RENAMETOKTable>>
+<<GENERICTable>>
+<<CharacterSyntaxTable>>
+
 <<defmacro bang>>
 <<defmacro must>>
 <<defmacro star>>
+
 
 <<defun action>>
 <<defun addCARorCDR>>
