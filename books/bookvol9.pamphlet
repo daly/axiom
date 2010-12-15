@@ -202,11 +202,2677 @@ November 10, 2003 ((iHy))
 \pagenumbering{arabic}
 \setcounter{chapter}{0} % Chapter 1
 \section{Makefile}
-This book is actually a literate program\cite{2} and can contain 
+This book is actually a literate program\cite{2} and contains
 executable source code. In particular, the Makefile for this book
 is part of the source of the book and is included below. Axiom 
 uses the ``noweb'' literate programming system by Norman Ramsey\cite{6}.
+
+\chapter{Overview}
+The Spad language is a mathematically oriented language intended for
+writing computational mathematics. It derives its logical structure
+from abstract algebra. It features ideas that are still not available
+in general purpose programming languages, such as selecting overloaded
+procedures based on the return type as well as the types of the arguments.
+
+The Spad language is heavily influenced by Barbara Liskov's work.
+It features encapsulation (aka objects), inheritance, and overloading.
+It has categories which are defined by the exports. Categories are
+parameterized functors that take arguments which define their behavior.
+
+More details on the language and its high level concepts is available
+in the Programmers Guide, Volume 3.
+
+The Spad compiler accepts the Spad language and generates a set of
+files used by the interpreter, detailed in Volume 5.
+
+The compiler does not produce stand-alone executable code. 
+It assumes that it will run inside the interpreter and that
+the code it generates will be loaded into the interpreter.
+
+Some of the routines are common to both the compiler and the
+interpreter. Where this happens we have favored the interpreter
+volume (Volume 5) as the official source location. In each case
+we will make reference to that volume and the code in it. Thus,
+the compiler volume should be considered as an extension of the
+interpreter document.
+
+This volume will go into painful detail of every aspect of compiling
+Spad code. We will start by defining the input to, and output from the
+compiler so we know what we are trying to achieve.
+
+Next we will look at the top level data structures used by the compiler.
+Unfortunately, the compiler uses a large number of ``global variables''
+to pass information and alter control flow. Some of these are used by
+many routines and some of these are very local to a small subset or a
+recursion. We will cover the minor ones as they arise.
+
+Next we examine the Pratt parser idea and the Led and Nud concepts,
+which is used to drive the low level parsing.
+
+Following that we journey deep into the code, trying our best not to
+get lost in the details. The code is introduced based on ``motivation''
+rather than in strict execution order or related concept order. We do
+this to try to make the compiler a ``readable novel'' rather than a
+mud-march through the code. The goal is to keep the reader's interest
+while trying to be exact. Sometimes this will require detours to 
+discuss subtopics. 
+
+``Motivating'' a piece of software is a not-very-well established form
+of narrative writing so we assume your forgiveness if we get it wrong.
+Worse yet, some of the pieces of the system are ``legacy'', in that they
+are no longer used and should be removed. Other parts of the system may
+have very weak descriptions because we simply do not understand them 
+either. Since this is a living document and the code for the system is
+actually the code you are reading we will expand parts as we go.
+
+
+\section{The Input}
+\begin{verbatim}
+)abbrev domain EQ Equation
+--FOR THE BENEFIT  OF LIBAX0 GENERATION
+++ Author: Stephen M. Watt, enhancements by Johannes Grabmeier
+++ Date Created: April 1985
+++ Date Last Updated: June 3, 1991; September 2, 1992
+++ Basic Operations: =
+++ Related Domains:
+++ Also See:
+++ AMS Classifications:
+++ Keywords: equation
+++ Examples:
+++ References:
+++ Description:
+++ Equations as mathematical objects.  All properties of the basis domain,
+++ e.g. being an abelian group are carried over the equation domain, by
+++ performing the structural operations on the left and on the
+++ right hand side.
+--   The interpreter translates "=" to "equation".  Otherwise, it will
+--   find a modemap for "=" in the domain of the arguments.
+
+Equation(S: Type): public == private where
+  Ex ==> OutputForm
+  public ==> Type with
+    "=": (S, S) -> $
+        ++ a=b creates an equation.
+    equation: (S, S) -> $
+        ++ equation(a,b) creates an equation.
+    swap: $ -> $
+        ++ swap(eq) interchanges left and right hand side of equation eq.
+    lhs: $ -> S
+        ++ lhs(eqn) returns the left hand side of equation eqn.
+    rhs: $ -> S
+        ++ rhs(eqn) returns the right hand side of equation eqn.
+    map: (S -> S, $) -> $
+        ++ map(f,eqn) constructs a new equation by applying f to both
+        ++ sides of eqn.
+    if S has InnerEvalable(Symbol,S) then
+             InnerEvalable(Symbol,S)
+    if S has SetCategory then
+        SetCategory
+        CoercibleTo Boolean
+        if S has Evalable(S) then
+           eval: ($, $) -> $
+            ++ eval(eqn, x=f) replaces x by f in equation eqn.
+           eval: ($, List $) -> $
+            ++ eval(eqn, [x1=v1, ... xn=vn]) replaces xi by vi in equation eqn.
+    if S has AbelianSemiGroup then
+        AbelianSemiGroup
+        "+": (S, $) -> $
+            ++ x+eqn produces a new equation by adding x to both sides of
+            ++ equation eqn.
+        "+": ($, S) -> $
+            ++ eqn+x produces a new equation by adding x to  both sides of
+            ++ equation eqn.
+    if S has AbelianGroup then
+        AbelianGroup
+        leftZero : $ -> $
+          ++ leftZero(eq) subtracts the left hand side.
+        rightZero : $ -> $
+          ++ rightZero(eq) subtracts the right hand side.
+        "-": (S, $) -> $
+            ++ x-eqn produces a new equation by subtracting both sides of
+            ++ equation eqn from x.
+        "-": ($, S) -> $
+            ++ eqn-x produces a new equation by subtracting x from  
+            ++ both sides of equation eqn.
+    if S has SemiGroup then
+        SemiGroup
+        "*": (S, $) -> $
+            ++ x*eqn produces a new equation by multiplying both sides of
+            ++ equation eqn by x.
+        "*": ($, S) -> $
+            ++ eqn*x produces a new equation by multiplying both sides of
+            ++ equation eqn by x.
+    if S has Monoid then
+        Monoid
+        leftOne : $ -> Union($,"failed")
+          ++ leftOne(eq) divides by the left hand side, if possible.
+        rightOne : $ -> Union($,"failed")
+          ++ rightOne(eq) divides by the right hand side, if possible.
+    if S has Group then
+        Group
+        leftOne : $ -> Union($,"failed")
+          ++ leftOne(eq) divides by the left hand side.
+        rightOne : $ -> Union($,"failed")
+          ++ rightOne(eq) divides by the right hand side.
+    if S has Ring then
+      Ring
+      BiModule(S,S)
+    if S has CommutativeRing then
+      Module(S)
+      --Algebra(S)
+    if S has IntegralDomain then
+      factorAndSplit : $ -> List $
+        ++ factorAndSplit(eq) make the right hand side 0 and
+        ++ factors the new left hand side. Each factor is equated
+        ++ to 0 and put into the resulting list without repetitions.
+    if S has PartialDifferentialRing(Symbol) then
+      PartialDifferentialRing(Symbol)
+    if S has Field then
+      VectorSpace(S)
+      "/": ($, $) -> $
+          ++ e1/e2 produces a new equation by dividing the left and right
+          ++ hand sides of equations e1 and e2.
+      inv: $ -> $
+          ++ inv(x) returns the multiplicative inverse of x.
+    if S has ExpressionSpace then
+        subst: ($, $) -> $
+             ++ subst(eq1,eq2) substitutes eq2 into both sides of eq1
+             ++ the lhs of eq2 should be a kernel
+
+  private ==> add
+    Rep := Record(lhs: S, rhs: S)
+    eq1,eq2: $
+    s : S
+    if S has IntegralDomain then
+        factorAndSplit eq ==
+          (S has factor : S -> Factored S) =>
+            eq0 := rightZero eq
+            [equation(rcf.factor,0) for rcf in factors factor lhs eq0]
+          [eq]
+    l:S = r:S      == [l, r]
+    equation(l, r) == [l, r]    -- hack!  See comment above.
+    lhs eqn        == eqn.lhs
+    rhs eqn        == eqn.rhs
+    swap eqn     == [rhs eqn, lhs eqn]
+    map(fn, eqn)   == equation(fn(eqn.lhs), fn(eqn.rhs))
+
+    if S has InnerEvalable(Symbol,S) then
+        s:Symbol
+        ls:List Symbol
+        x:S
+        lx:List S
+        eval(eqn,s,x) == eval(eqn.lhs,s,x) = eval(eqn.rhs,s,x)
+        eval(eqn,ls,lx) == eval(eqn.lhs,ls,lx) = eval(eqn.rhs,ls,lx)
+    if S has Evalable(S) then
+        eval(eqn1:$, eqn2:$):$ ==
+           eval(eqn1.lhs, eqn2 pretend Equation S) =
+               eval(eqn1.rhs, eqn2 pretend Equation S)
+        eval(eqn1:$, leqn2:List $):$ ==
+           eval(eqn1.lhs, leqn2 pretend List Equation S) =
+               eval(eqn1.rhs, leqn2 pretend List Equation S)
+    if S has SetCategory then
+        eq1 = eq2 == (eq1.lhs = eq2.lhs)@Boolean and
+                     (eq1.rhs = eq2.rhs)@Boolean
+        coerce(eqn:$):Ex == eqn.lhs::Ex = eqn.rhs::Ex
+        coerce(eqn:$):Boolean == eqn.lhs = eqn.rhs
+    if S has AbelianSemiGroup then
+        eq1 + eq2 == eq1.lhs + eq2.lhs = eq1.rhs + eq2.rhs
+        s + eq2 == [s,s] + eq2
+        eq1 + s == eq1 + [s,s]
+    if S has AbelianGroup then
+        - eq == (- lhs eq) = (-rhs eq)
+        s - eq2 == [s,s] - eq2
+        eq1 - s == eq1 - [s,s]
+        leftZero eq == 0 = rhs eq - lhs eq
+        rightZero eq == lhs eq - rhs eq = 0
+        0 == equation(0$S,0$S)
+        eq1 - eq2 == eq1.lhs - eq2.lhs = eq1.rhs - eq2.rhs
+    if S has SemiGroup then
+        eq1:$ * eq2:$ == eq1.lhs * eq2.lhs = eq1.rhs * eq2.rhs
+        l:S   * eqn:$ == l       * eqn.lhs = l       * eqn.rhs
+        l:S * eqn:$  ==  l * eqn.lhs    =    l * eqn.rhs
+        eqn:$ * l:S  ==  eqn.lhs * l    =    eqn.rhs * l
+        -- We have to be a bit careful here: raising to a +ve integer is OK
+        -- (since it's the equivalent of repeated multiplication)
+        -- but other powers may cause contradictions
+        -- Watch what else you add here! JHD 2/Aug 1990
+    if S has Monoid then
+        1 == equation(1$S,1$S)
+        recip eq ==
+          (lh := recip lhs eq) case "failed" => "failed"
+          (rh := recip rhs eq) case "failed" => "failed"
+          [lh :: S, rh :: S]
+        leftOne eq ==
+          (re := recip lhs eq) case "failed" => "failed"
+          1 = rhs eq * re
+        rightOne eq ==
+          (re := recip rhs eq) case "failed" => "failed"
+          lhs eq * re = 1
+    if S has Group then
+        inv eq == [inv lhs eq, inv rhs eq]
+        leftOne eq == 1 = rhs eq * inv rhs eq
+        rightOne eq == lhs eq * inv rhs eq = 1
+    if S has Ring then
+        characteristic() == characteristic()$S
+        i:Integer * eq:$ == (i::S) * eq
+    if S has IntegralDomain then
+        factorAndSplit eq ==
+          (S has factor : S -> Factored S) =>
+            eq0 := rightZero eq
+            [equation(rcf.factor,0) for rcf in factors factor lhs eq0]
+          (S has Polynomial Integer) =>
+            eq0 := rightZero eq
+            MF ==> MultivariateFactorize(Symbol, IndexedExponents Symbol, _
+               Integer, Polynomial Integer)
+            p : Polynomial Integer := (lhs eq0) pretend Polynomial Integer
+            [equation((rcf.factor) pretend S,0) for rcf in factors factor(p)$MF]
+          [eq]
+    if S has PartialDifferentialRing(Symbol) then
+        differentiate(eq:$, sym:Symbol):$ ==
+           [differentiate(lhs eq, sym), differentiate(rhs eq, sym)]
+    if S has Field then
+        dimension() == 2 :: CardinalNumber
+        eq1:$ / eq2:$ == eq1.lhs / eq2.lhs = eq1.rhs / eq2.rhs
+        inv eq == [inv lhs eq, inv rhs eq]
+    if S has ExpressionSpace then
+        subst(eq1,eq2) ==
+            eq3 := eq2 pretend Equation S
+            [subst(lhs eq1,eq3),subst(rhs eq1,eq3)]
+
+\end{verbatim}
+
+\section{The Output, the EQ.nrlib directory}
+The Spad compiler generates several files in a directory named after
+the input abbreviation. The input file contains an abbreviation line:
+\begin{verbatim}
+)abbrev domain EQ Equation
+\end{verbatim}
+for each category, domain, or package. The abbreviation line has 3 parts.
+\begin{itemize}
+\item one of ``category'', ``domain'', or ``package''
+\item the abbreviation for this domain (8 Uppercase Characters maximum)
+\item the name of this domain
+\end{itemize}
+
+Since the abbreviation for the Equation domain is EQ, the compiler will
+put all of its output into a subdirectory called ``EQ.nrlib''. The ``nrlib''
+is a port of a very old VMLisp file format, simulated with directories.
+
+For the EQ input file, the compiler will create the following output files,
+each of which we will explain in detail below.
+
+\begin{verbatim}
+  /research/test/int/algebra/EQ.nrlib:
+  used 216 available 4992900
+  drwxr-xr-x    2 root root  4096 2010-12-09 11:20 .
+  drwxr-xr-x 1259 root root 73728 2010-12-09 11:43 ..
+  -rw-r--r--    1 root root 19228 2010-12-09 11:20 code.lsp
+  -rw-r--r--    1 root root 34074 2010-12-09 11:20 code.o
+  -rw-r--r--    1 root root 13543 2010-12-09 11:20 EQ.fn
+  -rw-r--r--    1 root root 19228 2010-12-09 11:20 EQ.lsp
+  -rw-r--r--    1 root root 36148 2010-12-09 11:20 index.kaf
+  -rw-r--r--    1 root root  6236 2010-12-09 11:20 info
+\end{verbatim}
+
+\section{The code.lsp and EQ.lsp files}
+\begin{verbatim}
+
+(/VERSIONCHECK 2) 
+
+(DEFUN |EQ;factorAndSplit;$L;1| (|eq| $)
+  (PROG (|eq0| #:G1403 |rcf| #:G1404)
+    (RETURN
+      (SEQ (COND
+             ((|HasSignature| (QREFELT $ 6)
+                  (LIST '|factor|
+                        (LIST (LIST '|Factored|
+                                    (|devaluate| (QREFELT $ 6)))
+                              (|devaluate| (QREFELT $ 6)))))
+              (SEQ (LETT |eq0| (SPADCALL |eq| (QREFELT $ 8))
+                         |EQ;factorAndSplit;$L;1|)
+                   (EXIT (PROGN
+                           (LETT #:G1403 NIL |EQ;factorAndSplit;$L;1|)
+                           (SEQ (LETT |rcf| NIL
+                                      |EQ;factorAndSplit;$L;1|)
+                                (LETT #:G1404
+                                      (SPADCALL
+                                       (SPADCALL
+                                        (SPADCALL |eq0| (QREFELT $ 9))
+                                        (QREFELT $ 11))
+                                       (QREFELT $ 15))
+                                      |EQ;factorAndSplit;$L;1|)
+                                G190
+                                (COND
+                                  ((OR (ATOM #:G1404)
+                                    (PROGN
+                                      (LETT |rcf| (CAR #:G1404)
+                                       |EQ;factorAndSplit;$L;1|)
+                                      NIL))
+                                   (GO G191)))
+                                (SEQ (EXIT
+                                      (LETT #:G1403
+                                       (CONS
+                                        (SPADCALL (QCAR |rcf|)
+                                         (|spadConstant| $ 16)
+                                         (QREFELT $ 17))
+                                        #:G1403)
+                                       |EQ;factorAndSplit;$L;1|)))
+                                (LETT #:G1404 (CDR #:G1404)
+                                      |EQ;factorAndSplit;$L;1|)
+                                (GO G190) G191
+                                (EXIT (NREVERSE0 #:G1403)))))))
+             ('T (LIST |eq|)))))))
+
+(PUT (QUOTE |EQ;=;2S$;2|) (QUOTE |SPADreplace|) (QUOTE CONS)) 
+
+(DEFUN |EQ;=;2S$;2| (|l| |r| $) (CONS |l| |r|)) 
+
+(PUT (QUOTE |EQ;equation;2S$;3|) (QUOTE |SPADreplace|) (QUOTE CONS)) 
+
+(DEFUN |EQ;equation;2S$;3| (|l| |r| $) (CONS |l| |r|)) 
+
+(PUT (QUOTE |EQ;lhs;$S;4|) (QUOTE |SPADreplace|) (QUOTE QCAR)) 
+
+(DEFUN |EQ;lhs;$S;4| (|eqn| $) (QCAR |eqn|)) 
+
+(PUT (QUOTE |EQ;rhs;$S;5|) (QUOTE |SPADreplace|) (QUOTE QCDR)) 
+
+(DEFUN |EQ;rhs;$S;5| (|eqn| $) (QCDR |eqn|)) 
+
+(DEFUN |EQ;swap;2$;6| (|eqn| $) (CONS (SPADCALL |eqn| (QREFELT $ 21))
+ (SPADCALL |eqn| (QREFELT $ 9)))) 
+
+(DEFUN |EQ;map;M2$;7| (|fn| |eqn| $)
+ (SPADCALL
+  (SPADCALL (QCAR |eqn|) |fn|)
+  (SPADCALL (QCDR |eqn|) |fn|)
+  (QREFELT $ 17))) 
+
+(DEFUN |EQ;eval;$SS$;8| (|eqn| |s| |x| $)
+ (SPADCALL
+  (SPADCALL (QCAR |eqn|) |s| |x| (QREFELT $ 26))
+  (SPADCALL (QCDR |eqn|) |s| |x| (QREFELT $ 26))
+  (QREFELT $ 20))) 
+
+(DEFUN |EQ;eval;$LL$;9| (|eqn| |ls| |lx| $)
+ (SPADCALL
+  (SPADCALL (QCAR |eqn|) |ls| |lx| (QREFELT $ 30))
+  (SPADCALL (QCDR |eqn|) |ls| |lx| (QREFELT $ 30))
+  (QREFELT $ 20))) 
+
+(DEFUN |EQ;eval;3$;10| (|eqn1| |eqn2| $)
+ (SPADCALL
+  (SPADCALL (QCAR |eqn1|) |eqn2| (QREFELT $ 33))
+  (SPADCALL (QCDR |eqn1|) |eqn2| (QREFELT $ 33))
+  (QREFELT $ 20))) 
+
+(DEFUN |EQ;eval;$L$;11| (|eqn1| |leqn2| $)
+ (SPADCALL
+  (SPADCALL (QCAR |eqn1|) |leqn2| (QREFELT $ 36))
+  (SPADCALL (QCDR |eqn1|) |leqn2| (QREFELT $ 36))
+  (QREFELT $ 20))) 
+
+(DEFUN |EQ;=;2$B;12| (|eq1| |eq2| $)
+ (COND
+  ((SPADCALL (QCAR |eq1|) (QCAR |eq2|) (QREFELT $ 39))
+   (SPADCALL (QCDR |eq1|) (QCDR |eq2|) (QREFELT $ 39)))
+  ((QUOTE T) (QUOTE NIL)))) 
+
+(DEFUN |EQ;coerce;$Of;13| (|eqn| $)
+ (SPADCALL
+  (SPADCALL (QCAR |eqn|) (QREFELT $ 42))
+  (SPADCALL (QCDR |eqn|) (QREFELT $ 42))
+  (QREFELT $ 43))) 
+
+(DEFUN |EQ;coerce;$B;14| (|eqn| $)
+ (SPADCALL (QCAR |eqn|) (QCDR |eqn|) (QREFELT $ 39))) 
+
+(DEFUN |EQ;+;3$;15| (|eq1| |eq2| $)
+ (SPADCALL
+  (SPADCALL (QCAR |eq1|) (QCAR |eq2|) (QREFELT $ 46))
+  (SPADCALL (QCDR |eq1|) (QCDR |eq2|) (QREFELT $ 46))
+  (QREFELT $ 20))) 
+
+(DEFUN |EQ;+;S2$;16| (|s| |eq2| $)
+ (SPADCALL (CONS |s| |s|) |eq2| (QREFELT $ 47))) 
+
+(DEFUN |EQ;+;$S$;17| (|eq1| |s| $)
+ (SPADCALL |eq1| (CONS |s| |s|) (QREFELT $ 47))) 
+
+(DEFUN |EQ;-;2$;18| (|eq| $)
+ (SPADCALL
+  (SPADCALL (SPADCALL |eq| (QREFELT $ 9)) (QREFELT $ 50))
+  (SPADCALL (SPADCALL |eq| (QREFELT $ 21)) (QREFELT $ 50))
+  (QREFELT $ 20))) 
+
+(DEFUN |EQ;-;S2$;19| (|s| |eq2| $)
+ (SPADCALL (CONS |s| |s|) |eq2| (QREFELT $ 52))) 
+
+(DEFUN |EQ;-;$S$;20| (|eq1| |s| $)
+ (SPADCALL |eq1| (CONS |s| |s|) (QREFELT $ 52))) 
+
+(DEFUN |EQ;leftZero;2$;21| (|eq| $)
+ (SPADCALL
+  (|spadConstant| $ 16)
+  (SPADCALL
+   (SPADCALL |eq| (QREFELT $ 21))
+   (SPADCALL |eq| (QREFELT $ 9))
+   (QREFELT $ 56))
+  (QREFELT $ 20))) 
+
+(DEFUN |EQ;rightZero;2$;22| (|eq| $)
+ (SPADCALL
+  (SPADCALL
+   (SPADCALL |eq| (QREFELT $ 9))
+   (SPADCALL |eq| (QREFELT $ 21))
+   (QREFELT $ 56))
+  (|spadConstant| $ 16)
+  (QREFELT $ 20))) 
+
+(DEFUN |EQ;Zero;$;23| ($)
+ (SPADCALL (|spadConstant| $ 16) (|spadConstant| $ 16) (QREFELT $ 17))) 
+
+(DEFUN |EQ;-;3$;24| (|eq1| |eq2| $)
+ (SPADCALL
+  (SPADCALL (QCAR |eq1|) (QCAR |eq2|) (QREFELT $ 56))
+  (SPADCALL (QCDR |eq1|) (QCDR |eq2|) (QREFELT $ 56))
+  (QREFELT $ 20))) 
+
+(DEFUN |EQ;*;3$;25| (|eq1| |eq2| $)
+ (SPADCALL
+  (SPADCALL (QCAR |eq1|) (QCAR |eq2|) (QREFELT $ 58))
+  (SPADCALL (QCDR |eq1|) (QCDR |eq2|) (QREFELT $ 58))
+  (QREFELT $ 20))) 
+
+(DEFUN |EQ;*;S2$;26| (|l| |eqn| $)
+ (SPADCALL
+  (SPADCALL |l| (QCAR |eqn|) (QREFELT $ 58))
+  (SPADCALL |l| (QCDR |eqn|) (QREFELT $ 58))
+  (QREFELT $ 20))) 
+
+(DEFUN |EQ;*;S2$;27| (|l| |eqn| $)
+ (SPADCALL
+  (SPADCALL |l| (QCAR |eqn|) (QREFELT $ 58))
+  (SPADCALL |l| (QCDR |eqn|) (QREFELT $ 58))
+  (QREFELT $ 20))) 
+
+(DEFUN |EQ;*;$S$;28| (|eqn| |l| $)
+ (SPADCALL
+  (SPADCALL (QCAR |eqn|) |l| (QREFELT $ 58))
+  (SPADCALL (QCDR |eqn|) |l| (QREFELT $ 58))
+  (QREFELT $ 20))) 
+
+(DEFUN |EQ;One;$;29| ($)
+ (SPADCALL (|spadConstant| $ 62) (|spadConstant| $ 62) (QREFELT $ 17))) 
+
+(DEFUN |EQ;recip;$U;30| (|eq| $)
+ (PROG (|lh| |rh|)
+  (RETURN
+   (SEQ
+    (LETT |lh|
+     (SPADCALL (SPADCALL |eq| (QREFELT $ 9)) (QREFELT $ 65))
+     |EQ;recip;$U;30|)
+    (EXIT
+     (COND
+      ((QEQCAR |lh| 1) (CONS 1 "failed"))
+      ('T
+       (SEQ
+        (LETT |rh|
+         (SPADCALL (SPADCALL |eq| (QREFELT $ 21)) (QREFELT $ 65))
+         |EQ;recip;$U;30|)
+        (EXIT
+         (COND
+          ((QEQCAR |rh| 1) (CONS 1 "failed"))
+          ('T
+            (CONS 0
+             (CONS (QCDR |lh|) (QCDR |rh|))))))))))))))
+
+(DEFUN |EQ;leftOne;$U;31| (|eq| $)
+ (PROG (|re|)
+  (RETURN
+   (SEQ
+    (LETT |re|
+     (SPADCALL (SPADCALL |eq| (QREFELT $ 9)) (QREFELT $ 65))
+     |EQ;leftOne;$U;31|)
+    (EXIT
+     (COND
+      ((QEQCAR |re| 1) (CONS 1 "failed"))
+      ('T
+       (CONS 0
+        (SPADCALL
+         (|spadConstant| $ 62)
+         (SPADCALL (SPADCALL |eq| (QREFELT $ 21)) (QCDR |re|) (QREFELT $ 58))
+         (QREFELT $ 20))))))))))
+
+
+
+(DEFUN |EQ;rightOne;$U;32| (|eq| $)
+ (PROG (|re|)
+  (RETURN
+   (SEQ
+    (LETT |re|
+     (SPADCALL (SPADCALL |eq| (QREFELT $ 21)) (QREFELT $ 65))
+     |EQ;rightOne;$U;32|)
+    (EXIT
+     (COND
+      ((QEQCAR |re| 1) (CONS 1 "failed"))
+      ('T
+       (CONS 0
+        (SPADCALL
+         (SPADCALL (SPADCALL |eq| (QREFELT $ 9)) (QCDR |re|) (QREFELT $ 58))
+         (|spadConstant| $ 62)
+         (QREFELT $ 20))))))))))
+
+
+(DEFUN |EQ;inv;2$;33| (|eq| $)
+  (CONS (SPADCALL (SPADCALL |eq| (QREFELT $ 9)) (QREFELT $ 69))
+        (SPADCALL (SPADCALL |eq| (QREFELT $ 21)) (QREFELT $ 69))))
+
+(DEFUN |EQ;leftOne;$U;34| (|eq| $)
+  (CONS 0
+        (SPADCALL (|spadConstant| $ 62)
+            (SPADCALL (SPADCALL |eq| (QREFELT $ 21))
+                (SPADCALL (SPADCALL |eq| (QREFELT $ 21))
+                    (QREFELT $ 69))
+                (QREFELT $ 58))
+            (QREFELT $ 20))))
+
+(DEFUN |EQ;rightOne;$U;35| (|eq| $)
+  (CONS 0
+        (SPADCALL
+            (SPADCALL (SPADCALL |eq| (QREFELT $ 9))
+                (SPADCALL (SPADCALL |eq| (QREFELT $ 21))
+                    (QREFELT $ 69))
+                (QREFELT $ 58))
+            (|spadConstant| $ 62) (QREFELT $ 20))))
+
+(DEFUN |EQ;characteristic;Nni;36| ($) (SPADCALL (QREFELT $ 72))) 
+
+(DEFUN |EQ;*;I2$;37| (|i| |eq| $)
+ (SPADCALL (SPADCALL |i| (QREFELT $ 75)) |eq| (QREFELT $ 60))) 
+
+(DEFUN |EQ;factorAndSplit;$L;38| (|eq| $)
+  (PROG (#:G1488 #:G1489 |eq0| |p| #:G1490 |rcf| #:G1491)
+    (RETURN
+      (SEQ (COND
+             ((|HasSignature| (QREFELT $ 6)
+                  (LIST '|factor|
+                        (LIST (LIST '|Factored|
+                                    (|devaluate| (QREFELT $ 6)))
+                              (|devaluate| (QREFELT $ 6)))))
+              (SEQ (LETT |eq0| (SPADCALL |eq| (QREFELT $ 8))
+                         |EQ;factorAndSplit;$L;38|)
+                   (EXIT (PROGN
+                           (LETT #:G1488 NIL |EQ;factorAndSplit;$L;38|)
+                           (SEQ (LETT |rcf| NIL
+                                      |EQ;factorAndSplit;$L;38|)
+                                (LETT #:G1489
+                                      (SPADCALL
+                                       (SPADCALL
+                                        (SPADCALL |eq0| (QREFELT $ 9))
+                                        (QREFELT $ 11))
+                                       (QREFELT $ 15))
+                                      |EQ;factorAndSplit;$L;38|)
+                                G190
+                                (COND
+                                  ((OR (ATOM #:G1489)
+                                    (PROGN
+                                      (LETT |rcf| (CAR #:G1489)
+                                       |EQ;factorAndSplit;$L;38|)
+                                      NIL))
+                                   (GO G191)))
+                                (SEQ (EXIT
+                                      (LETT #:G1488
+                                       (CONS
+                                        (SPADCALL (QCAR |rcf|)
+                                         (|spadConstant| $ 16)
+                                         (QREFELT $ 17))
+                                        #:G1488)
+                                       |EQ;factorAndSplit;$L;38|)))
+                                (LETT #:G1489 (CDR #:G1489)
+                                      |EQ;factorAndSplit;$L;38|)
+                                (GO G190) G191
+                                (EXIT (NREVERSE0 #:G1488)))))))
+             ((EQUAL (QREFELT $ 6) (|Polynomial| (|Integer|)))
+              (SEQ (LETT |eq0| (SPADCALL |eq| (QREFELT $ 8))
+                         |EQ;factorAndSplit;$L;38|)
+                   (LETT |p| (SPADCALL |eq0| (QREFELT $ 9))
+                         |EQ;factorAndSplit;$L;38|)
+                   (EXIT (PROGN
+                           (LETT #:G1490 NIL |EQ;factorAndSplit;$L;38|)
+                           (SEQ (LETT |rcf| NIL
+                                      |EQ;factorAndSplit;$L;38|)
+                                (LETT #:G1491
+                                      (SPADCALL
+                                       (SPADCALL |p| (QREFELT $ 80))
+                                       (QREFELT $ 83))
+                                      |EQ;factorAndSplit;$L;38|)
+                                G190
+                                (COND
+                                  ((OR (ATOM #:G1491)
+                                    (PROGN
+                                      (LETT |rcf| (CAR #:G1491)
+                                       |EQ;factorAndSplit;$L;38|)
+                                      NIL))
+                                   (GO G191)))
+                                (SEQ (EXIT
+                                      (LETT #:G1490
+                                       (CONS
+                                        (SPADCALL (QCAR |rcf|)
+                                         (|spadConstant| $ 16)
+                                         (QREFELT $ 17))
+                                        #:G1490)
+                                       |EQ;factorAndSplit;$L;38|)))
+                                (LETT #:G1491 (CDR #:G1491)
+                                      |EQ;factorAndSplit;$L;38|)
+                                (GO G190) G191
+                                (EXIT (NREVERSE0 #:G1490)))))))
+             ('T (LIST |eq|)))))))
+
+(DEFUN |EQ;differentiate;$S$;39| (|eq| |sym| $)
+  (CONS (SPADCALL (SPADCALL |eq| (QREFELT $ 9)) |sym| (QREFELT $ 84))
+        (SPADCALL (SPADCALL |eq| (QREFELT $ 21)) |sym| (QREFELT $ 84))))
+
+
+(DEFUN |EQ;dimension;Cn;40| ($) (SPADCALL 2 (QREFELT $ 87))) 
+
+(DEFUN |EQ;/;3$;41| (|eq1| |eq2| $)
+  (SPADCALL (SPADCALL (QCAR |eq1|) (QCAR |eq2|) (QREFELT $ 89))
+      (SPADCALL (QCDR |eq1|) (QCDR |eq2|) (QREFELT $ 89))
+      (QREFELT $ 20)))
+
+(DEFUN |EQ;inv;2$;42| (|eq| $)
+  (CONS (SPADCALL (SPADCALL |eq| (QREFELT $ 9)) (QREFELT $ 69))
+        (SPADCALL (SPADCALL |eq| (QREFELT $ 21)) (QREFELT $ 69))))
+
+(DEFUN |EQ;subst;3$;43| (|eq1| |eq2| $)
+  (PROG (|eq3|)
+    (RETURN
+      (SEQ (LETT |eq3| |eq2| |EQ;subst;3$;43|)
+           (EXIT (CONS (SPADCALL (SPADCALL |eq1| (QREFELT $ 9)) |eq3|
+                           (QREFELT $ 92))
+                       (SPADCALL (SPADCALL |eq1| (QREFELT $ 21)) |eq3|
+                           (QREFELT $ 92))))))))
+
+(DEFUN |Equation| (#:G1503)
+ (PROG ()
+  (RETURN
+   (PROG (#:G1504)
+    (RETURN
+     (COND
+      ((LETT #:G1504
+        (|lassocShiftWithFunction|
+          (LIST (|devaluate| #:G1503))
+          (HGET |$ConstructorCache| '|Equation|)
+          '|domainEqualList|)
+        |Equation|)
+       (|CDRwithIncrement| #:G1504))
+      ('T
+       (UNWIND-PROTECT
+        (PROG1 (|Equation;| #:G1503)
+         (LETT #:G1504 T |Equation|))
+        (COND
+         ((NOT #:G1504) (HREM |$ConstructorCache| '|Equation|)))))))))))
+
+(DEFUN |Equation;| (|#1|)
+  (PROG (DV$1 |dv$| $ #:G1502 #:G1501 #:G1500 #:G1499 #:G1498 |pv$|)
+    (RETURN
+      (PROGN
+        (LETT DV$1 (|devaluate| |#1|) |Equation|)
+        (LETT |dv$| (LIST '|Equation| DV$1) |Equation|)
+        (LETT $ (GETREFV 98) |Equation|)
+        (QSETREFV $ 0 |dv$|)
+        (QSETREFV $ 3
+            (LETT |pv$|
+                  (|buildPredVector| 0 0
+                      (LIST (|HasCategory| |#1| '(|Field|))
+                            (|HasCategory| |#1| '(|SetCategory|))
+                            (|HasCategory| |#1| '(|Ring|))
+                            (|HasCategory| |#1|
+                                '(|PartialDifferentialRing| (|Symbol|)))
+                            (OR (|HasCategory| |#1|
+                                    '(|PartialDifferentialRing|
+                                      (|Symbol|)))
+                                (|HasCategory| |#1| '(|Ring|)))
+                            (|HasCategory| |#1| '(|Group|))
+                            (|HasCategory| |#1|
+                                (LIST '|InnerEvalable| '(|Symbol|)
+                                      (|devaluate| |#1|)))
+                            (AND (|HasCategory| |#1|
+                                     (LIST '|Evalable|
+                                      (|devaluate| |#1|)))
+                                 (|HasCategory| |#1| '(|SetCategory|)))
+                            (|HasCategory| |#1| '(|IntegralDomain|))
+                            (|HasCategory| |#1| '(|ExpressionSpace|))
+                            (OR (|HasCategory| |#1| '(|Field|))
+                                (|HasCategory| |#1| '(|Group|)))
+                            (OR (|HasCategory| |#1| '(|Group|))
+                                (|HasCategory| |#1| '(|Ring|)))
+                            (LETT #:G1502
+                                  (|HasCategory| |#1|
+                                      '(|CommutativeRing|))
+                                  |Equation|)
+                            (OR #:G1502 (|HasCategory| |#1| '(|Field|))
+                                (|HasCategory| |#1| '(|Ring|)))
+                            (OR #:G1502
+                                (|HasCategory| |#1| '(|Field|)))
+                            (LETT #:G1501
+                                  (|HasCategory| |#1| '(|Monoid|))
+                                  |Equation|)
+                            (OR (|HasCategory| |#1| '(|Group|))
+                                #:G1501)
+                            (LETT #:G1500
+                                  (|HasCategory| |#1| '(|SemiGroup|))
+                                  |Equation|)
+                            (OR (|HasCategory| |#1| '(|Group|)) #:G1501
+                                #:G1500)
+                            (LETT #:G1499
+                                  (|HasCategory| |#1|
+                                      '(|AbelianGroup|))
+                                  |Equation|)
+                            (OR (|HasCategory| |#1|
+                                    '(|PartialDifferentialRing|
+                                      (|Symbol|)))
+                                #:G1499 #:G1502
+                                (|HasCategory| |#1| '(|Field|))
+                                (|HasCategory| |#1| '(|Ring|)))
+                            (OR #:G1499 #:G1501)
+                            (LETT #:G1498
+                                  (|HasCategory| |#1|
+                                      '(|AbelianSemiGroup|))
+                                  |Equation|)
+                            (OR (|HasCategory| |#1|
+                                    '(|PartialDifferentialRing|
+                                      (|Symbol|)))
+                                #:G1499 #:G1498 #:G1502
+                                (|HasCategory| |#1| '(|Field|))
+                                (|HasCategory| |#1| '(|Ring|)))
+                            (OR (|HasCategory| |#1|
+                                    '(|PartialDifferentialRing|
+                                      (|Symbol|)))
+                                #:G1499 #:G1498 #:G1502
+                                (|HasCategory| |#1| '(|Field|))
+                                (|HasCategory| |#1| '(|Group|)) #:G1501
+                                (|HasCategory| |#1| '(|Ring|)) #:G1500
+                                (|HasCategory| |#1| '(|SetCategory|)))))
+                  |Equation|))
+        (|haddProp| |$ConstructorCache| '|Equation| (LIST DV$1)
+            (CONS 1 $))
+        (|stuffDomainSlots| $)
+        (QSETREFV $ 6 |#1|)
+        (QSETREFV $ 7 (|Record| (|:| |lhs| |#1|) (|:| |rhs| |#1|)))
+        (COND
+          ((|testBitVector| |pv$| 9)
+           (QSETREFV $ 19
+               (CONS (|dispatchFunction| |EQ;factorAndSplit;$L;1|) $))))
+        (COND
+          ((|testBitVector| |pv$| 7)
+           (PROGN
+             (QSETREFV $ 27
+                 (CONS (|dispatchFunction| |EQ;eval;$SS$;8|) $))
+             (QSETREFV $ 31
+                 (CONS (|dispatchFunction| |EQ;eval;$LL$;9|) $)))))
+        (COND
+          ((|HasCategory| |#1| (LIST '|Evalable| (|devaluate| |#1|)))
+           (PROGN
+             (QSETREFV $ 34
+                 (CONS (|dispatchFunction| |EQ;eval;3$;10|) $))
+             (QSETREFV $ 37
+                 (CONS (|dispatchFunction| |EQ;eval;$L$;11|) $)))))
+        (COND
+          ((|testBitVector| |pv$| 2)
+           (PROGN
+             (QSETREFV $ 40
+                 (CONS (|dispatchFunction| |EQ;=;2$B;12|) $))
+             (QSETREFV $ 44
+                 (CONS (|dispatchFunction| |EQ;coerce;$Of;13|) $))
+             (QSETREFV $ 45
+                 (CONS (|dispatchFunction| |EQ;coerce;$B;14|) $)))))
+        (COND
+          ((|testBitVector| |pv$| 23)
+           (PROGN
+             (QSETREFV $ 47 (CONS (|dispatchFunction| |EQ;+;3$;15|) $))
+             (QSETREFV $ 48
+                 (CONS (|dispatchFunction| |EQ;+;S2$;16|) $))
+             (QSETREFV $ 49
+                 (CONS (|dispatchFunction| |EQ;+;$S$;17|) $)))))
+        (COND
+          ((|testBitVector| |pv$| 20)
+           (PROGN
+             (QSETREFV $ 51 (CONS (|dispatchFunction| |EQ;-;2$;18|) $))
+             (QSETREFV $ 53
+                 (CONS (|dispatchFunction| |EQ;-;S2$;19|) $))
+             (QSETREFV $ 54
+                 (CONS (|dispatchFunction| |EQ;-;$S$;20|) $))
+             (QSETREFV $ 57
+                 (CONS (|dispatchFunction| |EQ;leftZero;2$;21|) $))
+             (QSETREFV $ 8
+                 (CONS (|dispatchFunction| |EQ;rightZero;2$;22|) $))
+             (QSETREFV $ 55
+                 (CONS IDENTITY
+                       (FUNCALL (|dispatchFunction| |EQ;Zero;$;23|) $)))
+             (QSETREFV $ 52 (CONS (|dispatchFunction| |EQ;-;3$;24|) $)))))
+        (COND
+          ((|testBitVector| |pv$| 18)
+           (PROGN
+             (QSETREFV $ 59 (CONS (|dispatchFunction| |EQ;*;3$;25|) $))
+             (QSETREFV $ 60
+                 (CONS (|dispatchFunction| |EQ;*;S2$;26|) $))
+             (QSETREFV $ 60
+                 (CONS (|dispatchFunction| |EQ;*;S2$;27|) $))
+             (QSETREFV $ 61
+                 (CONS (|dispatchFunction| |EQ;*;$S$;28|) $)))))
+        (COND
+          ((|testBitVector| |pv$| 16)
+           (PROGN
+             (QSETREFV $ 63
+                 (CONS IDENTITY
+                       (FUNCALL (|dispatchFunction| |EQ;One;$;29|) $)))
+             (QSETREFV $ 66
+                 (CONS (|dispatchFunction| |EQ;recip;$U;30|) $))
+             (QSETREFV $ 67
+                 (CONS (|dispatchFunction| |EQ;leftOne;$U;31|) $))
+             (QSETREFV $ 68
+                 (CONS (|dispatchFunction| |EQ;rightOne;$U;32|) $)))))
+        (COND
+          ((|testBitVector| |pv$| 6)
+           (PROGN
+             (QSETREFV $ 70
+                 (CONS (|dispatchFunction| |EQ;inv;2$;33|) $))
+             (QSETREFV $ 67
+                 (CONS (|dispatchFunction| |EQ;leftOne;$U;34|) $))
+             (QSETREFV $ 68
+                 (CONS (|dispatchFunction| |EQ;rightOne;$U;35|) $)))))
+        (COND
+          ((|testBitVector| |pv$| 3)
+           (PROGN
+             (QSETREFV $ 73
+                 (CONS (|dispatchFunction| |EQ;characteristic;Nni;36|)
+                       $))
+             (QSETREFV $ 76
+                 (CONS (|dispatchFunction| |EQ;*;I2$;37|) $)))))
+        (COND
+          ((|testBitVector| |pv$| 9)
+           (QSETREFV $ 19
+               (CONS (|dispatchFunction| |EQ;factorAndSplit;$L;38|) $))))
+        (COND
+          ((|testBitVector| |pv$| 4)
+           (QSETREFV $ 85
+               (CONS (|dispatchFunction| |EQ;differentiate;$S$;39|) $))))
+        (COND
+          ((|testBitVector| |pv$| 1)
+           (PROGN
+             (QSETREFV $ 88
+                 (CONS (|dispatchFunction| |EQ;dimension;Cn;40|) $))
+             (QSETREFV $ 90 (CONS (|dispatchFunction| |EQ;/;3$;41|) $))
+             (QSETREFV $ 70
+                 (CONS (|dispatchFunction| |EQ;inv;2$;42|) $)))))
+        (COND
+          ((|testBitVector| |pv$| 10)
+           (QSETREFV $ 93
+               (CONS (|dispatchFunction| |EQ;subst;3$;43|) $))))
+        $))))
+
+(MAKEPROP '|Equation| '|infovec|
+    (LIST '#(NIL NIL NIL NIL NIL NIL (|local| |#1|) '|Rep|
+             (0 . |rightZero|) |EQ;lhs;$S;4| (|Factored| $)
+             (5 . |factor|)
+             (|Record| (|:| |factor| 6) (|:| |exponent| 74))
+             (|List| 12) (|Factored| 6) (10 . |factors|) (15 . |Zero|)
+             |EQ;equation;2S$;3| (|List| $) (19 . |factorAndSplit|)
+             |EQ;=;2S$;2| |EQ;rhs;$S;5| |EQ;swap;2$;6| (|Mapping| 6 6)
+             |EQ;map;M2$;7| (|Symbol|) (24 . |eval|) (31 . |eval|)
+             (|List| 25) (|List| 6) (38 . |eval|) (45 . |eval|)
+             (|Equation| 6) (52 . |eval|) (58 . |eval|) (|List| 32)
+             (64 . |eval|) (70 . |eval|) (|Boolean|) (76 . =) (82 . =)
+             (|OutputForm|) (88 . |coerce|) (93 . =) (99 . |coerce|)
+             (104 . |coerce|) (109 . +) (115 . +) (121 . +) (127 . +)
+             (133 . -) (138 . -) (143 . -) (149 . -) (155 . -)
+             (161 . |Zero|) (165 . -) (171 . |leftZero|) (176 . *)
+             (182 . *) (188 . *) (194 . *) (200 . |One|) (204 . |One|)
+             (|Union| $ '"failed") (208 . |recip|) (213 . |recip|)
+             (218 . |leftOne|) (223 . |rightOne|) (228 . |inv|)
+             (233 . |inv|) (|NonNegativeInteger|)
+             (238 . |characteristic|) (242 . |characteristic|)
+             (|Integer|) (246 . |coerce|) (251 . *) (|Factored| 78)
+             (|Polynomial| 74)
+             (|MultivariateFactorize| 25 (|IndexedExponents| 25) 74 78)
+             (257 . |factor|)
+             (|Record| (|:| |factor| 78) (|:| |exponent| 74))
+             (|List| 81) (262 . |factors|) (267 . |differentiate|)
+             (273 . |differentiate|) (|CardinalNumber|)
+             (279 . |coerce|) (284 . |dimension|) (288 . /) (294 . /)
+             (|Equation| $) (300 . |subst|) (306 . |subst|)
+             (|PositiveInteger|) (|List| 71) (|SingleInteger|)
+             (|String|))
+          '#(~= 312 |zero?| 318 |swap| 323 |subtractIfCan| 328 |subst|
+             334 |sample| 340 |rightZero| 344 |rightOne| 349 |rhs| 354
+             |recip| 359 |one?| 364 |map| 369 |lhs| 375 |leftZero| 380
+             |leftOne| 385 |latex| 390 |inv| 395 |hash| 400
+             |factorAndSplit| 405 |eval| 410 |equation| 436 |dimension|
+             442 |differentiate| 446 |conjugate| 472 |commutator| 478
+             |coerce| 484 |characteristic| 499 ^ 503 |Zero| 521 |One|
+             525 D 529 = 555 / 567 - 579 + 602 ** 620 * 638)
+          '((|unitsKnown| . 12) (|rightUnitary| . 3)
+            (|leftUnitary| . 3))
+          (CONS (|makeByteWordVec2| 25
+                    '(1 15 4 14 5 14 3 5 3 21 21 6 21 17 24 19 25 0 2
+                      25 2 7))
+                (CONS '#(|VectorSpace&| |Module&|
+                         |PartialDifferentialRing&| NIL |Ring&| NIL NIL
+                         NIL NIL |AbelianGroup&| NIL |Group&|
+                         |AbelianMonoid&| |Monoid&| |AbelianSemiGroup&|
+                         |SemiGroup&| |SetCategory&| NIL NIL
+                         |BasicType&| NIL |InnerEvalable&|)
+                      (CONS '#((|VectorSpace| 6) (|Module| 6)
+                               (|PartialDifferentialRing| 25)
+                               (|BiModule| 6 6) (|Ring|)
+                               (|LeftModule| 6) (|RightModule| 6)
+                               (|Rng|) (|LeftModule| $$)
+                               (|AbelianGroup|)
+                               (|CancellationAbelianMonoid|) (|Group|)
+                               (|AbelianMonoid|) (|Monoid|)
+                               (|AbelianSemiGroup|) (|SemiGroup|)
+                               (|SetCategory|) (|Type|)
+                               (|CoercibleTo| 41) (|BasicType|)
+                               (|CoercibleTo| 38)
+                               (|InnerEvalable| 25 6))
+                            (|makeByteWordVec2| 97
+                                '(1 0 0 0 8 1 6 10 0 11 1 14 13 0 15 0
+                                  6 0 16 1 0 18 0 19 3 6 0 0 25 6 26 3
+                                  0 0 0 25 6 27 3 6 0 0 28 29 30 3 0 0
+                                  0 28 29 31 2 6 0 0 32 33 2 0 0 0 0 34
+                                  2 6 0 0 35 36 2 0 0 0 18 37 2 6 38 0
+                                  0 39 2 0 38 0 0 40 1 6 41 0 42 2 41 0
+                                  0 0 43 1 0 41 0 44 1 0 38 0 45 2 6 0
+                                  0 0 46 2 0 0 0 0 47 2 0 0 6 0 48 2 0
+                                  0 0 6 49 1 6 0 0 50 1 0 0 0 51 2 0 0
+                                  0 0 52 2 0 0 6 0 53 2 0 0 0 6 54 0 0
+                                  0 55 2 6 0 0 0 56 1 0 0 0 57 2 6 0 0
+                                  0 58 2 0 0 0 0 59 2 0 0 6 0 60 2 0 0
+                                  0 6 61 0 6 0 62 0 0 0 63 1 6 64 0 65
+                                  1 0 64 0 66 1 0 64 0 67 1 0 64 0 68 1
+                                  6 0 0 69 1 0 0 0 70 0 6 71 72 0 0 71
+                                  73 1 6 0 74 75 2 0 0 74 0 76 1 79 77
+                                  78 80 1 77 82 0 83 2 6 0 0 25 84 2 0
+                                  0 0 25 85 1 86 0 71 87 0 0 86 88 2 6
+                                  0 0 0 89 2 0 0 0 0 90 2 6 0 0 91 92 2
+                                  0 0 0 0 93 2 2 38 0 0 1 1 20 38 0 1 1
+                                  0 0 0 22 2 20 64 0 0 1 2 10 0 0 0 93
+                                  0 22 0 1 1 20 0 0 8 1 16 64 0 68 1 0
+                                  6 0 21 1 16 64 0 66 1 16 38 0 1 2 0 0
+                                  23 0 24 1 0 6 0 9 1 20 0 0 57 1 16 64
+                                  0 67 1 2 97 0 1 1 11 0 0 70 1 2 96 0
+                                  1 1 9 18 0 19 2 8 0 0 0 34 2 8 0 0 18
+                                  37 3 7 0 0 25 6 27 3 7 0 0 28 29 31 2
+                                  0 0 6 6 17 0 1 86 88 2 4 0 0 28 1 2 4
+                                  0 0 25 85 3 4 0 0 28 95 1 3 4 0 0 25
+                                  71 1 2 6 0 0 0 1 2 6 0 0 0 1 1 3 0 74
+                                  1 1 2 41 0 44 1 2 38 0 45 0 3 71 73 2
+                                  6 0 0 74 1 2 16 0 0 71 1 2 18 0 0 94
+                                  1 0 20 0 55 0 16 0 63 2 4 0 0 28 1 2
+                                  4 0 0 25 1 3 4 0 0 28 95 1 3 4 0 0 25
+                                  71 1 2 2 38 0 0 40 2 0 0 6 6 20 2 11
+                                  0 0 0 90 2 1 0 0 6 1 1 20 0 0 51 2 20
+                                  0 0 0 52 2 20 0 6 0 53 2 20 0 0 6 54
+                                  2 23 0 0 0 47 2 23 0 6 0 48 2 23 0 0
+                                  6 49 2 6 0 0 74 1 2 16 0 0 71 1 2 18
+                                  0 0 94 1 2 20 0 71 0 1 2 20 0 74 0 76
+                                  2 23 0 94 0 1 2 18 0 0 0 59 2 18 0 0
+                                  6 61 2 18 0 6 0 60)))))
+          '|lookupComplete|))
+
+\end{verbatim}
+
+\section{The code.o file}
+The Spad compiler translates the Spad language into Common Lisp.
+It eventually invokes the Common Lisp ``compile-file'' command to
+output files in binary. Depending on the lisp system this filename
+can vary (e.g ``code.fasl''). The details of how these are used
+depends on the Common Lisp in use.
+
+By default, Axiom uses Gnu Common Lisp (GCL), which generates ``.o'' files.
+
+\section{The info file}
+\begin{verbatim}
+
+((* (($ $ $) (|arguments| (|eq2| . $) (|eq1| . $)) (S (* S S S))
+     ($ (= $ S S)))
+    (($ $ S) (|arguments| (|l| . S) (|eqn| . $)) (S (* S S S))
+     ($ (= $ S S)))
+    (($ #0=(|Integer|) $) (|arguments| (|i| . #0#) (|eq| . $))
+     (S (|coerce| S (|Integer|))) ($ (* $ S $)))
+    (($ S $) (|arguments| (|l| . S) (|eqn| . $)) (S (* S S S))
+     ($ (= $ S S))))
+ (+ (($ $ $) (|arguments| (|eq2| . $) (|eq1| . $)) (S (+ S S S))
+     ($ (= $ S S)))
+    (($ $ S) (|arguments| (|s| . S) (|eq1| . $)) ($ (+ $ $ $)))
+    (($ S $) (|arguments| (|s| . S) (|eq2| . $)) ($ (+ $ $ $))))
+ (- (($ $ $) (|arguments| (|eq2| . $) (|eq1| . $)) (S (- S S S))
+     ($ (= $ S S)))
+    (($ $ S) (|arguments| (|s| . S) (|eq1| . $)) ($ (- $ $ $)))
+    (($ $) (|arguments| (|eq| . $)) (S (- S S))
+     ($ (|rhs| S $) (|lhs| S $) (= $ S S)))
+    (($ S $) (|arguments| (|s| . S) (|eq2| . $)) ($ (- $ $ $))))
+ (/ (($ $ $) (|arguments| (|eq2| . $) (|eq1| . $)) (S (/ S S S))
+     ($ (= $ S S))))
+ (= (($ S S) (|arguments| (|r| . S) (|l| . S)))
+    (((|Boolean|) $ $) ((|Boolean|) (|false| (|Boolean|)))
+     (|locals| (#:G1393 |Boolean|))
+     (|arguments| (|eq2| . $) (|eq1| . $)) (S (= (|Boolean|) S S))))
+ (|One| (($) (S (|One| S)) ($ (|equation| $ S S))))
+ (|Zero| (($) (S (|Zero| S)) ($ (|equation| $ S S))))
+ (|characteristic|
+     (((|NonNegativeInteger|))
+      (S (|characteristic| (|NonNegativeInteger|)))))
+ (|coerce|
+     (((|Boolean|) $) (|arguments| (|eqn| . $))
+      (S (= (|Boolean|) S S)))
+     (((|OutputForm|) $)
+      ((|OutputForm|) (= (|OutputForm|) (|OutputForm|) (|OutputForm|)))
+      (|arguments| (|eqn| . $)) (S (|coerce| (|OutputForm|) S))))
+ (|constructor|
+     (NIL (|locals|
+              (|Rep| |Join| (|SetCategory|)
+                     (CATEGORY |domain|
+                         (SIGNATURE |construct|
+                             ((|Record| (|:| |lhs| S) (|:| |rhs| S)) S
+                              S))
+                         (SIGNATURE |coerce|
+                             ((|OutputForm|)
+                              (|Record| (|:| |lhs| S) (|:| |rhs| S))))
+                         (SIGNATURE |elt|
+                             (S (|Record| (|:| |lhs| S) (|:| |rhs| S))
+                                "lhs"))
+                         (SIGNATURE |elt|
+                             (S (|Record| (|:| |lhs| S) (|:| |rhs| S))
+                                "rhs"))
+                         (SIGNATURE |setelt|
+                             (S (|Record| (|:| |lhs| S) (|:| |rhs| S))
+                                "lhs" S))
+                         (SIGNATURE |setelt|
+                             (S (|Record| (|:| |lhs| S) (|:| |rhs| S))
+                                "rhs" S))
+                         (SIGNATURE |copy|
+                             ((|Record| (|:| |lhs| S) (|:| |rhs| S))
+                              (|Record| (|:| |lhs| S) (|:| |rhs| S)))))))))
+ (|differentiate|
+     (($ $ #1=(|Symbol|)) (|arguments| (|sym| . #1#) (|eq| . $))
+      (S (|differentiate| S S (|Symbol|))) ($ (|rhs| S $) (|lhs| S $))))
+ (|dimension|
+     ((#2=(|CardinalNumber|))
+      (#2# (|coerce| (|CardinalNumber|) (|NonNegativeInteger|)))))
+ (|equation| (($ S S) (|arguments| (|r| . S) (|l| . S))))
+ (|eval| (($ $ $) (|arguments| (|eqn2| . $) (|eqn1| . $))
+          (S (|eval| S S (|Equation| S))) ($ (= $ S S)))
+         (($ $ #3=(|List| $))
+          (|arguments| (|leqn2| . #3#) (|eqn1| . $))
+          (S (|eval| S S (|List| (|Equation| S)))) ($ (= $ S S)))
+         (($ $ #4=(|List| #5=(|Symbol|)) #6=(|List| S))
+          (|arguments| (|lx| . #6#) (|ls| . #4#) (|eqn| . $))
+          (S (|eval| S S (|List| (|Symbol|)) (|List| S)))
+          ($ (= $ S S)))
+         (($ $ #5# S) (|arguments| (|x| . S) (|s| . #5#) (|eqn| . $))
+          (S (|eval| S S (|Symbol|) S)) ($ (= $ S S))))
+ (|factorAndSplit|
+     (((|List| $) $)
+      ((|MultivariateFactorize| (|Symbol|)
+           (|IndexedExponents| (|Symbol|)) (|Integer|)
+           (|Polynomial| (|Integer|)))
+       (|factor| (|Factored| (|Polynomial| (|Integer|)))
+           (|Polynomial| (|Integer|))))
+      ((|Factored| S)
+       (|factors|
+           (|List| (|Record| (|:| |factor| S)
+                       (|:| |exponent| (|Integer|))))
+           (|Factored| S)))
+      ((|Factored| (|Polynomial| (|Integer|)))
+       (|factors|
+           (|List| (|Record| (|:| |factor| (|Polynomial| (|Integer|)))
+                       (|:| |exponent| (|Integer|))))
+           (|Factored| (|Polynomial| (|Integer|)))))
+      (|locals| (|p| |Polynomial| (|Integer|)) (|eq0| . $))
+      (|arguments| (|eq| . $))
+      (S (|factor| (|Factored| S) S) (|Zero| S))
+      ($ (|rightZero| $ $) (|lhs| S $) (|equation| $ S S))))
+ (|inv| (($ $) (|arguments| (|eq| . $)) (S (|inv| S S))
+         ($ (|rhs| S $) (|lhs| S $))))
+ (|leftOne|
+     (((|Union| $ "failed") $) (|locals| (|re| |Union| S "failed"))
+      (|arguments| (|eq| . $))
+      (S (|recip| (|Union| S "failed") S) (|inv| S S) (|One| S)
+         (* S S S))
+      ($ (|rhs| S $) (|lhs| S $) (|One| $) (= $ S S))))
+ (|leftZero|
+     (($ $) (|arguments| (|eq| . $)) (S (|Zero| S) (- S S S))
+      ($ (|rhs| S $) (|lhs| S $) (|Zero| $) (= $ S S))))
+ (|lhs| ((S $) (|arguments| (|eqn| . $))))
+ (|map| (($ #7=(|Mapping| S S) $)
+         (|arguments| (|fn| . #7#) (|eqn| . $)) ($ (|equation| $ S S))))
+ (|recip| (((|Union| $ "failed") $)
+           (|locals| (|rh| |Union| S "failed")
+               (|lh| |Union| S "failed"))
+           (|arguments| (|eq| . $))
+           (S (|recip| (|Union| S "failed") S))
+           ($ (|rhs| S $) (|lhs| S $))))
+ (|rhs| ((S $) (|arguments| (|eqn| . $))))
+ (|rightOne|
+     (((|Union| $ "failed") $) (|locals| (|re| |Union| S "failed"))
+      (|arguments| (|eq| . $))
+      (S (|recip| (|Union| S "failed") S) (|inv| S S) (|One| S)
+         (* S S S))
+      ($ (|rhs| S $) (|lhs| S $) (= $ S S))))
+ (|rightZero|
+     (($ $) (|arguments| (|eq| . $)) (S (|Zero| S) (- S S S))
+      ($ (|rhs| S $) (|lhs| S $) (= $ S S))))
+ (|subst| (($ $ $) (|locals| (|eq3| |Equation| S))
+           (|arguments| (|eq2| . $) (|eq1| . $))
+           (S (|subst| S S (|Equation| S)))
+           ($ (|rhs| S $) (|lhs| S $))))
+ (|swap| (($ $) (|arguments| (|eqn| . $)) ($ (|rhs| S $) (|lhs| S $))))) 
+\end{verbatim}
+
+\section{The EQ.fn file}
+\begin{verbatim}
+(in-package 'compiler)(init-fn)
+(ADD-FN-DATA '(
+#S(FN NAME BOOT::|EQ;*;S2$;26| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (VMLISP:QCDR CDR VMLISP:QCAR CAR SVREF VMLISP:QREFELT
+          BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QCDR VMLISP:QCAR VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;rightOne;$U;32| DEF DEFUN VALUE-TYPE T FUN-VALUES
+      NIL CALLEES
+      (BOOT::|spadConstant| VMLISP:QCDR CONS VMLISP:QCAR EQL
+          BOOT::QEQCAR COND VMLISP:EXIT CDR CAR SVREF VMLISP:QREFELT
+          BOOT:SPADCALL BOOT::LETT VMLISP:SEQ RETURN)
+      RETURN-TYPE NIL ARG-TYPES (T T) NO-EMIT NIL MACROS
+      (BOOT::|spadConstant| VMLISP:QCDR VMLISP:QCAR BOOT::QEQCAR COND
+          VMLISP:EXIT VMLISP:QREFELT BOOT:SPADCALL BOOT::LETT
+          VMLISP:SEQ RETURN)) 
+#S(FN NAME BOOT::|EQ;lhs;$S;4| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES (CAR VMLISP:QCAR) RETURN-TYPE NIL ARG-TYPES (T T) NO-EMIT
+      NIL MACROS (VMLISP:QCAR)) 
+#S(FN NAME BOOT::|EQ;+;3$;15| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (VMLISP:QCDR CDR VMLISP:QCAR CAR SVREF VMLISP:QREFELT
+          BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QCDR VMLISP:QCAR VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;dimension;Cn;40| DEF DEFUN VALUE-TYPE T FUN-VALUES
+      NIL CALLEES (CDR CAR SVREF VMLISP:QREFELT BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T) NO-EMIT NIL MACROS
+      (VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;rightZero;2$;22| DEF DEFUN VALUE-TYPE T FUN-VALUES
+      NIL CALLEES
+      (BOOT::|spadConstant| CDR CAR SVREF VMLISP:QREFELT BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T) NO-EMIT NIL MACROS
+      (BOOT::|spadConstant| VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;coerce;$Of;13| DEF DEFUN VALUE-TYPE T FUN-VALUES
+      NIL CALLEES
+      (VMLISP:QCDR CDR VMLISP:QCAR CAR SVREF VMLISP:QREFELT
+          BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T) NO-EMIT NIL MACROS
+      (VMLISP:QCDR VMLISP:QCAR VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;One;$;29| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (CDR BOOT::|spadConstant| CAR SVREF VMLISP:QREFELT BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T) NO-EMIT NIL MACROS
+      (BOOT::|spadConstant| VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;inv;2$;42| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES (CDR CAR SVREF VMLISP:QREFELT BOOT:SPADCALL CONS)
+      RETURN-TYPE NIL ARG-TYPES (T T) NO-EMIT NIL MACROS
+      (VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;-;$S$;20| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES (CDR CONS CAR SVREF VMLISP:QREFELT BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;=;2$B;12| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (VMLISP:QCDR CDR VMLISP:QCAR CAR SVREF VMLISP:QREFELT
+          BOOT:SPADCALL COND)
+      RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QCDR VMLISP:QCAR VMLISP:QREFELT BOOT:SPADCALL COND)) 
+#S(FN NAME BOOT::|EQ;/;3$;41| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (VMLISP:QCDR CDR VMLISP:QCAR CAR SVREF VMLISP:QREFELT
+          BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QCDR VMLISP:QCAR VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;recip;$U;30| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (VMLISP:QCDR LIST* CONS VMLISP:QCAR EQL BOOT::QEQCAR COND
+          VMLISP:EXIT CDR CAR SVREF VMLISP:QREFELT BOOT:SPADCALL
+          BOOT::LETT VMLISP:SEQ RETURN)
+      RETURN-TYPE NIL ARG-TYPES (T T) NO-EMIT NIL MACROS
+      (VMLISP:QCDR VMLISP:QCAR BOOT::QEQCAR COND VMLISP:EXIT
+          VMLISP:QREFELT BOOT:SPADCALL BOOT::LETT VMLISP:SEQ RETURN)) 
+#S(FN NAME BOOT::|EQ;-;3$;24| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (VMLISP:QCDR CDR VMLISP:QCAR CAR SVREF VMLISP:QREFELT
+          BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QCDR VMLISP:QCAR VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;eval;$L$;11| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (VMLISP:QCDR CDR VMLISP:QCAR CAR SVREF VMLISP:QREFELT
+          BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QCDR VMLISP:QCAR VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;leftZero;2$;21| DEF DEFUN VALUE-TYPE T FUN-VALUES
+      NIL CALLEES
+      (CDR BOOT::|spadConstant| CAR SVREF VMLISP:QREFELT BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T) NO-EMIT NIL MACROS
+      (BOOT::|spadConstant| VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;*;S2$;27| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (VMLISP:QCDR CDR VMLISP:QCAR CAR SVREF VMLISP:QREFELT
+          BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QCDR VMLISP:QCAR VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;*;I2$;37| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES (CDR CAR SVREF VMLISP:QREFELT BOOT:SPADCALL) RETURN-TYPE
+      NIL ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;eval;3$;10| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (VMLISP:QCDR CDR VMLISP:QCAR CAR SVREF VMLISP:QREFELT
+          BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QCDR VMLISP:QCAR VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;eval;$SS$;8| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (VMLISP:QCDR CDR VMLISP:QCAR CAR SVREF VMLISP:QREFELT
+          BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T T T) NO-EMIT NIL MACROS
+      (VMLISP:QCDR VMLISP:QCAR VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;factorAndSplit;$L;38| DEF DEFUN VALUE-TYPE T
+      FUN-VALUES NIL CALLEES
+      (BOOT:|Integer| BOOT:|Polynomial| EQUAL BOOT:NREVERSE0
+          BOOT::|spadConstant| VMLISP:QCAR CONS ATOM VMLISP:EXIT CDR
+          CAR BOOT:SPADCALL BOOT::LETT BOOT::|devaluate| LIST SVREF
+          VMLISP:QREFELT BOOT::|HasSignature| COND VMLISP:SEQ RETURN)
+      RETURN-TYPE NIL ARG-TYPES (T T) NO-EMIT NIL MACROS
+      (BOOT::|spadConstant| VMLISP:QCAR VMLISP:EXIT BOOT:SPADCALL
+          BOOT::LETT VMLISP:QREFELT COND VMLISP:SEQ RETURN)) 
+#S(FN NAME BOOT::|EQ;differentiate;$S$;39| DEF DEFUN VALUE-TYPE T
+      FUN-VALUES NIL CALLEES
+      (CDR CAR SVREF VMLISP:QREFELT BOOT:SPADCALL CONS) RETURN-TYPE NIL
+      ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;eval;$LL$;9| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (VMLISP:QCDR CDR VMLISP:QCAR CAR SVREF VMLISP:QREFELT
+          BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T T T) NO-EMIT NIL MACROS
+      (VMLISP:QCDR VMLISP:QCAR VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;leftOne;$U;34| DEF DEFUN VALUE-TYPE T FUN-VALUES
+      NIL CALLEES
+      (CDR BOOT::|spadConstant| CAR SVREF VMLISP:QREFELT BOOT:SPADCALL
+           CONS)
+      RETURN-TYPE NIL ARG-TYPES (T T) NO-EMIT NIL MACROS
+      (BOOT::|spadConstant| VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;map;M2$;7| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (VMLISP:QCDR CDR VMLISP:QCAR CAR SVREF VMLISP:QREFELT
+          BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QCDR VMLISP:QCAR VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;-;S2$;19| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES (CDR CONS CAR SVREF VMLISP:QREFELT BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;equation;2S$;3| DEF DEFUN VALUE-TYPE T FUN-VALUES
+      NIL CALLEES (CONS) RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL
+      MACROS NIL) 
+#S(FN NAME BOOT::|EQ;+;$S$;17| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES (CDR CONS CAR SVREF VMLISP:QREFELT BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;factorAndSplit;$L;1| DEF DEFUN VALUE-TYPE T
+      FUN-VALUES NIL CALLEES
+      (BOOT:NREVERSE0 BOOT::|spadConstant| VMLISP:QCAR CONS ATOM
+          VMLISP:EXIT CDR CAR BOOT:SPADCALL BOOT::LETT
+          BOOT::|devaluate| LIST SVREF VMLISP:QREFELT
+          BOOT::|HasSignature| COND VMLISP:SEQ RETURN)
+      RETURN-TYPE NIL ARG-TYPES (T T) NO-EMIT NIL MACROS
+      (BOOT::|spadConstant| VMLISP:QCAR VMLISP:EXIT BOOT:SPADCALL
+          BOOT::LETT VMLISP:QREFELT COND VMLISP:SEQ RETURN)) 
+#S(FN NAME BOOT::|EQ;*;3$;25| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (VMLISP:QCDR CDR VMLISP:QCAR CAR SVREF VMLISP:QREFELT
+          BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QCDR VMLISP:QCAR VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;Zero;$;23| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (CDR BOOT::|spadConstant| CAR SVREF VMLISP:QREFELT BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T) NO-EMIT NIL MACROS
+      (BOOT::|spadConstant| VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;characteristic;Nni;36| DEF DEFUN VALUE-TYPE T
+      FUN-VALUES NIL CALLEES
+      (CDR CAR SVREF VMLISP:QREFELT BOOT:SPADCALL) RETURN-TYPE NIL
+      ARG-TYPES (T) NO-EMIT NIL MACROS (VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;leftOne;$U;31| DEF DEFUN VALUE-TYPE T FUN-VALUES
+      NIL CALLEES
+      (VMLISP:QCDR BOOT::|spadConstant| CONS VMLISP:QCAR EQL
+          BOOT::QEQCAR COND VMLISP:EXIT CDR CAR SVREF VMLISP:QREFELT
+          BOOT:SPADCALL BOOT::LETT VMLISP:SEQ RETURN)
+      RETURN-TYPE NIL ARG-TYPES (T T) NO-EMIT NIL MACROS
+      (VMLISP:QCDR BOOT::|spadConstant| VMLISP:QCAR BOOT::QEQCAR COND
+          VMLISP:EXIT VMLISP:QREFELT BOOT:SPADCALL BOOT::LETT
+          VMLISP:SEQ RETURN)) 
+#S(FN NAME BOOT::|EQ;swap;2$;6| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES (CDR CAR SVREF VMLISP:QREFELT BOOT:SPADCALL CONS)
+      RETURN-TYPE NIL ARG-TYPES (T T) NO-EMIT NIL MACROS
+      (VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;-;2$;18| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES (CDR CAR SVREF VMLISP:QREFELT BOOT:SPADCALL) RETURN-TYPE
+      NIL ARG-TYPES (T T) NO-EMIT NIL MACROS
+      (VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;subst;3$;43| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (CDR CAR SVREF VMLISP:QREFELT BOOT:SPADCALL CONS VMLISP:EXIT
+           BOOT::LETT VMLISP:SEQ RETURN)
+      RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QREFELT BOOT:SPADCALL VMLISP:EXIT BOOT::LETT VMLISP:SEQ
+          RETURN)) 
+#S(FN NAME BOOT::|EQ;=;2S$;2| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES (CONS) RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL
+      MACROS NIL) 
+#S(FN NAME BOOT::|EQ;*;$S$;28| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (VMLISP:QCDR CDR VMLISP:QCAR CAR SVREF VMLISP:QREFELT
+          BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QCDR VMLISP:QCAR VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;+;S2$;16| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES (CDR CONS CAR SVREF VMLISP:QREFELT BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T T) NO-EMIT NIL MACROS
+      (VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|Equation;| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES
+      (BOOT::|EQ;One;$;29| BOOT::|EQ;Zero;$;23|
+          BOOT::|dispatchFunction| BOOT::|testBitVector| COND
+          BOOT::|Record0| BOOT::|Record| BOOT::|stuffDomainSlots| CONS
+          BOOT::|haddProp| BOOT::|HasCategory| BOOT::|buildPredVector|
+          SYSTEM:SVSET SETF VMLISP:QSETREFV VMLISP:GETREFV LIST
+          BOOT::|devaluate| BOOT::LETT RETURN)
+      RETURN-TYPE NIL ARG-TYPES (T) NO-EMIT NIL MACROS
+      (BOOT::|dispatchFunction| COND BOOT::|Record| SETF
+          VMLISP:QSETREFV BOOT::LETT RETURN)) 
+#S(FN NAME BOOT::|EQ;coerce;$B;14| DEF DEFUN VALUE-TYPE T FUN-VALUES
+      NIL CALLEES
+      (CDR VMLISP:QCDR VMLISP:QCAR CAR SVREF VMLISP:QREFELT
+           BOOT:SPADCALL)
+      RETURN-TYPE NIL ARG-TYPES (T T) NO-EMIT NIL MACROS
+      (VMLISP:QCDR VMLISP:QCAR VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;rhs;$S;5| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES (CDR VMLISP:QCDR) RETURN-TYPE NIL ARG-TYPES (T T) NO-EMIT
+      NIL MACROS (VMLISP:QCDR)) 
+#S(FN NAME OTHER-FORM DEF NIL VALUE-TYPE NIL FUN-VALUES NIL CALLEES NIL
+      RETURN-TYPE NIL ARG-TYPES NIL NO-EMIT NIL MACROS NIL) 
+#S(FN NAME BOOT::|EQ;inv;2$;33| DEF DEFUN VALUE-TYPE T FUN-VALUES NIL
+      CALLEES (CDR CAR SVREF VMLISP:QREFELT BOOT:SPADCALL CONS)
+      RETURN-TYPE NIL ARG-TYPES (T T) NO-EMIT NIL MACROS
+      (VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|EQ;rightOne;$U;35| DEF DEFUN VALUE-TYPE T FUN-VALUES
+      NIL CALLEES
+      (BOOT::|spadConstant| CDR CAR SVREF VMLISP:QREFELT BOOT:SPADCALL
+          CONS)
+      RETURN-TYPE NIL ARG-TYPES (T T) NO-EMIT NIL MACROS
+      (BOOT::|spadConstant| VMLISP:QREFELT BOOT:SPADCALL)) 
+#S(FN NAME BOOT::|Equation| DEF DEFUN VALUE-TYPE T FUN-VALUES
+      (SINGLE-VALUE) CALLEES
+      (REMHASH VMLISP:HREM BOOT::|Equation;| PROG1
+               BOOT::|CDRwithIncrement| GETHASH VMLISP:HGET
+               BOOT::|devaluate| LIST BOOT::|lassocShiftWithFunction|
+               BOOT::LETT COND RETURN)
+      RETURN-TYPE NIL ARG-TYPES (T) NO-EMIT NIL MACROS
+      (VMLISP:HREM PROG1 VMLISP:HGET BOOT::LETT COND RETURN)) ))\end{verbatim}
+
+\section{The index.kaf file}
+
+Each constructor (e.g. EQ) had one library directory (e.g. EQ.nrlib). 
+This directory contained a random access file called the index.kaf file. 
+These files contain runtime information such as the operationAlist and
+the ConstructorModemap. At system build time we merge all of these 
+.nrlib/index.kaf files into one database, INTERP.daase.  Requests to 
+get information from this database are cached so that multiple 
+references do not cause additional disk i/o.
+
+Before getting into the contents, we need to understand the format of
+an {\index index.kaf} file.  The kaf file is a random access file,
+originally used as a database. In the current system we make a pass to
+combine these files at build time to construct the various {\index daase} 
+files.
+
+This is just a file of lisp objects, one after another, in (read) format.
+
+A kaf file starts with an integer, in this case, 35695. This integer gives 
+the byte offset to the index. Due to the way the file is constructed, the
+index is at the end of the file. To read a kaf file, first read the
+integer, then seek to that location in the file, and do a (read).
+This will return the index, in this case:
+\begin{verbatim}
+(("slot1Info" 0 32444)
+ ("documentation" 0 29640)
+ ("ancestors" 0 28691)
+ ("parents" 0 28077)
+ ("abbreviation" 0 28074)
+ ("predicates" 0 25442)
+ ("attributes" 0 25304)
+ ("signaturesAndLocals" 0 23933)
+ ("superDomain" 0 NIL)
+ ("operationAlist" 0 20053)
+ ("modemaps" 0 17216)
+ ("sourceFile" 0 17179)
+ ("constructorCategory" 0 15220)
+ ("constructorModemap" 0 13215)
+ ("constructorKind" 0 13206)
+ ("constructorForm" 0 13191)
+ ("compilerInfo" 0 4433)
+ ("loadTimeStuff" 0 20))
+\end{verbatim}
+
+This is a list of triples. The first item in each triple is a string
+that is used as a lookup key (e.g. ``operationAlist''). The second
+element is no longer used. The third element is the byte offset from
+the beginning of the file.
+
+So to read the ``operationAlist'' from this file you would:
+\begin{enumerate}
+\item open the index.kaf file
+\item (read) the integer
+\item (seek) to the integer offset from the beginning of the file
+\item (read) the index of triples
+\item find the keyword (e.g. ``operationAlist'') triple
+\item select the third element, an integer
+\item (seek) to the integer offset from the beginning of the file
+\item (read) the ``operationAlist''
+\end{enumerate}
+
+Note that the information below has been reformatted to fit this 
+document. In order to save space the index.kaf file is does not use
+prettyprint since it is normally only read by machine. 
+
+\subsection{The index offset byte}
+\begin{verbatim}
+35695
+\end{verbatim}
+
+\subsection{The ``loadTimeStuff''}
+\begin{verbatim}
+(MAKEPROP '|Equation| '|infovec|
+    (LIST '#(NIL NIL NIL NIL NIL NIL (|local| |#1|) '|Rep|
+             (0 . |rightZero|) |EQ;lhs;$S;4| (|Factored| $)
+             (5 . |factor|)
+             (|Record| (|:| |factor| 6) (|:| |exponent| 74))
+             (|List| 12) (|Factored| 6) (10 . |factors|) (15 . |Zero|)
+             |EQ;equation;2S$;3| (|List| $) (19 . |factorAndSplit|)
+             |EQ;=;2S$;2| |EQ;rhs;$S;5| |EQ;swap;2$;6| (|Mapping| 6 6)
+             |EQ;map;M2$;7| (|Symbol|) (24 . |eval|) (31 . |eval|)
+             (|List| 25) (|List| 6) (38 . |eval|) (45 . |eval|)
+             (|Equation| 6) (52 . |eval|) (58 . |eval|) (|List| 32)
+             (64 . |eval|) (70 . |eval|) (|Boolean|) (76 . =) (82 . =)
+             (|OutputForm|) (88 . |coerce|) (93 . =) (99 . |coerce|)
+             (104 . |coerce|) (109 . +) (115 . +) (121 . +) (127 . +)
+             (133 . -) (138 . -) (143 . -) (149 . -) (155 . -)
+             (161 . |Zero|) (165 . -) (171 . |leftZero|) (176 . *)
+             (182 . *) (188 . *) (194 . *) (200 . |One|) (204 . |One|)
+             (|Union| $ '"failed") (208 . |recip|) (213 . |recip|)
+             (218 . |leftOne|) (223 . |rightOne|) (228 . |inv|)
+             (233 . |inv|) (|NonNegativeInteger|)
+             (238 . |characteristic|) (242 . |characteristic|)
+             (|Integer|) (246 . |coerce|) (251 . *) (|Factored| 78)
+             (|Polynomial| 74)
+             (|MultivariateFactorize| 25 (|IndexedExponents| 25) 74 78)
+             (257 . |factor|)
+             (|Record| (|:| |factor| 78) (|:| |exponent| 74))
+             (|List| 81) (262 . |factors|) (267 . |differentiate|)
+             (273 . |differentiate|) (|CardinalNumber|)
+             (279 . |coerce|) (284 . |dimension|) (288 . /) (294 . /)
+             (|Equation| $) (300 . |subst|) (306 . |subst|)
+             (|PositiveInteger|) (|List| 71) (|SingleInteger|)
+             (|String|))
+          '#(~= 312 |zero?| 318 |swap| 323 |subtractIfCan| 328 |subst|
+             334 |sample| 340 |rightZero| 344 |rightOne| 349 |rhs| 354
+             |recip| 359 |one?| 364 |map| 369 |lhs| 375 |leftZero| 380
+             |leftOne| 385 |latex| 390 |inv| 395 |hash| 400
+             |factorAndSplit| 405 |eval| 410 |equation| 436 |dimension|
+             442 |differentiate| 446 |conjugate| 472 |commutator| 478
+             |coerce| 484 |characteristic| 499 ^ 503 |Zero| 521 |One|
+             525 D 529 = 555 / 567 - 579 + 602 ** 620 * 638)
+          '((|unitsKnown| . 12) (|rightUnitary| . 3)
+            (|leftUnitary| . 3))
+          (CONS (|makeByteWordVec2| 25
+                    '(1 15 4 14 5 14 3 5 3 21 21 6 21 17 24 19 25 0 2
+                      25 2 7))
+                (CONS '#(|VectorSpace&| |Module&|
+                         |PartialDifferentialRing&| NIL |Ring&| NIL NIL
+                         NIL NIL |AbelianGroup&| NIL |Group&|
+                         |AbelianMonoid&| |Monoid&| |AbelianSemiGroup&|
+                         |SemiGroup&| |SetCategory&| NIL NIL
+                         |BasicType&| NIL |InnerEvalable&|)
+                      (CONS '#((|VectorSpace| 6) (|Module| 6)
+                               (|PartialDifferentialRing| 25)
+                               (|BiModule| 6 6) (|Ring|)
+                               (|LeftModule| 6) (|RightModule| 6)
+                               (|Rng|) (|LeftModule| $$)
+                               (|AbelianGroup|)
+                               (|CancellationAbelianMonoid|) (|Group|)
+                               (|AbelianMonoid|) (|Monoid|)
+                               (|AbelianSemiGroup|) (|SemiGroup|)
+                               (|SetCategory|) (|Type|)
+                               (|CoercibleTo| 41) (|BasicType|)
+                               (|CoercibleTo| 38)
+                               (|InnerEvalable| 25 6))
+                            (|makeByteWordVec2| 97
+                                '(1 0 0 0 8 1 6 10 0 11 1 14 13 0 15 0
+                                  6 0 16 1 0 18 0 19 3 6 0 0 25 6 26 3
+                                  0 0 0 25 6 27 3 6 0 0 28 29 30 3 0 0
+                                  0 28 29 31 2 6 0 0 32 33 2 0 0 0 0 34
+                                  2 6 0 0 35 36 2 0 0 0 18 37 2 6 38 0
+                                  0 39 2 0 38 0 0 40 1 6 41 0 42 2 41 0
+                                  0 0 43 1 0 41 0 44 1 0 38 0 45 2 6 0
+                                  0 0 46 2 0 0 0 0 47 2 0 0 6 0 48 2 0
+                                  0 0 6 49 1 6 0 0 50 1 0 0 0 51 2 0 0
+                                  0 0 52 2 0 0 6 0 53 2 0 0 0 6 54 0 0
+                                  0 55 2 6 0 0 0 56 1 0 0 0 57 2 6 0 0
+                                  0 58 2 0 0 0 0 59 2 0 0 6 0 60 2 0 0
+                                  0 6 61 0 6 0 62 0 0 0 63 1 6 64 0 65
+                                  1 0 64 0 66 1 0 64 0 67 1 0 64 0 68 1
+                                  6 0 0 69 1 0 0 0 70 0 6 71 72 0 0 71
+                                  73 1 6 0 74 75 2 0 0 74 0 76 1 79 77
+                                  78 80 1 77 82 0 83 2 6 0 0 25 84 2 0
+                                  0 0 25 85 1 86 0 71 87 0 0 86 88 2 6
+                                  0 0 0 89 2 0 0 0 0 90 2 6 0 0 91 92 2
+                                  0 0 0 0 93 2 2 38 0 0 1 1 20 38 0 1 1
+                                  0 0 0 22 2 20 64 0 0 1 2 10 0 0 0 93
+                                  0 22 0 1 1 20 0 0 8 1 16 64 0 68 1 0
+                                  6 0 21 1 16 64 0 66 1 16 38 0 1 2 0 0
+                                  23 0 24 1 0 6 0 9 1 20 0 0 57 1 16 64
+                                  0 67 1 2 97 0 1 1 11 0 0 70 1 2 96 0
+                                  1 1 9 18 0 19 2 8 0 0 0 34 2 8 0 0 18
+                                  37 3 7 0 0 25 6 27 3 7 0 0 28 29 31 2
+                                  0 0 6 6 17 0 1 86 88 2 4 0 0 28 1 2 4
+                                  0 0 25 85 3 4 0 0 28 95 1 3 4 0 0 25
+                                  71 1 2 6 0 0 0 1 2 6 0 0 0 1 1 3 0 74
+                                  1 1 2 41 0 44 1 2 38 0 45 0 3 71 73 2
+                                  6 0 0 74 1 2 16 0 0 71 1 2 18 0 0 94
+                                  1 0 20 0 55 0 16 0 63 2 4 0 0 28 1 2
+                                  4 0 0 25 1 3 4 0 0 28 95 1 3 4 0 0 25
+                                  71 1 2 2 38 0 0 40 2 0 0 6 6 20 2 11
+                                  0 0 0 90 2 1 0 0 6 1 1 20 0 0 51 2 20
+                                  0 0 0 52 2 20 0 6 0 53 2 20 0 0 6 54
+                                  2 23 0 0 0 47 2 23 0 6 0 48 2 23 0 0
+                                  6 49 2 6 0 0 74 1 2 16 0 0 71 1 2 18
+                                  0 0 94 1 2 20 0 71 0 1 2 20 0 74 0 76
+                                  2 23 0 94 0 1 2 18 0 0 0 59 2 18 0 0
+                                  6 61 2 18 0 6 0 60)))))
+          '|lookupComplete|))
+\end{verbatim}
+
+\subsection{The ``compilerInfo''}
+\begin{verbatim}
+(SETQ |$CategoryFrame|
+      (|put| '|Equation| '|isFunctor|
+             '(((|eval| ($ $ (|List| (|Symbol|)) (|List| |#1|)))
+                (|has| |#1| (|InnerEvalable| (|Symbol|) |#1|))
+                (ELT $ 31))
+               ((|eval| ($ $ (|Symbol|) |#1|))
+                (|has| |#1| (|InnerEvalable| (|Symbol|) |#1|))
+                (ELT $ 27))
+               ((~= ((|Boolean|) $ $)) (|has| |#1| (|SetCategory|))
+                (ELT $ NIL))
+               ((= ((|Boolean|) $ $)) (|has| |#1| (|SetCategory|))
+                (ELT $ 40))
+               ((|coerce| ((|OutputForm|) $))
+                (|has| |#1| (|SetCategory|)) (ELT $ 44))
+               ((|hash| ((|SingleInteger|) $))
+                (|has| |#1| (|SetCategory|)) (ELT $ NIL))
+               ((|latex| ((|String|) $)) (|has| |#1| (|SetCategory|))
+                (ELT $ NIL))
+               ((|coerce| ((|Boolean|) $)) (|has| |#1| (|SetCategory|))
+                (ELT $ 45))
+               ((+ ($ $ $)) (|has| |#1| (|AbelianSemiGroup|))
+                (ELT $ 47))
+               ((* ($ (|PositiveInteger|) $))
+                (|has| |#1| (|AbelianSemiGroup|)) (ELT $ NIL))
+               ((|Zero| ($)) (|has| |#1| (|AbelianGroup|))
+                (CONST $ 55))
+               ((|sample| ($))
+                (OR (|has| |#1| (|AbelianGroup|))
+                    (|has| |#1| (|Monoid|)))
+                (CONST $ NIL))
+               ((|zero?| ((|Boolean|) $)) (|has| |#1| (|AbelianGroup|))
+                (ELT $ NIL))
+               ((* ($ (|NonNegativeInteger|) $))
+                (|has| |#1| (|AbelianGroup|)) (ELT $ NIL))
+               ((|subtractIfCan| ((|Union| $ "failed") $ $))
+                (|has| |#1| (|AbelianGroup|)) (ELT $ NIL))
+               ((- ($ $)) (|has| |#1| (|AbelianGroup|)) (ELT $ 51))
+               ((- ($ $ $)) (|has| |#1| (|AbelianGroup|)) (ELT $ 52))
+               ((* ($ (|Integer|) $)) (|has| |#1| (|AbelianGroup|))
+                (ELT $ 76))
+               ((* ($ $ $)) (|has| |#1| (|SemiGroup|)) (ELT $ 59))
+               ((** ($ $ (|PositiveInteger|)))
+                (|has| |#1| (|SemiGroup|)) (ELT $ NIL))
+               ((^ ($ $ (|PositiveInteger|)))
+                (|has| |#1| (|SemiGroup|)) (ELT $ NIL))
+               ((|One| ($)) (|has| |#1| (|Monoid|)) (CONST $ 63))
+               ((|one?| ((|Boolean|) $)) (|has| |#1| (|Monoid|))
+                (ELT $ NIL))
+               ((** ($ $ (|NonNegativeInteger|)))
+                (|has| |#1| (|Monoid|)) (ELT $ NIL))
+               ((^ ($ $ (|NonNegativeInteger|)))
+                (|has| |#1| (|Monoid|)) (ELT $ NIL))
+               ((|recip| ((|Union| $ "failed") $))
+                (|has| |#1| (|Monoid|)) (ELT $ 66))
+               ((|inv| ($ $))
+                (OR (|has| |#1| (|Field|)) (|has| |#1| (|Group|)))
+                (ELT $ 70))
+               ((/ ($ $ $))
+                (OR (|has| |#1| (|Field|)) (|has| |#1| (|Group|)))
+                (ELT $ 90))
+               ((** ($ $ (|Integer|))) (|has| |#1| (|Group|))
+                (ELT $ NIL))
+               ((^ ($ $ (|Integer|))) (|has| |#1| (|Group|))
+                (ELT $ NIL))
+               ((|conjugate| ($ $ $)) (|has| |#1| (|Group|))
+                (ELT $ NIL))
+               ((|commutator| ($ $ $)) (|has| |#1| (|Group|))
+                (ELT $ NIL))
+               ((|characteristic| ((|NonNegativeInteger|)))
+                (|has| |#1| (|Ring|)) (ELT $ 73))
+               ((|coerce| ($ (|Integer|))) (|has| |#1| (|Ring|))
+                (ELT $ NIL))
+               ((* ($ |#1| $)) (|has| |#1| (|SemiGroup|)) (ELT $ 60))
+               ((* ($ $ |#1|)) (|has| |#1| (|SemiGroup|)) (ELT $ 61))
+               ((|differentiate| ($ $ (|Symbol|)))
+                (|has| |#1| (|PartialDifferentialRing| (|Symbol|)))
+                (ELT $ 85))
+               ((|differentiate| ($ $ (|List| (|Symbol|))))
+                (|has| |#1| (|PartialDifferentialRing| (|Symbol|)))
+                (ELT $ NIL))
+               ((|differentiate|
+                    ($ $ (|Symbol|) (|NonNegativeInteger|)))
+                (|has| |#1| (|PartialDifferentialRing| (|Symbol|)))
+                (ELT $ NIL))
+               ((|differentiate|
+                    ($ $ (|List| (|Symbol|))
+                       (|List| (|NonNegativeInteger|))))
+                (|has| |#1| (|PartialDifferentialRing| (|Symbol|)))
+                (ELT $ NIL))
+               ((D ($ $ (|Symbol|)))
+                (|has| |#1| (|PartialDifferentialRing| (|Symbol|)))
+                (ELT $ NIL))
+               ((D ($ $ (|List| (|Symbol|))))
+                (|has| |#1| (|PartialDifferentialRing| (|Symbol|)))
+                (ELT $ NIL))
+               ((D ($ $ (|Symbol|) (|NonNegativeInteger|)))
+                (|has| |#1| (|PartialDifferentialRing| (|Symbol|)))
+                (ELT $ NIL))
+               ((D ($ $ (|List| (|Symbol|))
+                      (|List| (|NonNegativeInteger|))))
+                (|has| |#1| (|PartialDifferentialRing| (|Symbol|)))
+                (ELT $ NIL))
+               ((/ ($ $ |#1|)) (|has| |#1| (|Field|)) (ELT $ NIL))
+               ((|dimension| ((|CardinalNumber|)))
+                (|has| |#1| (|Field|)) (ELT $ 88))
+               ((|subst| ($ $ $)) (|has| |#1| (|ExpressionSpace|))
+                (ELT $ 93))
+               ((|factorAndSplit| ((|List| $) $))
+                (|has| |#1| (|IntegralDomain|)) (ELT $ 19))
+               ((|rightOne| ((|Union| $ "failed") $))
+                (|has| |#1| (|Monoid|)) (ELT $ 68))
+               ((|leftOne| ((|Union| $ "failed") $))
+                (|has| |#1| (|Monoid|)) (ELT $ 67))
+               ((- ($ $ |#1|)) (|has| |#1| (|AbelianGroup|))
+                (ELT $ 54))
+               ((- ($ |#1| $)) (|has| |#1| (|AbelianGroup|))
+                (ELT $ 53))
+               ((|rightZero| ($ $)) (|has| |#1| (|AbelianGroup|))
+                (ELT $ 8))
+               ((|leftZero| ($ $)) (|has| |#1| (|AbelianGroup|))
+                (ELT $ 57))
+               ((+ ($ $ |#1|)) (|has| |#1| (|AbelianSemiGroup|))
+                (ELT $ 49))
+               ((+ ($ |#1| $)) (|has| |#1| (|AbelianSemiGroup|))
+                (ELT $ 48))
+               ((|eval| ($ $ (|List| $)))
+                (AND (|has| |#1| (|Evalable| |#1|))
+                     (|has| |#1| (|SetCategory|)))
+                (ELT $ 37))
+               ((|eval| ($ $ $))
+                (AND (|has| |#1| (|Evalable| |#1|))
+                     (|has| |#1| (|SetCategory|)))
+                (ELT $ 34))
+               ((|map| ($ (|Mapping| |#1| |#1|) $)) T (ELT $ 24))
+               ((|rhs| (|#1| $)) T (ELT $ 21))
+               ((|lhs| (|#1| $)) T (ELT $ 9))
+               ((|swap| ($ $)) T (ELT $ 22))
+               ((|equation| ($ |#1| |#1|)) T (ELT $ 17))
+               ((= ($ |#1| |#1|)) T (ELT $ 20)))
+             (|addModemap| '|Equation| '(|Equation| |#1|)
+                 '((|Join| (|Type|)
+                           (CATEGORY |domain|
+                               (SIGNATURE = ($ |#1| |#1|))
+                               (SIGNATURE |equation| ($ |#1| |#1|))
+                               (SIGNATURE |swap| ($ $))
+                               (SIGNATURE |lhs| (|#1| $))
+                               (SIGNATURE |rhs| (|#1| $))
+                               (SIGNATURE |map|
+                                   ($ (|Mapping| |#1| |#1|) $))
+                               (IF (|has| |#1|
+                                    (|InnerEvalable| (|Symbol|) |#1|))
+                                   (ATTRIBUTE
+                                    (|InnerEvalable| (|Symbol|) |#1|))
+                                   |noBranch|)
+                               (IF (|has| |#1| (|SetCategory|))
+                                   (PROGN
+                                     (ATTRIBUTE (|SetCategory|))
+                                     (ATTRIBUTE
+                                      (|CoercibleTo| (|Boolean|)))
+                                     (IF (|has| |#1| (|Evalable| |#1|))
+                                      (PROGN
+                                        (SIGNATURE |eval| ($ $ $))
+                                        (SIGNATURE |eval|
+                                         ($ $ (|List| $))))
+                                      |noBranch|))
+                                   |noBranch|)
+                               (IF (|has| |#1| (|AbelianSemiGroup|))
+                                   (PROGN
+                                     (ATTRIBUTE (|AbelianSemiGroup|))
+                                     (SIGNATURE + ($ |#1| $))
+                                     (SIGNATURE + ($ $ |#1|)))
+                                   |noBranch|)
+                               (IF (|has| |#1| (|AbelianGroup|))
+                                   (PROGN
+                                     (ATTRIBUTE (|AbelianGroup|))
+                                     (SIGNATURE |leftZero| ($ $))
+                                     (SIGNATURE |rightZero| ($ $))
+                                     (SIGNATURE - ($ |#1| $))
+                                     (SIGNATURE - ($ $ |#1|)))
+                                   |noBranch|)
+                               (IF (|has| |#1| (|SemiGroup|))
+                                   (PROGN
+                                     (ATTRIBUTE (|SemiGroup|))
+                                     (SIGNATURE * ($ |#1| $))
+                                     (SIGNATURE * ($ $ |#1|)))
+                                   |noBranch|)
+                               (IF (|has| |#1| (|Monoid|))
+                                   (PROGN
+                                     (ATTRIBUTE (|Monoid|))
+                                     (SIGNATURE |leftOne|
+                                      ((|Union| $ "failed") $))
+                                     (SIGNATURE |rightOne|
+                                      ((|Union| $ "failed") $)))
+                                   |noBranch|)
+                               (IF (|has| |#1| (|Group|))
+                                   (PROGN
+                                     (ATTRIBUTE (|Group|))
+                                     (SIGNATURE |leftOne|
+                                      ((|Union| $ "failed") $))
+                                     (SIGNATURE |rightOne|
+                                      ((|Union| $ "failed") $)))
+                                   |noBranch|)
+                               (IF (|has| |#1| (|Ring|))
+                                   (PROGN
+                                     (ATTRIBUTE (|Ring|))
+                                     (ATTRIBUTE (|BiModule| |#1| |#1|)))
+                                   |noBranch|)
+                               (IF (|has| |#1| (|CommutativeRing|))
+                                   (ATTRIBUTE (|Module| |#1|))
+                                   |noBranch|)
+                               (IF (|has| |#1| (|IntegralDomain|))
+                                   (SIGNATURE |factorAndSplit|
+                                    ((|List| $) $))
+                                   |noBranch|)
+                               (IF (|has| |#1|
+                                    (|PartialDifferentialRing|
+                                     (|Symbol|)))
+                                   (ATTRIBUTE
+                                    (|PartialDifferentialRing|
+                                     (|Symbol|)))
+                                   |noBranch|)
+                               (IF (|has| |#1| (|Field|))
+                                   (PROGN
+                                     (ATTRIBUTE (|VectorSpace| |#1|))
+                                     (SIGNATURE / ($ $ $))
+                                     (SIGNATURE |inv| ($ $)))
+                                   |noBranch|)
+                               (IF (|has| |#1| (|ExpressionSpace|))
+                                   (SIGNATURE |subst| ($ $ $))
+                                   |noBranch|)))
+                   (|Type|))
+                 T '|Equation|
+                 (|put| '|Equation| '|mode|
+                        '(|Mapping|
+                             (|Join| (|Type|)
+                                     (CATEGORY |domain|
+                                      (SIGNATURE = ($ |#1| |#1|))
+                                      (SIGNATURE |equation|
+                                       ($ |#1| |#1|))
+                                      (SIGNATURE |swap| ($ $))
+                                      (SIGNATURE |lhs| (|#1| $))
+                                      (SIGNATURE |rhs| (|#1| $))
+                                      (SIGNATURE |map|
+                                       ($ (|Mapping| |#1| |#1|) $))
+                                      (IF
+                                       (|has| |#1|
+                                        (|InnerEvalable| (|Symbol|)
+                                         |#1|))
+                                       (ATTRIBUTE
+                                        (|InnerEvalable| (|Symbol|)
+                                         |#1|))
+                                       |noBranch|)
+                                      (IF (|has| |#1| (|SetCategory|))
+                                       (PROGN
+                                         (ATTRIBUTE (|SetCategory|))
+                                         (ATTRIBUTE
+                                          (|CoercibleTo| (|Boolean|)))
+                                         (IF
+                                          (|has| |#1|
+                                           (|Evalable| |#1|))
+                                          (PROGN
+                                            (SIGNATURE |eval| ($ $ $))
+                                            (SIGNATURE |eval|
+                                             ($ $ (|List| $))))
+                                          |noBranch|))
+                                       |noBranch|)
+                                      (IF
+                                       (|has| |#1|
+                                        (|AbelianSemiGroup|))
+                                       (PROGN
+                                         (ATTRIBUTE
+                                          (|AbelianSemiGroup|))
+                                         (SIGNATURE + ($ |#1| $))
+                                         (SIGNATURE + ($ $ |#1|)))
+                                       |noBranch|)
+                                      (IF (|has| |#1| (|AbelianGroup|))
+                                       (PROGN
+                                         (ATTRIBUTE (|AbelianGroup|))
+                                         (SIGNATURE |leftZero| ($ $))
+                                         (SIGNATURE |rightZero| ($ $))
+                                         (SIGNATURE - ($ |#1| $))
+                                         (SIGNATURE - ($ $ |#1|)))
+                                       |noBranch|)
+                                      (IF (|has| |#1| (|SemiGroup|))
+                                       (PROGN
+                                         (ATTRIBUTE (|SemiGroup|))
+                                         (SIGNATURE * ($ |#1| $))
+                                         (SIGNATURE * ($ $ |#1|)))
+                                       |noBranch|)
+                                      (IF (|has| |#1| (|Monoid|))
+                                       (PROGN
+                                         (ATTRIBUTE (|Monoid|))
+                                         (SIGNATURE |leftOne|
+                                          ((|Union| $ "failed") $))
+                                         (SIGNATURE |rightOne|
+                                          ((|Union| $ "failed") $)))
+                                       |noBranch|)
+                                      (IF (|has| |#1| (|Group|))
+                                       (PROGN
+                                         (ATTRIBUTE (|Group|))
+                                         (SIGNATURE |leftOne|
+                                          ((|Union| $ "failed") $))
+                                         (SIGNATURE |rightOne|
+                                          ((|Union| $ "failed") $)))
+                                       |noBranch|)
+                                      (IF (|has| |#1| (|Ring|))
+                                       (PROGN
+                                         (ATTRIBUTE (|Ring|))
+                                         (ATTRIBUTE
+                                          (|BiModule| |#1| |#1|)))
+                                       |noBranch|)
+                                      (IF
+                                       (|has| |#1| (|CommutativeRing|))
+                                       (ATTRIBUTE (|Module| |#1|))
+                                       |noBranch|)
+                                      (IF
+                                       (|has| |#1| (|IntegralDomain|))
+                                       (SIGNATURE |factorAndSplit|
+                                        ((|List| $) $))
+                                       |noBranch|)
+                                      (IF
+                                       (|has| |#1|
+                                        (|PartialDifferentialRing|
+                                         (|Symbol|)))
+                                       (ATTRIBUTE
+                                        (|PartialDifferentialRing|
+                                         (|Symbol|)))
+                                       |noBranch|)
+                                      (IF (|has| |#1| (|Field|))
+                                       (PROGN
+                                         (ATTRIBUTE
+                                          (|VectorSpace| |#1|))
+                                         (SIGNATURE / ($ $ $))
+                                         (SIGNATURE |inv| ($ $)))
+                                       |noBranch|)
+                                      (IF
+                                       (|has| |#1| (|ExpressionSpace|))
+                                       (SIGNATURE |subst| ($ $ $))
+                                       |noBranch|)))
+                             (|Type|))
+                        |$CategoryFrame|))))
+\end{verbatim}
+
+\subsection{The ``constructorForm''}
+\begin{verbatim}
+(|Equation| S)
+\end{verbatim}
+
+\subsection{The ``constructorKind''}
+\begin{verbatim}
+|domain|
+\end{verbatim}
+
+\subsection{The ``constructorModemap''}
+\begin{verbatim}
+(((|Equation| |#1|)
+  (|Join| (|Type|)
+          (CATEGORY |domain| (SIGNATURE = ($ |#1| |#1|))
+              (SIGNATURE |equation| ($ |#1| |#1|))
+              (SIGNATURE |swap| ($ $)) (SIGNATURE |lhs| (|#1| $))
+              (SIGNATURE |rhs| (|#1| $))
+              (SIGNATURE |map| ($ (|Mapping| |#1| |#1|) $))
+              (IF (|has| |#1| (|InnerEvalable| (|Symbol|) |#1|))
+                  (ATTRIBUTE (|InnerEvalable| (|Symbol|) |#1|))
+                  |noBranch|)
+              (IF (|has| |#1| (|SetCategory|))
+                  (PROGN
+                    (ATTRIBUTE (|SetCategory|))
+                    (ATTRIBUTE (|CoercibleTo| (|Boolean|)))
+                    (IF (|has| |#1| (|Evalable| |#1|))
+                        (PROGN
+                          (SIGNATURE |eval| ($ $ $))
+                          (SIGNATURE |eval| ($ $ (|List| $))))
+                        |noBranch|))
+                  |noBranch|)
+              (IF (|has| |#1| (|AbelianSemiGroup|))
+                  (PROGN
+                    (ATTRIBUTE (|AbelianSemiGroup|))
+                    (SIGNATURE + ($ |#1| $))
+                    (SIGNATURE + ($ $ |#1|)))
+                  |noBranch|)
+              (IF (|has| |#1| (|AbelianGroup|))
+                  (PROGN
+                    (ATTRIBUTE (|AbelianGroup|))
+                    (SIGNATURE |leftZero| ($ $))
+                    (SIGNATURE |rightZero| ($ $))
+                    (SIGNATURE - ($ |#1| $))
+                    (SIGNATURE - ($ $ |#1|)))
+                  |noBranch|)
+              (IF (|has| |#1| (|SemiGroup|))
+                  (PROGN
+                    (ATTRIBUTE (|SemiGroup|))
+                    (SIGNATURE * ($ |#1| $))
+                    (SIGNATURE * ($ $ |#1|)))
+                  |noBranch|)
+              (IF (|has| |#1| (|Monoid|))
+                  (PROGN
+                    (ATTRIBUTE (|Monoid|))
+                    (SIGNATURE |leftOne| ((|Union| $ "failed") $))
+                    (SIGNATURE |rightOne| ((|Union| $ "failed") $)))
+                  |noBranch|)
+              (IF (|has| |#1| (|Group|))
+                  (PROGN
+                    (ATTRIBUTE (|Group|))
+                    (SIGNATURE |leftOne| ((|Union| $ "failed") $))
+                    (SIGNATURE |rightOne| ((|Union| $ "failed") $)))
+                  |noBranch|)
+              (IF (|has| |#1| (|Ring|))
+                  (PROGN
+                    (ATTRIBUTE (|Ring|))
+                    (ATTRIBUTE (|BiModule| |#1| |#1|)))
+                  |noBranch|)
+              (IF (|has| |#1| (|CommutativeRing|))
+                  (ATTRIBUTE (|Module| |#1|)) |noBranch|)
+              (IF (|has| |#1| (|IntegralDomain|))
+                  (SIGNATURE |factorAndSplit| ((|List| $) $))
+                  |noBranch|)
+              (IF (|has| |#1| (|PartialDifferentialRing| (|Symbol|)))
+                  (ATTRIBUTE (|PartialDifferentialRing| (|Symbol|)))
+                  |noBranch|)
+              (IF (|has| |#1| (|Field|))
+                  (PROGN
+                    (ATTRIBUTE (|VectorSpace| |#1|))
+                    (SIGNATURE / ($ $ $))
+                    (SIGNATURE |inv| ($ $)))
+                  |noBranch|)
+              (IF (|has| |#1| (|ExpressionSpace|))
+                  (SIGNATURE |subst| ($ $ $)) |noBranch|)))
+  (|Type|))
+ (T |Equation|))
+\end{verbatim}
+
+\subsection{The ``constructorCategory''}
+\begin{verbatim}
+(|Join| (|Type|)
+        (CATEGORY |domain| (SIGNATURE = ($ |#1| |#1|))
+            (SIGNATURE |equation| ($ |#1| |#1|))
+            (SIGNATURE |swap| ($ $)) (SIGNATURE |lhs| (|#1| $))
+            (SIGNATURE |rhs| (|#1| $))
+            (SIGNATURE |map| ($ (|Mapping| |#1| |#1|) $))
+            (IF (|has| |#1| (|InnerEvalable| (|Symbol|) |#1|))
+                (ATTRIBUTE (|InnerEvalable| (|Symbol|) |#1|))
+                |noBranch|)
+            (IF (|has| |#1| (|SetCategory|))
+                (PROGN
+                  (ATTRIBUTE (|SetCategory|))
+                  (ATTRIBUTE (|CoercibleTo| (|Boolean|)))
+                  (IF (|has| |#1| (|Evalable| |#1|))
+                      (PROGN
+                        (SIGNATURE |eval| ($ $ $))
+                        (SIGNATURE |eval| ($ $ (|List| $))))
+                      |noBranch|))
+                |noBranch|)
+            (IF (|has| |#1| (|AbelianSemiGroup|))
+                (PROGN
+                  (ATTRIBUTE (|AbelianSemiGroup|))
+                  (SIGNATURE + ($ |#1| $))
+                  (SIGNATURE + ($ $ |#1|)))
+                |noBranch|)
+            (IF (|has| |#1| (|AbelianGroup|))
+                (PROGN
+                  (ATTRIBUTE (|AbelianGroup|))
+                  (SIGNATURE |leftZero| ($ $))
+                  (SIGNATURE |rightZero| ($ $))
+                  (SIGNATURE - ($ |#1| $))
+                  (SIGNATURE - ($ $ |#1|)))
+                |noBranch|)
+            (IF (|has| |#1| (|SemiGroup|))
+                (PROGN
+                  (ATTRIBUTE (|SemiGroup|))
+                  (SIGNATURE * ($ |#1| $))
+                  (SIGNATURE * ($ $ |#1|)))
+                |noBranch|)
+            (IF (|has| |#1| (|Monoid|))
+                (PROGN
+                  (ATTRIBUTE (|Monoid|))
+                  (SIGNATURE |leftOne| ((|Union| $ "failed") $))
+                  (SIGNATURE |rightOne| ((|Union| $ "failed") $)))
+                |noBranch|)
+            (IF (|has| |#1| (|Group|))
+                (PROGN
+                  (ATTRIBUTE (|Group|))
+                  (SIGNATURE |leftOne| ((|Union| $ "failed") $))
+                  (SIGNATURE |rightOne| ((|Union| $ "failed") $)))
+                |noBranch|)
+            (IF (|has| |#1| (|Ring|))
+                (PROGN
+                  (ATTRIBUTE (|Ring|))
+                  (ATTRIBUTE (|BiModule| |#1| |#1|)))
+                |noBranch|)
+            (IF (|has| |#1| (|CommutativeRing|))
+                (ATTRIBUTE (|Module| |#1|)) |noBranch|)
+            (IF (|has| |#1| (|IntegralDomain|))
+                (SIGNATURE |factorAndSplit| ((|List| $) $)) |noBranch|)
+            (IF (|has| |#1| (|PartialDifferentialRing| (|Symbol|)))
+                (ATTRIBUTE (|PartialDifferentialRing| (|Symbol|)))
+                |noBranch|)
+            (IF (|has| |#1| (|Field|))
+                (PROGN
+                  (ATTRIBUTE (|VectorSpace| |#1|))
+                  (SIGNATURE / ($ $ $))
+                  (SIGNATURE |inv| ($ $)))
+                |noBranch|)
+            (IF (|has| |#1| (|ExpressionSpace|))
+                (SIGNATURE |subst| ($ $ $)) |noBranch|)))
+\end{verbatim}
+
+\subsection{The ``sourceFile''}
+\begin{verbatim}
+"/research/test/int/algebra/EQ.spad"
+\end{verbatim}
+
+\subsection{The ``modemaps''}
+\begin{verbatim}
+((= (*1 *1 *2 *2)
+    (AND (|isDomain| *1 (|Equation| *2)) (|ofCategory| *2 (|Type|))))
+ (|equation| (*1 *1 *2 *2)
+     (AND (|isDomain| *1 (|Equation| *2)) (|ofCategory| *2 (|Type|))))
+ (|swap| (*1 *1 *1)
+         (AND (|isDomain| *1 (|Equation| *2))
+              (|ofCategory| *2 (|Type|))))
+ (|lhs| (*1 *2 *1)
+        (AND (|isDomain| *1 (|Equation| *2))
+             (|ofCategory| *2 (|Type|))))
+ (|rhs| (*1 *2 *1)
+        (AND (|isDomain| *1 (|Equation| *2))
+             (|ofCategory| *2 (|Type|))))
+ (|map| (*1 *1 *2 *1)
+        (AND (|isDomain| *2 (|Mapping| *3 *3))
+             (|ofCategory| *3 (|Type|))
+             (|isDomain| *1 (|Equation| *3))))
+ (|eval| (*1 *1 *1 *1)
+         (AND (|ofCategory| *2 (|Evalable| *2))
+              (|ofCategory| *2 (|SetCategory|))
+              (|ofCategory| *2 (|Type|))
+              (|isDomain| *1 (|Equation| *2))))
+ (|eval| (*1 *1 *1 *2)
+         (AND (|isDomain| *2 (|List| (|Equation| *3)))
+              (|ofCategory| *3 (|Evalable| *3))
+              (|ofCategory| *3 (|SetCategory|))
+              (|ofCategory| *3 (|Type|))
+              (|isDomain| *1 (|Equation| *3))))
+ (+ (*1 *1 *2 *1)
+    (AND (|isDomain| *1 (|Equation| *2))
+         (|ofCategory| *2 (|AbelianSemiGroup|))
+         (|ofCategory| *2 (|Type|))))
+ (+ (*1 *1 *1 *2)
+    (AND (|isDomain| *1 (|Equation| *2))
+         (|ofCategory| *2 (|AbelianSemiGroup|))
+         (|ofCategory| *2 (|Type|))))
+ (|leftZero| (*1 *1 *1)
+     (AND (|isDomain| *1 (|Equation| *2))
+          (|ofCategory| *2 (|AbelianGroup|))
+          (|ofCategory| *2 (|Type|))))
+ (|rightZero| (*1 *1 *1)
+     (AND (|isDomain| *1 (|Equation| *2))
+          (|ofCategory| *2 (|AbelianGroup|))
+          (|ofCategory| *2 (|Type|))))
+ (- (*1 *1 *2 *1)
+    (AND (|isDomain| *1 (|Equation| *2))
+         (|ofCategory| *2 (|AbelianGroup|)) (|ofCategory| *2 (|Type|))))
+ (- (*1 *1 *1 *2)
+    (AND (|isDomain| *1 (|Equation| *2))
+         (|ofCategory| *2 (|AbelianGroup|)) (|ofCategory| *2 (|Type|))))
+ (|leftOne| (*1 *1 *1)
+     (|partial| AND (|isDomain| *1 (|Equation| *2))
+         (|ofCategory| *2 (|Monoid|)) (|ofCategory| *2 (|Type|))))
+ (|rightOne| (*1 *1 *1)
+     (|partial| AND (|isDomain| *1 (|Equation| *2))
+         (|ofCategory| *2 (|Monoid|)) (|ofCategory| *2 (|Type|))))
+ (|factorAndSplit| (*1 *2 *1)
+     (AND (|isDomain| *2 (|List| (|Equation| *3)))
+          (|isDomain| *1 (|Equation| *3))
+          (|ofCategory| *3 (|IntegralDomain|))
+          (|ofCategory| *3 (|Type|))))
+ (|subst| (*1 *1 *1 *1)
+          (AND (|isDomain| *1 (|Equation| *2))
+               (|ofCategory| *2 (|ExpressionSpace|))
+               (|ofCategory| *2 (|Type|))))
+ (* (*1 *1 *1 *2)
+    (AND (|isDomain| *1 (|Equation| *2))
+         (|ofCategory| *2 (|SemiGroup|)) (|ofCategory| *2 (|Type|))))
+ (* (*1 *1 *2 *1)
+    (AND (|isDomain| *1 (|Equation| *2))
+         (|ofCategory| *2 (|SemiGroup|)) (|ofCategory| *2 (|Type|))))
+ (/ (*1 *1 *1 *1)
+    (OR (AND (|isDomain| *1 (|Equation| *2))
+             (|ofCategory| *2 (|Field|)) (|ofCategory| *2 (|Type|)))
+        (AND (|isDomain| *1 (|Equation| *2))
+             (|ofCategory| *2 (|Group|)) (|ofCategory| *2 (|Type|)))))
+ (|inv| (*1 *1 *1)
+        (OR (AND (|isDomain| *1 (|Equation| *2))
+                 (|ofCategory| *2 (|Field|))
+                 (|ofCategory| *2 (|Type|)))
+            (AND (|isDomain| *1 (|Equation| *2))
+                 (|ofCategory| *2 (|Group|))
+                 (|ofCategory| *2 (|Type|))))))
+\end{verbatim}
+
+\subsection{The ``operationAlist''}
+\begin{verbatim}
+((~= (((|Boolean|) $ $) NIL (|has| |#1| (|SetCategory|))))
+ (|zero?| (((|Boolean|) $) NIL (|has| |#1| (|AbelianGroup|))))
+ (|swap| (($ $) 22))
+ (|subtractIfCan|
+     (((|Union| $ "failed") $ $) NIL (|has| |#1| (|AbelianGroup|))))
+ (|subst| (($ $ $) 93 (|has| |#1| (|ExpressionSpace|))))
+ (|sample|
+     (($) NIL
+      (OR (|has| |#1| (|AbelianGroup|)) (|has| |#1| (|Monoid|))) CONST))
+ (|rightZero| (($ $) 8 (|has| |#1| (|AbelianGroup|))))
+ (|rightOne| (((|Union| $ "failed") $) 68 (|has| |#1| (|Monoid|))))
+ (|rhs| ((|#1| $) 21))
+ (|recip| (((|Union| $ "failed") $) 66 (|has| |#1| (|Monoid|))))
+ (|one?| (((|Boolean|) $) NIL (|has| |#1| (|Monoid|))))
+ (|map| (($ (|Mapping| |#1| |#1|) $) 24)) (|lhs| ((|#1| $) 9))
+ (|leftZero| (($ $) 57 (|has| |#1| (|AbelianGroup|))))
+ (|leftOne| (((|Union| $ "failed") $) 67 (|has| |#1| (|Monoid|))))
+ (|latex| (((|String|) $) NIL (|has| |#1| (|SetCategory|))))
+ (|inv| (($ $) 70 (OR (|has| |#1| (|Field|)) (|has| |#1| (|Group|)))))
+ (|hash| (((|SingleInteger|) $) NIL (|has| |#1| (|SetCategory|))))
+ (|factorAndSplit| (((|List| $) $) 19 (|has| |#1| (|IntegralDomain|))))
+ (|eval| (($ $ $) 34
+          (AND (|has| |#1| (|Evalable| |#1|))
+               (|has| |#1| (|SetCategory|))))
+         (($ $ (|List| $)) 37
+          (AND (|has| |#1| (|Evalable| |#1|))
+               (|has| |#1| (|SetCategory|))))
+         (($ $ (|Symbol|) |#1|) 27
+          (|has| |#1| (|InnerEvalable| (|Symbol|) |#1|)))
+         (($ $ (|List| (|Symbol|)) (|List| |#1|)) 31
+          (|has| |#1| (|InnerEvalable| (|Symbol|) |#1|))))
+ (|equation| (($ |#1| |#1|) 17))
+ (|dimension| (((|CardinalNumber|)) 88 (|has| |#1| (|Field|))))
+ (|differentiate|
+     (($ $ (|List| (|Symbol|)) (|List| (|NonNegativeInteger|))) NIL
+      (|has| |#1| (|PartialDifferentialRing| (|Symbol|))))
+     (($ $ (|Symbol|) (|NonNegativeInteger|)) NIL
+      (|has| |#1| (|PartialDifferentialRing| (|Symbol|))))
+     (($ $ (|List| (|Symbol|))) NIL
+      (|has| |#1| (|PartialDifferentialRing| (|Symbol|))))
+     (($ $ (|Symbol|)) 85
+      (|has| |#1| (|PartialDifferentialRing| (|Symbol|)))))
+ (|conjugate| (($ $ $) NIL (|has| |#1| (|Group|))))
+ (|commutator| (($ $ $) NIL (|has| |#1| (|Group|))))
+ (|coerce| (($ (|Integer|)) NIL (|has| |#1| (|Ring|)))
+     (((|Boolean|) $) 45 (|has| |#1| (|SetCategory|)))
+     (((|OutputForm|) $) 44 (|has| |#1| (|SetCategory|))))
+ (|characteristic| (((|NonNegativeInteger|)) 73 (|has| |#1| (|Ring|))))
+ (^ (($ $ (|Integer|)) NIL (|has| |#1| (|Group|)))
+    (($ $ (|NonNegativeInteger|)) NIL (|has| |#1| (|Monoid|)))
+    (($ $ (|PositiveInteger|)) NIL (|has| |#1| (|SemiGroup|))))
+ (|Zero| (($) 55 (|has| |#1| (|AbelianGroup|)) CONST))
+ (|One| (($) 63 (|has| |#1| (|Monoid|)) CONST))
+ (D (($ $ (|List| (|Symbol|)) (|List| (|NonNegativeInteger|))) NIL
+     (|has| |#1| (|PartialDifferentialRing| (|Symbol|))))
+    (($ $ (|Symbol|) (|NonNegativeInteger|)) NIL
+     (|has| |#1| (|PartialDifferentialRing| (|Symbol|))))
+    (($ $ (|List| (|Symbol|))) NIL
+     (|has| |#1| (|PartialDifferentialRing| (|Symbol|))))
+    (($ $ (|Symbol|)) NIL
+     (|has| |#1| (|PartialDifferentialRing| (|Symbol|)))))
+ (= (($ |#1| |#1|) 20)
+    (((|Boolean|) $ $) 40 (|has| |#1| (|SetCategory|))))
+ (/ (($ $ |#1|) NIL (|has| |#1| (|Field|)))
+    (($ $ $) 90 (OR (|has| |#1| (|Field|)) (|has| |#1| (|Group|)))))
+ (- (($ |#1| $) 53 (|has| |#1| (|AbelianGroup|)))
+    (($ $ |#1|) 54 (|has| |#1| (|AbelianGroup|)))
+    (($ $ $) 52 (|has| |#1| (|AbelianGroup|)))
+    (($ $) 51 (|has| |#1| (|AbelianGroup|))))
+ (+ (($ |#1| $) 48 (|has| |#1| (|AbelianSemiGroup|)))
+    (($ $ |#1|) 49 (|has| |#1| (|AbelianSemiGroup|)))
+    (($ $ $) 47 (|has| |#1| (|AbelianSemiGroup|))))
+ (** (($ $ (|Integer|)) NIL (|has| |#1| (|Group|)))
+     (($ $ (|NonNegativeInteger|)) NIL (|has| |#1| (|Monoid|)))
+     (($ $ (|PositiveInteger|)) NIL (|has| |#1| (|SemiGroup|))))
+ (* (($ $ |#1|) 61 (|has| |#1| (|SemiGroup|)))
+    (($ |#1| $) 60 (|has| |#1| (|SemiGroup|)))
+    (($ $ $) 59 (|has| |#1| (|SemiGroup|)))
+    (($ (|Integer|) $) 76 (|has| |#1| (|AbelianGroup|)))
+    (($ (|NonNegativeInteger|) $) NIL (|has| |#1| (|AbelianGroup|)))
+    (($ (|PositiveInteger|) $) NIL (|has| |#1| (|AbelianSemiGroup|)))))
+\end{verbatim}
+
+\subsection{The ``superDomain''}
+
+\subsection{The ``signaturesAndLocals''}
+\begin{verbatim}
+((|EQ;subst;3$;43| ($ $ $)) (|EQ;inv;2$;42| ($ $))
+ (|EQ;/;3$;41| ($ $ $)) (|EQ;dimension;Cn;40| ((|CardinalNumber|)))
+ (|EQ;differentiate;$S$;39| ($ $ (|Symbol|)))
+ (|EQ;factorAndSplit;$L;38| ((|List| $) $))
+ (|EQ;*;I2$;37| ($ (|Integer|) $))
+ (|EQ;characteristic;Nni;36| ((|NonNegativeInteger|)))
+ (|EQ;rightOne;$U;35| ((|Union| $ "failed") $))
+ (|EQ;leftOne;$U;34| ((|Union| $ "failed") $)) (|EQ;inv;2$;33| ($ $))
+ (|EQ;rightOne;$U;32| ((|Union| $ "failed") $))
+ (|EQ;leftOne;$U;31| ((|Union| $ "failed") $))
+ (|EQ;recip;$U;30| ((|Union| $ "failed") $)) (|EQ;One;$;29| ($))
+ (|EQ;*;$S$;28| ($ $ S)) (|EQ;*;S2$;27| ($ S $))
+ (|EQ;*;S2$;26| ($ S $)) (|EQ;*;3$;25| ($ $ $)) (|EQ;-;3$;24| ($ $ $))
+ (|EQ;Zero;$;23| ($)) (|EQ;rightZero;2$;22| ($ $))
+ (|EQ;leftZero;2$;21| ($ $)) (|EQ;-;$S$;20| ($ $ S))
+ (|EQ;-;S2$;19| ($ S $)) (|EQ;-;2$;18| ($ $)) (|EQ;+;$S$;17| ($ $ S))
+ (|EQ;+;S2$;16| ($ S $)) (|EQ;+;3$;15| ($ $ $))
+ (|EQ;coerce;$B;14| ((|Boolean|) $))
+ (|EQ;coerce;$Of;13| ((|OutputForm|) $))
+ (|EQ;=;2$B;12| ((|Boolean|) $ $)) (|EQ;eval;$L$;11| ($ $ (|List| $)))
+ (|EQ;eval;3$;10| ($ $ $))
+ (|EQ;eval;$LL$;9| ($ $ (|List| (|Symbol|)) (|List| S)))
+ (|EQ;eval;$SS$;8| ($ $ (|Symbol|) S))
+ (|EQ;map;M2$;7| ($ (|Mapping| S S) $)) (|EQ;swap;2$;6| ($ $))
+ (|EQ;rhs;$S;5| (S $)) (|EQ;lhs;$S;4| (S $))
+ (|EQ;equation;2S$;3| ($ S S)) (|EQ;=;2S$;2| ($ S S))
+ (|EQ;factorAndSplit;$L;1| ((|List| $) $)))
+\end{verbatim}
+
+\subsection{The ``attributes''}
+\begin{verbatim}
+((|unitsKnown| OR (|has| |#1| (|Ring|)) (|has| |#1| (|Group|)))
+ (|rightUnitary| |has| |#1| (|Ring|))
+ (|leftUnitary| |has| |#1| (|Ring|)))
+\end{verbatim}
+
+\subsection{The ``predicates''}
+\begin{verbatim}
+((|HasCategory| |#1| '(|Field|)) (|HasCategory| |#1| '(|SetCategory|))
+ (|HasCategory| |#1| '(|Ring|))
+ (|HasCategory| |#1| (LIST '|PartialDifferentialRing| '(|Symbol|)))
+ (OR (|HasCategory| |#1| (LIST '|PartialDifferentialRing| '(|Symbol|)))
+     (|HasCategory| |#1| '(|Ring|)))
+ (|HasCategory| |#1| '(|Group|))
+ (|HasCategory| |#1|
+     (LIST '|InnerEvalable| '(|Symbol|) (|devaluate| |#1|)))
+ (AND (|HasCategory| |#1| (LIST '|Evalable| (|devaluate| |#1|)))
+      (|HasCategory| |#1| '(|SetCategory|)))
+ (|HasCategory| |#1| '(|IntegralDomain|))
+ (|HasCategory| |#1| '(|ExpressionSpace|))
+ (OR (|HasCategory| |#1| '(|Field|)) (|HasCategory| |#1| '(|Group|)))
+ (OR (|HasCategory| |#1| '(|Group|)) (|HasCategory| |#1| '(|Ring|)))
+ (|HasCategory| |#1| '(|CommutativeRing|))
+ (OR (|HasCategory| |#1| '(|CommutativeRing|))
+     (|HasCategory| |#1| '(|Field|)) (|HasCategory| |#1| '(|Ring|)))
+ (OR (|HasCategory| |#1| '(|CommutativeRing|))
+     (|HasCategory| |#1| '(|Field|)))
+ (|HasCategory| |#1| '(|Monoid|))
+ (OR (|HasCategory| |#1| '(|Group|)) (|HasCategory| |#1| '(|Monoid|)))
+ (|HasCategory| |#1| '(|SemiGroup|))
+ (OR (|HasCategory| |#1| '(|Group|)) (|HasCategory| |#1| '(|Monoid|))
+     (|HasCategory| |#1| '(|SemiGroup|)))
+ (|HasCategory| |#1| '(|AbelianGroup|))
+ (OR (|HasCategory| |#1| (LIST '|PartialDifferentialRing| '(|Symbol|)))
+     (|HasCategory| |#1| '(|AbelianGroup|))
+     (|HasCategory| |#1| '(|CommutativeRing|))
+     (|HasCategory| |#1| '(|Field|)) (|HasCategory| |#1| '(|Ring|)))
+ (OR (|HasCategory| |#1| '(|AbelianGroup|))
+     (|HasCategory| |#1| '(|Monoid|)))
+ (|HasCategory| |#1| '(|AbelianSemiGroup|))
+ (OR (|HasCategory| |#1| (LIST '|PartialDifferentialRing| '(|Symbol|)))
+     (|HasCategory| |#1| '(|AbelianGroup|))
+     (|HasCategory| |#1| '(|AbelianSemiGroup|))
+     (|HasCategory| |#1| '(|CommutativeRing|))
+     (|HasCategory| |#1| '(|Field|)) (|HasCategory| |#1| '(|Ring|)))
+ (OR (|HasCategory| |#1| (LIST '|PartialDifferentialRing| '(|Symbol|)))
+     (|HasCategory| |#1| '(|AbelianGroup|))
+     (|HasCategory| |#1| '(|AbelianSemiGroup|))
+     (|HasCategory| |#1| '(|CommutativeRing|))
+     (|HasCategory| |#1| '(|Field|)) (|HasCategory| |#1| '(|Group|))
+     (|HasCategory| |#1| '(|Monoid|)) (|HasCategory| |#1| '(|Ring|))
+     (|HasCategory| |#1| '(|SemiGroup|))
+     (|HasCategory| |#1| '(|SetCategory|))))
+\end{verbatim}
+
+\subsection{The ``abbreviation''}
+\begin{verbatim}
+EQ
+\end{verbatim}
+
+\subsection{The ``parents''}
+\begin{verbatim}
+(((|Type|) . T)
+ ((|InnerEvalable| (|Symbol|) S) |has| S
+  (|InnerEvalable| (|Symbol|) S))
+ ((|CoercibleTo| (|Boolean|)) |has| S (|SetCategory|))
+ ((|SetCategory|) |has| S (|SetCategory|))
+ ((|AbelianSemiGroup|) |has| S (|AbelianSemiGroup|))
+ ((|AbelianGroup|) |has| S (|AbelianGroup|))
+ ((|SemiGroup|) |has| S (|SemiGroup|)) ((|Monoid|) |has| S (|Monoid|))
+ ((|Group|) |has| S (|Group|)) ((|BiModule| S S) |has| S (|Ring|))
+ ((|Ring|) |has| S (|Ring|)) ((|Module| S) |has| S (|CommutativeRing|))
+ ((|PartialDifferentialRing| (|Symbol|)) |has| S
+  (|PartialDifferentialRing| (|Symbol|)))
+ ((|VectorSpace| S) |has| S (|Field|)))
+\end{verbatim}
+
+\subsection{The ``ancestors''}
+\begin{verbatim}
+(((|AbelianGroup|) |has| S (|AbelianGroup|))
+ ((|AbelianMonoid|) |has| S (|AbelianGroup|))
+ ((|AbelianSemiGroup|) |has| S (|AbelianSemiGroup|))
+ ((|BasicType|) |has| S (|SetCategory|))
+ ((|BiModule| S S) |has| S (|Ring|))
+ ((|CancellationAbelianMonoid|) |has| S (|AbelianGroup|))
+ ((|CoercibleTo| (|OutputForm|)) |has| S (|SetCategory|))
+ ((|CoercibleTo| (|Boolean|)) |has| S (|SetCategory|))
+ ((|Group|) |has| S (|Group|))
+ ((|InnerEvalable| (|Symbol|) S) |has| S
+  (|InnerEvalable| (|Symbol|) S))
+ ((|LeftModule| $) |has| S (|Ring|))
+ ((|LeftModule| S) |has| S (|Ring|))
+ ((|Module| S) |has| S (|CommutativeRing|))
+ ((|Monoid|) |has| S (|Monoid|))
+ ((|PartialDifferentialRing| (|Symbol|)) |has| S
+  (|PartialDifferentialRing| (|Symbol|)))
+ ((|RightModule| S) |has| S (|Ring|)) ((|Ring|) |has| S (|Ring|))
+ ((|Rng|) |has| S (|Ring|)) ((|SemiGroup|) |has| S (|SemiGroup|))
+ ((|SetCategory|) |has| S (|SetCategory|)) ((|Type|) . T)
+ ((|VectorSpace| S) |has| S (|Field|)))
+\end{verbatim}
+
+\subsection{The ``documentation''}
+\begin{verbatim}
+((|constructor|
+     (NIL "Equations as mathematical objects. All properties of the basis 
+           domain,{} \\spadignore{e.g.} being an abelian group are carried 
+           over the equation domain,{} by performing the structural operations
+            on the left and on the right hand side."))
+ (|subst| (($ $ $)
+           "\\spad{subst(eq1,{}eq2)} substitutes \\spad{eq2} into both sides 
+           of \\spad{eq1} the \\spad{lhs} of \\spad{eq2} should be a kernel"))
+ (|inv| (($ $)
+         "\\spad{inv(x)} returns the multiplicative inverse of \\spad{x}."))
+ (/ (($ $ $)
+     "\\spad{e1/e2} produces a new equation by dividing the left and right 
+      hand sides of equations \\spad{e1} and \\spad{e2}."))
+ (|factorAndSplit|
+     (((|List| $) $)
+      "\\spad{factorAndSplit(eq)} make the right hand side 0 and factors the 
+       new left hand side. Each factor is equated to 0 and put into the 
+       resulting list without repetitions."))
+ (|rightOne|
+     (((|Union| $ "failed") $)
+      "\\spad{rightOne(eq)} divides by the right hand side.")
+     (((|Union| $ "failed") $)
+      "\\spad{rightOne(eq)} divides by the right hand side,{} if possible."))
+ (|leftOne|
+     (((|Union| $ "failed") $)
+      "\\spad{leftOne(eq)} divides by the left hand side.")
+     (((|Union| $ "failed") $)
+      "\\spad{leftOne(eq)} divides by the left hand side,{} if possible."))
+ (* (($ $ |#1|)
+     "\\spad{eqn*x} produces a new equation by multiplying both sides of 
+      equation eqn by \\spad{x}.")
+    (($ |#1| $)
+     "\\spad{x*eqn} produces a new equation by multiplying both sides of 
+      equation eqn by \\spad{x}."))
+ (- (($ $ |#1|)
+     "\\spad{eqn-x} produces a new equation by subtracting \\spad{x} from 
+      both sides of equation eqn.")
+    (($ |#1| $)
+     "\\spad{x-eqn} produces a new equation by subtracting both sides of 
+      equation eqn from \\spad{x}."))
+ (|rightZero|
+     (($ $) "\\spad{rightZero(eq)} subtracts the right hand side."))
+ (|leftZero|
+     (($ $) "\\spad{leftZero(eq)} subtracts the left hand side."))
+ (+ (($ $ |#1|)
+     "\\spad{eqn+x} produces a new equation by adding \\spad{x} to both 
+     sides of equation eqn.")
+    (($ |#1| $)
+     "\\spad{x+eqn} produces a new equation by adding \\spad{x} to both 
+     sides of equation eqn."))
+ (|eval| (($ $ (|List| $))
+          "\\spad{eval(eqn,{} [x1=v1,{} ... xn=vn])} replaces \\spad{xi} 
+          by \\spad{vi} in equation \\spad{eqn}.")
+         (($ $ $)
+          "\\spad{eval(eqn,{} x=f)} replaces \\spad{x} by \\spad{f} in 
+          equation \\spad{eqn}."))
+ (|map| (($ (|Mapping| |#1| |#1|) $)
+         "\\spad{map(f,{}eqn)} constructs a new equation by applying 
+          \\spad{f} to both sides of \\spad{eqn}."))
+ (|rhs| ((|#1| $)
+         "\\spad{rhs(eqn)} returns the right hand side of equation 
+          \\spad{eqn}."))
+ (|lhs| ((|#1| $)
+         "\\spad{lhs(eqn)} returns the left hand side of equation 
+          \\spad{eqn}."))
+ (|swap| (($ $)
+          "\\spad{swap(eq)} interchanges left and right hand side of 
+           equation \\spad{eq}."))
+ (|equation|
+     (($ |#1| |#1|) "\\spad{equation(a,{}b)} creates an equation."))
+ (= (($ |#1| |#1|) "\\spad{a=b} creates an equation.")))
+\end{verbatim}
+
+\subsection{The ``slotInfo''}
+\begin{verbatim}
+(|Equation|
+    (NIL (~= ((38 0 0) NIL (|has| |#1| (|SetCategory|))))
+         (|zero?| ((38 0) NIL (|has| |#1| (|AbelianGroup|))))
+         (|swap| ((0 0) 22))
+         (|subtractIfCan| ((64 0 0) NIL (|has| |#1| (|AbelianGroup|))))
+         (|subst| ((0 0 0) 93 (|has| |#1| (|ExpressionSpace|))))
+         (|sample|
+             ((0) NIL
+              (OR (|has| |#1| (|AbelianGroup|))
+                  (|has| |#1| (|Monoid|)))
+              CONST))
+         (|rightZero| ((0 0) 8 (|has| |#1| (|AbelianGroup|))))
+         (|rightOne| ((64 0) 68 (|has| |#1| (|Monoid|))))
+         (|rhs| ((6 0) 21))
+         (|recip| ((64 0) 66 (|has| |#1| (|Monoid|))))
+         (|one?| ((38 0) NIL (|has| |#1| (|Monoid|))))
+         (|map| ((0 23 0) 24)) (|lhs| ((6 0) 9))
+         (|leftZero| ((0 0) 57 (|has| |#1| (|AbelianGroup|))))
+         (|leftOne| ((64 0) 67 (|has| |#1| (|Monoid|))))
+         (|latex| ((97 0) NIL (|has| |#1| (|SetCategory|))))
+         (|inv| ((0 0) 70
+                 (OR (|has| |#1| (|Field|)) (|has| |#1| (|Group|)))))
+         (|hash| ((96 0) NIL (|has| |#1| (|SetCategory|))))
+         (|factorAndSplit| ((18 0) 19 (|has| |#1| (|IntegralDomain|))))
+         (|eval| ((0 0 28 29) 31
+                  (|has| |#1| (|InnerEvalable| (|Symbol|) |#1|)))
+                 ((0 0 25 6) 27
+                  (|has| |#1| (|InnerEvalable| (|Symbol|) |#1|)))
+                 ((0 0 18) 37
+                  (AND (|has| |#1| (|Evalable| |#1|))
+                       (|has| |#1| (|SetCategory|))))
+                 ((0 0 0) 34
+                  (AND (|has| |#1| (|Evalable| |#1|))
+                       (|has| |#1| (|SetCategory|)))))
+         (|equation| ((0 6 6) 17))
+         (|dimension| ((86) 88 (|has| |#1| (|Field|))))
+         (|differentiate|
+             ((0 0 25 71) NIL
+              (|has| |#1| (|PartialDifferentialRing| (|Symbol|))))
+             ((0 0 28 95) NIL
+              (|has| |#1| (|PartialDifferentialRing| (|Symbol|))))
+             ((0 0 25) 85
+              (|has| |#1| (|PartialDifferentialRing| (|Symbol|))))
+             ((0 0 28) NIL
+              (|has| |#1| (|PartialDifferentialRing| (|Symbol|)))))
+         (|conjugate| ((0 0 0) NIL (|has| |#1| (|Group|))))
+         (|commutator| ((0 0 0) NIL (|has| |#1| (|Group|))))
+         (|coerce| ((38 0) 45 (|has| |#1| (|SetCategory|)))
+             ((41 0) 44 (|has| |#1| (|SetCategory|)))
+             ((0 74) NIL (|has| |#1| (|Ring|))))
+         (|characteristic| ((71) 73 (|has| |#1| (|Ring|))))
+         (^ ((0 0 94) NIL (|has| |#1| (|SemiGroup|)))
+            ((0 0 71) NIL (|has| |#1| (|Monoid|)))
+            ((0 0 74) NIL (|has| |#1| (|Group|))))
+         (|Zero| ((0) 55 (|has| |#1| (|AbelianGroup|)) CONST))
+         (|One| ((0) 63 (|has| |#1| (|Monoid|)) CONST))
+         (D ((0 0 25 71) NIL
+             (|has| |#1| (|PartialDifferentialRing| (|Symbol|))))
+            ((0 0 28 95) NIL
+             (|has| |#1| (|PartialDifferentialRing| (|Symbol|))))
+            ((0 0 25) NIL
+             (|has| |#1| (|PartialDifferentialRing| (|Symbol|))))
+            ((0 0 28) NIL
+             (|has| |#1| (|PartialDifferentialRing| (|Symbol|)))))
+         (= ((0 6 6) 20) ((38 0 0) 40 (|has| |#1| (|SetCategory|))))
+         (/ ((0 0 6) NIL (|has| |#1| (|Field|)))
+            ((0 0 0) 90
+             (OR (|has| |#1| (|Field|)) (|has| |#1| (|Group|)))))
+         (- ((0 0 6) 54 (|has| |#1| (|AbelianGroup|)))
+            ((0 6 0) 53 (|has| |#1| (|AbelianGroup|)))
+            ((0 0 0) 52 (|has| |#1| (|AbelianGroup|)))
+            ((0 0) 51 (|has| |#1| (|AbelianGroup|))))
+         (+ ((0 0 6) 49 (|has| |#1| (|AbelianSemiGroup|)))
+            ((0 6 0) 48 (|has| |#1| (|AbelianSemiGroup|)))
+            ((0 0 0) 47 (|has| |#1| (|AbelianSemiGroup|))))
+         (** ((0 0 94) NIL (|has| |#1| (|SemiGroup|)))
+             ((0 0 71) NIL (|has| |#1| (|Monoid|)))
+             ((0 0 74) NIL (|has| |#1| (|Group|))))
+         (* ((0 6 0) 60 (|has| |#1| (|SemiGroup|)))
+            ((0 0 6) 61 (|has| |#1| (|SemiGroup|)))
+            ((0 0 0) 59 (|has| |#1| (|SemiGroup|)))
+            ((0 94 0) NIL (|has| |#1| (|AbelianSemiGroup|)))
+            ((0 74 0) 76 (|has| |#1| (|AbelianGroup|)))
+            ((0 71 0) NIL (|has| |#1| (|AbelianGroup|))))))
+\end{verbatim}
+
+\subsection{The ``index''}
+\begin{verbatim}
+(("slot1Info" 0 32444) ("documentation" 0 29640) ("ancestors" 0 28691)
+ ("parents" 0 28077) ("abbreviation" 0 28074) ("predicates" 0 25442)
+ ("attributes" 0 25304) ("signaturesAndLocals" 0 23933)
+ ("superDomain" 0 NIL) ("operationAlist" 0 20053) ("modemaps" 0 17216)
+ ("sourceFile" 0 17179) ("constructorCategory" 0 15220)
+ ("constructorModemap" 0 13215) ("constructorKind" 0 13206)
+ ("constructorForm" 0 13191) ("compilerInfo" 0 4433)
+ ("loadTimeStuff" 0 20))
+
+\end{verbatim}
+
 \chapter{Compiler top level}
+\section{Global Data Structures}
+\section{Pratt Parsing}
+Parsing involves understanding the association of symbols and operators.
+Vaughn Pratt \cite{8} poses the question ``Given a substring AEB where A 
+takes a right argument, B a left, and E is an expression, does E associate
+with A or B?''.
+
+Floyd \cite{9} associates a precedence with operators, storing them
+in a table, called ``binding powers''. The expression E would associate
+with the argument position having the highest binding power. This leads
+to a large set of numbers, one for every situation.
+
+Pratt assigns data types to ``classes'' and then creates a total order
+on the classes. He lists, in ascending order, Outcomes, Booleans, 
+Graphs (trees, lists, etc), Strings, Algebraics (e.g. Integer, complex 
+numbers, polynomials, real arrays) and references (e.g. the left hand
+side of assignments). Thus, Strings < References. The key restriction
+is ``that the class of the type at any argument that might participate
+in an association problem not be less than the class of the data type
+of the result of the function taking that argument''.
+
+For a less-than comparision (``$<$'') the argument types are Algebraics
+but the result type is Boolean. Since Algebraics are greater than Boolean
+we can associate the Algebraics together and apply them as arguments to
+the Boolean.
+
+In more detail, there an ``association'' is a function of 4 types:
+\begin{itemize}
+\item $a_A$ -- The data type of the right argument
+\item $r_A$ -- The return type of the right argument
+\item $a_B$ -- The data type of the left argument
+\item $r_B$ -- The return type of the left argument
+\end{itemize}
+Note that the return types might depend on the type of the expression E.
+If all 4 are of the same class then the association is to the left.
+
+Using these ideas and given the restriction above, Pratt proves that
+every association problem has at most one solution consistant with the
+data types of the associated operators.
+
+Pratt proves that there exists an assignment of integers to the argument
+positions of each token in the language such that the correct association,
+if any, is always in the direction of the argument position with the
+larger number, with ties being broken to the left. 
+
+To construct the proper numbers, first assign even integers to the data
+type classes. Then to each argument position assign an integer lying
+strictly (where possible) between the integers corresponding to the
+classes of the argument and result types.
+
+For tokens like ``and'', ``or'', $+$, $*$, and $^{}$ the Booleans
+and Algebraics can be subdivided into pseudo-classes so that
+
+terms $<$ factors $<$ primaries
+
+Then $+$ is defined over terms, $*$ over factors, and $^{}$ over
+primaries with coercions allowed from primaries to factors to terms.
+To be consistent with Algol, the primaries should be a right associative
+class (e.g. x$^{}$y$^{}$z)
+
 \section{)compile}
 This is the implementation of the )compile command.
 
@@ -619,6 +3285,11 @@ is [[+]] for Integers.
  
 @  
 
+\section{Giant steps, Baby steps}
+We will walk through the compiler with the EQ.spad example using a
+Giant-steps, Baby-steps approach. That is, we will show the large
+scale (Giant) transformations at each stage of compilation and discuss the
+details (Baby) in subsequent chapters.
 \chapter{The Parser}
 \section{EQ.spad}
 We will explain the compilation function using the file {\tt EQ.spad}.
@@ -837,6 +3508,18 @@ Equation(S: Type): public == private where
             [subst(lhs eq1,eq3),subst(rhs eq1,eq3)]
 
 \end{verbatim}
+
+\section{preparse}
+
+The first large transformation of this input occurs in the function
+preparse \index{preparse}. The preparse function reads the source file
+and breaks the input into a list of pairs. The first part of the pair
+is the line number of the input file and the second part of the pair
+is the actual source text as a string. 
+
+One feature that is the added semicolons at the end of the strings
+where the ``pile'' structure of the code has been converted to a
+semicolon delimited form.
 
 \defdollar{index}
 <<initvars>>=
@@ -1258,6 +3941,10 @@ For instance, for the file {\tt EQ.spad}, we get:
 \end{verbatim}
 
 \defun{preparse1}{Build the lines from the input for piles}
+The READLOOP calls preparseReadLine which returns a pair of the form
+\begin{verbatim}
+(number . string)
+\end{verbatim}
 \calls{preparse1}{preparseReadLine}
 \calls{preparse1}{preparse-echo}
 \calls{preparse1}{fincomblock}
@@ -1278,29 +3965,33 @@ For instance, for the file {\tt EQ.spad}, we get:
 \usesdollar{preparse1}{preparse-last-line}
 <<defun preparse1>>=
 (defun preparse1 (linelist)
- (prog (($linelist linelist) $echolinestack num a i l psloc
+ (labels (
+  (isSystemCommand (line lines)
+    (and (> (length line) 0) (eq (char line 0) #\) )))
+  (executeSystemCommand (line)
+   (catch 'spad_reader (|doSystemCommand| (subseq line 1))))
+ )
+ (prog (($linelist linelist) $echolinestack num line i l psloc
         instring pcount comsym strsym oparsym cparsym n ncomsym
         (sloc -1) (continue nil)  (parenlev 0) (ncomblock ())
         (lines ()) (locs ()) (nums ()) functor)
  (declare (special $linelist $echolinestack |$byConstructors| $skipme
            |$constructorsSeen| $preparse-last-line))
 READLOOP 
-  (dcq (num . a) (preparseReadLine linelist))
-  (unless (stringp a)
+  (dcq (num . line) (preparseReadLine linelist))
+  (unless (stringp line)
     (preparse-echo linelist)
     (cond 
      ((null lines) (return nil))
      (ncomblock    (fincomblock nil nums locs ncomblock nil)))
-    (return
+    (return 
      (pair (nreverse nums) (parsepiles (nreverse locs) (nreverse lines)))))
-  ; this is a command line, don't parse it
-  (when (and (null lines) (> (length a) 0) (eq (char a 0) #\) ))
+  (when (and (null lines) (isSystemCommand line lines))
     (preparse-echo linelist)
     (setq $preparse-last-line nil) ;don't reread this line
-    (setq line a)
-    (catch 'spad_reader (|doSystemCommand| (subseq line 1)))
+    (executeSystemCommand line)
     (go READLOOP))
-  (setq l (length a))
+  (setq l (length line))
   ; if we get a null line, read the next line
   (when (eq l 0) (go READLOOP))
   ; otherwise we have to parse this line
@@ -1310,37 +4001,38 @@ READLOOP
   (setq pcount 0)
 STRLOOP ;; handle things that need ignoring, quoting, or grouping
   ; are we in a comment, quoting, or grouping situation?
-  (setq strsym (or (position #\" a :start i ) l))
-  (setq comsym (or (search "--" a :start2 i ) l))
-  (setq ncomsym (or (search "++" a :start2 i ) l))
-  (setq oparsym (or (position #\( a :start i ) l))
-  (setq cparsym (or (position #\) a :start i ) l))
+  (setq strsym  (or (position #\" line :start  i ) l))
+  (setq comsym  (or (search "--"  line :start2 i ) l))
+  (setq ncomsym (or (search "++"  line :start2 i ) l))
+  (setq oparsym (or (position #\( line :start  i ) l))
+  (setq cparsym (or (position #\) line :start  i ) l))
   (setq n (min strsym comsym ncomsym oparsym cparsym))
   (cond 
    ; nope, we found no comment, quoting, or grouping
    ((= n l) (go NOCOMS))
-   ((escaped a n))
+   ((escaped line n))
    ; scan until we hit the end of the string
    ((= n strsym) (setq instring (not instring)))
+   ; we are in a string, just continue looping
    (instring)
    ;; handle -- comments by ignoring them
    ((= n comsym)
-    (setq a (subseq a 0 n))
+    (setq line (subseq line 0 n))
     (go NOCOMS)) ; discard trailing comment
    ;; handle ++ comments by chunking them together
    ((= n ncomsym)
-    (setq sloc (indent-pos a))
+    (setq sloc (indent-pos line))
     (cond
      ((= sloc n)
       (when (and ncomblock (not (= n (car ncomblock))))
        (fincomblock num nums locs ncomblock linelist)
        (setq ncomblock nil))
-      (setq ncomblock (cons n (cons a (ifcdr ncomblock))))
-      (setq a ""))
+      (setq ncomblock (cons n (cons line (ifcdr ncomblock))))
+      (setq line ""))
      (t 
-      (push (strconc (make-full-cvec n " ") (substring a n ())) $linelist)
+      (push (strconc (make-full-cvec n " ") (substring line n ())) $linelist)
       (setq $index (1- $index))
-      (setq a (subseq a 0 n))))
+      (setq line (subseq line 0 n))))
     (go NOCOMS))
    ; know how deep we are into parens
    ((= n oparsym) (setq pcount (1+ pcount)))
@@ -1349,25 +4041,25 @@ STRLOOP ;; handle things that need ignoring, quoting, or grouping
   (go STRLOOP)
 NOCOMS 
   ; remember the indentation level
-  (setq sloc (indent-pos a))
-  (setq a (string-right-trim " " a))
+  (setq sloc (indent-pos line))
+  (setq line (string-right-trim " " line))
   (when (null sloc)
    (setq sloc psloc)
    (go READLOOP))
   ; handle line that ends in a continuation character
   (cond
-   ((eq (elt a (maxindex a)) xcape)
+   ((eq (elt line (maxindex line)) #\_)
     (setq continue t)
-    (setq a (subseq a (maxindex a))))
+    (setq line (subseq line (maxindex line))))
    ((setq continue nil)))
   ; test for skipping constructors
   (when (and (null lines) (= sloc 0))
     (if (and |$byConstructors|
-             (null (search "==>" a))
+             (null (search "==>" line))
              (not 
               (member 
                (setq functor 
-                (intern (substring a 0 (strposl ": (=" a 0 nil))))
+                (intern (substring line 0 (strposl ": (=" line 0 nil))))
                 |$byConstructors|)))
        (setq $skipme 't)
        (progn
@@ -1391,14 +4083,137 @@ NOCOMS
   (push sloc locs)
 REREAD 
   (preparse-echo linelist)
-  (push a lines)
+  (push line lines)
   (push num nums)
   (setq parenlev (+ parenlev pcount))
   (when (and (is-console in-stream) (not continue))
    (setq $preparse-last-line nil)
    (return
     (pair (nreverse nums) (parsepiles (nreverse locs) (nreverse lines)))))
-  (go READLOOP)))
+  (go READLOOP))))
+
+;(defun preparse1 (linelist)
+; (prog (($linelist linelist) $echolinestack num a i l psloc
+;        instring pcount comsym strsym oparsym cparsym n ncomsym
+;        (sloc -1) (continue nil)  (parenlev 0) (ncomblock ())
+;        (lines ()) (locs ()) (nums ()) functor)
+; (declare (special $linelist $echolinestack |$byConstructors| $skipme
+;           |$constructorsSeen| $preparse-last-line))
+;READLOOP 
+;  (dcq (num . a) (preparseReadLine linelist))
+;  (unless (stringp a)
+;    (preparse-echo linelist)
+;    (cond 
+;     ((null lines) (return nil))
+;     (ncomblock    (fincomblock nil nums locs ncomblock nil)))
+;    (return
+;     (pair (nreverse nums) (parsepiles (nreverse locs) (nreverse lines)))))
+;  ; this is a command line, don't parse it
+;  (when (and (null lines) (> (length a) 0) (eq (char a 0) #\) ))
+;    (preparse-echo linelist)
+;    (setq $preparse-last-line nil) ;don't reread this line
+;    (setq line a)
+;    (catch 'spad_reader (|doSystemCommand| (subseq line 1)))
+;    (go READLOOP))
+;  (setq l (length a))
+;  ; if we get a null line, read the next line
+;  (when (eq l 0) (go READLOOP))
+;  ; otherwise we have to parse this line
+;  (setq psloc sloc)
+;  (setq i 0)
+;  (setq instring nil)
+;  (setq pcount 0)
+;STRLOOP ;; handle things that need ignoring, quoting, or grouping
+;  ; are we in a comment, quoting, or grouping situation?
+;  (setq strsym (or (position #\" a :start i ) l))
+;  (setq comsym (or (search "--" a :start2 i ) l))
+;  (setq ncomsym (or (search "++" a :start2 i ) l))
+;  (setq oparsym (or (position #\( a :start i ) l))
+;  (setq cparsym (or (position #\) a :start i ) l))
+;  (setq n (min strsym comsym ncomsym oparsym cparsym))
+;  (cond 
+;   ; nope, we found no comment, quoting, or grouping
+;   ((= n l) (go NOCOMS))
+;   ((escaped a n))
+;   ; scan until we hit the end of the string
+;   ((= n strsym) (setq instring (not instring)))
+;   (instring)
+;   ;; handle -- comments by ignoring them
+;   ((= n comsym)
+;    (setq a (subseq a 0 n))
+;    (go NOCOMS)) ; discard trailing comment
+;   ;; handle ++ comments by chunking them together
+;   ((= n ncomsym)
+;    (setq sloc (indent-pos a))
+;    (cond
+;     ((= sloc n)
+;      (when (and ncomblock (not (= n (car ncomblock))))
+;       (fincomblock num nums locs ncomblock linelist)
+;       (setq ncomblock nil))
+;      (setq ncomblock (cons n (cons a (ifcdr ncomblock))))
+;      (setq a ""))
+;     (t 
+;      (push (strconc (make-full-cvec n " ") (substring a n ())) $linelist)
+;      (setq $index (1- $index))
+;      (setq a (subseq a 0 n))))
+;    (go NOCOMS))
+;   ; know how deep we are into parens
+;   ((= n oparsym) (setq pcount (1+ pcount)))
+;   ((= n cparsym) (setq pcount (1- pcount))))
+;  (setq i (1+ n))
+;  (go STRLOOP)
+;NOCOMS 
+;  ; remember the indentation level
+;  (setq sloc (indent-pos a))
+;  (setq a (string-right-trim " " a))
+;  (when (null sloc)
+;   (setq sloc psloc)
+;   (go READLOOP))
+;  ; handle line that ends in a continuation character
+;  (cond
+;   ((eq (elt a (maxindex a)) #\_)
+;    (setq continue t)
+;    (setq a (subseq a (maxindex a))))
+;   ((setq continue nil)))
+;  ; test for skipping constructors
+;  (when (and (null lines) (= sloc 0))
+;    (if (and |$byConstructors|
+;             (null (search "==>" a))
+;             (not 
+;              (member 
+;               (setq functor 
+;                (intern (substring a 0 (strposl ": (=" a 0 nil))))
+;                |$byConstructors|)))
+;       (setq $skipme 't)
+;       (progn
+;        (push functor |$constructorsSeen|)
+;        (setq $skipme nil))))
+;  ; is this thing followed by ++ comments?
+;  (when (and lines (eql sloc 0))
+;   (when (and ncomblock (not (zerop (car ncomblock))))
+;    (fincomblock num nums locs ncomblock linelist))
+;   (when (not (is-console in-stream))
+;    (setq $preparse-last-line (nreverse $echolinestack)))
+;   (return
+;    (pair (nreverse nums) (parsepiles (nreverse locs) (nreverse lines)))))
+;  (when (> parenlev 0)
+;   (push nil locs)
+;   (setq sloc psloc)
+;   (go REREAD))
+;  (when ncomblock
+;   (fincomblock num nums locs ncomblock linelist)
+;   (setq ncomblock ()))
+;  (push sloc locs)
+;REREAD 
+;  (preparse-echo linelist)
+;  (push a lines)
+;  (push num nums)
+;  (setq parenlev (+ parenlev pcount))
+;  (when (and (is-console in-stream) (not continue))
+;   (setq $preparse-last-line nil)
+;   (return
+;    (pair (nreverse nums) (parsepiles (nreverse locs) (nreverse lines)))))
+;  (go READLOOP)))
 
 @
 
@@ -1466,7 +4281,7 @@ leave it alone."
 <<defun preparseReadLine>>=
 (defun preparseReadLine (x)
  (let (line ind)
-  (dcq (ind . line) (preparseReadLine1 x))
+  (dcq (ind . line) (preparseReadLine1))
   (cond
    ((not (stringp line)) (cons ind line))
    ((zerop (size line))  (cons ind line))
@@ -1497,8 +4312,16 @@ leave it alone."
 \usesdollar{preparseReadLine1}{index}
 \usesdollar{preparseReadLine1}{EchoLineStack}
 <<defun preparseReadLine1>>=
-(defun preparseReadLine1 (x)
- (let (line ind)
+(defun preparseReadLine1 ()
+ (labels (
+  (accumulateLinesWithTrailingEscape (line)
+   (let (ind)
+   (declare (special $preparse-last-line))
+     (if (and (> (setq ind (maxindex line)) -1) (char= (elt line ind) #\_))
+      (setq $preparse-last-line
+        (strconc (substring line 0 ind) (cdr (preparseReadLine1))))
+      line))))
+ (let (line)
  (declare (special $linelist $preparse-last-line $index $EchoLineStack))
   (setq line
    (if $linelist
@@ -1507,15 +4330,11 @@ leave it alone."
   (setq $preparse-last-line line)
   (if (stringp line)
    (progn
-    (incf $index)
+    (incf $index)   ;; $index is the current line number
     (setq line (string-right-trim " " line))
     (push (copy-seq line) $EchoLineStack)
-    (cons $index
-     (if (and (> (setq ind (maxindex line)) -1) (char= (elt line ind) #\_))
-      (setq $preparse-last-line
-        (strconc (substring line 0 ind) (cdr (preparseReadLine1 x))))
-      line)))
-    (cons $index line))))
+    (cons $index (accumulateLinesWithTrailingEscape line)))
+   (cons $index line)))))
  
 @
 
@@ -9237,11 +12056,9 @@ Return a pointer to the Nth cons of X, counting 0 as the first cons.
 @
  
 \defun{escaped}{escaped}
-\uses{escaped}{xcape}
 <<defun escaped>>=
 (defun escaped (str n)
- (declare (special xcape))
- (and (> n 0) (eq (char str (1- n)) xcape)))
+ (and (> n 0) (eq (char str (1- n)) #\_)))
 
 @
 
@@ -9349,7 +12166,7 @@ Return a pointer to the Nth cons of X, counting 0 as the first cons.
 <<defun skip-to-endif>>=
 (defun skip-to-endif (x)
  (let (line ind)
-  (dcq (ind . line) (preparseReadLine1 x))
+  (dcq (ind . line) (preparseReadLine1))
   (cond
    ((not (stringp line)) (cons ind line))
    ((initial-substring line ")endif") (preparseReadLine x))
@@ -9821,6 +12638,8 @@ combination of operations was requested. For this case we see:
 \calls{compilerDoit}{/rf(5)}
 \calls{compilerDoit}{member(5)}
 \calls{compilerDoit}{sayBrightly}
+\calls{compilerDoit}{opOf}
+\calls{compilerDoit}{/RQ,LIB}
 \usesdollar{compilerDoit}{byConstructors}
 \usesdollar{compilerDoit}{constructorsSeen}
 <<defun compilerDoit>>=
@@ -10345,17 +13164,16 @@ And the {\bf s-process} function which returns a parsed version of the input.
 \uses{spad}{*comp370-apply*}
 \uses{spad}{*eof*}
 \uses{spad}{file-closed}
-\uses{spad}{xcape}
 \catches{spad}{spad-reader}
 <<defun spad>>=
 (defun spad (&optional (*spad-input-file* nil) (*spad-output-file* nil)
              &aux (*comp370-apply* #'print-defun)
                   (*fileactq-apply* #'print-defun)
-                 ($spad t) ($boot nil) (xcape #\_) (optionlist nil) (*eof* nil)
+                 ($spad t) ($boot nil) (optionlist nil) (*eof* nil)
                  (file-closed nil) (/editfile *spad-input-file*)
                 (|$noSubsumption| |$noSubsumption|) in-stream out-stream)
   (declare (special echo-meta /editfile *comp370-apply* *eof*
-                    file-closed xcape |$noSubsumption| |$InteractiveFrame|
+                    file-closed |$noSubsumption| |$InteractiveFrame|
                     |$InteractiveMode| |$InitialDomainsInScope|))
   ;; only rebind |$InteractiveFrame| if compiling
   (progv (if (not |$InteractiveMode|) '(|$InteractiveFrame|))
@@ -12447,6 +15265,12 @@ Literate Programming''\\
 {\bf http://www.eecs.harvard.edu/ $\tilde{}$nr/noweb}
 \bibitem{7} Daly, Timothy, "The Axiom Literate Documentation"\\
 {\bf http://axiom.axiom-developer.org/axiom-website/documentation.html}
+\bibitem{8} Pratt, Vaughn ``Top down operator precedence''
+POPL '73 Proceedings of the 1st annual ACM SIGACT-SIGPLAN symposium on
+Principles of programming languages 
+\verb|hall.org.ua/halls/wizzard/pdf/Vaughan.Pratt.TDOP.pdf|
+\bibitem{9} Floyd, R. W. ``Semantic Analysis and Operator Precedence''
+JACM 10, 3, 316-333 (1963)
 \end{thebibliography}
 \chapter{Index}
 \printindex
