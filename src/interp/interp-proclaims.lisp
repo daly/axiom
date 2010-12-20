@@ -1878,7 +1878,7 @@
             BOOT::|npConditional| BOOT::|stackMessageIfNone|
             BOOT::PREPARSEREADLINE BOOT::|npElse|
             BOOT::|translateYesNoToTrueFalse| BOOT::|npMissing|
-            BOOT::PREPARSEREADLINE1 BOOT::|npDDInfKey| VMLISP:RPACKFILE
+            BOOT::|npDDInfKey| VMLISP:RPACKFILE
             BOOT::SKIP-IFBLOCK BOOT::|tokPart| BOOT::|npInfKey|
             VMLISP:RECOMPILE-LIB-FILE-IF-NECESSARY BOOT::|npWith|
             BOOT::|optimizeFunctionDef| BOOT::PREPARSE-ECHO
