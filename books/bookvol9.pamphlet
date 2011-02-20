@@ -3152,10 +3152,10 @@ The value of the {\tt )set break} variable then controls what happens.
 (defun makeop (x y keyname)
   (if (or (not (cdr x)) (numberp (second x)))
       (setq x (cons (first x) x)))
-  (if (and (alpha-char-p (elt (stringimage (first x)) 0))
+  (if (and (alpha-char-p (elt (princ-to-string (first x)) 0))
            (not (member (first x) (eval keyname))))
       (set keyname (cons (first x) (eval keyname))))
-  (makeprop (first x) y x)
+  (put (first x) y x)
   (second x))
  
 (setq |PARSE-NewKEY| nil) ;;list of keywords
@@ -3236,7 +3236,7 @@ The token reader uses the gliph property to determine the longest token.
 Thus $:=$ is read as one token not as : followed by $=$.
  
 \begin{chunk}{GLIPHTable}
-(mapcar #'(lambda (x) (makeprop (car x) 'gliph (cdr x)))
+(mapcar #'(lambda (x) (put (car x) 'gliph (cdr x)))
         `(
           ( \| (\))        )
           ( *  (*)         )
@@ -3259,7 +3259,7 @@ RENAMETOK defines alternate token strings which can be used for different
 keyboards which define equivalent tokens.
 \begin{chunk}{RENAMETOKTable}
 (mapcar 
-  #'(lambda (x) (makeprop (car x) 'renametok (cadr x)) (makenewop x nil))
+  #'(lambda (x) (put (car x) 'renametok (cadr x)) (makenewop x nil))
         '((\(\| \[)                     ; (| |) means []
           (\|\) \])
           (\(< \{)                      ; (< >) means {}
@@ -3272,7 +3272,7 @@ GENERIC operators be suffixed by \$ qualifications in SPAD code.
 signifies which domain the operator refers to.  For example \verb|+$Integer|
 is $+$ for Integers.
 \begin{chunk}{GENERICTable}
-(mapcar #'(lambda (x) (makeprop x 'generic 'true))
+(mapcar #'(lambda (x) (put x 'generic 'true))
         '(- = * |rem| |mod| |quo| |div| / ** |exquo| + - < > <= >= ^= ))
 
 \end{chunk}  
@@ -4388,28 +4388,98 @@ Hence there is always a current character, because there is never a
 non-blank line, and there is always a separator character between tokens 
 on separate lines. Also, when a line is read, the character pointer is 
 always positioned ON the first character.
-\defstruct{Line}
+\defstruct{line}
 \begin{chunk}{initvars}
-;(defstruct Line "Line of input file to parse."
-;           (Buffer (make-string 0) :type string)
-;           (Current-Char #\Return :type character)
-;           (Current-Index 1 :type fixnum)
-;           (Last-Index 0 :type fixnum)
-;           (Number 0 :type fixnum))
+(defstruct line "Line of input file to parse."
+           (buffer (make-string 0) :type string)
+           (current-char #\Return :type character)
+           (current-index 1 :type fixnum)
+           (last-index 0 :type fixnum)
+           (number 0 :type fixnum))
 
 \end{chunk}
 
-\defun{Line-New-Line}{Line-New-Line}
-\usesstruct{Line-New-Line}{Line}
-\begin{chunk}{defun Line-New-Line}
-(defun Line-New-Line (string line &optional (linenum nil))
+\defmacro{line-clear}
+\usesstruct{line-clear}{line}
+\begin{chunk}{defmacro line-clear}
+(defmacro line-clear (line)
+ `(let ((l ,line))
+   (setf (line-buffer l) (make-string 0))
+   (setf (line-current-char l) #\return)
+   (setf (line-current-index l) 1)
+   (setf (line-last-index l) 0)
+   (setf (line-number l) 0)))
+
+\end{chunk}
+
+\defun{line-print}{line-print}
+\usesstruct{line-print}{line}
+\begin{chunk}{defun line-print}
+(defun line-print (line)
+  (format out-stream "~&~5D> ~A~%" (Line-Number line) (Line-Buffer Line))
+  (format out-stream "~v@T^~%" (+ 7 (Line-Current-Index line))))
+
+\end{chunk}
+
+\defun{line-at-end-p}{line-at-end-p}
+\usesstruct{line-at-end-p}{line}
+\begin{chunk}{defun line-at-end-p}
+(defun line-at-end-p (line)
+  "Tests if line is empty or positioned past the last character."
+  (>= (line-current-index line) (line-last-index line)))
+
+\end{chunk}
+
+\defun{line-past-end-p}{line-past-end-p}
+\usesstruct{line-past-end-p}{line}
+\begin{chunk}{defun line-past-end-p}
+(defun line-past-end-p (line)
+  "Tests if line is empty or positioned past the last character."
+  (> (line-current-index line) (line-last-index line)))
+
+\end{chunk}
+
+\defun{line-next-char}{line-next-char}
+\usesstruct{line-next-char}{line}
+\begin{chunk}{defun line-next-char}
+(defun line-next-char (line)
+  (elt (line-buffer line) (1+ (line-current-index line))))
+
+\end{chunk}
+
+\defun{line-advance-char}{line-advance-char}
+\usesstruct{line-advance-char}{line}
+\begin{chunk}{defun line-advance-char}
+(defun line-advance-char (line)
+  (setf (line-current-char line)
+        (elt (line-buffer line) (incf (line-current-index line)))))
+
+\end{chunk}
+
+\defun{line-current-segment}{line-current-segment}
+\usesstruct{line-print}{line}
+\begin{chunk}{defun line-current-segment}
+(defun line-current-segment (line)
+  "Buffer from current index to last index."
+  (if (line-at-end-p line) 
+   (make-string 0)
+   (subseq (line-buffer line)
+           (line-current-index line)
+           (line-last-index line))))
+
+\end{chunk}
+
+\defun{line-new-line}{line-new-line}
+\usesstruct{line-new-line}{line}
+\begin{chunk}{defun line-new-line}
+(defun line-new-line (string line &optional (linenum nil))
   "Sets string to be the next line stored in line."
-  (setf (Line-Last-Index line) (1- (length string)))
-  (setf (Line-Current-Index line) 0)
-  (setf (Line-Current-Char line)
+  (setf (line-last-index line) (1- (length string)))
+  (setf (line-current-index line) 0)
+  (setf (line-current-char line)
         (or (and (> (length string) 0) (elt string 0)) #\Return))
-  (setf (Line-Buffer line) string)
-  (setf (Line-Number line) (or linenum (1+ (Line-Number line)))))
+  (setf (line-buffer line) string)
+  (setf (line-number line) (or linenum (1+ (line-number line)))))
 
 \end{chunk}
 
@@ -7839,7 +7909,7 @@ An angry JHD - August 15th., 1984
                   (eq (qcar (qcar arglp)) '|@Tuple|))
               (|#| (qcdr (qcar arglp))))
             (t 1)))
-          (internl '* (stringimage numOfArgs) (pname op))))
+          (internl '* (princ-to-string numOfArgs) (pname op))))
        (cons opp arglp))
      ((and (pairp op) (eq (qcar op) '|Scripts|))
        (append (|postTran| op) (|postTranList| argl)))
@@ -8108,14 +8178,13 @@ of the symbol being parsed. The original list read:
 \end{chunk}
 
 \defun{postColonColon}{postColonColon}
-\calls{postColonColon}{stringimage}
 \calls{postColonColon}{postForm}
 \usesdollar{postColonColon}{boot}
 \begin{chunk}{defun postColonColon}
 (defun |postColonColon| (u)
   (if (and $boot (pairp u) (eq (qcar u) '|::|) (pairp (qcdr u))
            (pairp (qcdr (qcdr u))) (eq (qcdr (qcdr (qcdr u))) nil))
-   (intern (stringimage (third u)) (second u))
+   (intern (princ-to-string (third u)) (second u))
    (|postForm| u)))
 
 \end{chunk}
@@ -8854,14 +8923,13 @@ of the symbol being parsed. The original list read:
 \seebook{getScriptName}{identp}{5}
 \calls{getScriptName}{postError}
 \calls{getScriptName}{internl}
-\calls{getScriptName}{stringimage}
 \calls{getScriptName}{decodeScripts}
 \seebook{getScriptName}{pname}{5}
 \begin{chunk}{defun getScriptName}
 (defun |getScriptName| (op a numberOfFunctionalArgs)
  (when (null (identp op))
    (|postError| (list "   " op " cannot have scripts" )))
- (internl '* (stringimage numberOfFunctionalArgs)
+ (internl '* (princ-to-string numberOfFunctionalArgs)
              (|decodeScripts| a) (pname op)))
 
 \end{chunk}
@@ -8870,7 +8938,6 @@ of the symbol being parsed. The original list read:
 \calls{decodeScripts}{qcar}
 \calls{decodeScripts}{qcdr}
 \calls{decodeScripts}{strconc}
-\calls{decodeScripts}{stringimage}
 \calls{decodeScripts}{decodeScripts}
 \begin{chunk}{defun decodeScripts}
 (defun |decodeScripts| (a)
@@ -8883,13 +8950,13 @@ of the symbol being parsed. The original list read:
   (cond
    ((and (pairp a) (eq (qcar a) '|PrefixSC|)
          (pairp (qcdr a)) (eq (qcdr (qcdr a)) nil))
-    (strconc (stringimage 0) (|decodeScripts| (qcar (qcdr a)))))
+    (strconc (princ-to-string 0) (|decodeScripts| (qcar (qcdr a)))))
    ((and (pairp a) (eq (qcar a) '|;|))
     (apply 'strconc (loop for x in (qcdr a) collect (|decodeScripts| x))))
    ((and (pairp a) (eq (qcar a) '|,|))
-    (stringimage (fn a)))
+    (princ-to-string (fn a)))
    (t
-    (stringimage 1)))))
+    (princ-to-string 1)))))
 
 \end{chunk}
 
@@ -12795,7 +12862,6 @@ preferred to the underlying representation -- RDJ 9/12/83
 \end{verbatim}
 \calls{comp3}{addDomain}
 \calls{comp3}{compWithMappingMode}
-\calls{comp3}{stringimage}
 \calls{comp3}{compAtom}
 \calls{comp3}{getmode}
 \calls{comp3}{applyMapping}
@@ -12826,7 +12892,7 @@ preferred to the underlying representation -- RDJ 9/12/83
           (progn (setq a (qcar tmp1)) t))))
     (when (equal x a) (list x m |$e|)))
    ((stringp m)
-    (when (and (atom x) (or (equal m x) (equal m (stringimage x))))
+    (when (and (atom x) (or (equal m x) (equal m (princ-to-string x))))
      (list m m e )))
    ((or (null x) (atom x)) (|compAtom| x m e))
    (t 
@@ -14075,6 +14141,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{GENERICTable}
 
 \getchunk{defmacro bang}
+\getchunk{defmacro line-clear}
 \getchunk{defmacro must}
 \getchunk{defmacro nth-stack}
 \getchunk{defmacro pop-stack-1}
@@ -14212,7 +14279,13 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun is-console}
 \getchunk{defun isTokenDelimiter}
 
-\getchunk{defun Line-New-Line}
+\getchunk{defun line-advance-char}
+\getchunk{defun line-at-end-p}
+\getchunk{defun line-current-segment}
+\getchunk{defun line-next-char}
+\getchunk{defun line-past-end-p}
+\getchunk{defun line-print}
+\getchunk{defun line-new-line}
 
 \getchunk{defun make-string-adjustable}
 \getchunk{defun make-symbol-of}
