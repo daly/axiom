@@ -381,11 +381,12 @@
   (when *chunknoise* (format t "PASS 2~%"))
   (maphash #'(lambda (key value)
               (if (search pattern key)
-               (let ((helpfile  (concatenate 'string todir "/" 
-                           (subseq key 2 (- (length key) 2)))))
-               (with-open-file (out helpfile :direction :output)
-                (format t "extracting ~a~%" helpfile)
-                (gcl-expand key noweb? out)))))
+               (let ((filename key) helpfile)
+                (when noweb? (setq filename (subseq key 2 (- (length key) 2))))
+                (setq helpfile (concatenate 'string todir "/" filename))
+                (with-open-file (out helpfile :direction :output)
+                 (format t "extracting ~a~%" helpfile)
+                 (gcl-expand key noweb? out)))))
        *chunkhash*))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -440,12 +441,13 @@
 (defun makeHelpFiles ()
  (let ((AXIOM (si::getenv "AXIOM")) (BOOKS (si::getenv "BOOKS")) HELP PAT)
   (setq HELP (concatenate 'string AXIOM "/doc/spadhelp"))
-  (setq PAT ".help>>")
-  (allchunks PAT (concatenate 'string BOOKS "/bookvol5.pamphlet") HELP t)
-  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.2.pamphlet") HELP t)
-  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.3.pamphlet") HELP t)
-  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.4.pamphlet") HELP t)
-  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.5.pamphlet") HELP t)))
+  (setq PAT1 ".help")
+  (setq PAT2 ".help>>")
+  (allchunks PAT1 (concatenate 'string BOOKS "/bookvol5.pamphlet") HELP nil)
+  (allchunks PAT2 (concatenate 'string BOOKS "/bookvol10.2.pamphlet") HELP t)
+  (allchunks PAT2 (concatenate 'string BOOKS "/bookvol10.3.pamphlet") HELP t)
+  (allchunks PAT2 (concatenate 'string BOOKS "/bookvol10.4.pamphlet") HELP t)
+  (allchunks PAT2 (concatenate 'string BOOKS "/bookvol10.5.pamphlet") HELP t)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; 13 makeInputFiles
