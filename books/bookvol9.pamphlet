@@ -4536,6 +4536,25 @@ The current input line.
 
 \end{chunk}
 
+\defun{Advance-Char}{Advance-Char}
+\calls{Advance-Char}{Line-At-End-P}
+\calls{Advance-Char}{Line-Advance-Char}
+\calls{Advance-Char}{next-line}
+\calls{Advance-Char}{current-char}
+\usesstruct{Advance-Char}{line}
+\begin{chunk}{defun Advance-Char}
+(defun Advance-Char ()
+  "Advances IN-STREAM, invoking Next Line if necessary."
+ (loop
+  (cond
+   ((not (Line-At-End-P Current-Line))
+    (return (Line-Advance-Char Current-Line)))
+   ((next-line in-stream) 
+    (return (current-char)))
+   ((return nil)))))
+
+\end{chunk}
+
 \defun{storeblanks}{storeblanks}
 \begin{chunk}{defun storeblanks}
 (defun storeblanks (line n)
@@ -5068,6 +5087,66 @@ of the symbol being parsed. The original list read:
        (dolist (y (cdr x) (nreverse result))
          (push (|transIs| (|parseTran| y)) result))))
    (t (|parseTran| x)))))
+
+\end{chunk}
+
+\defun{transIs}{transIs}
+\calls{transIs}{isListConstructor}
+\calls{transIs}{transIs1}
+\begin{chunk}{defun transIs}
+(defun |transIs| (u)
+  (if (|isListConstructor| u) 
+    (cons '|construct| (|transIs1| u))
+    u))
+
+\end{chunk}
+
+\defun{transIs1}{transIs1}
+\calls{transIs1}{qcar}
+\calls{transIs1}{qcdr}
+\calls{transIs1}{pairp}
+\calls{transIs1}{nreverse0}
+\calls{transIs1}{transIs}
+\calls{transIs1}{transIs1}
+\begin{chunk}{defun transIs1}
+(defun |transIs1| (u)
+ (let (x h v tmp3)
+  (cond
+   ((and (pairp u) (eq (qcar u) '|construct|))
+     (dolist (x (qcdr u) (nreverse0 tmp3))
+       (push (|transIs| x) tmp3)))
+   ((and (pairp u) (eq (qcar u) '|append|) (pairp (qcdr u))
+         (pairp (qcdr (qcdr u))) (eq (qcdr (qcdr (qcdr u))) nil))
+     (setq x (qcar (qcdr u)))
+     (setq h (list '|:| (|transIs| x)))
+     (setq v (|transIs1| (qcar (qcdr (qcdr u)))))
+     (cond
+      ((and (pairp v) (eq (qcar v) '|:|)
+            (pairp (qcdr v)) (eq (qcdr (qcdr v)) nil))
+         (list h (qcar (qcdr v))))
+      ((eq v '|nil|) (car (cdr h)))
+      ((atom v) (list h (list '|:| v)))
+      (t (cons h v))))
+   ((and (pairp u) (eq (qcar u) '|cons|) (pairp (qcdr u)) 
+         (pairp (qcdr (qcdr u))) (eq (qcdr (qcdr (qcdr u))) nil))
+     (setq h (|transIs| (qcar (qcdr u))))
+     (setq v (|transIs1| (qcar (qcdr (qcdr u)))))
+     (cond
+      ((and (pairp v) (eq (qcar v) '|:|) (pairp (qcdr v))
+            (eq (qcdr (qcdr v)) nil))
+         (cons h (list (qcar (qcdr v)))))
+      ((eq v '|nil|) (cons h nil))
+      ((atom v) (list h (list '|:| v)))
+      (t (cons h v))))
+   (t u))))
+
+\end{chunk}
+
+\defun{isListConstructor}{isListConstructor}
+\calls{isListConstructor}{member}
+\begin{chunk}{defun isListConstructor}
+(defun |isListConstructor| (u)
+ (and (pairp u) (|member| (qcar u) '(|construct| |append| |cons|))))
 
 \end{chunk}
 
@@ -11227,6 +11306,28 @@ if X matches initial segment of inputstream.
  
 \end{chunk}
 
+\begin{chunk}{initvars}
+(defvar Escape-Character #\\ "Superquoting character.")
+
+\end{chunk}
+
+\defun{token-lookahead-type}{token-lookahead-type}
+\uses{token-lookahead-type}{Escape-Character}
+\begin{chunk}{defun token-lookahead-type}
+(defun token-lookahead-type (char)
+  "Predicts the kind of token to follow, based on the given initial character."
+ (declare (special Escape-Character))
+  (cond 
+   ((not char)                                             'eof)
+   ((or (char= char Escape-Character) (alpha-char-p char)) 'id)
+   ((digitp char)                                          'num)
+   ((char= char #\')                                       'string)
+   ((char= char #\[)                                       'bstring)
+   ((member char '(#\Space #\Tab #\Return) :test #'char=)  'white)
+   (t                                                       'special-char)))
+ 
+\end{chunk}
+
 \defun{match-advance-string}{match-advance-string}
 The match-string function returns length of X 
 if X matches initial segment of inputstream.
@@ -11712,6 +11813,85 @@ Stack of results of reduced productions.
 \end{chunk}
 
 \chapter{Utility Functions}
+
+\defun{translabel}{translabel}
+\calls{translabel}{translabel1}
+\begin{chunk}{defun translabel}
+(defun translabel (x al)
+ (translabel1 x al) x)
+
+\end{chunk}
+
+\defun{translabel1}{translabel1}
+\calls{translabel1}{refvecp}
+\calls{translabel1}{maxindex}
+\calls{translabel1}{translabel1}
+\calls{translabel1}{lassoc}
+\begin{chunk}{defun translabel1}
+(defun translabel1 (x al)
+ "Transforms X according to AL = ((<label> . Sexpr) ..)."
+  (cond
+   ((refvecp x)
+    (do ((i 0 (1+ i)) (k (maxindex x)))
+        ((> i k))
+      (if (let ((y (lassoc (elt x i) al))) (setelt x i y))
+       (translabel1 (elt x i) al))))
+   ((atom x) nil)
+   ((let ((y (lassoc (first x) al)))
+           (if y (setf (first x) y) (translabel1 (cdr x) al))))
+   ((translabel1 (first x) al) (translabel1 (cdr x) al))))
+
+\end{chunk}
+
+\defun{displayPreCompilationErrors}{displayPreCompilationErrors}
+\calls{displayPreCompilationErrors}{length}
+\calls{displayPreCompilationErrors}{remdup}
+\calls{displayPreCompilationErrors}{sayBrightly}
+\calls{displayPreCompilationErrors}{nequal}
+\calls{displayPreCompilationErrors}{sayMath}
+\usesdollar{displayPreCompilationErrors}{postStack}
+\usesdollar{displayPreCompilationErrors}{topOp}
+\begin{chunk}{defun displayPreCompilationErrors}
+(defun |displayPreCompilationErrors| ()
+ (let (n errors heading)
+  (declare (special |$postStack| |$topOp|))
+  (setq n (|#| (setq |$postStack| (remdup (nreverse |$postStack|)))))
+  (unless (eql n 0)
+    (setq errors (cond ((> n 1) "errors") (t "error")))
+    (cond
+     (|$InteractiveMode|
+      (|sayBrightly| (list "   Semantic " errors " detected: ")))
+     (t
+      (setq heading
+       (if (nequal |$topOp| '|$topOp|) 
+        (list "   " |$topOp| " has")
+        (list "   You have")))
+      (|sayBrightly|
+       (append heading (list n "precompilation " errors ":" )))))
+    (cond
+     ((> n 1)
+       (let ((i 1))
+        (dolist (x |$postStack|)
+          (|sayMath| (cons "   " (cons i (cons ") " x)))))))
+     (t (|sayMath| (cons "    " (car |$postStack|)))))
+    (terpri))))
+
+\end{chunk}
+
+\defun{bumperrorcount}{bumperrorcount}
+\usesdollar{bumperrorcount}{InteractiveMode}
+\usesdollar{bumperrorcount}{spad-errors}
+\begin{chunk}{defun bumperrorcount}
+(defun bumperrorcount (kind)
+ (unless |$InteractiveMode|
+  (let ((index (case kind
+                (|syntax| 0)
+                (|precompilation| 1)
+                (|semantic| 2)
+                (t (error "BUMPERRORCOUNT")))))
+    (setelt $spad_errors index (1+ (elt $spad_errors index))))))
+
+\end{chunk}
 
 \defun{parseTranCheckForRecord}{parseTranCheckForRecord}
 \begin{verbatim}
@@ -14882,6 +15062,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun action}
 \getchunk{defun addclose}
 \getchunk{defun add-parens-and-semis-to-line}
+\getchunk{defun Advance-Char}
 \getchunk{defun advance-token}
 \getchunk{defun aplTran}
 \getchunk{defun aplTran1}
@@ -14889,6 +15070,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun argsToSig}
 
 \getchunk{defun blankp}
+\getchunk{defun bumperrorcount}
 
 \getchunk{defun char-eq}
 \getchunk{defun char-ne}
@@ -14979,6 +15161,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun deepestExpression}
 \getchunk{defun def-rename}
 \getchunk{defun def-rename1}
+\getchunk{defun displayPreCompilationErrors}
 \getchunk{defun dollarTran}
 \getchunk{defun drop}
 
@@ -15007,6 +15190,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun initial-substring}
 \getchunk{defun initial-substring-p}
 \getchunk{defun is-console}
+\getchunk{defun isListConstructor}
 \getchunk{defun isTokenDelimiter}
 
 \getchunk{defun killColons}
@@ -15252,7 +15436,12 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun s-process}
 
 \getchunk{defun token-install}
+\getchunk{defun token-lookahead-type}
 \getchunk{defun token-print}
+\getchunk{defun transIs}
+\getchunk{defun transIs1}
+\getchunk{defun translabel}
+\getchunk{defun translabel1}
 \getchunk{defun try-get-token}
 \getchunk{defun tuple2List}
 
