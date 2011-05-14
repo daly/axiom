@@ -1,4 +1,4 @@
-VERSION:="Axiom (September 2010)"
+VERSION:="Axiom (March 2011)"
 
 ##### special paths
 SPD:=$(shell pwd)
@@ -149,17 +149,6 @@ all: noweb ${MNT}/${SYS}/bin/document
 	      rm -f *.aux ) ; \
 	  fi
 	@ if [ "$RUNTYPE" = "parallel" ] ; then \
-	     ( echo p6 starting parallel make of help ; \
-	       ${ENV} $(MAKE) help ${NOISE} & ) ; \
-	  else \
-	    ( echo s6 starting serial make of help ; \
-	      mkdir -p ${MNT}/${SYS}/doc/spadhelp ; \
-	      mkdir -p ${INT}/input ; \
-	      cd ${SRC}/algebra ; \
-	      ${TANGLE} -t8 Makefile.pamphlet >Makefile.help ; \
-	      ${ENV} $(MAKE) -f Makefile.help parallelhelp ) ; \
-	  fi
-	@ if [ "$RUNTYPE" = "parallel" ] ; then \
 	    ( echo s2 starting parallel make of books ; \
 	      echo s3 ${SPD}/books/Makefile from \
                    ${SPD}/books/Makefile.pamphlet ; \
@@ -190,14 +179,6 @@ all: noweb ${MNT}/${SYS}/bin/document
 	@ echo p7 starting make of src
 	@ ${ENV} $(MAKE) -f Makefile.${SYS} 
 	@ echo 3 finished system build on `date` | tee >lastBuildDate
-
-help:
-	@ echo p8 making of help files
-	@ ( mkdir -p ${MNT}/${SYS}/doc/spadhelp ; \
-	    mkdir -p ${INT}/input ; \
-	    cd ${SRC}/algebra ; \
-	    ${TANGLE} -t8 Makefile.pamphlet >Makefile.help ; \
-	    ${ENV} $(MAKE) -f Makefile.help parallelhelp )
 
 input:
 	@ echo p9 making input documents

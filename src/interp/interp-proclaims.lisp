@@ -530,7 +530,7 @@
             BOOT::|rootApp| BOOT::|bracketApp| BOOT::|plusApp|
             BOOT::|appparu1| BOOT::|bigopWidth| BOOT::|P2Us|
             BOOT::|pi2App| BOOT::|boxLApp| BOOT::STRPOSL
-            BOOT::|compOrCroak1| BOOT::|piApp| BOOT::|compForm2|
+            BOOT::|piApp| BOOT::|compForm2|
             BOOT::|compForm3| BOOT::|getConditionalCategoryOfType1|
             BOOT::|indefIntegralApp| BOOT::|nothingApp|
             BOOT::|evalconstruct| BOOT::|evalInfiniteTupleConstruct|
@@ -1878,7 +1878,7 @@
             BOOT::|npConditional| BOOT::|stackMessageIfNone|
             BOOT::PREPARSEREADLINE BOOT::|npElse|
             BOOT::|translateYesNoToTrueFalse| BOOT::|npMissing|
-            BOOT::PREPARSEREADLINE1 BOOT::|npDDInfKey| VMLISP:RPACKFILE
+            BOOT::|npDDInfKey| VMLISP:RPACKFILE
             BOOT::SKIP-IFBLOCK BOOT::|tokPart| BOOT::|npInfKey|
             VMLISP:RECOMPILE-LIB-FILE-IF-NECESSARY BOOT::|npWith|
             BOOT::|optimizeFunctionDef| BOOT::PREPARSE-ECHO
