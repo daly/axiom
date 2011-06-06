@@ -74,12 +74,15 @@ NOISE:="-o ${TMP}/trace"
 PART:=	cprogs
 SUBPART:= everything
 RUNTYPE:=serial
-TESTSET:=catstests
+# can be richtests, catstests, regresstests (see src/input/Makefile)
+TESTSET:=alltests
+BUILD:=full
 
 
 ENV:= \
 AWK=${AWK} \
 BOOKS=${BOOKS} \
+BUILD=${BUILD} \
 BYE=${BYE} \
 CC=${CC} \
 CCF=${CCF} \
@@ -130,25 +133,32 @@ all: noweb ${MNT}/${SYS}/bin/document
 	@ ${DOCUMENT} Makefile
 	@ mkdir -p ${MNT}/${SYS}/doc/src
 	@ cp Makefile.dvi ${MNT}/${SYS}/doc/src/root.Makefile.dvi
-	@ if [ "$RUNTYPE" = "parallel" ] ; then \
+	@ if [ "${RUNTYPE}" = "parallel" ] ; then \
 	   ( echo p4 starting parallel make of input files ; \
 	     ${ENV} ${MAKE} input ${NOISE} & ) ; \
 	  else \
+           if [ "${BUILD}" = "full" ] ; then \
 	   ( echo s4 starting serial make of input files ; \
 	     mkdir -p ${MNT}/${SYS}/doc/src/input ; \
              cd ${MNT}/${SYS}/doc/src/input ; \
 	     cp ${SRC}/scripts/tex/axiom.sty . ; \
-	     for i in `ls ${SRC}/input/*.input.pamphlet` ; \
-               do latex $$i ; \
-               done ; \
-	      rm -f *~ ; \
-	      rm -f *.pamphlet~ ; \
-	      rm -f *.log ; \
-	      rm -f *.tex ; \
-	      rm -f *.toc ; \
-	      rm -f *.aux ) ; \
+	     for i in `ls ${SRC}/input/*.input.pamphlet` ; do \
+	      if [ .${NOISE} = . ] ; \
+	      then \
+               latex $$i ; \
+	      else \
+	       ( echo p4a making $$i ; \
+	         latex $$i >${TMP}/trace ) ; \
+	      fi ; \
+             done ; \
+	     rm -f *~ ; \
+	     rm -f *.pamphlet~ ; \
+	     rm -f *.log ; \
+	     rm -f *.tex ; \
+	     rm -f *.toc ; \
+	     rm -f *.aux ) ; fi ; \
 	  fi
-	@ if [ "$RUNTYPE" = "parallel" ] ; then \
+	@ if [ "${RUNTYPE}" = "parallel" ] ; then \
 	    ( echo s2 starting parallel make of books ; \
 	      echo s3 ${SPD}/books/Makefile from \
                    ${SPD}/books/Makefile.pamphlet ; \
@@ -163,9 +173,10 @@ all: noweb ${MNT}/${SYS}/bin/document
 	      cd ${SPD}/books ; \
               ${DOCUMENT} Makefile ; \
               cp Makefile.dvi ${MNT}/${SYS}/doc/src/books.Makefile.dvi ; \
-	      ${ENV} ${MAKE} ) ; \
+              if [ "${BUILD}" = "full" ] ; then \
+	      ${ENV} ${MAKE} ; fi ) ; \
 	  fi
-	@ if [ "$RUNTYPE" = "parallel" ] ; then \
+	@ if [ "${RUNTYPE}" = "parallel" ] ; then \
 	    ( echo p5 starting parallel make of xhtml documents ; \
 	      ${ENV} ${MAKE} xhtml ${NOISE} & ) ; \
 	  else \
@@ -173,7 +184,8 @@ all: noweb ${MNT}/${SYS}/bin/document
 	      mkdir -p ${MNT}/${SYS}/doc/hypertex/bitmaps ; \
 	      cd ${MNT}/${SYS}/doc/hypertex ; \
 	      ${TANGLE} -t8 ${SPD}/books/bookvol11.pamphlet >Makefile11 ; \
-	      ${ENV} ${MAKE} -j 10 -f Makefile11 ; \
+              if [ "${BUILD}" = "full" ] ; then \
+	      ${ENV} ${MAKE} -j 10 -f Makefile11 ; fi ; \
 	      rm -f Makefile11 ) ; \
 	  fi
 	@ echo p7 starting make of src
@@ -182,7 +194,8 @@ all: noweb ${MNT}/${SYS}/bin/document
 
 input:
 	@ echo p9 making input documents
-	@ ( mkdir -p ${MNT}/${SYS}/doc/src/input ; \
+	@ if [ "${BUILD}" = "full" ] ; then \
+	  ( mkdir -p ${MNT}/${SYS}/doc/src/input ; \
             cd ${MNT}/${SYS}/doc/src/input ; \
 	    cp ${SRC}/scripts/tex/axiom.sty . ; \
 	    for i in `ls ${SRC}/input/*.input.pamphlet` ; \
@@ -193,15 +206,16 @@ input:
 	     rm -f *.log ; \
 	     rm -f *.tex ; \
 	     rm -f *.toc ; \
-	     rm -f *.aux )
+	     rm -f *.aux ) ; fi
 
 xhtml:
 	@ echo p10 making xhtml pages
 	@mkdir -p ${MNT}/${SYS}/doc/hypertex/bitmaps
-	@(cd ${MNT}/${SYS}/doc/hypertex ; \
+	@ if [ "${BUILD}" = "full" ] ; then \
+	 (cd ${MNT}/${SYS}/doc/hypertex ; \
 	  ${TANGLE} -t8 ${SPD}/books/bookvol11.pamphlet >Makefile11 ; \
 	  ${ENV} ${MAKE} -j 10 -f Makefile11 ; \
-	  rm -f Makefile11 )
+	  rm -f Makefile11 ) ; fi
 
 book:
 	@ echo 79 building the book as ${MNT}/${SYS}/doc/book.dvi 
