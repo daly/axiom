@@ -108,6 +108,7 @@
             BOOT::APP BOOT::|appagg| BOOT::|binomialApp|
             BOOT::|charyTrouble1| BOOT::|appsub| BOOT::|slashApp|
             BOOT::|appsetq| BOOT::|makeStatString|
+            BOOT::|augModemapsFromCategory| 
             BOOT::|e02dffDefaultSolve| BOOT::|e04dgfDefaultSolve|
             BOOT::|e04fdfDefaultSolve| BOOT::|e04gcfDefaultSolve|
             BOOT::|f01refDefaultSolve| BOOT::|f01qefDefaultSolve|)) 
@@ -137,7 +138,7 @@
             BOOT::|d02rafDefaultSolve|)) 
 (PROCLAIM
     '(FTYPE (FUNCTION (T T T) T) BOOT::|mapRecurDepth| BOOT::THETACHECK
-            BOOT::|flowSegmentedMsg| BOOT::|rewriteMap0|
+            BOOT::|flowSegmentedMsg| BOOT::|rewriteMap0| BOOT::|genDomainView|
             BOOT::|restoreDependentMapInfo| BOOT::|dcSig|
             BOOT::|analyzeNonRecur| BOOT::|addMap| BOOT::|fortCall|
             BOOT::|axAddLiteral| BOOT::|writeStringLengths|
@@ -456,7 +457,7 @@
             BOOT::|augmentMap| BOOT::|reportFunctionCompilation|
             BOOT::|putSrcPos| BOOT::|hasSigInTargetCategory,fn|
             BOOT::|encodeFunctionName| BOOT::|getArgValueComp2|
-            BOOT::|augModemapsFromCategory| BOOT::|compDefineFunctor1|
+            BOOT::|compDefineFunctor1|
             BOOT::|augModemapsFromCategoryRep|
             BOOT::|compDefineFunctor| BOOT::|processFunctor|
             BOOT::|buildFunctor| BOOT::|selectMmsGen,matchMms|
@@ -514,7 +515,7 @@
             BOOT::|compDefWhereClause,fetchType| BOOT::|compSubDomain1|
             BOOT::|putFileProperty| BOOT::|srcPosNew|
             BOOT::|substNames| BOOT::|mac0MLambdaApply|
-            BOOT::|mac0ExpandBody| BOOT::|genDomainView|
+            BOOT::|mac0ExpandBody| 
             BOOT::|getArgValue2| BOOT::|compFunctorBody|
             BOOT::|analyzeMap| BOOT::|defaultTarget|
             BOOT::|selectDollarMms| BOOT::|selectMmsGen|
