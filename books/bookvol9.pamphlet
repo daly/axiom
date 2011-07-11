@@ -7348,6 +7348,54 @@ $\rightarrow$
 
 \end{chunk}
 
+\defun{getUniqueModemap}{getUniqueModemap}
+\calls{getUniqueModemap}{getModemapList}
+\calls{getUniqueModemap}{qslessp}
+\calls{getUniqueModemap}{stackWarning}
+\begin{chunk}{defun getUniqueModemap}
+(defun |getUniqueModemap| (op numOfArgs env)
+ (let (mml)
+  (cond
+   ((eql 1 (|#| (setq mml (|getModemapList| op numOfArgs env))))
+     (car mml))
+   ((qslessp 1 (|#| mml))
+     (|stackWarning|
+       (list numOfArgs " argument form of: " op " has more than one modemap"))
+     (car mml))
+   (t nil))))
+
+\end{chunk}
+
+\defun{getModemapList}{getModemapList}
+\calls{getModemapList}{pairp}
+\calls{getModemapList}{qcar}
+\calls{getModemapList}{qcdr}
+\calls{getModemapList}{getModemapListFromDomain}
+\calls{getModemapList}{nreverse0}
+\calls{getModemapList}{get}
+\begin{chunk}{defun getModemapList}
+(defun |getModemapList| (op numOfArgs env)
+ (let (result)
+  (cond
+   ((and (pairp op) (eq (qcar op) '|elt|) (pairp (qcdr op))
+         (pairp (qcdr (qcdr op))) (eq (qcdr (qcdr (qcdr op))) nil))
+     (|getModemapListFromDomain| (third op) numOfArgs (second op) env))
+  (t
+   (dolist (term (|get| op '|modemap| env) (nreverse0 result))
+     (when (eql numOfArgs (|#| (cddar term))) (push term result)))))))
+
+\end{chunk}
+
+\defun{getModemapListFromDomain}{getModemapListFromDomain}
+\calls{getModemapListFromDomain}{get}
+\begin{chunk}{defun getModemapListFromDomain}
+(defun |getModemapListFromDomain| (op numOfArgs d env)
+ (loop for term in (|get| op '|modemap| env) 
+       when (and (equal (caar term) d) (eql (|#| (cddar term)) numOfArgs))
+       collect term))
+ 
+\end{chunk}
+
 \defun{domainMember}{domainMember}
 \calls{domainMember}{modeEqual}
 \begin{chunk}{defun domainMember}
@@ -7379,6 +7427,207 @@ $\rightarrow$
     (setq fnsel (caddr u))
     (setq env (|addModemapKnown| op domainName sig cond fnsel env)))
   env))
+
+\end{chunk}
+
+\defun{addModemapKnown}{addModemapKnown}
+\calls{addModemapKnown}{addModemap0}
+\refsdollar{addModemapKnown}{e}
+\refsdollar{CapsuleModemapFrame}{insideCapsuleFunctionIfTrue}
+\defsdollar{addModemapKnown}{CapsuleModemapFrame}
+\begin{chunk}{defun addModemapKnown}
+(defun |addModemapKnown| (op mc sig pred fn |$e|)
+ (declare (special |$e| |$CapsuleModemapFrame| |$insideCapsuleFunctionIfTrue|))
+  (if (eq |$insideCapsuleFunctionIfTrue| t)
+   (progn
+     (setq |$CapsuleModemapFrame|
+      (|addModemap0| op mc sig pred fn |$CapsuleModemapFrame|))
+     |$e|)
+   (|addModemap0| op mc sig pred fn |$e|)))
+
+\end{chunk}
+
+\defun{addModemap0}{addModemap0}
+\calls{addModemap0}{pairp}
+\calls{addModemap0}{qcar}
+\calls{addModemap0}{addEltModemap}
+\calls{addModemap0}{addModemap1}
+\refsdollar{addModemap0}{functorForm}
+\begin{chunk}{defun addModemap0}
+(defun |addModemap0| (op mc sig pred fn env)
+ (declare (special |$functorForm|))
+ (cond
+  ((and (pairp |$functorForm|)
+        (eq (qcar |$functorForm|) '|CategoryDefaults|)
+        (eq mc '$))
+    env)
+  ((or (eq op '|elt|) (eq op '|setelt|))
+    (|addEltModemap| op mc sig pred fn env))
+  (t (|addModemap1| op mc sig pred fn env))))
+
+\end{chunk}
+
+\defun{addEltModemap}{addEltModemap}
+This is a hack to change selectors from strings to identifiers; and to
+add flag identifiers as literals in the environment
+\calls{addEltModemap}{pairp}
+\calls{addEltModemap}{qcar}
+\calls{addEltModemap}{qcdr}
+\calls{addEltModemap}{makeLiteral}
+\calls{addEltModemap}{addModemap1}
+\calls{addEltModemap}{systemErrorHere}
+\refsdollar{addEltModemap}{insideCapsuleFunctionIfTrue}
+\defsdollar{addEltModemap}{e}
+\begin{chunk}{defun addEltModemap}
+(defun |addEltModemap| (op mc sig pred fn env)
+ (let (tmp1 v sel lt id)
+ (declare (special |$e| |$insideCapsuleFunctionIfTrue|))
+  (cond
+   ((and (eq op '|elt|) (pairp sig))
+     (setq tmp1 (reverse sig))
+     (setq sel (qcar tmp1))
+     (setq lt (nreverse (qcdr tmp1)))
+     (cond
+       ((stringp sel) 
+         (setq id (intern sel))
+         (if |$insideCapsuleFunctionIfTrue|
+           (setq |$e| (|makeLiteral| id |$e|))
+           (setq env (|makeLiteral| id env)))
+         (|addModemap1| op mc (append lt (list id)) pred fn env))
+       (t (|addModemap1| op mc sig pred fn env))))
+   ((and (eq op '|setelt|) (pairp sig))
+     (setq tmp1 (reverse sig))
+     (setq v (qcar tmp1))
+     (setq sel (qcar (qcdr tmp1)))
+     (setq lt (nreverse (qcdr (qcdr tmp1))))
+     (cond
+       ((stringp sel) (setq id (intern sel))
+         (if |$insideCapsuleFunctionIfTrue|
+           (setq |$e| (|makeLiteral| id |$e|))
+           (setq env (|makeLiteral| id env)))
+         (|addModemap1| op mc (append lt (list id v)) pred fn env))
+       (t (|addModemap1| op mc sig pred fn env))))
+   (t (|systemErrorHere| "addEltModemap")))))
+
+\end{chunk}
+
+\defun{addModemap1}{addModemap1}
+\calls{addModemap1}{msubst}
+\calls{addModemap1}{getProplist}
+\calls{addModemap1}{mkNewModemapList}
+\calls{addModemap1}{lassoc}
+\calls{addModemap1}{augProplist}
+\calls{addModemap1}{unErrorRef}
+\calls{addModemap1}{addBinding}
+\begin{chunk}{defun addModemap1}
+(defun |addModemap1| (op mc sig pred fn env)
+ (let (currentProplist newModemapList newProplist newProplistp)
+  (when (eq mc '|Rep|) (setq sig (msubst '$ '|Rep| sig)))
+  (setq currentProplist (or (|getProplist| op env) nil))
+  (setq newModemapList
+   (|mkNewModemapList| mc sig pred fn
+     (lassoc '|modemap| currentProplist) env nil))
+  (setq newProplist (|augProplist| currentProplist '|modemap| newModemapList))
+  (setq newProplistp (|augProplist| newProplist 'fluid t))
+  (|unErrorRef| op)
+  (|addBinding| op newProplistp env)))
+
+\end{chunk}
+
+\defun{mkNewModemapList}{mkNewModemapList}
+\calls{mkNewModemapList}{member}
+\calls{mkNewModemapList}{assoc}
+\calls{mkNewModemapList}{pairp}
+\calls{mkNewModemapList}{qcar}
+\calls{mkNewModemapList}{qcdr}
+\calls{mkNewModemapList}{mergeModemap}
+\calls{mkNewModemapList}{nequal}
+\calls{mkNewModemapList}{nreverse0}
+\calls{mkNewModemapList}{insertModemap}
+\refsdollar{mkNewModemapList}{InteractiveMode}
+\refsdollar{mkNewModemapList}{forceAdd}
+\begin{chunk}{defun mkNewModemapList}
+(defun |mkNewModemapList| (mc sig pred fn curModemapList env filenameOrNil)
+ (let (map entry oldMap opred result)
+ (declare (special |$InteractiveMode| |$forceAdd|))
+   (setq entry
+    (cons (setq map (cons mc sig)) (cons (list pred fn) filenameOrNil)))
+   (cond
+    ((|member| entry curModemapList) curModemapList)
+    ((and (setq oldMap (|assoc| map curModemapList))
+          (pairp oldMap) (pairp (qcdr oldMap))
+          (pairp (qcar (qcdr oldMap)))
+          (pairp (qcdr (qcar (qcdr oldMap))))
+          (eq (qcdr (qcdr (qcar (qcdr oldMap)))) nil)
+          (equal (qcar (qcdr (qcar (qcdr oldMap)))) fn))
+      (setq opred (qcar (qcar (qcdr oldMap))))
+      (cond
+       (|$forceAdd| (|mergeModemap| entry curModemapList env))
+       ((eq opred t) curModemapList)
+       (t
+         (when (and (nequal pred t) (nequal pred opred))
+            (setq pred (list 'or pred opred)))
+         (dolist (x curModemapList (nreverse0 result))
+          (push
+           (if (equal x oldMap)
+             (cons map (cons (list pred fn) filenameOrNil))
+             x)
+           result)))))
+    (|$InteractiveMode|
+     (|insertModemap| entry curModemapList))
+    (t
+     (|mergeModemap| entry curModemapList env)))))
+
+\end{chunk}
+
+\defun{mergeModemap}{mergeModemap}
+\calls{mergeModemap}{isSuperDomain}
+\calls{mergeModemap}{TruthP}
+\refsdollar{mergeModemap}{forceAdd}
+\begin{chunk}{defun mergeModemap}
+(defun |mergeModemap| (entry modemapList env)
+ (let (mc sig pred mcp sigp predp newmm mm)
+ (declare (special |$forceAdd|))
+  ; break out the condition, signature, and predicate fields of the new entry
+  (setq mc (caar entry))
+  (setq sig (cdar entry))
+  (setq pred (caadr entry))
+  (seq 
+   ; walk across the successive tails of the modemap list
+   (do ((mmtail modemapList (cdr mmtail)))
+       ((atom mmtail) nil)
+     (setq mcp (caaar mmtail))
+     (setq sigp (cdaar mmtail))
+     (setq predp (caadar mmtail))
+     (cond
+      ((or (equal mc mcp) (|isSuperDomain| mcp mc env))
+        ; if this is a duplicate condition
+        (exit 
+         (progn
+          (setq newmm nil)
+          (setq mm modemapList)
+          ; copy the unique modemap terms
+          (loop while (not (eq mm mmtail)) do
+            (setq newmm (cons (car mm) newmm))
+            (setq mm (cdr mm)))
+          ; if the conditions and signatures are equal
+          (when (and (equal mc mcp) (equal sig sigp))
+            ; we only need one of these unless the conditions are hairy
+            (cond
+             ((and (null |$forceAdd|) (|TruthP| predp))
+               ; the new predicate buys us nothing
+               (setq entry nil)
+               (return modemapList))
+             ((|TruthP| pred)
+               ; the thing we matched against is useless, by comparison
+               (setq mmtail (cdr mmtail)))))
+          (setq modemapList (nconc (nreverse newmm) (cons entry mmtail)))
+          (setq entry nil)
+          (return modemapList))))))
+   ; if the entry is still defined, add it to the modemap
+   (if entry 
+     (append modemapList (list entry))
+     modemapList))))
 
 \end{chunk}
 
@@ -16644,7 +16893,11 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun action}
 \getchunk{defun addclose}
 \getchunk{defun addDomain}
+\getchunk{defun addEltModemap}
 \getchunk{defun addEmptyCapsuleIfNecessary}
+\getchunk{defun addModemapKnown}
+\getchunk{defun addModemap0}
+\getchunk{defun addModemap1}
 \getchunk{defun add-parens-and-semis-to-line}
 \getchunk{defun Advance-Char}
 \getchunk{defun advance-token}
@@ -16774,11 +17027,14 @@ if \verb|$InteractiveMode| then use a null outputstream
 
 \getchunk{defun get-a-line}
 \getchunk{defun getModemap}
+\getchunk{defun getModemapList}
+\getchunk{defun getModemapListFromDomain}
 \getchunk{defun getOperationAlist}
 \getchunk{defun getScriptName}
 \getchunk{defun getTargetFromRhs}
 \getchunk{defun get-token}
 \getchunk{defun getToken}
+\getchunk{defun getUniqueModemap}
 \getchunk{defun getUniqueSignature}
 \getchunk{defun genDomainOps}
 \getchunk{defun genDomainViewList0}
@@ -16824,9 +17080,11 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun match-next-token}
 \getchunk{defun match-string}
 \getchunk{defun match-token}
+\getchunk{defun mergeModemap}
 \getchunk{defun meta-syntax-error}
 \getchunk{defun mkCategoryPackage}
 \getchunk{defun mkConstructor}
+\getchunk{defun mkNewModemapList}
 \getchunk{defun mkOpVec}
 \getchunk{defun modifyModeStack}
 
