@@ -6612,6 +6612,134 @@ $\rightarrow$
 
 \end{chunk}
 
+\defun{interactiveModemapForm}{interactiveModemapForm}
+Create modemap form for use by the interpreter.  This function
+replaces all specific domains mentioned in the modemap with pattern
+variables, and predicates
+\calls{interactiveModemapForm}{pairp}
+\calls{interactiveModemapForm}{qcar}
+\calls{interactiveModemapForm}{qcdr}
+\calls{interactiveModemapForm}{nequal}
+\calls{interactiveModemapForm}{replaceVars}
+\calls{interactiveModemapForm}{modemapPattern}
+\calls{interactiveModemapForm}{substVars}
+\calls{interactiveModemapForm}{fixUpPredicate}
+\refsdollar{interactiveModemapForm}{PatternVariableList}
+\refsdollar{interactiveModemapForm}{FormalMapVariableList}
+\begin{chunk}{defun interactiveModemapForm}
+(defun |interactiveModemapForm| (mm)
+ (labels (
+  (fn (x)
+    (if (and (pairp x) (pairp (qcdr x))
+             (pairp (qcdr (qcdr x))) (eq (qcdr (qcdr (qcdr x))) nil)
+             (nequal (qcar x) '|isFreeFunction|) 
+             (atom (qcar (qcdr (qcdr x)))))
+     (list (first x) (second x) (list (third x)))
+     x)))
+ (let (pattern dc sig mmpat patternAlist partial patvars
+       domainPredicateList tmp1 pred dependList cond)
+ (declare (special |$PatternVariableList| |$FormalMapVariableList|))
+  (setq mm 
+   (|replaceVars| (copy mm) |$PatternVariableList| |$FormalMapVariableList|))
+  (setq pattern (car mm))
+  (setq dc (caar mm))
+  (setq sig (cdar mm))
+  (setq pred (cadr mm))
+  (setq pred
+   (prog ()
+    (return
+     (do ((x pred (cdr x)) (result nil))
+         ((atom x) (nreverse0 result))
+       (setq result (cons (fn (car x)) result))))))
+  (setq tmp1 (|modemapPattern| pattern sig))
+  (setq mmpat (car tmp1))
+  (setq patternAlist (cadr tmp1))
+  (setq partial (caddr tmp1))
+  (setq patvars (cadddr tmp1))
+  (setq tmp1 (|substVars| pred patternAlist patvars))
+  (setq pred (car tmp1))
+  (setq domainPredicateList (cadr tmp1))
+  (setq tmp1 (|fixUpPredicate| pred domainPredicateList partial (cdr mmpat)))
+  (setq pred (car tmp1))
+  (setq dependList (cdr tmp1))
+  (setq cond (car pred))
+  (list mmpat cond))))
+
+\end{chunk}
+
+\defun{substVars}{substVars}
+Make pattern variable substitutions.
+\calls{substVars}{msubst}
+\calls{substVars}{nsubst}
+\calls{substVars}{contained}
+\refsdollar{substVars}{FormalMapVariableList}
+\begin{chunk}{defun substVars}
+(defun |substVars| (pred patternAlist patternVarList)
+ (let (patVar value everything replacementVar domainPredicates)
+ (declare (special |$FormalMapVariableList|))
+  (setq domainPredicates NIL)
+  (maplist 
+   #'(lambda (x)
+      (setq patVar (caar x))
+      (setq value (cdar x))
+      (setq pred (msubst patVar value pred))
+      (setq patternAlist (|nsubst| patVar value patternAlist))
+      (setq domainPredicates (msubst patVar value domainPredicates))
+      (unless (member value |$FormalMapVariableList|)
+       (setq domainPredicates
+         (cons (list '|isDomain| patVar value) domainPredicates))))
+     patternAlist)
+  (setq everything (list pred patternAlist domainPredicates))
+  (dolist (|var| |$FormalMapVariableList|)
+    (cond
+     ((contained |var| everything)
+        (setq replacementVar (car patternVarList))
+        (setq patternVarList (cdr patternVarList))
+        (setq pred (msubst replacementVar |var| pred))
+        (setq domainPredicates
+          (msubst replacementVar |var| domainPredicates)))))
+  (list pred domainPredicates)))
+
+\end{chunk}
+
+\defun{modemapPattern}{modemapPattern}
+\calls{modemapPattern}{pairp}
+\calls{modemapPattern}{qcar}
+\calls{modemapPattern}{qcdr}
+\calls{modemapPattern}{rassoc}
+\refsdollar{modemapPattern}{PatternVariableList}
+\begin{chunk}{defun modemapPattern}
+(defun |modemapPattern| (mmPattern sig)
+ (let (partial patvar patvars mmpat patternAlist)
+ (declare (special |$PatternVariableList|))
+   (setq patternAlist nil)
+   (setq mmpat nil)
+   (setq patvars |$PatternVariableList|)
+   (setq partial nil)
+   (maplist
+    #'(lambda (xTails)
+      (let ((x (car xTails)))
+       (when  (and (pairp x) (eq (qcar x) '|Union|)
+                  (pairp (qcdr x)) (pairp (qcdr (qcdr x)))
+                  (eq (qcdr (qcdr (qcdr x))) nil)
+                  (equal (third x) "failed")
+                  (equal xTails sig))
+         (setq x (second x))
+         (setq partial t))
+       (setq patvar (|rassoc| x patternAlist))
+       (cond
+        ((null (null patvar))
+         (setq mmpat (cons patvar mmpat)))
+        (t
+         (setq patvar (car patvars))
+         (setq patvars (cdr patvars))
+         (setq mmpat (cons patvar mmpat))
+         (setq patternAlist (cons (cons patvar x) patternAlist))))))
+     mmPattern)
+   (list (nreverse mmpat) patternAlist partial patvars)))
+
+\end{chunk}
+
 \defun{evalAndRwriteLispForm}{evalAndRwriteLispForm}
 \calls{evalAndRwriteLispForm}{eval}
 \calls{evalAndRwriteLispForm}{rwriteLispForm}
@@ -7043,8 +7171,8 @@ where item has form
 \refsdollar{transformOperationAlist}{functionLocations}
 \begin{chunk}{defun transformOperationAlist}
 (defun |transformOperationAlist| (operationAlist)
- (let (op sig condition implementation eltEtc tmp1 tmp2 impOp kind u n 
-       signatureItem itemList newAlist)
+ (let (op sig condition implementation eltEtc impOp kind u n signatureItem 
+       itemList newAlist)
  (declare (special |$functionLocations|))
   (setq newAlist nil)
   (dolist (item operationAlist)
@@ -10575,6 +10703,7 @@ An angry JHD - August 15th., 1984
 \refsdollar{isDomainForm}{SpecialDomainNames}
 \begin{chunk}{defun isDomainForm}
 (defun |isDomainForm| (d env)
+ (let (tmp1)
  (declare (special |$SpecialDomainNames|))
   (or (member (kar d) |$SpecialDomainNames|) (|isFunctor| d)
       (and (progn
@@ -10582,7 +10711,7 @@ An angry JHD - August 15th., 1984
             (and (pairp tmp1) (eq (qcar tmp1) '|Mapping|) (pairp (qcdr tmp1))))
            (|isCategoryForm| (qcar (qcdr tmp1)) env))
     (|isCategoryForm| (|getmode| d env) env)
-    (|isDomainConstructorForm| d env)))
+    (|isDomainConstructorForm| d env))))
 
 \end{chunk}
 
@@ -18109,6 +18238,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun initial-substring}
 \getchunk{defun initial-substring-p}
 \getchunk{defun initializeLisplib}
+\getchunk{defun interactiveModemapForm}
 \getchunk{defun is-console}
 \getchunk{defun isDomainConstructorForm}
 \getchunk{defun isDomainForm}
@@ -18153,6 +18283,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun mkNewModemapList}
 \getchunk{defun mkOpVec}
 \getchunk{defun modifyModeStack}
+\getchunk{defun modemapPattern}
 
 \getchunk{defun ncINTERPFILE}
 \getchunk{defun next-char}
@@ -18380,6 +18511,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun storeblanks}
 \getchunk{defun substituteCategoryArguments}
 \getchunk{defun substNames}
+\getchunk{defun substVars}
 \getchunk{defun s-process}
 
 \getchunk{defun token-install}
