@@ -6691,7 +6691,7 @@ $\rightarrow$
 \calls{flattenSignatureList}{flattenSignatureList}
 \begin{chunk}{defun flattenSignatureList}
 (defun |flattenSignatureList| (x)
- (let (tmp1 cond tmp2 b1 tmp3 b2 z zz)
+ (let (zz)
   (cond
    ((atom x) nil)
    ((and (pairp x) (eq (qcar x) 'signature)) (list x))
@@ -6817,6 +6817,203 @@ identifier in newvars in the expression x
   (setq pred (|moveORsOutside| pred))
   (when partial (setq pred (cons '|partial| pred)))
   (cons (cons pred (cons fn skip)) dependList)))
+
+\end{chunk}
+
+\defun{orderPredicateItems}{orderPredicateItems}
+\calls{orderPredicateItems}{pairp}
+\calls{orderPredicateItems}{qcar}
+\calls{orderPredicateItems}{qcdr}
+\calls{orderPredicateItems}{signatureTran}
+\calls{orderPredicateItems}{orderPredTran}
+\begin{chunk}{defun orderPredicateItems}
+(defun |orderPredicateItems| (pred1 sig skip)
+ (let (pred)
+  (setq pred (|signatureTran| pred1))
+  (if (and (pairp pred) (eq (qcar pred) 'and))
+     (|orderPredTran| (qcdr pred) sig skip)
+     pred)))
+
+\end{chunk}
+
+\defun{signatureTran}{signatureTran}
+\calls{signatureTran}{signatureTran}
+\calls{signatureTran}{isCategoryForm}
+\refsdollar{signatureTran}{e}
+\begin{chunk}{defun signatureTran}
+(defun |signatureTran| (pred)
+ (declare (special |$e|))
+  (cond
+   ((atom pred) pred)
+   ((and (pairp pred) (eq (qcar pred) '|has|) (PAIRP (qcdr pred))
+         (pairp (qcdr (qcdr pred)))
+         (eq (qcdr (qcdr (qcdr pred))) nil)
+         (|isCategoryForm| (third pred) |$e|))
+     (list '|ofCategory| (second pred) (third pred)))
+   (t
+    (loop for p in pred
+     collect (|signatureTran| p)))))
+
+\end{chunk}
+
+\defun{orderPredTran}{orderPredTran}
+\calls{orderPredTran}{pairp}
+\calls{orderPredTran}{qcar}
+\calls{orderPredTran}{qcdr}
+\calls{orderPredTran}{member}
+\calls{orderPredTran}{delete}
+\calls{orderPredTran}{unionq}
+\calls{orderPredTran}{listOfPatternIds}
+\calls{orderPredTran}{intersectionq}
+\calls{orderPredTran}{setdifference}
+\calls{orderPredTran}{insertWOC}
+\calls{orderPredTran}{isDomainSubst}
+\begin{chunk}{defun orderPredTran}
+(defun |orderPredTran| (oldList sig skip)
+ (let (lastDependList somethingDone lastPreds indepvl depvl dependList 
+       noldList x ids fullDependList newList answer)
+;  --(1) make two kinds of predicates appear last:
+;  -----  (op *target ..) when *target does not appear later in sig
+;  -----  (isDomain *1 ..)
+  (SEQ 
+   (loop for pred in oldList 
+    do (cond
+        ((or (and (pairp pred) (pairp (qcdr pred))
+                  (pairp (qcdr (qcdr pred)))
+                  (eq (qcdr (qcdr (qcdr pred))) nil)
+                  (member (qcar pred) '(|isDomain| |ofCategory|))
+                  (equal (qcar (qcdr pred)) (car sig))
+                  (null (|member| (qcar (qcdr pred)) (cdr sig))))
+             (and (null skip) (pairp pred) (eq (qcar pred) '|isDomain|)
+                  (pairp (qcdr pred)) (pairp (qcdr (qcdr pred)))
+                  (eq (qcdr (qcdr (qcdr pred))) nil)
+                  (equal (qcar (qcdr pred)) '*1)))
+           (setq oldList (|delete| pred oldList))
+           (setq lastPreds (cons pred lastPreds)))))
+;  --(2a) lastDependList=list of all variables that lastPred forms depend upon
+   (setq lastDependList
+    (let (result)
+     (loop for x in lastPreds
+      do (setq result (unionq result (|listOfPatternIds| x))))
+    result))
+;  --(2b) dependList=list of all variables that isDom/ofCat forms depend upon
+   (setq dependList
+    (let (result)
+     (loop for x in oldList
+      do (when 
+          (and (pairp x) 
+               (or (eq (qcar x) '|isDomain|) (eq (qcar x) '|ofCategory|))
+               (pairp (qcdr x)) (pairp (qcdr (qcdr x)))
+               (eq (qcdr (qcdr (qcdr x))) nil))
+           (setq result (unionq result (|listOfPatternIds| (third x))))))
+     result))
+;  --(3a) newList= list of ofCat/isDom entries that don't depend on
+   (loop for x in oldList
+    do
+      (cond
+       ((and (pairp x) 
+             (or (eq (qcar x) '|ofCategory|) (eq (qcar x) '|isDomain|))
+             (pairp (qcdr x)) (pairp (qcdr (qcdr x)))
+             (eq (qcdr (qcdr (qcdr x))) nil))
+        (setq indepvl (|listOfPatternIds| (second x)))
+        (setq depvl (|listOfPatternIds| (third x))))
+       (t
+         (setq indepvl (|listOfPatternIds| x))
+         (setq depvl nil)))
+      (when
+       (and (null (intersectionq indepvl dependList))
+            (intersectionq indepvl lastDependList))
+          (setq somethingDone t)
+          (setq lastPreds (append lastPreds (list x)))
+          (setq oldList (|delete| x oldList))))
+;  --(3b) newList= list of ofCat/isDom entries that don't depend on
+   (loop while oldList do
+    (loop for x in oldList do
+     (cond
+      ((and (pairp x) 
+            (or (eq (qcar x) '|ofCategory|) (eq (qcar x) '|isDomain|))
+            (pairp (qcdr x))
+            (pairp (qcdr (qcdr x))) (eq (qcdr (qcdr (qcdr x))) nil))
+       (setq indepvl (|listOfPatternIds| (second x)))
+       (setq depvl (|listOfPatternIds| (third x))))
+      (t
+        (setq indepvl (|listOfPatternIds| x))
+        (setq depvl nil)))
+     (when (null (intersectionq indepvl dependList))
+        (setq dependList (SETDIFFERENCE dependList depvl))
+        (setq newList (APPEND newList (list x)))))
+;  --(4) noldList= what is left over
+    (cond
+     ((equal (setq noldList (setdifference oldList newList)) oldList)
+       (setq newList (APPEND newList oldList))
+       (return nil))
+     (t
+       (setq oldList noldList))))
+   (loop for pred in newList do 
+     (when
+       (and (pairp pred) 
+             (or (eq (qcar pred) '|isDomain|) (eq (qcar x) '|ofCategory|))
+             (pairp (qcdr pred))
+             (pairp (qcdr (qcdr pred)))
+             (eq (qcdr (qcdr (qcdr pred))) nil))
+         (setq ids (|listOfPatternIds| (third pred)))
+         (when 
+           (let (result)
+             (loop for id in ids do
+              (setq result (and result (|member| id fullDependList))))
+             result)
+           (setq fullDependList (|insertWOC| (second pred) fullDependList)))
+         (setq fullDependList (unionq fullDependList ids))))
+   (setq newList (append newList lastPreds))
+   (setq newList (|isDomainSubst| newList))
+   (setq answer 
+    (cons (cons 'and newList) (intersectionq fullDependList sig))))))
+
+\end{chunk}
+
+\defun{isDomainSubst}{isDomainSubst}
+\begin{chunk}{defun isDomainSubst}
+(defun |isDomainSubst| (u)
+ (labels (
+  (findSub (x alist)
+  (cond
+   ((null alist) nil)
+   ((and (pairp alist) (pairp (qcar alist))
+         (eq (qcar (qcar alist)) '|isDomain|)
+         (pairp (qcdr (qcar alist)))
+         (pairp (qcdr (qcdr (qcar alist))))
+         (eq (qcdr (qcdr (qcdr (qcar alist)))) nil)
+         (equal x (cadar alist)))
+         (caddar alist))
+    (t (findSub x (cdr alist)))))
+  (fn (x alist)
+   (let (s)
+    (declare (special |$PatternVariableList|))
+    (if (atom x)
+     (if 
+      (and (identp x)
+           (member x |$PatternVariableList|)
+           (setq s (findSub x alist)))
+         s
+         x)
+     (cons (car x)
+      (loop for y in (cdr x)
+       collect (fn y alist)))))))
+ (let (head tail tmp1 x tmp2 y nhead)
+  (if (pairp u)
+   (progn
+    (setq head (qcar u))
+    (setq tail (qcdr u))
+    (setq nhead
+     (cond
+      ((and (pairp head) (eq (qcar head) '|isDomain|)
+            (pairp (qcdr head)) (pairp (qcdr (qcdr head)))
+            (eq (qcdr (qcdr (qcdr head))) nil))
+        (list '|isDomain| (second head)
+           (fn (third head) tail)))
+      (t head)))
+     (cons nhead (|isDomainSubst| (cdr u))))
+   u))))
 
 \end{chunk}
 
@@ -7912,6 +8109,15 @@ where item has form
 
 \end{chunk}
 
+\defun{allLASSOCs}{allLASSOCs}
+\begin{chunk}{defun allLASSOCs}
+(defun |allLASSOCs| (op alist)
+ (loop for value in alist
+  when (equal (car value) op)
+  collect value))
+
+\end{chunk}
+
 \defun{formal2Pattern}{formal2Pattern}
 \calls{formal2Pattern}{sublis}
 \calls{formal2Pattern}{pairList}
@@ -8926,6 +9132,13 @@ add flag identifiers as literals in the environment
      (|insertModemap| entry curModemapList))
     (t
      (|mergeModemap| entry curModemapList env)))))
+
+\end{chunk}
+
+\defun{insertModemap}{insertModemap}
+\begin{chunk}{defun insertModemap}
+(defun |insertModemap| (new mmList)
+ (if (null mmList) (list new) (cons new mmList)))
 
 \end{chunk}
 
@@ -18299,6 +18512,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun add-parens-and-semis-to-line}
 \getchunk{defun Advance-Char}
 \getchunk{defun advance-token}
+\getchunk{defun allLASSOCs}
 \getchunk{defun aplTran}
 \getchunk{defun aplTran1}
 \getchunk{defun aplTranList}
@@ -18470,10 +18684,12 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun initial-substring}
 \getchunk{defun initial-substring-p}
 \getchunk{defun initializeLisplib}
+\getchunk{defun insertModemap}
 \getchunk{defun interactiveModemapForm}
 \getchunk{defun is-console}
 \getchunk{defun isDomainConstructorForm}
 \getchunk{defun isDomainForm}
+\getchunk{defun isDomainSubst}
 \getchunk{defun isFunctor}
 \getchunk{defun isListConstructor}
 \getchunk{defun isSuperDomain}
@@ -18529,6 +18745,8 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun nonblankloc}
 
 \getchunk{defun optional}
+\getchunk{defun orderPredicateItems}
+\getchunk{defun orderPredTran}
 
 \getchunk{defun PARSE-AnyId}
 \getchunk{defun PARSE-Application}
@@ -18735,6 +18953,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun rwriteLispForm}
 
 \getchunk{defun setDefOp}
+\getchunk{defun signatureTran}
 \getchunk{defun skip-blanks}
 \getchunk{defun skip-ifblock}
 \getchunk{defun skip-to-endif}

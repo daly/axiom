@@ -640,6 +640,7 @@ information is initialized.
  (if (<= n 0) 
   ""
   (make-string n :initial-element (character (or (ifcar charPart) " ")))))
+
 \end{chunk}
 
 \defunsec{spad}{Starts the interpreter but do not read in profiles}
@@ -29648,6 +29649,27 @@ o )what
 
 \end{chunk}
 
+\defun{isExposedConstructor}{isExposedConstructor}
+\calls{isExposedConstructor}{getalist}
+\refsdollar{isExposedConstructor}{localExposureData}
+\refsdollar{isExposedConstructor}{globalExposureGroupAlist}
+\begin{chunk}{defun isExposedConstructor}
+(defun |isExposedConstructor| (name)
+ (let (x found)
+ (declare (special |$globalExposureGroupAlist| |$localExposureData|))
+  (cond
+    ((member name '(|Union| |Record| |Mapping|)) t)
+    ((member name (elt |$localExposureData| 2)) nil)
+    ((member name (elt |$localExposureData| 1)) t)
+    (t 
+     (loop for g in (elt |$localExposureData| 0) do
+      while (not found)
+        (setq x (getalist |$globalExposureGroupAlist| g))
+        (when (and x (getalist x name)) (setq found t)))
+     found))))
+
+\end{chunk}
+
 \defun{displayOperationsFromLisplib}{displayOperationsFromLisplib}
 \calls{displayOperationsFromLisplib}{getdatabase}
 \calls{displayOperationsFromLisplib}{centerAndHighlight}
@@ -29804,6 +29826,63 @@ o )what
               (|bright| "--"))))
       (|sayBrightly| ""))))
   nil))
+
+\end{chunk}
+
+\defun{getOplistForConstructorForm}{getOplistForConstructorForm}
+The new form is an op-Alist which has entries 
+\begin{verbatim}
+  (<op> . signature-Alist)
+\end{verbatim}
+where signature-Alist has entries 
+\begin{verbatim}
+  (<signature> . item)
+\end{verbatim}
+where item has form (<slotNumber> <condition> <kind>)
+\begin{verbatim}
+  (<slotNumber> <condition> <kind>)
+\end{verbatim}
+where <kind> =  ELT | CONST | Subsumed | (XLAM..) ..
+\begin{verbatim}
+  <kind> =  ELT | CONST | Subsumed | (XLAM..) ..
+\end{verbatim}
+\begin{chunk}{defun getOplistForConstructorForm}
+(defun |getOplistForConstructorForm| (form)
+ (let (argl pairlis opAlist op signatureAlist result)
+ (declare (special |$FormalMapVariableList|))
+  (setq op (car form))
+  (setq argl (cdr form))
+  (setq pairlis
+   (loop for fv in |$FormalMapVariableList|
+         for arg in argl
+    collect (cons fv arg)))
+  (setq opAlist (|getOperationAlistFromLisplib| op))
+  (loop for item in opAlist do
+    (setq op (car item))
+    (setq signatureAlist (cdr item))
+    (setq result 
+     (append result 
+      (|getOplistWithUniqueSignatures| op pairlis signatureAlist))))
+  result))
+
+\end{chunk}
+
+\defun{getOplistWithUniqueSignatures}{getOplistWithUniqueSignatures}
+\begin{chunk}{defun getOplistWithUniqueSignatures}
+(defun |getOplistWithUniqueSignatures| (op pairlis signatureAlist)
+ (let (sig slotNumber pred kind alist)
+  (loop for item in signatureAlist do
+   where (nequal (fourth item) '|Subsumed|) 
+     (setq sig (first item))
+     (setq slotNumber (second item))
+     (setq pred (third item))
+     (setq kind (fourth item))
+     (setq alist
+      (|insertAlist| 
+       (sublis pairlis (list op sig))
+       (sublis pairlis (list pred (list kind  nil slotNumber)))
+       alist)))
+  alist))
 
 \end{chunk}
 
@@ -32529,6 +32608,19 @@ to convert the data into type "Expression"
           (|spadReply|))))))))))) 
 
 \end{chunk}
+
+\defun{remover}{remover}
+\calls{remover}{rplnode}
+\calls{remover}{remover}
+\begin{chunk}{defun remover}
+(defun remover (lst item)
+ (cond
+  ((null (pairp lst)) (cond ((equal lst item) nil) (t lst)))
+  ((equal (car lst) item) (cdr lst))
+  (t (rplnode lst (remover (car lst) item) (remover (cdr lst) item)))))
+
+\end{chunk}
+
 \defun{prTraceNames,fn}{prTraceNames,fn}
 \calls{prTraceNames,fn}{seq}
 \calls{prTraceNames,fn}{pairp}
@@ -33975,14 +34067,14 @@ in patterns
 \calls{filterAndFormatConstructors}{function}
 \usesdollar{filterAndFormatConstructors}{linelength}
 \begin{chunk}{defun filterAndFormatConstructors}
-(defun |filterAndFormatConstructors| (|constrType| label patterns)
+(defun |filterAndFormatConstructors| (constrType label patterns)
  (prog (l)
  (declare (special $linelength))
   (return
    (progn (|centerAndHighlight| label $linelength (|specialChar| '|hbar|))
     (setq l
      (|filterListOfStringsWithFn| patterns
-       (|whatConstructors| |constrType|)
+       (|whatConstructors| constrType)
        (|function| cdr)))
     (cond (patterns
      (cond
@@ -34016,7 +34108,7 @@ in patterns
 \calls{whatConstructors}{msort}
 \calls{whatConstructors}{exit}
 \begin{chunk}{defun whatConstructors}
-(defun |whatConstructors| (|constrType|)
+(defun |whatConstructors| (constrType)
  (prog nil
   (return 
    (seq
@@ -34029,8 +34121,7 @@ in patterns
         (seq
          (exit
           (cond
-           ((boot-equal (getdatabase |con| 'constructorkind)
-                        |constrType|)
+           ((equal (getdatabase |con| 'constructorkind) constrType)
              (setq t0
               (cons
                (cons
@@ -36307,6 +36398,27 @@ The localdatabase function tries to find files in the order of:
       (|loadLibNoUpdate| key key object)) ; used to be cname key
      (apply key args)))
   (|sayKeyedMsg| 'S2IU0001 (list key object))))))
+
+\end{chunk}
+
+\defun{updateDatabase}{updateDatabase}
+For now in NRUNTIME do database update only if forced
+\calls{updateDatabase}{constructor?}
+\calls{updateDatabase}{clearClams}
+\calls{updateDatabase}{clearAllSlams}
+\refsdollar{updateDatabase}{forceDatabaseUpdate}
+\begin{chunk}{defun updateDatabase}
+(defun |updateDatabase| (fname cname systemdirp)
+ (declare (ignore fname))
+ (declare (special |$forceDatabaseUpdate|))
+  (when |$forceDatabaseUpdate|
+   (when (|constructor?| cname)
+    (|clearClams|)
+    (|clearAllSlams| nil)
+    (when (getl cname 'loaded) (|clearConstructorCaches|)))
+   (when (or |$forceDatabaseUpdate| (null systemdirp))
+    (|clearClams|)
+    (|clearAllSlams| nil))))
 
 \end{chunk}
 
@@ -40379,6 +40491,8 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun getMsgPos}
 \getchunk{defun getMsgPos2}
 \getchunk{defun getMsgToWhere}
+\getchunk{defun getOplistForConstructorForm}
+\getchunk{defun getOplistWithUniqueSignatures}
 \getchunk{defun getOption}
 \getchunk{defun getPosStL}
 \getchunk{defun getPreviousMapSubNames}
@@ -40475,6 +40589,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun ioclear}
 \getchunk{defun iostat}
 \getchunk{defun isDomainOrPackage}
+\getchunk{defun isExposedConstructor}
 \getchunk{defun isgenvar}
 \getchunk{defun isInterpOnlyMap}
 \getchunk{defun isListOfIdentifiers}
@@ -41039,6 +41154,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun redundant}
 \getchunk{defun remFile}
 \getchunk{defun removeOption}
+\getchunk{defun remover}
 \getchunk{defun removeTracedMapSigs}
 \getchunk{defun removeUndoLines}
 \getchunk{defun replaceFile}
@@ -41257,6 +41373,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun untraceMapSubNames}
 \getchunk{defun unwritable?}
 \getchunk{defun updateCurrentInterpreterFrame}
+\getchunk{defun updateDatabase}
 \getchunk{defun updateFromCurrentInterpreterFrame}
 \getchunk{defun updateHist}
 \getchunk{defun updateInCoreHist}
