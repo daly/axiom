@@ -10375,6 +10375,22 @@ An angry JHD - August 15th., 1984
 
 \end{chunk}
 
+\defun{compBoolean}{compBoolean}
+\calls{compBoolean}{comp}
+\calls{compBoolean}{getSuccessEnvironment}
+\calls{compBoolean}{getInverseEnvironment}
+\begin{chunk}{defun compBoolean}
+(defun |compBoolean| (p mode env)
+ (let (tmp1 pp)
+  (when (setq tmp1 (OR (|comp| p mode env))) 
+   (setq pp (car tmp1))
+   (setq mode (cadr tmp1))
+   (setq env (caddr tmp1))
+   (list pp mode (|getSuccessEnvironment| p env)
+                 (|getInverseEnvironment| p env)))))
+
+\end{chunk}
+
 \defplist{import}{compImport plist}
 \begin{chunk}{postvars}
 (eval-when (eval load)
@@ -11045,6 +11061,103 @@ An angry JHD - August 15th., 1984
 
 \end{chunk}
 
+\defun{setqMultiple}{setqMultiple}
+\calls{setqMultiple}{nreverse0}
+\calls{setqMultiple}{pairp}
+\calls{setqMultiple}{qcar}
+\calls{setqMultiple}{qcdr}
+\calls{setqMultiple}{stackMessage}
+\calls{setqMultiple}{setqMultipleExplicit}
+\calls{setqMultiple}{genVariable}
+\calls{setqMultiple}{addBinding}
+\calls{setqMultiple}{compSetq1}
+\calls{setqMultiple}{convert}
+\calls{setqMultiple}{put}
+\calls{setqMultiple}{genSomeVariable}
+\calls{setqMultiple}{length}
+\calls{setqMultiple}{mkprogn}
+\refsdollar{setqMultiple}{EmptyMode}
+\refsdollar{setqMultiple}{NoValueMode}
+\refsdollar{setqMultiple}{noEnv}
+\begin{chunk}{defun setqMultiple}
+(defun |setqMultiple| (nameList val m env)
+ (labels (
+  (decompose (tt len env)
+   (declare (ignore len))
+   (let (tmp1 z)
+   (declare (special |$EmptyMode|))
+    (cond
+     ((and (pairp tt) (eq (qcar tt) '|Record|)
+           (progn (setq z (qcdr tt)) t))
+      (loop for item in z
+       collect (cons (second item) (third item))))
+     ((progn
+       (setq tmp1 (|comp| tt |$EmptyMode| env))
+       (and (pairp tmp1) (PAIRP (qcdr tmp1)) (PAIRP (qcar (qcdr tmp1)))
+            (eq (qcar (qcar (qcdr tmp1))) '|RecordCategory|)
+            (pairp (qcdr (qcdr tmp1))) (eq (qcdr (qcdr (qcdr tmp1))) nil)))
+      (loop for item in z
+       collect (cons (second item) (third item))))
+     (t (|stackMessage| (list '|no multiple assigns to mode: | tt)))))))
+ (let (g m1 tt x mp selectorModePairs tmp2 assignList)
+ (declare (special |$noEnv| |$EmptyMode| |$NoValueMode|))
+  (cond
+   ((and (pairp val) (eq (qcar val) 'cons) (equal m |$NoValueMode|))
+     (|setqMultipleExplicit| nameList (|uncons| val) m env))
+   ((and (pairp val) (eq (qcar val) '|@Tuple|) (equal m |$NoValueMode|))
+     (|setqMultipleExplicit| nameList (qcdr val) m env))
+   ; 1 create a gensym, %add to local environment, compile and assign rhs
+   (t 
+     (setq g (|genVariable|))
+     (setq env (|addBinding| g nil env))
+     (setq tmp2 (|compSetq1| g val |$EmptyMode| env))
+     (when tmp2
+      (setq tt tmp2)
+      (setq m1 (cadr tmp2))
+      (setq env (|put| g 'mode m1 env))
+      (setq tmp2 (|convert| tt m))
+;  1.1 --exit if result is a list
+      (when tmp2
+       (setq x (first tmp2))
+       (setq mp (second tmp2))
+       (setq env (third tmp2))
+       (cond
+        ((and (pairp m1) (eq (qcar m1) '|List|) (pairp (qcdr m1))
+              (eq (qcdr (qcdr m1)) nil))
+         (loop for y in nameList do
+          (setq env 
+           (|put| y '|value| (list (|genSomeVariable|) (second m1) |$noEnv|)
+           env)))
+         (|convert| (list (list 'progn x (list 'let nameList g) g) mp env) m))
+        (t
+;  2 --verify that the #nameList = number of parts of right-hand-side
+         (setq selectorModePairs 
+          (decompose m1 (|#| nameList) env))
+         (when selectorModePairs 
+          (cond
+           ((nequal (|#| nameList) (|#| selectorModePairs))
+             (|stackMessage|
+              (list val '| must decompose into | 
+               (|#| nameList) '| components| )))
+           (t
+;  3 --generate code
+            (setq assignList
+             (loop for x in nameList
+                   for item in selectorModePairs
+              collect (car
+                       (progn
+                        (setq tmp2 
+                          (or (|compSetq1| x (list '|elt| g (first item)) 
+                                             (rest item) env)
+                              (return '|failed|)))
+                        (setq env (third tmp2))
+                        tmp2))))
+            (unless (eq assignList '|failed|)
+             (list (mkprogn (cons x (append assignList (list g)))) mp env))
+              ))))))))))))
+
+\end{chunk}
+
 \defun{setqSetelt}{setqSetelt}
 \calls{setqSetelt}{comp}
 \begin{chunk}{defun setqSetelt}
@@ -11134,6 +11247,22 @@ An angry JHD - August 15th., 1984
 
 \end{chunk}
 
+\defun{assignError}{assignError}
+\calls{assignError}{stackMessage}
+\begin{chunk}{defun assignError}
+(defun |assignError| (val mp form m)
+ (let (message)
+  (setq message
+   (if val
+    (list '|CANNOT ASSIGN: | val '|%l| 
+          '|   OF MODE: | mp '|%l| 
+          '|   TO: | form '|%l| '|   OF MODE: | m)
+    (list '|CANNOT ASSIGN: | val '|%l| 
+          '|   TO: | form '|%l| '|   OF MODE: | m)))
+  (|stackMessage| message)))
+
+\end{chunk}
+
 \defun{outputComp}{outputComp}
 \calls{outputComp}{comp}
 \calls{outputComp}{pairp}
@@ -11152,52 +11281,29 @@ An angry JHD - August 15th., 1984
 ;    [['coerceUn2E,x,v.mode],$Expression,e]
 ;  [x,$Expression,e]
 
-(DEFUN |outputComp| (|x| |e|)
-  (PROG (|u| |argl| |LETTMP#1| |v| |ISTMP#1| |l|)
-  (declare (special |$Expression|))
-    (RETURN
-      (SEQ (COND
-             ((SPADLET |u|
-                       (|comp| (CONS '|::|
-                                     (CONS |x|
-                                      (CONS |$Expression| NIL)))
-                               |$Expression| |e|))
-              |u|)
-             ((AND (PAIRP |x|) (EQ (QCAR |x|) '|construct|)
-                   (PROGN (SPADLET |argl| (QCDR |x|)) 'T))
-              (CONS (CONS 'LIST
-                          (PROG (G167017)
-                            (SPADLET G167017 NIL)
-                            (RETURN
-                              (DO ((G167025 |argl| (CDR G167025))
-                                   (|x| NIL))
-                                  ((OR (ATOM G167025)
-                                    (PROGN
-                                      (SETQ |x| (CAR G167025))
-                                      NIL))
-                                   (NREVERSE0 G167017))
-                                (SEQ (EXIT
-                                      (SETQ G167017
-                                       (CONS
-                                        (CAR
-                                         (PROGN
-                                           (SPADLET |LETTMP#1|
-                                            (|outputComp| |x| |e|))
-                                           (SPADLET |e|
-                                            (CADDR |LETTMP#1|))
-                                           |LETTMP#1|))
-                                        G167017))))))))
-                    (CONS |$Expression| (CONS |e| NIL))))
-             ((AND (SPADLET |v| (|get| |x| '|value| |e|))
-                   (PROGN
-                     (SPADLET |ISTMP#1| (CADR |v|))
-                     (AND (PAIRP |ISTMP#1|)
-                          (EQ (QCAR |ISTMP#1|) '|Union|)
-                          (PROGN (SPADLET |l| (QCDR |ISTMP#1|)) 'T))))
-              (CONS (CONS '|coerceUn2E|
-                          (CONS |x| (CONS (CADR |v|) NIL)))
-                    (CONS |$Expression| (CONS |e| NIL))))
-             ('T (CONS |x| (CONS |$Expression| (CONS |e| NIL)))))))))
+(defun |outputComp| (x env)
+ (let (argl v)
+ (declare (special |$Expression|))
+  (cond
+   ((|comp| (list '|::| x |$Expression|) |$Expression| env))
+   ((and (pairp x) (eq (qcar x) '|construct|))
+     (setq argl (qcdr x))
+     (list (cons 'list
+      (let (result tmp1)
+       (loop for x in argl
+        do (setq result
+            (cons (car
+             (progn
+              (setq tmp1 (|outputComp| x env))
+              (setq env (third tmp1))
+               tmp1))
+               result)))
+         (nreverse0 result)))
+        |$Expression| env))
+     ((and (setq v (|get| x '|value| env))
+           (pairp (cadr v)) (eq (qcar (cadr v)) '|Union|))
+        (list (list '|coerceUn2E| x (cadr v)) |$Expression| env))
+     (t (list x |$Expression| env)))))
 
 \end{chunk}
 
@@ -17795,6 +17901,106 @@ preferred to the underlying representation -- RDJ 9/12/83
 
 \end{chunk}
 
+\defun{getFormModemaps}{getFormModemaps}
+\calls{getFormModemaps}{pairp}
+\calls{getFormModemaps}{qcar}
+\calls{getFormModemaps}{qcdr}
+\calls{getFormModemaps}{getFormModemaps}
+\calls{getFormModemaps}{nreverse0}
+\calls{getFormModemaps}{get}
+\calls{getFormModemaps}{nequal}
+\calls{getFormModemaps}{eltModemapFilter}
+\calls{getFormModemaps}{last}
+\calls{getFormModemaps}{length}
+\calls{getFormModemaps}{stackMessage}
+\refsdollar{getFormModemaps}{insideCategoryPackageIfTrue}
+\begin{chunk}{defun getFormModemaps}
+(defun |getFormModemaps| (form env)
+ (let (op argl domain op1 modemapList nargs finalModemapList)
+ (declare (special |$insideCategoryPackageIfTrue|))
+  (setq op (car form))
+  (setq argl (cdr form))
+  (cond
+   ((and (pairp op) (eq (qcar op) '|elt|) (PAIRP (qcdr op))
+         (pairp (qcdr (qcdr op))) (eq (qcdr (qcdr (qcdr op))) nil))
+     (setq op1 (third op))
+     (setq domain (second op))
+     (loop for x in (|getFormModemaps| (cons op1 argl) env)
+      when (and (pairp x) (pairp (qcar x)) (equal (qcar (qcar x)) domain))
+      collect x))
+   ((null (atom op)) nil)
+   (t
+    (setq modemapList (|get| op '|modemap| env))
+    (when |$insideCategoryPackageIfTrue|
+     (setq modemapList
+      (loop for x in modemapList
+       when (and (pairp x) (pairp (qcar x)) (nequal (qcar (qcar x)) '$))
+       collect x)))))
+  (cond
+   ((eq op '|elt|)
+    (setq modemapList (|eltModemapFilter| (|last| argl) modemapList env)))
+   ((eq op '|setelt|)
+    (setq modemapList (|seteltModemapFilter| (CADR argl) modemapList env))))
+   (setq nargs (|#| argl))
+   (setq finalModemapList
+    (loop for mm in modemapList
+     when (equal (|#| (cddar mm)) nargs)
+     collect mm))
+ (when (and modemapList (null finalModemapList))
+  (|stackMessage|
+   (list '|no modemap for| '|%b| op  '|%d| '|with | nargs '| arguments|)))
+  finalModemapList))
+
+\end{chunk}
+
+\defun{eltModemapFilter}{eltModemapFilter}
+\calls{eltModemapFilter}{pairp}
+\calls{eltModemapFilter}{qcar}
+\calls{eltModemapFilter}{qcdr}
+\calls{eltModemapFilter}{isConstantId}
+\calls{eltModemapFilter}{stackMessage}
+\begin{chunk}{defun eltModemapFilter}
+(defun |eltModemapFilter| (name mmList env)
+ (let (z)
+  (if (|isConstantId| name env)
+   (cond
+    ((setq z
+      (loop for mm in mmList
+       when (and (pairp mm) (pairp (qcar mm)) (pairp (qcdr (qcar mm)))
+                 (pairp (qcdr (qcdr (qcar mm))))
+                 (pairp (qcdr (qcdr (qcdr (qcar mm)))))
+                 (equal (fourth (first mm)) name))
+       collect mm))
+      z)
+    (t
+     (|stackMessage| 
+      (list '|selector variable: | name '| is undeclared and unbound|))
+     nil))
+    mmList)))
+
+\end{chunk}
+
+\defun{seteltModemapFilter}{seteltModemapFilter}
+\calls{seteltModemapFilter}{isConstantId}
+\calls{seteltModemapFilter}{stackMessage}
+\begin{chunk}{defun seteltModemapFilter}
+(defun |seteltModemapFilter| (name mmList env)
+ (let (z)
+  (if (|isConstantId| name env)
+   (cond
+    ((setq z
+      (loop for mm in mmList
+       when (equal (car (cdddar mm)) name)
+       collect mm))
+      z)
+     (t
+      (|stackMessage|
+       (list '|selector variable: | name '| is undeclared and unbound|))
+      nil))
+   mmList)))
+
+\end{chunk}
+
 \defun{compExpressionList}{compExpressionList}
 \calls{compExpressionList}{nreverse0}
 \calls{compExpressionList}{comp}
@@ -17917,6 +18123,35 @@ preferred to the underlying representation -- RDJ 9/12/83
        (|compFormPartiallyBottomUp| form mode env modemapList partialModeList)
        (|compForm3| form mode env modemapList)))
    (t (|compForm3| form mode env modemapList)))))
+
+\end{chunk}
+
+\defun{compForm3}{compForm3}
+\calls{compForm3}{compFormWithModemap}
+\throws{compForm3}{compUniquely}
+\refsdollar{compForm3}{compUniquelyIfTrue}
+\begin{chunk}{defun compForm3}
+(defun |compForm3| (form mode env modemapList)
+ (let (op argl mml tt)
+ (declare (special |$compUniquelyIfTrue|))
+  (setq op (car form))
+  (setq argl (cdr form))
+  (setq tt
+   (let (result)
+    (maplist #'(lambda (mlst)
+     (setq result (or result
+       (|compFormWithModemap| form mode env (car (setq mml mlst))))))
+     modemapList)
+    result))
+   (when |$compUniquelyIfTrue|
+    (if (let (result)
+         (mapcar #'(lambda (mm) 
+            (setq result (or result (|compFormWithModemap| form mode env mm))))
+           (rest mml))
+          result)
+     (throw '|compUniquely| nil)
+     tt))
+  tt))
 
 \end{chunk}
 
@@ -18723,6 +18958,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun aplTran1}
 \getchunk{defun aplTranList}
 \getchunk{defun argsToSig}
+\getchunk{defun assignError}
 \getchunk{defun augLisplibModemapsFromCategory}
 \getchunk{defun augmentLisplibModemapsFromFunctor}
 \getchunk{defun augModemapsFromCategory}
@@ -18744,13 +18980,13 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun compArgumentsAndTryAgain}
 \getchunk{defun compAtom}
 \getchunk{defun compAtSign}
+\getchunk{defun compBoolean}
 \getchunk{defun compCapsule}
 \getchunk{defun compCapsuleInner}
 \getchunk{defun compCase}
 \getchunk{defun compCase1}
 \getchunk{defun compCat}
 \getchunk{defun compCategory}
-\getchunk{defun compDefineCategory1}
 \getchunk{defun compCoerce}
 \getchunk{defun compCoerce1}
 \getchunk{defun compColon}
@@ -18763,6 +18999,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun compDefine1}
 \getchunk{defun compDefineAddSignature}
 \getchunk{defun compDefineCategory}
+\getchunk{defun compDefineCategory1}
 \getchunk{defun compDefineCategory2}
 \getchunk{defun compDefineFunctor}
 \getchunk{defun compDefineFunctor1}
@@ -18775,6 +19012,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun compForm}
 \getchunk{defun compForm1}
 \getchunk{defun compForm2}
+\getchunk{defun compForm3}
 \getchunk{defun compFormMatch}
 \getchunk{defun compFormPartiallyBottomUp}
 \getchunk{defun compFunctorBody}
@@ -18844,6 +19082,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun domainMember}
 \getchunk{defun drop}
 
+\getchunk{defun eltModemapFilter}
 \getchunk{defun errhuh}
 \getchunk{defun escape-keywords}
 \getchunk{defun escaped}
@@ -18863,6 +19102,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun getCategoryOpsAndAtts}
 \getchunk{defun getConstructorOpsAndAtts}
 \getchunk{defun getDomainsInScope}
+\getchunk{defun getFormModemaps}
 \getchunk{defun getFunctorOpsAndAtts}
 \getchunk{defun getModemap}
 \getchunk{defun getModemapList}
@@ -19165,6 +19405,8 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun rwriteLispForm}
 
 \getchunk{defun setDefOp}
+\getchunk{defun seteltModemapFilter}
+\getchunk{defun setqMultiple}
 \getchunk{defun signatureTran}
 \getchunk{defun skip-blanks}
 \getchunk{defun skip-ifblock}
