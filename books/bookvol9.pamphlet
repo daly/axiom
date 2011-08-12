@@ -10325,6 +10325,56 @@ An angry JHD - August 15th., 1984
 
 \end{chunk}
 
+\defun{compHasFormat}{compHasFormat}
+\calls{compHasFormat}{take}
+\calls{compHasFormat}{length}
+\calls{compHasFormat}{sublislis}
+\calls{compHasFormat}{comp}
+\calls{compHasFormat}{pairp}
+\calls{compHasFormat}{qcar}
+\calls{compHasFormat}{qcdr}
+\calls{compHasFormat}{mkList}
+\calls{compHasFormat}{mkDomainConstructor}
+\calls{compHasFormat}{isDomainForm}
+\refsdollar{compHasFormat}{FormalMapVariableList}
+\refsdollar{compHasFormat}{EmptyMode}
+\refsdollar{compHasFormat}{e}
+\refsdollar{compHasFormat}{form}
+\refsdollar{compHasFormat}{EmptyEnvironment}
+\begin{chunk}{defun compHasFormat}
+(defun |compHasFormat| (pred)
+ (let (olda b argl formals tmp1 a)
+ (declare (special |$EmptyEnvironment| |$e| |$EmptyMode|
+                    |$FormalMapVariableList| |$form|))
+  (when (eq (car pred) '|has|) (car pred))
+  (setq olda (second pred))
+  (setq b (third pred))
+  (setq argl (rest |$form|))
+  (setq formals (take (|#| argl) |$FormalMapVariableList|))
+  (setq a (sublislis argl formals olda))
+  (setq tmp1 (|comp| a |$EmptyMode| |$e|))
+  (when tmp1
+   (setq a (car tmp1))
+   (setq a (sublislis formals argl a))
+   (cond
+    ((and (pairp b) (eq (qcar b) 'attribute) (pairp (qcdr b))
+          (eq (qcdr (qcdr b)) nil))
+      (list '|HasAttribute| a (list 'quote (qcar (qcdr b)))))
+    ((and (pairp b) (eq (qcar b) 'signature) (pairp (qcdr b))
+          (pairp (qcdr (qcdr b))) (EQ (QCDR (qcdr (qcdr b))) NIL))
+       (list '|HasSignature| a
+         (|mkList|
+          (list (MKQ (qcar (qcdr b)))
+           (|mkList|
+            (loop for type in (qcar (qcdr (qcdr b)))
+             collect (|mkDomainConstructor| type)))))))
+    ((|isDomainForm| b |$EmptyEnvironment|)
+      (list 'equal a b))
+    (t
+      (list '|HasCategory| a (|mkDomainConstructor| b)))))))
+
+\end{chunk}
+
 \defplist{if}{compIf plist}
 \begin{chunk}{postvars}
 (eval-when (eval load)
@@ -10375,6 +10425,109 @@ An angry JHD - August 15th., 1984
 
 \end{chunk}
 
+\defun{canReturn}{canReturn}
+\calls{canReturn}{say}
+\calls{canReturn}{pairp}
+\calls{canReturn}{qcar}
+\calls{canReturn}{qcdr}
+\calls{canReturn}{canReturn}
+\calls{canReturn}{systemErrorHere}
+\begin{chunk}{defun canReturn}
+(defun |canReturn| (expr level exitCount ValueFlag)
+ (labels (
+  (findThrow (gs expr level exitCount ValueFlag)
+   (cond
+    ((atom expr) nil)
+    ((and (pairp expr) (eq (qcar expr) 'throw) (pairp (qcdr expr))
+          (equal (qcar (qcdr expr)) gs) (pairp (qcdr (qcdr expr)))
+          (eq (qcdr (qcdr (qcdr expr))) nil))
+      t)
+    ((and (pairp expr) (eq (qcar expr) 'seq))
+     (let (result)
+       (loop for u in (qcdr expr)
+        do (setq result 
+            (or result
+             (findThrow gs u (1+ level) exitCount ValueFlag))))
+        result))
+    (t 
+     (let (result)
+       (loop for u in (rest expr)
+        do (setq result 
+            (or result
+             (findThrow gs u level exitCount ValueFlag))))
+        result)))))
+ (let (op count gs)
+  (cond
+   ((atom expr) (and ValueFlag (equal level exitCount)))
+   ((eq (setq op (car expr)) 'quote) (and ValueFlag (equal level exitCount)))
+   ((eq op '|TAGGEDexit|)
+    (cond
+     ((and (pairp expr) (pairp (qcdr expr)) (pairp (qcdr (qcdr expr)))
+           (eq (qcdr (qcdr (qcdr expr))) nil))
+       (|canReturn| (car (third expr)) level (second expr)
+                    (equal (second expr) level)))))
+     ((and (equal level exitCount) (null ValueFlag))
+       nil)
+     ((eq op 'seq)
+      (let (result)
+       (loop for u in (rest expr) 
+        do (setq result (or result (|canReturn| u (1+ level) exitCount nil))))
+       result))
+     ((eq op '|TAGGEDreturn|) nil)
+     ((eq op 'catch)
+      (cond
+       ((findThrow (second expr) (third expr) level
+                       exitCount ValueFlag)
+         t)
+       (t
+        (|canReturn| (third expr) level exitCount ValueFlag))))
+     ((eq op 'cond)
+      (cond
+       ((equal level exitCount)
+        (let (result)
+         (loop for u in (rest expr)
+          do (setq result (or result 
+              (|canReturn| (|last| u) level exitCount ValueFlag))))
+         result))
+       (t
+        (let (outer)
+         (loop for v in (rest expr)
+          do (setq outer (or outer
+              (let (inner)
+               (loop for u in v
+                do (setq inner
+                    (or inner
+                     (findThrow gs u level exitCount ValueFlag))))
+               inner))))
+          outer))))
+     ((eq op 'if)
+       (and (pairp expr) (pairp (qcdr expr)) (pairp (qcdr (qcdr expr)))
+            (pairp (qcdr (qcdr (qcdr expr))))
+            (eq (qcdr (qcdr (qcdr (qcdr expr)))) nil))
+        (cond
+         ((null (|canReturn| (second expr) 0 0 t))
+           (say "IF statement can not cause consequents to be executed")
+           (|pp| expr)))
+          (or (|canReturn| (second expr) level exitCount nil)
+              (|canReturn| (third expr) level exitCount ValueFlag)
+              (|canReturn| (fourth expr) level exitCount ValueFlag)))
+     ((atom op)
+      (let ((result t))
+       (loop for u in expr
+        do (setq result
+            (and result (|canReturn| u level exitCount ValueFlag))))
+       result))
+     ((and (pairp op) (eq (qcar op) 'xlam) (pairp (qcdr op))
+           (pairp (qcdr (qcdr op))) (eq (qcdr (qcdr (qcdr op))) nil))
+       (let ((result t))
+        (loop for u in expr
+         do (setq result
+              (and result (|canReturn| u level exitCount ValueFlag))))
+        result))
+      (t (|systemErrorHere| "canReturn"))))))
+
+\end{chunk}
+
 \defun{compBoolean}{compBoolean}
 \calls{compBoolean}{comp}
 \calls{compBoolean}{getSuccessEnvironment}
@@ -10388,6 +10541,158 @@ An angry JHD - August 15th., 1984
    (setq env (caddr tmp1))
    (list pp mode (|getSuccessEnvironment| p env)
                  (|getInverseEnvironment| p env)))))
+
+\end{chunk}
+
+\defun{getSuccessEnvironment}{getSuccessEnvironment}
+\calls{getSuccessEnvironment}{pairp}
+\calls{getSuccessEnvironment}{qcar}
+\calls{getSuccessEnvironment}{qcdr}
+\calls{getSuccessEnvironment}{isDomainForm}
+\calls{getSuccessEnvironment}{put}
+\calls{getSuccessEnvironment}{identp}
+\calls{getSuccessEnvironment}{getProplist}
+\calls{getSuccessEnvironment}{comp}
+\calls{getSuccessEnvironment}{consProplistOf}
+\calls{getSuccessEnvironment}{removeEnv}
+\calls{getSuccessEnvironment}{addBinding}
+\calls{getSuccessEnvironment}{get}
+\refsdollar{getSuccessEnvironment}{EmptyEnvironment}
+\refsdollar{getSuccessEnvironment}{EmptyMode}
+\begin{chunk}{defun getSuccessEnvironment}
+(defun |getSuccessEnvironment| (a env)
+ (let (id currentProplist tt newProplist x m)
+  (declare (special |$EmptyMode| |$EmptyEnvironment|))
+   (cond
+    ((and (pairp a) (eq (qcar a) '|has|) (PAIRP (qcdr a))
+          (pairp (qcdr (qcdr a))) (eq (qcdr (qcdr (qcdr a))) nil))
+     (if
+      (and (identp (second a)) (|isDomainForm| (third a) |$EmptyEnvironment|))
+        (|put| (second a) '|specialCase| (third a) env)
+        env))
+    ((and (pairp a) (eq (qcar a) '|is|) (pairp (qcdr a))
+          (pairp (qcdr (qcdr a))) (eq (qcdr (qcdr (qcdr a))) nil))
+       (setq id (qcar (qcdr a)))
+       (setq m (qcar (qcdr (qcdr a))))
+       (cond
+         ((and (identp id) (|isDomainForm| m |$EmptyEnvironment|))
+          (setq env (|put| id '|specialCase| m env))
+          (setq currentProplist (|getProplist| id env))
+          (setq tt (|comp| m |$EmptyMode| env))
+          (when tt
+           (setq env (caddr tt))
+           (setq newProplist
+             (|consProplistOf| id currentProplist '|value|
+                         (cons m (cdr (|removeEnv| tt)))))
+             (|addBinding| id newProplist env)))
+         (t env)))
+    ((and (pairp a) (eq (qcar a) '|case|) (pairp (qcdr a))
+          (pairp (qcdr (qcdr a))) (eq (qcdr (qcdr (qcdr a))) nil)
+          (identp (qcar (qcdr a))))
+      (setq x (qcar (qcdr a)))
+      (setq m (qcar (qcdr (qcdr a))))
+      (|put| x '|condition| (cons a (|get| x '|condition| env)) env))
+    (t env))))
+
+\end{chunk}
+
+\defun{getInverseEnvironment}{getInverseEnvironment}
+\calls{getInverseEnvironment}{pairp}
+\calls{getInverseEnvironment}{qcar}
+\calls{getInverseEnvironment}{qcdr}
+\calls{getInverseEnvironment}{identp}
+\calls{getInverseEnvironment}{isDomainForm}
+\calls{getInverseEnvironment}{put}
+\calls{getInverseEnvironment}{get}
+\calls{getInverseEnvironment}{member}
+\calls{getInverseEnvironment}{mkpf}
+\calls{getInverseEnvironment}{delete}
+\calls{getInverseEnvironment}{getUnionMode}
+\refsdollar{getInverseEnvironment}{EmptyEnvironment}
+\begin{chunk}{defun getInverseEnvironment}
+(defun |getInverseEnvironment| (a env)
+ (let (op argl x m tmp2 oldpred z tmp1 zz newpred)
+ (declare (special |$EmptyEnvironment|))
+  (cond
+   ((atom a) env)
+   (t 
+    (setq op (car a))
+    (setq argl (cdr a))
+    (cond
+     ((eq op '|has|) 
+       (setq x (car argl))
+       (setq m (cadr argl))
+       (cond
+        ((and (identp x) (|isDomainForm| m |$EmptyEnvironment|))
+           (|put| x '|specialCase| m env))
+        (t env)))
+     ((and (pairp a) (eq (qcar a) '|case|)
+          (PROGN
+           (setq tmp1 (QCDR a))
+           (and (pairp tmp1)
+                (PROGN
+                 (setq x (QCAR tmp1))
+                 (setq tmp2 (QCDR tmp1))
+                 (AND (PAIRP tmp2)
+                      (EQ (QCDR tmp2) nil)
+                      (PROGN (setq m (QCAR tmp2)) t)))))
+                      (IDENTP x))
+       (COND
+        ((AND (PROGN
+                (setq tmp1 (|get| x '|condition| env))
+                (AND (PAIRP tmp1) (EQ (QCDR tmp1) nil)
+                     (PROGN
+                      (setq tmp2 (QCAR tmp1))
+                      (AND (PAIRP tmp2)
+                           (EQ (QCAR tmp2) 'OR)
+                           (PROGN (setq oldpred (QCDR tmp2)) t)))))
+              (|member| a oldpred))
+          (|put| x '|condition|
+                        (LIST (MKPF (|delete| a oldpred) 'OR))
+                           env))
+        (t
+         (setq tmp1 (|getUnionMode| x env))
+         (AND (PAIRP tmp1)
+              (EQ (QCAR tmp1) '|Union|)
+                  (PROGN
+                   (setq z (QCDR tmp1)) t))
+                   (setq zz (|delete| m z))
+                   (DO ((G169713 zz (CDR G169713)) (u nil))
+                        ((OR (ATOM G169713)
+                             (PROGN (SETQ u (CAR G169713)) nil))
+                         nil)
+                      (COND
+                                   ((AND (PAIRP u)
+                                     (EQ (QCAR u) '|:|)
+                                     (PROGN
+                                       (setq tmp1 (QCDR u))
+                                       (AND (PAIRP tmp1)
+                                        (EQUAL (QCAR tmp1) m))))
+                                    (setq zz (|delete| u zz)))
+                                   (t nil)))
+                    (setq newpred
+                             (MKPF (PROG (G169723)
+                                     (RETURN
+                                       (DO
+                                        ((G169728 zz
+                                          (CDR G169728))
+                                         (mp nil))
+                                        ((OR (ATOM G169728)
+                                          (PROGN
+                                            (SETQ mp (CAR G169728))
+                                            nil))
+                                         (NREVERSE0 G169723))
+                                           (SETQ G169723
+                                            (CONS
+                                             (CONS '|case|
+                                              (CONS x
+                                               (CONS mp nil)))
+                                             G169723)))))
+                                   'OR))
+                    (|put| x '|condition|
+                           (CONS newpred (|get| x '|condition| env))
+                           env))))
+     (t env))))))
 
 \end{chunk}
 
@@ -10998,6 +11303,48 @@ An angry JHD - August 15th., 1984
 
 \end{chunk}
 
+\defun{replaceExitEtc}{replaceExitEtc}
+\calls{replaceExitEtc}{pairp}
+\calls{replaceExitEtc}{qcar}
+\calls{replaceExitEtc}{qcdr}
+\calls{replaceExitEtc}{rplac}
+\calls{replaceExitEtc}{replaceExitEtc}
+\calls{replaceExitEtc}{intersectionEnvironment}
+\calls{replaceExitEtc}{convertOrCroak}
+\defsdollar{replaceExitEtc}{finalEnv}
+\refsdollar{replaceExitEtc}{finalEnv}
+\begin{chunk}{defun replaceExitEtc}
+(defun |replaceExitEtc| (x tag opFlag opMode)
+ (declare (special |$finalEnv|))
+  (cond 
+   ((atom x) nil)
+   ((and (pairp x) (eq (qcar x) 'quote)) nil)
+   ((and (pairp x) (equal (qcar x) opFlag) (pairp (qcdr x))
+         (pairp (qcdr (qcdr x))) (eq (qcdr (qcdr (qcdr x))) nil))
+     (|rplac| (caaddr x) (|replaceExitEtc| (caaddr x) tag opFlag opMode))
+     (cond
+      ((eql (second x) 0)
+        (setq |$finalEnv|
+         (if |$finalEnv|
+           (|intersectionEnvironment| |$finalEnv| (third (third x)))
+           (third (third x))))
+         (|rplac| (car x) 'throw)
+         (|rplac| (cadr x) tag)
+         (|rplac| (caddr x) (car (|convertOrCroak| (caddr x) opMode))))
+      (t
+        (|rplac| (cadr x) (1- (cadr x))))))
+   ((and (pairp x) (pairp (qcdr x)) (pairp (qcdr (qcdr x)))
+         (eq (qcdr (qcdr (qcdr x))) nil)
+         (member (qcar x) '(|TAGGEDreturn| |TAGGEDexit|)))
+     (|rplac| (car (caddr x))
+       (|replaceExitEtc| (car (caddr x)) tag opFlag opMode)))
+   (t
+     (|replaceExitEtc| (car x) tag opFlag opMode)
+     (|replaceExitEtc| (cdr x) tag opFlag opMode)))
+ x)
+
+\end{chunk}
+
 \defun{compSeqItem}{compSeqItem}
 \calls{compSeqItem}{comp}
 \calls{compSeqItem}{macroExpand}
@@ -11155,6 +11502,59 @@ An angry JHD - August 15th., 1984
             (unless (eq assignList '|failed|)
              (list (mkprogn (cons x (append assignList (list g)))) mp env))
               ))))))))))))
+
+\end{chunk}
+
+\defun{setqMultipleExplicit}{setqMultipleExplicit}
+\calls{setqMultipleExplicit}{nequal}
+\calls{setqMultipleExplicit}{stackMessage}
+\calls{setqMultipleExplicit}{genVariable}
+\calls{setqMultipleExplicit}{compSetq1}
+\calls{setqMultipleExplicit}{last}
+\refsdollar{setqMultipleExplicit}{EmptyMode}
+\refsdollar{setqMultipleExplicit}{NoValueMode}
+\begin{chunk}{defun setqMultipleExplicit}
+(defun |setqMultipleExplicit| (nameList valList m env)
+ (declare (ignore m))
+ (let (gensymList assignList tmp1 reAssignList)
+ (declare (special |$NoValueMode| |$EmptyMode|))
+  (cond
+   ((nequal (|#| nameList) (|#| valList))
+    (|stackMessage|
+     (list '|Multiple assignment error; # of items in: | nameList 
+           '|must = # in: | valList)))
+   (t
+    (setq gensymList
+     (loop for name in nameList
+      collect (|genVariable|)))
+    (setq assignList
+     (loop for g in gensymList
+           for val in valList
+      collect (progn
+               (setq tmp1
+                (or (|compSetq1| g val |$EmptyMode| env)
+                    (return '|failed|)))
+               (setq env (third tmp1))
+               tmp1)))
+    (unless (eq assignList '|failed|)
+     (setq reAssignList
+      (loop for g in gensymList
+            for name in nameList
+       collect (progn
+                (setq tmp1 
+                 (or (|compSetq1| name g |$EmptyMode| env)
+                     (return '|failed|)))
+                 (setq env (third tmp1))
+                 tmp1)))
+     (unless (eq reAssignList '|failed|)
+      (list 
+       (cons 'progn
+        (append
+         (loop for tt in assignList
+          collect (car tt))
+         (loop for tt in reAssignList
+          collect (car tt))))
+         |$NoValueMode| (third (|last| reAssignList)))))))))
 
 \end{chunk}
 
@@ -18969,6 +19369,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun blankp}
 \getchunk{defun bumperrorcount}
 
+\getchunk{defun canReturn}
 \getchunk{defun char-eq}
 \getchunk{defun char-ne}
 \getchunk{defun checkWarning}
@@ -19017,6 +19418,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun compFormPartiallyBottomUp}
 \getchunk{defun compFunctorBody}
 \getchunk{defun compHas}
+\getchunk{defun compHasFormat}
 \getchunk{defun compIf}
 \getchunk{defun compileFileQuietly}
 \getchunk{defun compile-lib-file}
@@ -19104,6 +19506,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun getDomainsInScope}
 \getchunk{defun getFormModemaps}
 \getchunk{defun getFunctorOpsAndAtts}
+\getchunk{defun getInverseEnvironment}
 \getchunk{defun getModemap}
 \getchunk{defun getModemapList}
 \getchunk{defun getModemapListFromDomain}
@@ -19111,6 +19514,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun getScriptName}
 \getchunk{defun getSlotFromCategoryForm}
 \getchunk{defun getSlotFromFunctor}
+\getchunk{defun getSuccessEnvironment}
 \getchunk{defun getTargetFromRhs}
 \getchunk{defun get-token}
 \getchunk{defun getToken}
@@ -19397,6 +19801,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 
 \getchunk{defun read-a-line}
 \getchunk{defun recompile-lib-file-if-necessary}
+\getchunk{defun replaceExitEtc}
 \getchunk{defun /rf-1}
 \getchunk{defun removeSuperfluousMapping}
 \getchunk{defun replaceVars}
@@ -19407,6 +19812,7 @@ if \verb|$InteractiveMode| then use a null outputstream
 \getchunk{defun setDefOp}
 \getchunk{defun seteltModemapFilter}
 \getchunk{defun setqMultiple}
+\getchunk{defun setqMultipleExplicit}
 \getchunk{defun signatureTran}
 \getchunk{defun skip-blanks}
 \getchunk{defun skip-ifblock}
