@@ -6381,8 +6381,6 @@ $\rightarrow$
 \calls{compile}{userError}
 \calls{compile}{encodeItem}
 \calls{compile}{strconc}
-\calls{compile}{encodeItem}
-\calls{compile}{isPackageFunction}
 \calls{compile}{nequal}
 \calls{compile}{kar}
 \calls{compile}{encodeFunctionName}
@@ -6456,18 +6454,6 @@ $\rightarrow$
         (when opexport
          (|userError| (list '|%b| op '|%d| " is local and exported")))
         (intern (strconc (|encodeItem| |$prefix|) ";" (|encodeItem| op))))
-;       ((and (|isPackageFunction|)
-;             (nequal (kar |$functorForm|) '|CategoryDefaults|))
-;         (when (null opmodes) (|userError| (list "no modemap for " op)))
-;         (cond
-;          ((and (pairp opmodes) (eq (qcdr opmodes) nil) (pairp (qcar opmodes))
-;                (eq (qcar (qcar opmodes)) 'pac) (pairp (qcdr (qcar opmodes)))
-;                (pairp (qcdr (qcdr (qcar opmodes))))
-;                (eq (qcdr (qcdr (qcdr (qcar opmodes)))) nil))
-;            (qcar (qcdr (qcdr (qcar opmodes)))))
-;          (t
-;            (|encodeFunctionName| op |$functorForm| |$signatureOfForm|
-;                                  '|;| |$suffix|))))
        (t
         (|encodeFunctionName| op |$functorForm| |$signatureOfForm|
                               '|;| |$suffix|)))))
@@ -6515,6 +6501,132 @@ $\rightarrow$
      (setq |$functionStats| (|addStats| |$functionStats| functionStats))
      (|printStats| functionStats)
       result)))))
+
+\end{chunk}
+
+\defun{encodeFunctionName}{encodeFunctionName}
+Code for encoding function names inside package or domain
+\calls{encodeFunctionName}{msubst}
+\calls{encodeFunctionName}{mkRepititionAssoc}
+\calls{encodeFunctionName}{encodeItem}
+\calls{encodeFunctionName}{stringimage}
+\calls{encodeFunctionName}{internl}
+\calls{encodeFunctionName}{getAbbreviation}
+\calls{encodeFunctionName}{length}
+\refsdollar{encodeFunctionName}{lisplib}
+\refsdollar{encodeFunctionName}{lisplibSignatureAlist}
+\defsdollar{encodeFunctionName}{lisplibSignatureAlist}
+\begin{chunk}{defun encodeFunctionName}
+(defun |encodeFunctionName| (fun package signature sep count)
+ (let (packageName arglist signaturep reducedSig n x encodedSig encodedName)
+ (declare (special |$lisplibSignatureAlist| $lisplib))
+  (setq packageName (car package))
+  (setq arglist (cdr package))
+  (setq signaturep (msubst '$ package signature))
+  (setq reducedSig
+   (|mkRepititionAssoc| (append (cdr signaturep) (list (car signaturep)))))
+  (setq encodedSig
+   (let ((result ""))
+    (loop for item in reducedSig
+     do
+      (setq n (car item))
+      (setq x (cdr item))
+      (setq result 
+       (strconc result
+        (if (eql n 1)
+          (|encodeItem| x)
+          (strconc (stringimage n) (|encodeItem| x))))))
+     result))
+  (setq encodedName
+   (internl (|getAbbreviation| packageName (|#| arglist))
+            '|;| (|encodeItem| fun) '|;| encodedSig sep (stringimage count)))
+  (when $lisplib
+   (setq |$lisplibSignatureAlist|
+     (cons (cons encodedName signaturep) |$lisplibSignatureAlist|)))
+  encodedName))
+
+\end{chunk}
+
+\defun{mkRepititionAssoc}{mkRepititionAssoc}
+\calls{mkRepititionAssoc}{pairp}
+\calls{mkRepititionAssoc}{qcar}
+\calls{mkRepititionAssoc}{qcdr}
+\begin{chunk}{defun mkRepititionAssoc}
+(defun |mkRepititionAssoc| (z)
+ (labels (
+  (mkRepfun (z n)
+   (let (x)
+    (cond
+     ((null z) nil)
+     ((and (pairp z) (eq (qcdr z) nil) (list (cons n (qcar z)))))
+     ((and (pairp z) (pairp (qcdr z)) (equal (qcar (qcdr z)) (qcar z)))
+      (mkRepfun (cdr z) (1+ n)))
+     (t (cons (cons n (car z)) (mkRepfun (cdr z) 1)))))))
+ (mkRepfun z 1)))
+
+\end{chunk}
+
+\defun{splitEncodedFunctionName}{splitEncodedFunctionName}
+\calls{splitEncodedFunctionName}{stringimage}
+\calls{splitEncodedFunctionName}{strpos}
+\begin{chunk}{defun splitEncodedFunctionName}
+(defun |splitEncodedFunctionName| (encodedName sep)
+ (let (sep0 p1 p2 p3 s1 s2 s3 s4)
+  ; sep0 is the separator used in "encodeFunctionName".
+  (setq sep0 ";")
+  (unless (stringp encodedName) (setq encodedName (stringimage encodedName)))
+  (cond
+   ((null (setq p1 (strpos sep0 encodedName 0 "*"))) nil)
+   ; This is picked up in compile for inner functions in partial compilation
+   ((null (setq p2 (strpos sep0 encodedName (1+ p1) "*"))) '|inner|)
+   ((null (setq p3 (strpos sep encodedName (1+ p2) "*"))) nil)
+   (t
+    (setq s1 (substring encodedName 0 p1))
+    (setq s2 (substring encodedName (1+ p1) (- p2 p1 1)))
+    (setq s3 (substring encodedName (1+ p2) (- p3 p2 1)))
+    (setq s4 (substring encodedName (1+ p3) nil))
+    (list s1 s2 s3 s4)))))
+
+\end{chunk}
+
+\defun{encodeItem}{encodeItem}
+\calls{encodeItem}{getCaps}
+\calls{encodeItem}{identp}
+\calls{encodeItem}{pairp}
+\calls{encodeItem}{qcar}
+\calls{encodeItem}{pname}
+\calls{encodeItem}{stringimage}
+\begin{chunk}{defun encodeItem}
+(defun |encodeItem| (x)
+ (cond
+  ((pairp x) (|getCaps| (qcar x)))
+  ((identp x) (pname x))
+  (t (stringimage x))))
+
+\end{chunk}
+
+\defun{getCaps}{getCaps}
+\calls{getCaps}{stringimage}
+\calls{getCaps}{maxindex}
+\calls{getCaps}{l-case}
+\calls{getCaps}{strconc}
+\begin{chunk}{defun getCaps}
+(defun |getCaps| (x)
+ (let (s c clist tmp1)
+  (setq s (stringimage x))
+  (setq clist
+   (loop for i from 0 to (maxindex s) 
+    when (upper-case-p (setq c (elt s i)))
+    collect c))
+  (cond
+   ((null clist) "_")
+   (t
+    (setq tmp1
+     (cons (first clist) (loop for u in (rest clist) collect (l-case u))))
+    (let ((result ""))
+     (loop for u in tmp1
+      do (setq result (strconc result u)))
+     result)))))
 
 \end{chunk}
 
@@ -7841,7 +7953,6 @@ where item has form
 \calls{compDefineFunctor1}{augModemapsFromCategoryRep}
 \calls{compDefineFunctor1}{augModemapsFromCategory}
 \calls{compDefineFunctor1}{sublis}
-\calls{compDefineFunctor1}{isPackageFunction}
 \calls{compDefineFunctor1}{maxindex}
 \calls{compDefineFunctor1}{makeFunctorArgumentParameters}
 \calls{compDefineFunctor1}{compFunctorBody}
@@ -8074,23 +8185,6 @@ where item has form
      (setq operationAlist (sublis |$pairlis| (elt |$domainShell| 1)))
      (setq parSignature (sublis |$pairlis| signaturep))
      (setq parForm (sublis |$pairlis| form))
-;     (when (|isPackageFunction|)
-;      (setq |$functorLocalParameters|
-;        (cons nil
-;         (let (tmp1 result)
-;          (loop for i from 6 to (maxindex |$domainShell|) do
-;           (setq tmp1 (elt |$domainShell| i))
-;           (when 
-;             (and (pairp tmp1) (pairp (qcdr tmp1)) (pairp (qcdr (qcdr tmp1))) 
-;                  (eq    (qcdr (qcdr (qcdr tmp1))) nil)
-;                  (pairp (qcar (qcdr (qcdr tmp1))))
-;                  (eq    (qcar (qcar (qcdr (qcdr tmp1)))) 'elt)
-;                  (pairp (qcdr (qcar (qcdr (qcdr tmp1)))))
-;                  (eq    (qcar (qcdr (qcar (qcdr (qcdr tmp1))))) '$)
-;                  (pairp (qcdr (qcdr (qcar (qcdr (qcdr tmp1))))))
-;                  (eq    (qcdr (qcdr (qcdr (qcar (qcdr (qcdr tmp1)))))) nil))
-;            (push nil result)))
-;           result))))
      (setq argPars (|makeFunctorArgumentParameters| argl
                      (cdr signaturep) (car signaturep)))
      (setq |$functorLocalParameters| argl)
@@ -9767,7 +9861,7 @@ in the body of the add.
 \defun{compCapsuleInner}{compCapsuleInner}
 \calls{compCapsuleInner}{addInformation}
 \calls{compCapsuleInner}{compCapsuleItems}
-\calls{compCapsuleInner}{processFunctorOrPackage}
+\calls{compCapsuleInner}{processFunctor}
 \calls{compCapsuleInner}{mkpf}
 \usesdollar{compCapsuleInner}{getDomainCode}
 \usesdollar{compCapsuleInner}{signature}
@@ -9790,9 +9884,21 @@ in the body of the add.
   (setq code
    (if (and |$insideCategoryIfTrue| (null |$insideCategoryPackageIfTrue|))
     data
-    (|processFunctorOrPackage|
-       |$form| |$signature| data localParList mode env)))
+    (|processFunctor| |$form| |$signature| data localParList env)))
   (cons (mkpf (append |$getDomainCode| (list code)) 'progn) (list mode env))))
+
+\end{chunk}
+
+\defun{processFunctor}{processFunctor}
+\calls{processFunctor}{error}
+\calls{processFunctor}{buildFunctor}
+\begin{chunk}{defun processFunctor}
+(defun |processFunctor| (form signature data localParList e)
+  (cond
+    ((and (pairp form) (eq (qcdr form) nil)
+          (eq (qcar form) '|CategoryDefaults|))
+     (|error| '|CategoryDefaults is a reserved name|))
+    (t (|buildFunctor| form signature data localParList e))))
 
 \end{chunk}
 
@@ -10299,7 +10405,7 @@ An angry JHD - August 15th., 1984
 \refsdollar{compCategoryItem}{atList}
 \begin{chunk}{defun compCategoryItem}
 (defun |compCategoryItem| (x predl)
- (let (p e a tmp2 b tmp3 c predlp pred tmp1 y z op sig)
+ (let (p e a b c predlp pred y z op sig)
  (declare (special |$sigList| |$atList|))
  (cond
   ((null x) nil)
@@ -10885,6 +10991,74 @@ An angry JHD - August 15th., 1984
          (|getAbbreviation| |$op| (|#| (cdr |$form|)))))
       (|compDefineCapsuleFunction| 
          form mode env newPrefix |$formalArgList|)))))))
+
+\end{chunk}
+
+\defun{getAbbreviation}{getAbbreviation}
+\calls{getAbbreviation}{constructor?}
+\calls{getAbbreviation}{assq}
+\calls{getAbbreviation}{mkAbbrev}
+\calls{getAbbreviation}{rplac}
+\refsdollar{getAbbreviation}{abbreviationTable}
+\defsdollar{getAbbreviation}{abbreviationTable}
+\begin{chunk}{defun getAbbreviation}
+(defun |getAbbreviation| (name c)
+ (let (cname x n upc newAbbreviation)
+ (declare (special |$abbreviationTable|))
+  (setq cname (|constructor?| name))
+  (cond
+   ((setq x (assq cname |$abbreviationTable|))
+    (cond
+     ((setq n (assq name (cdr x)))
+      (cond
+       ((setq upc (assq c (cdr n)))
+        (cdr upc))
+       (t
+        (setq newAbbreviation (|mkAbbrev| x cname))
+        (rplac (cdr n) (cons (cons c newAbbreviation) (cdr n)))
+        newAbbreviation)))
+     (t
+      (setq newAbbreviation (|mkAbbrev| x x))
+      (rplac (cdr x)
+             (cons (cons name (list (cons c newAbbreviation))) (cdr x)))
+      newAbbreviation)))
+   (t
+    (setq |$abbreviationTable|
+     (cons (list cname (list name (cons c cname))) |$abbreviationTable|))
+    cname))))
+
+\end{chunk}
+
+\defun{mkAbbrev}{mkAbbrev}
+\calls{mkAbbrev}{addSuffix}
+\calls{mkAbbrev}{alistSize}
+\begin{chunk}{defun mkAbbrev}
+(defun |mkAbbrev| (x z)
+ (|addSuffix| (|alistSize| (cdr x)) z))
+
+\end{chunk}
+
+\defun{addSuffix}{addSuffix}
+\begin{chunk}{defun addSuffix}
+(defun |addSuffix| (n u)
+ (let (s)
+  (if (alpha-char-p (elt (spadlet s (stringimage u)) (maxindex s)))
+    (intern (strconc s (stringimage n)))
+    (internl (strconc s (stringimage '|;|) (stringimage n))))))
+
+\end{chunk}
+
+\defun{alistSize}{alistSize}
+\begin{chunk}{defun alistSize}
+(defun |alistSize| (c)
+ (labels (
+  (count (x level)
+   (cond
+    ((eql level 2)  (|#| x))
+    ((null x) 0)
+    (+ (count (cdar x) (1+ level))
+       (count (cdr x) level)))))
+ (count c 1)))
 
 \end{chunk}
 
@@ -11651,6 +11825,13 @@ is still more than one complain else return the only signature.
       (list 'equal a b))
     (t
       (list '|HasCategory| a (|mkDomainConstructor| b)))))))
+
+\end{chunk}
+
+\defun{mkList}{mkList}
+\begin{chunk}{defun mkList}
+(defun |mkList| (u) 
+ (when u (cons 'list u)))
 
 \end{chunk}
 
@@ -21398,8 +21579,10 @@ The current input line.
 \getchunk{defun addModemap1}
 \getchunk{defun addNewDomain}
 \getchunk{defun add-parens-and-semis-to-line}
+\getchunk{defun addSuffix}
 \getchunk{defun Advance-Char}
 \getchunk{defun advance-token}
+\getchunk{defun alistSize}
 \getchunk{defun allLASSOCs}
 \getchunk{defun aplTran}
 \getchunk{defun aplTran1}
@@ -21560,6 +21743,8 @@ The current input line.
 \getchunk{defun drop}
 
 \getchunk{defun eltModemapFilter}
+\getchunk{defun encodeItem}
+\getchunk{defun encodeFunctionName}
 \getchunk{defun errhuh}
 \getchunk{defun escape-keywords}
 \getchunk{defun escaped}
@@ -21576,8 +21761,10 @@ The current input line.
 \getchunk{defun freelist}
 
 \getchunk{defun get-a-line}
+\getchunk{defun getAbbreviation}
 \getchunk{defun getArgumentMode}
 \getchunk{defun getArgumentModeOrMoan}
+\getchunk{defun getCaps}
 \getchunk{defun getCategoryOpsAndAtts}
 \getchunk{defun getConstructorOpsAndAtts}
 \getchunk{defun getDomainsInScope}
@@ -21666,14 +21853,17 @@ The current input line.
 \getchunk{defun mergeModemap}
 \getchunk{defun mergeSignatureAndLocalVarAlists}
 \getchunk{defun meta-syntax-error}
+\getchunk{defun mkAbbrev}
 \getchunk{defun mkAlistOfExplicitCategoryOps}
 \getchunk{defun mkCategoryPackage}
 \getchunk{defun mkConstructor}
 \getchunk{defun mkDatabasePred}
 \getchunk{defun mkEvalableCategoryForm}
 \getchunk{defun mkExplicitCategoryFunction}
+\getchunk{defun mkList}
 \getchunk{defun mkNewModemapList}
 \getchunk{defun mkOpVec}
+\getchunk{defun mkRepititionAssoc}
 \getchunk{defun mkUnion}
 \getchunk{defun modifyModeStack}
 \getchunk{defun modeEqual}
@@ -21886,6 +22076,7 @@ The current input line.
 \getchunk{defun preparseReadLine1}
 \getchunk{defun primitiveType}
 \getchunk{defun print-defun}
+\getchunk{defun processFunctor}
 \getchunk{defun push-reduction}
 \getchunk{defun putDomainsInScope}
 \getchunk{defun putInLocalDomainReferences}
@@ -21916,6 +22107,7 @@ The current input line.
 \getchunk{defun spad}
 \getchunk{defun spadCompileOrSetq}
 \getchunk{defun spad-fixed-arg}
+\getchunk{defun splitEncodedFunctionName}
 \getchunk{defun stack-clear}
 \getchunk{defun stack-load}
 \getchunk{defun stack-pop}
