@@ -15,201 +15,7 @@
 
 ;--% OPTIMIZER
 ;
-;optimizeFunctionDef(def) ==
-;  if $reportOptimization then
-;    sayBrightlyI bright '"Original LISP code:"
-;    pp def
 ;
-;  def' := optimize COPY def
-;
-;  if $reportOptimization then
-;    sayBrightlyI bright '"Optimized LISP code:"
-;    pp def'
-;    sayBrightlyI bright '"Final LISP code:"
-;  [name,[slamOrLam,args,body]] := def'
-;
-;  body':=
-;    removeTopLevelCatch body where
-;      removeTopLevelCatch body ==
-;        body is ["CATCH",g,u] =>
-;          removeTopLevelCatch replaceThrowByReturn(u,g)
-;        body
-;      replaceThrowByReturn(x,g) ==
-;        fn(x,g)
-;        x
-;      fn(x,g) ==
-;        x is ["THROW", =g,:u] =>
-;          rplac(first x,"RETURN")
-;          rplac(rest x,replaceThrowByReturn(u,g))
-;        atom x => nil
-;        replaceThrowByReturn(first x,g)
-;        replaceThrowByReturn(rest x,g)
-;  [name,[slamOrLam,args,body']]
-
-(DEFUN |optimizeFunctionDef,fn| (|x| |g|)
-  (PROG (|ISTMP#1| |u|)
-    (RETURN
-      (SEQ (IF (AND (PAIRP |x|) (EQ (QCAR |x|) 'THROW)
-                    (PROGN
-                      (SPADLET |ISTMP#1| (QCDR |x|))
-                      (AND (PAIRP |ISTMP#1|)
-                           (EQUAL (QCAR |ISTMP#1|) |g|)
-                           (PROGN (SPADLET |u| (QCDR |ISTMP#1|)) 'T))))
-               (EXIT (SEQ (|rplac| (CAR |x|) 'RETURN)
-                          (EXIT (|rplac| (CDR |x|)
-                                    (|optimizeFunctionDef,replaceThrowByReturn|
-                                          |u| |g|))))))
-           (IF (ATOM |x|) (EXIT NIL))
-           (|optimizeFunctionDef,replaceThrowByReturn| (CAR |x|) |g|)
-           (EXIT (|optimizeFunctionDef,replaceThrowByReturn| (CDR |x|)
-                     |g|))))))
-
-
-(DEFUN |optimizeFunctionDef,replaceThrowByReturn| (|x| |g|)
-  (SEQ (|optimizeFunctionDef,fn| |x| |g|) (EXIT |x|)))
-
-(DEFUN |optimizeFunctionDef,removeTopLevelCatch| (|body|)
-  (PROG (|ISTMP#1| |g| |ISTMP#2| |u|)
-    (RETURN
-      (SEQ (IF (AND (PAIRP |body|) (EQ (QCAR |body|) 'CATCH)
-                    (PROGN
-                      (SPADLET |ISTMP#1| (QCDR |body|))
-                      (AND (PAIRP |ISTMP#1|)
-                           (PROGN
-                             (SPADLET |g| (QCAR |ISTMP#1|))
-                             (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
-                             (AND (PAIRP |ISTMP#2|)
-                                  (EQ (QCDR |ISTMP#2|) NIL)
-                                  (PROGN
-                                    (SPADLET |u| (QCAR |ISTMP#2|))
-                                    'T))))))
-               (EXIT (|optimizeFunctionDef,removeTopLevelCatch|
-                         (|optimizeFunctionDef,replaceThrowByReturn|
-                             |u| |g|))))
-           (EXIT |body|)))))
-
-(DEFUN |optimizeFunctionDef| (|def|)
-  (PROG (|def'| |name| |slamOrLam| |args| |body| |body'|)
-    (DECLARE (SPECIAL |$reportOptimization|))
-    (RETURN
-      (PROGN
-        (COND
-          (|$reportOptimization|
-              (|sayBrightlyI|
-                  (|bright| "Original LISP code:"))
-              (|pp| |def|)))
-        (SPADLET |def'| (|optimize| (COPY |def|)))
-        (COND
-          (|$reportOptimization|
-              (|sayBrightlyI|
-                  (|bright| "Optimized LISP code:"))
-              (|pp| |def'|)
-              (|sayBrightlyI|
-                  (|bright| "Final LISP code:"))))
-        (SPADLET |name| (CAR |def'|))
-        (SPADLET |slamOrLam| (CAADR |def'|))
-        (SPADLET |args| (CADADR |def'|))
-        (SPADLET |body| (CAR (CDDADR |def'|)))
-        (SPADLET |body'|
-                 (|optimizeFunctionDef,removeTopLevelCatch| |body|))
-        (CONS |name|
-              (CONS (CONS |slamOrLam| (CONS |args| (CONS |body'| NIL)))
-                    NIL))))))
-
-;optimize x ==
-;  (opt x; x) where
-;    opt x ==
-;      atom x => nil
-;      (y:= first x)='QUOTE => nil
-;      y='CLOSEDFN => nil
-;      y is [["XLAM",argl,body],:a] =>
-;        optimize rest x
-;        argl = "ignore" => RPLAC(first x,body)
-;        if not (LENGTH argl<=LENGTH a) then
-;          SAY '"length mismatch in XLAM expression"
-;          PRETTYPRINT y
-;        RPLAC(first x,optimize optXLAMCond SUBLIS(pairList(argl,a),body))
-;      atom y =>
-;        optimize rest x
-;        y="true" => RPLAC(first x,'(QUOTE (QUOTE T)))
-;        y="false" => RPLAC(first x,nil)
-;      if first y="IF" then (RPLAC(first x,optIF2COND y); y:= first x)
-;      op:= GET(subrname first y,"OPTIMIZE") =>
-;        (optimize rest x; RPLAC(first x,FUNCALL(op,optimize first x)))
-;      RPLAC(first x,optimize first x)
-;      optimize rest x
-
-(DEFUN |optimize,opt| (|x|)
-  (PROG (|ISTMP#1| |ISTMP#2| |argl| |ISTMP#3| |body| |a| |y| |op|)
-    (RETURN
-      (SEQ (IF (ATOM |x|) (EXIT NIL))
-           (IF (BOOT-EQUAL (SPADLET |y| (CAR |x|)) 'QUOTE) (EXIT NIL))
-           (IF (BOOT-EQUAL |y| 'CLOSEDFN) (EXIT NIL))
-           (IF (AND (PAIRP |y|)
-                    (PROGN
-                      (SPADLET |ISTMP#1| (QCAR |y|))
-                      (AND (PAIRP |ISTMP#1|)
-                           (EQ (QCAR |ISTMP#1|) 'XLAM)
-                           (PROGN
-                             (SPADLET |ISTMP#2| (QCDR |ISTMP#1|))
-                             (AND (PAIRP |ISTMP#2|)
-                                  (PROGN
-                                    (SPADLET |argl| (QCAR |ISTMP#2|))
-                                    (SPADLET |ISTMP#3|
-                                     (QCDR |ISTMP#2|))
-                                    (AND (PAIRP |ISTMP#3|)
-                                     (EQ (QCDR |ISTMP#3|) NIL)
-                                     (PROGN
-                                       (SPADLET |body|
-                                        (QCAR |ISTMP#3|))
-                                       'T)))))))
-                    (PROGN (SPADLET |a| (QCDR |y|)) 'T))
-               (EXIT (SEQ (|optimize| (CDR |x|))
-                          (IF (BOOT-EQUAL |argl| '|ignore|)
-                              (EXIT (RPLAC (CAR |x|) |body|)))
-                          (IF (NULL (<= (LENGTH |argl|) (LENGTH |a|)))
-                              (SEQ (SAY
-                                                                         "length mismatch in XLAM expression")
-                                   (EXIT (PRETTYPRINT |y|)))
-                              NIL)
-                          (EXIT (RPLAC (CAR |x|)
-                                       (|optimize|
-                                        (|optXLAMCond|
-                                         (SUBLIS
-                                          (|pairList| |argl| |a|)
-                                          |body|))))))))
-           (IF (ATOM |y|)
-               (EXIT (SEQ (|optimize| (CDR |x|))
-                          (IF (BOOT-EQUAL |y| '|true|)
-                              (EXIT (RPLAC (CAR |x|) '''T)))
-                          (EXIT (IF (BOOT-EQUAL |y| '|false|)
-                                    (EXIT (RPLAC (CAR |x|) NIL)))))))
-           (IF (BOOT-EQUAL (CAR |y|) 'IF)
-               (SEQ (RPLAC (CAR |x|) (|optIF2COND| |y|))
-                    (EXIT (SPADLET |y| (CAR |x|))))
-               NIL)
-           (IF (SPADLET |op| (GETL (|subrname| (CAR |y|)) 'OPTIMIZE))
-               (EXIT (SEQ (|optimize| (CDR |x|))
-                          (EXIT (RPLAC (CAR |x|)
-                                       (FUNCALL |op|
-                                        (|optimize| (CAR |x|))))))))
-           (RPLAC (CAR |x|) (|optimize| (CAR |x|)))
-           (EXIT (|optimize| (CDR |x|)))))))
-
-(DEFUN |optimize| (|x|) (PROGN (|optimize,opt| |x|) |x|)) 
-
-;
-;subrname u ==
-;  IDENTP u => u
-;  COMPILED_-FUNCTION_-P u or MBPIP u => BPINAME u
-;  nil
-
-(DEFUN |subrname| (|u|)
-  (COND
-    ((IDENTP |u|) |u|)
-    ((OR (COMPILED-FUNCTION-P |u|) (MBPIP |u|)) (BPINAME |u|))
-    ('T NIL)))
-
 ;optCatch (x is ["CATCH",g,a]) ==
 ;  $InteractiveMode => x
 ;  atom a => a
@@ -1543,17 +1349,17 @@
 ;    )
 ;
 
-(EVALANDFILEACTQ
-    (REPEAT (IN |x|
-                '((|call| |optCall|) (SEQ |optSEQ|) (EQ |optEQ|)
-                  (MINUS |optMINUS|) (QSMINUS |optQSMINUS|) (- |opt-|)
-                  (LESSP |optLESSP|) (SPADCALL |optSPADCALL|)
-                  (|\|| |optSuchthat|) (CATCH |optCatch|)
-                  (COND |optCond|) (|mkRecord| |optMkRecord|)
-                  (RECORDELT |optRECORDELT|)
-                  (SETRECORDELT |optSETRECORDELT|)
-                  (RECORDCOPY |optRECORDCOPY|)))
-            (MAKEPROP (CAR |x|) 'OPTIMIZE (CADR |x|))))
+;(EVALANDFILEACTQ
+;    (REPEAT (IN |x|
+;                '((|call| |optCall|) (SEQ |optSEQ|) (EQ |optEQ|)
+;                  (MINUS |optMINUS|) (QSMINUS |optQSMINUS|) (- |opt-|)
+;                  (LESSP |optLESSP|) (SPADCALL |optSPADCALL|)
+;                  (|\|| |optSuchthat|) (CATCH |optCatch|)
+;                  (COND |optCond|) (|mkRecord| |optMkRecord|)
+;                  (RECORDELT |optRECORDELT|)
+;                  (SETRECORDELT |optSETRECORDELT|)
+;                  (RECORDCOPY |optRECORDCOPY|)))
+;            (MAKEPROP (CAR |x|) 'OPTIMIZE (CADR |x|))))
 
 \end{chunk}
 \eject

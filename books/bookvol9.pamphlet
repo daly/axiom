@@ -6555,13 +6555,12 @@ Code for encoding function names inside package or domain
 (defun |mkRepititionAssoc| (z)
  (labels (
   (mkRepfun (z n)
-   (let (x)
     (cond
      ((null z) nil)
      ((and (pairp z) (eq (qcdr z) nil) (list (cons n (qcar z)))))
      ((and (pairp z) (pairp (qcdr z)) (equal (qcar (qcdr z)) (qcar z)))
       (mkRepfun (cdr z) (1+ n)))
-     (t (cons (cons n (car z)) (mkRepfun (cdr z) 1)))))))
+     (t (cons (cons n (car z)) (mkRepfun (cdr z) 1))))))
  (mkRepfun z 1)))
 
 \end{chunk}
@@ -8901,6 +8900,242 @@ where item has form
           (setq vl vlp)
           (setq dl dlp))))
         (when (and newl orderedVarList) (remdup (nreverse orderedVarList)))))))
+
+\end{chunk}
+
+\section{Code optimization routines}
+\defun{optimizeFunctionDef}{optimizeFunctionDef}
+\calls{optimizeFunctionDef}{pairp}
+\calls{optimizeFunctionDef}{qcar}
+\calls{optimizeFunctionDef}{qcdr}
+\calls{optimizeFunctionDef}{rplac}
+\calls{optimizeFunctionDef}{sayBrightlyI}
+\calls{optimizeFunctionDef}{optimize}
+\calls{optimizeFunctionDef}{pp}
+\calls{optimizeFunctionDef}{bright}
+\refsdollar{optimizeFunctionDef}{reportOptimization}
+\begin{chunk}{defun optimizeFunctionDef}
+(defun |optimizeFunctionDef| (def)
+ (labels (
+  (fn (x g)
+    (cond
+     ((and (pairp x) (eq (qcar x) 'throw) (pairp (qcdr x))
+           (equal (qcar (qcdr x)) g))
+       (|rplac| (car x) 'return)
+       (|rplac| (cdr x)
+        (replaceThrowByReturn (qcdr (qcdr x)) g)))
+     ((atom x) nil)
+     (t
+      (replaceThrowByReturn (car x) g)
+      (replaceThrowByReturn (cdr x) g))))
+  (replaceThrowByReturn (x g)
+   (fn x g)
+   x)
+  (removeTopLevelCatch (body)
+   (if (and (pairp body) (eq (qcar body) 'catch) (pairp (qcdr body))
+            (pairp (qcdr (qcdr body))) (eq (qcdr (qcdr (qcdr body))) nil))
+    (removeTopLevelCatch
+      (replaceThrowByReturn 
+        (qcar (qcdr (qcdr body))) (qcar (qcdr body))))
+    body)))
+ (let (defp name slamOrLam args body bodyp)
+ (declare (special |$reportOptimization|))
+  (when |$reportOptimization|
+    (|sayBrightlyI| (|bright| "Original LISP code:"))
+    (|pp| def))
+  (setq defp (|optimize| (copy def)))
+  (when |$reportOptimization|
+    (|sayBrightlyI| (|bright| "Optimized LISP code:"))
+    (|pp| defp)
+    (|sayBrightlyI| (|bright| "Final LISP code:")))
+  (setq name (car defp))
+  (setq slamOrLam (caadr defp))
+  (setq args (cadadr defp))
+  (setq body (car (cddadr defp)))
+  (setq bodyp (removeTopLevelCatch body))
+  (list name (list slamOrLam args bodyp)))))
+
+\end{chunk}
+
+\defun{optimize}{optimize}
+\calls{optimize}{pairp}
+\calls{optimize}{qcar}
+\calls{optimize}{qcdr}
+\calls{optimize}{optimize}
+\calls{optimize}{say}
+\calls{optimize}{prettyprint}
+\calls{optimize}{rplac}
+\calls{optimize}{optIF2COND}
+\calls{optimize}{getl}
+\calls{optimize}{subrname}
+\begin{chunk}{defun optimize}
+(defun |optimize| (x)
+ (labels (
+  (opt (x)
+   (let (argl body a y op)
+    (cond
+     ((atom x) nil)
+     ((eq (setq y (car x)) 'quote) nil)
+     ((eq y 'closedfn) nil)
+     ((and (pairp y) (pairp (qcar y)) (eq (qcar (qcar y)) 'xlam)
+           (pairp (qcdr (qcar y))) (pairp (qcdr (qcdr (qcar y))))
+           (eq (qcdr (qcdr (qcdr (qcar y)))) nil))
+      (setq argl (qcar (qcdr (qcar y))))
+      (setq body (qcar (qcdr (qcdr (qcar y)))))
+      (setq a (qcdr y))
+      (|optimize| (cdr x))
+      (cond
+       ((eq argl '|ignore|) (rplac (car x) body))
+       (t
+         (when (null (<= (length argl) (length a)))
+           (say "length mismatch in XLAM expression")
+           (prettyprint y))
+          (rplac (car x)
+           (|optimize|
+            (|optXLAMCond|
+             (sublis (|pairList| argl a) body)))))))
+   ((atom y)
+     (|optimize| (cdr x))
+     (cond
+      ((eq y '|true|) (rplac (car x) '''T))
+      ((eq y '|false|) (rplac (car x) nil))))
+   ((eq (car y) 'if)
+     (rplac (car x) (|optIF2COND| y))
+     (setq y (car x))
+     (when (setq op (getl (|subrname| (car y)) 'optimize))
+      (|optimize| (cdr x))
+      (rplac (car x) (funcall op (|optimize| (car x))))))
+   ((setq op (getl (|subrname| (car y)) 'optimize))
+      (|optimize| (cdr x))
+      (rplac (car x) (funcall op (|optimize| (car x)))))
+   (t
+     (rplac (car x) (|optimize| (car x)))
+     (|optimize| (cdr x)))))))
+ (opt x)
+ x))
+
+\end{chunk}
+
+\defun{subrname}{subrname}
+\calls{subrname}{identp}
+\calls{subrname}{compiled-function-p}
+\calls{subrname}{mbpip}
+\calls{subrname}{bpiname}
+\begin{chunk}{defun subrname}
+(defun |subrname| (u)
+ (cond
+   ((identp u) u)
+   ((or (compiled-function-p u) (mbpip u)) (bpiname u))
+   (t nil)))
+
+\end{chunk}
+
+\subsection{Special case optimizers}
+Optimization functions are called through the OPTIMIZE property on the
+symbol property list.
+
+\defplist{call}{optCall}
+\begin{chunk}{postvars}
+(eval-when (eval load)
+ (setf (get '|call| 'optimize) '|optCall|))
+
+\end{chunk}
+
+\defplist{seq}{optSEQ}
+\begin{chunk}{postvars}
+(eval-when (eval load)
+ (setf (get 'seq 'optimize) '|optSEQ|))
+
+\end{chunk}
+
+\defplist{eq}{optEQ}
+\begin{chunk}{postvars}
+(eval-when (eval load)
+ (setf (get 'eq 'optimize) '|optEQ|))
+
+\end{chunk}
+
+\defplist{minus}{optMINUS}
+\begin{chunk}{postvars}
+(eval-when (eval load)
+ (setf (get 'minus 'optimize) '|optMINUS|))
+
+\end{chunk}
+
+\defplist{qsminus}{optQSMINUS}
+\begin{chunk}{postvars}
+(eval-when (eval load)
+ (setf (get 'qsminus 'optimize) '|optQSMINUS|))
+
+\end{chunk}
+
+\defplist{-}{opt-}
+\begin{chunk}{postvars}
+(eval-when (eval load)
+ (setf (get '- 'optimize) '|opt-|))
+
+\end{chunk}
+
+\defplist{lessp}{optLESSP}
+\begin{chunk}{postvars}
+(eval-when (eval load)
+ (setf (get 'lessp 'optimize) '|optLESSP|))
+
+\end{chunk}
+
+\defplist{spadcall}{optSPADCALL}
+\begin{chunk}{postvars}
+(eval-when (eval load)
+ (setf (get 'spadcall 'optimize) '|optSPADCALL|))
+
+\end{chunk}
+
+\defplist{\vert{}}{optSuchthat}
+\begin{chunk}{postvars}
+(eval-when (eval load)
+ (setf (get '|\|| 'optimize) '|optSuchthat|))
+
+\end{chunk}
+
+\defplist{catch}{optCatch}
+\begin{chunk}{postvars}
+(eval-when (eval load)
+ (setf (get 'catch 'optimize) '|optCatch|))
+
+\end{chunk}
+
+\defplist{cond}{optCond}
+\begin{chunk}{postvars}
+(eval-when (eval load)
+ (setf (get 'cond 'optimize) '|optCond|))
+
+\end{chunk}
+
+\defplist{mkRecord}{optMkRecord}
+\begin{chunk}{postvars}
+(eval-when (eval load)
+ (setf (get '|mkRecord| 'optimize) '|optMkRecord|))
+
+\end{chunk}
+
+\defplist{recordelt}{optRECORDELT}
+\begin{chunk}{postvars}
+(eval-when (eval load)
+ (setf (get 'recordelt 'optimize) '|optRECORDELT|))
+
+\end{chunk}
+
+\defplist{setrecordelt}{optSETRECORDELT}
+\begin{chunk}{postvars}
+(eval-when (eval load)
+ (setf (get 'setrecordelt 'optimize) '|optSETRECORDELT|))
+
+\end{chunk}
+
+\defplist{recordcopy}{optRECORDCOPY}
+\begin{chunk}{postvars}
+(eval-when (eval load)
+ (setf (get 'recordcopy 'optimize) '|optRECORDCOPY|))
 
 \end{chunk}
 
@@ -21880,6 +22115,8 @@ The current input line.
 \getchunk{defun new2OldLisp}
 \getchunk{defun nonblankloc}
 
+\getchunk{defun optimize}
+\getchunk{defun optimizeFunctionDef}
 \getchunk{defun optional}
 \getchunk{defun orderByDependency}
 \getchunk{defun orderPredicateItems}
@@ -22115,6 +22352,7 @@ The current input line.
 \getchunk{defun storeblanks}
 \getchunk{defun stripOffArgumentConditions}
 \getchunk{defun stripOffSubdomainConditions}
+\getchunk{defun subrname}
 \getchunk{defun substituteCategoryArguments}
 \getchunk{defun substNames}
 \getchunk{defun substVars}
