@@ -33082,6 +33082,463 @@ o )history
 \end{chunk} 
 \footnote{\fnref{history}}
 
+\section{Evaluation}
+Some Antique Comments About the Interpreter
+
+EVAL BOOT contains the top level interface to the Scratchhpad-II
+interpreter.  The Entry point into the interpreter from the parser is
+processInteractive.
+
+The type analysis algorithm is contained in the file BOTMUP BOOT,
+and MODSEL boot,
+the map handling routines are in MAP BOOT and NEWMAP BOOT, and
+the interactive coerce routines are in COERCE BOOT and COERCEFN BOOT.
+
+{\bf Conventions:}
+All spad values in the interpreter are passed around in triples.
+These are lists of three items: 
+\begin{verbatim}
+   [value,mode,environment]
+\end{verbatim}
+The value
+may be wrapped (this is a pair whose CAR is the atom WRAPPED and
+whose CDR is the value), which indicates that it is a real value,
+or unwrapped in which case it needs to be EVALed to produce the
+proper value.  The mode is the type of value, and should always be
+completely specified (not contain \verb|$EmptyMode|).  The environment
+is always empty, and is included for historical reasons.
+
+{\bf Modemaps:}
+Modemaps are descriptions of compiled Spad function which the
+interpreter uses to perform type analysis. They consist of patterns
+of types for the arguments, and conditions the types must satisfy
+for the function to apply.  For each function name there is a list
+of modemaps in file modemap DATABASE for each distinct function with
+that name. The following is the list of the modemaps for ``*''
+(multiplication. The first modemap (the one with the labels) is for
+module mltiplication which is multiplication of an element of a
+module by a member of its scalar domain.
+
+This is the signature pattern for the modemap, it is of the form:
+\begin{verbatim}
+    (DomainOfComputation TargetType <ArgumentType ...>)
+          |
+          |                This is the predicate that needs to be
+          |                 satisfied for the modemap to apply
+          |                            |
+          V                            |
+     /-----------/                     |
+ ( ( (*1 *1 *2 *1)                     V
+       /-----------------------------------------------------------/
+     ( (AND (ofCategory *1 (Module *2)) (ofCategory *2 (SimpleRing))) )
+      . CATDEF) <-- This is the file where the function was defined
+   ( (*1 *1 *2 *1)
+     ( (AND (isDomain *2 (Integer)) (ofCategory *1 (AbelianGroup))) )
+      . CATDEF)
+   ( (*1 *1 *2 *1)
+     ( (AND
+         (isDomain *2 (NonNegativeInteger))
+         (ofCategory *1 (AbelianMonoid))) )
+      . CATDEF)
+   ((*1 *1 *1 *1) ((ofCategory *1 (SemiGroup)) ) . CATDEF)
+      )
+\end{verbatim}
+{\bf Environments:}
+Environments associate properties with atoms.
+
+Some common properties are:
+\begin{itemize}
+\item {\bf modeSet:}
+During interpretation we build a modeSet property for each node in
+the expression.  This is (in theory) a list of all the types
+possible for the node.  In the current implementation these
+modeSets always contain a single type.
+\item {\bf value:}
+Value properties are always triples.  This is where the values of
+variables are stored.  We also build value properties for internal
+nodes during the bottom up phase.
+\item {\bf mode:}
+This is the declared type of an identifier.
+\end{itemize}
+
+There are several different environments used in the interpreter:
+\begin{itemize}
+\item {\bf \verb|$InteractiveFrame|:} this is the environment where the user
+values are stored.  Any side effects of evaluation of a top-level
+expression are stored in this environment.  It is always used as
+the starting environment for interpretation.
+\item {\bf \$e:} 
+This is the name used for \verb|$InteractiveFrame| while interpreting.
+\item {\bf \verb|$env|:} This is local environment used by the interpreter.
+Only temporary information (such as types of local variables is
+stored in \verb|$env|.
+It is thrown away after evaluation of each expression.
+\end{itemize}
+
+Frequently used global variables:
+\begin{itemize}
+\item {\bf \verb|$genValue|}: if true then evaluate generated code,
+otherwise leave code unevaluated.  If \verb|$genValue| is false then
+we are compiling.
+\item {\bf \verb|$op|}: name of the top level operator 
+(unused except in map printing)
+\item {\bf \verb|$mapList|}: list of maps being type analyzed, used in
+recursive map type anlysis.
+\item {\bf \verb|$compilingMap|}: true when compiling a map, used to
+detect where to THROW when interpret-only is invoked
+\item {\bf \verb|$compilingLoop|}: true when compiling a loop body,
+used to control nesting level of interp-only loop CATCH points
+\item {\bf \verb|$interpOnly|}: true when in interpret only mode, used
+to call alternate forms of COLLECT and REPEAT.
+\item {\bf \verb|$inCOLLECT|}: true when compiling a COLLECT, used
+only for hacked stream compiler.
+\item {\bf \verb|$StreamFrame|}: used in printing streams, it is the
+environment where local stream variables are stored
+\item {\bf \verb|$declaredMode|}: Weak type propagation for symbols,
+set in upCOERCE and upLET.  This variable is used to determine the
+alternate polynomial types of Symbols.
+\item {\bf \verb|$localVars|}: list of local variables in a map body
+\item {\bf \verb|$MapArgumentTypeList|}: hack for stream compilation
+\end{itemize}
+
+\defun{evalDomain}{evalDomain}
+\calls{evalDomain}{sayMSG}
+\calls{evalDomain}{concat}
+\calls{evalDomain}{prefix2String}
+\calls{evalDomain}{startTimingProcess}
+\calls{evalDomain}{newType?}
+\calls{evalDomain}{eval}
+\calls{evalDomain}{mkEvalable}
+\calls{evalDomain}{stopTimingProcess}
+\refsdollar{evalDomain}{evalDomain}
+\begin{chunk}{defun evalDomain}
+(defun |evalDomain| (form)
+ (let (result)
+ (declare (special |$evalDomain|))
+  (when |$evalDomain|
+    (|sayMSG| 
+      (|concat| "   instantiating" '|%b| (|prefix2String| form) '|%d|)))
+  (|startTimingProcess| '|instantiation|)
+  (cond
+    ((|newType?| form) form)
+    ('t
+      (setq result (|eval| (|mkEvalable| form)))
+      (|stopTimingProcess| '|instantiation|)
+      result))))
+
+\end{chunk}
+
+\defun{mkEvalable}{mkEvalable}
+\calls{mkEvalable}{pairp}
+\calls{mkEvalable}{qcar}
+\calls{mkEvalable}{qcdr}
+\calls{mkEvalable}{mkEvalable}
+\calls{mkEvalable}{devaluate}
+\calls{mkEvalable}{mkEvalableRecord}
+\calls{mkEvalable}{mkEvalableUnion}
+\calls{mkEvalable}{mkEvalableMapping}
+\calls{mkEvalable}{loadIfNecessary}
+\calls{mkEvalable}{getdatabase}
+\calls{mkEvalable}{mkq}
+\calls{mkEvalable}{constructor?}
+\calls{mkEvalable}{fbpip}
+\calls{mkEvalable}{bpiname}
+\refsdollar{mkEvalable}{Integer}
+\refsdollar{mkEvalable}{EmptyMode}
+\begin{chunk}{defun mkEvalable}
+(defun |mkEvalable| (form)
+ (let (op argl kind cosig tmp1 y)
+ (declare (special |$Integer| |$EmptyMode|))
+  (cond
+   ((pairp form)
+     (setq op (qcar form))
+     (setq argl (qcdr form))
+     (cond
+      ((eq op 'quote) form)
+      ((eq op 'wrapped) (|mkEvalable| (|devaluate| argl)))
+      ((eq op '|Record|) (|mkEvalableRecord| form))
+      ((eq op '|Union|) (|mkEvalableUnion| form))
+      ((eq op '|Mapping|) (|mkEvalableMapping| form))
+      ((eq op '|Enumeration|) form)
+      (t
+       (|loadIfNecessary| op)
+       (setq kind (getdatabase op 'constructorkind))
+       (cond
+         ((setq cosig (getdatabase op 'cosig))
+          (cons op
+           (loop for x in argl for typeFlag in (rest cosig)
+            collect 
+             (cond
+              (typeFlag
+               (cond
+                ((eq kind '|category|) (mkq x))
+                ((vecp x) (mkq x))
+                (t
+                  (|loadIfNecessary| x)
+                  (|mkEvalable| x))))
+              ((and (pairp x) (eq (qcar x) 'quote)) x)
+              ((and (pairp x) (eq (qcar x) '|#|) (pairp (qcdr x)) 
+                    (eq (qcdr (qcdr x)) nil))
+                (list 'size (mkq (qcar (qcdr x)))))
+              (t (mkq x))))))
+         (t
+          (cons op
+           (loop for x in argl
+            collect (|mkEvalable| x))))))))
+     ((equal form |$EmptyMode|) |$Integer|)
+     ((and (identp form) (|constructor?| form)) (list form))
+     ((fbpip form) (bpiname form))
+     (t form))))
+
+\end{chunk}
+
+\defun{mkEvalableUnion}{mkEvalableUnion}
+\calls{mkEvalableUnion}{mkEvalable}
+\begin{chunk}{defun mkEvalableUnion}
+(defun |mkEvalableUnion| (form)
+  (cond
+   ((|isTaggedUnion| form)
+    (cons
+     (car form)
+     (loop for item in (rest form)
+      collect (list '|:| (second item) (|mkEvalable| (third item))))))
+   (t
+    (cons (car form)
+     (loop for d in (rest form)
+      collect (|mkEvalable| d))))))
+
+\end{chunk}
+
+\defun{mkEvalableRecord}{mkEvalableRecord}
+\calls{mkEvalableRecord}{mkEvalable}
+\begin{chunk}{defun mkEvalableRecord}
+(defun |mkEvalableRecord| (form)
+ (let (n d)
+  (cons
+   (car form)
+   (loop for item in (rest form)
+    collect (list (quote |:|) (second item) (|mkEvalable| (third item)))))))
+
+\end{chunk}
+
+\defun{mkEvalableMapping}{mkEvalableMapping}
+\calls{mkEvalableMapping}{mkEvalable}
+\begin{chunk}{defun mkEvalableMapping}
+(defun |mkEvalableMapping| (form)
+ (cons
+  (car form)
+  (loop for d in (rest form)
+   collect (|mkEvalable| d))))
+
+\end{chunk}
+
+\defun{evaluateType}{evaluateType}
+Takes a parsed, unabbreviated type and evaluates it, replacing
+type valued variables with their values, and calling bottomUp
+on non-type valued arguemnts to the constructor
+and finally checking to see whether the type satisfies the
+conditions of its modemap
+\calls{evaluateType}{isDomainValuedVariable}
+\calls{evaluateType}{pairp}
+\calls{evaluateType}{qcar}
+\calls{evaluateType}{qcdr}
+\calls{evaluateType}{mkAtree}
+\calls{evaluateType}{bottomUp}
+\calls{evaluateType}{objVal}
+\calls{evaluateType}{getValue}
+\calls{evaluateType}{evaluateSignature}
+\calls{evaluateType}{member}
+\calls{evaluateType}{evaluateType}
+\calls{evaluateType}{constructor?}
+\calls{evaluateType}{throwEvalTypeMsg}
+\refsdollar{evaluateType}{EmptyMode}
+\defsdollar{evaluateType}{expandSegments}
+\begin{chunk}{defun evaluateType}
+(defun |evaluateType| (form)
+ (let (|$expandSegments| domain formp op argl)
+  (declare (special |$expandSegments| |$EmptyMode|))
+  (cond
+    ((setq domain (|isDomainValuedVariable| form)) domain)
+    ((equal form |$EmptyMode|) form)
+    ((eq form '?) |$EmptyMode|)
+    ((stringp form) form)
+    ((eq form '$) form)
+    (t
+     (setq |$expandSegments| nil)
+     (cond
+       ((and (pairp form) (eq (qcar form) '|typeOf|) (pairp (qcdr form)) 
+             (eq (qcdr (qcdr form)) nil))
+         (setq formp (|mkAtree| form))
+         (|bottomUp| formp)
+         (|objVal| (|getValue| formp)))
+       ((pairp form)
+         (setq op (qcar form))
+         (setq argl (qcdr form))
+         (cond
+          ((eq op 'category)
+            (cond
+             ((pairp argl)
+               (cons op
+                (cons (qcar argl)
+                 (loop for s in (qcdr argl)
+                  collect (|evaluateSignature| s)))))
+             (t form)))
+          ((|member| op '(|Join| |Mapping|))
+            (cons op
+             (loop for arg in argl
+              collect (|evaluateType| arg))))
+          ((eq op '|Union|)
+            (cond
+             ((and argl (pairp (car argl)) (pairp (qcdr (car argl)))
+                   (pairp (qcdr (qcdr (car argl))))
+                   (eq (qcdr (qcdr (qcdr (car argl)))) nil)
+                   (|member| (qcar (car argl)) '(|:| |Declare|)))
+               (cons op
+                (loop for item in argl
+                 collect
+                  (list '|:| (second item) (|evaluateType| (third item))))))
+             (t
+              (cons op
+               (loop for arg in argl
+                collect (|evaluateType| arg))))))
+          ((eq op '|Record|)
+            (cons op
+             (loop for item in argl
+              collect
+               (list '|:| (second item) (|evaluateType| (third item))))))
+          ((eq op '|Enumeration|) form)
+          (t (|evaluateType1| form))))
+       ((|constructor?| form)
+         (if (atom form)
+           (|evaluateType| (list form))
+           (|throwEvalTypeMsg| 'S2IE0003 (list form form))))
+       (t (|throwEvalTypeMsg| 'S2IE0004 (list form))))))))
+
+\end{chunk}
+
+\defun{evaluateType1}{Eval args passed to a constructor}
+Evaluates the arguments passed to a constructor
+\calls{evaluateType1}{constructor?}
+\calls{evaluateType1}{getConstructorSignature}
+\calls{evaluateType1}{throwEvalTypeMsg}
+\calls{evaluateType1}{replaceSharps}
+\calls{evaluateType1}{nequal}
+\calls{evaluateType1}{categoryForm?}
+\calls{evaluateType1}{evaluateType}
+\calls{evaluateType1}{evalCategory}
+\calls{evaluateType1}{getdatabase}
+\calls{evaluateType1}{mkAtree}
+\calls{evaluateType1}{putTarget}
+\calls{evaluateType1}{bottumUp}
+\calls{evaluateType1}{pairp}
+\calls{evaluateType1}{qcar}
+\calls{evaluateType1}{qcdr}
+\calls{evaluateType1}{getAndEvalConstructorArguments}
+\calls{evaluateType1}{coerceOrRetract}
+\calls{evaluateType1}{objValUnwrap}
+\calls{evaluateType1}{throwKeyedMsgCannotCoerceWithValue}
+\calls{evaluateType1}{makeOrdinal}
+\refsdollar{evaluateType1}{quadSymbol}
+\refsdollar{evaluateType1}{EmptyMode}
+\begin{chunk}{defun evaluateType1}
+(defun |evaluateType1| (form)
+ (let (op argl sig ml xp tree tmp1 m1 z1 zt zv v typeList (argnum 0))
+ (declare (special |$quadSymbol| |$EmptyMode|))
+  (setq op (car form))
+  (setq argl (cdr form))
+  (cond
+   ((|constructor?| op)
+     (cond
+      ((null (setq sig (|getConstructorSignature| form)))
+       (|throwEvalTypeMsg| 'S2IE0005 (list form)))
+      (t
+       (setq ml (cdr sig))
+       (setq ml (|replaceSharps| ml form))
+       (cond
+        ((nequal (|#| argl) (|#| ml))
+          (|throwEvalTypeMsg| 'S2IE0003 (list form form)))
+        (t
+         (loop for x in argl for m in ml 
+          do
+           (setq typeList
+            (cons
+             (cond
+              ((|categoryForm?| m)
+                (setq m (|evaluateType| (msubstq x '$ m)))
+                (if (|evalCategory| (setq xp (|evaluateType| x)) m)
+                   xp
+                   (|throwEvalTypeMsg| 'S2IE0004 (list form))))
+              (t
+               (setq m (|evaluateType| m))
+               (cond
+                ((and (eq (getdatabase (|opOf| m) 'constructorkind) '|domain|)
+                      (setq tree (|mkAtree| x))
+                      (|putTarget| tree m)
+                      (progn
+                       (setq tmp1 (|bottomUp| tree))
+                       (and (pairp tmp1)
+                            (eq (qcdr tmp1) nil))))
+                  (setq m1 (qcar tmp1))
+                  (setq z1 (|getAndEvalConstructorArgument| tree))
+                  (setq zt (car z1))
+                  (setq zv (cdr z1))
+                  (if (setq v (|coerceOrRetract| z1 m))
+                    (|objValUnwrap| v)
+                    (|throwKeyedMsgCannotCoerceWithValue| zv zt m)))
+                (t
+                 (when (equal x |$EmptyMode|) (setq x |$quadSymbol|))
+                 (|throwEvalTypeMsg| 'S2IE0006
+                  (list (|makeOrdinal| (incf argnum)) m form))))))
+             typeList)))
+       (cons op (nreverse typeList)))))))
+    (t (|throwEvalTypeMsg| 'S2IE0007 (list op))))))
+
+\end{chunk}
+
+\defdollar{noEvalTypeMsg}
+\begin{chunk}{initvars}
+(defvar |$noEvalTypeMsg| nil)
+
+\end{chunk}
+
+\defun{throwEvalTypeMsg}{throwEvalTypeMsg}
+\calls{throwEvalTypeMsg}{spadThrow}
+\calls{throwEvalTypeMsg}{throwKeyedMsg}
+\refsdollar{throwEvalTypeMsg}{noEvalTypeMsg}
+\begin{chunk}{defun throwEvalTypeMsg}
+(defun |throwEvalTypeMsg| (msg args)
+ (declare (special |$noEvalTypeMsg|))
+ (if |$noEvalTypeMsg|
+  (|spadThrow|)
+  (|throwKeyedMsg| msg args)))
+
+\end{chunk}
+
+\defun{makeOrdinal}{makeOrdinal}
+\begin{chunk}{defun makeOrdinal}
+(defun |makeOrdinal| (i)
+ (elt '(|first| |second| |third| |fourth| |fifth| |sixth| |seventh| 
+        |eighth| |ninth| |tenth|)
+  (1- i)))
+
+\end{chunk}
+
+\defun{evaluateSignature}{evaluateSignature}
+Calls evaluateType on a signature
+\calls{evaluateSignature}{evaluateType}
+\begin{chunk}{defun evaluateSignature}
+(defun |evaluateSignature| (sig)
+  (cond
+   ((and (pairp sig) (eq (qcar sig) 'signature) (pairp (qcdr sig))
+         (pairp (qcdr (qcdr sig))) (eq (qcdr (qcdr (qcdr sig))) nil))
+    (cons 'signature (cons (qcar (qcdr sig))
+      (list
+       (loop for z in (qcar (qcdr (qcdr sig)))
+        collect (if (eq z '$) z (|evaluateType| z)))))))
+   (t sig)))
+
+\end{chunk}
+
 \section{Data Structures}
 \verb|$frameRecord = [delta1, delta2,... ]| where
 delta(i) contains changes in the ``backwards'' direction.
@@ -40445,6 +40902,10 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun erMsgCompare}
 \getchunk{defun erMsgSep}
 \getchunk{defun erMsgSort}
+\getchunk{defun evalDomain}
+\getchunk{defun evaluateSignature}
+\getchunk{defun evaluateType}
+\getchunk{defun evaluateType1}
 \getchunk{defun ExecuteInterpSystemCommand}
 \getchunk{defun executeQuietCommand}
 
@@ -40652,6 +41113,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun make-instream}
 \getchunk{defun makeLeaderMsg}
 \getchunk{defun makeMsgFromLine}
+\getchunk{defun makeOrdinal}
 \getchunk{defun make-outstream}
 \getchunk{defun makePathname}
 \getchunk{defun makeStream}
@@ -40660,6 +41122,10 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun messageprint}
 \getchunk{defun messageprint-1}
 \getchunk{defun messageprint-2}
+\getchunk{defun mkEvalable}
+\getchunk{defun mkEvalableMapping}
+\getchunk{defun mkEvalableRecord}
+\getchunk{defun mkEvalableUnion}
 \getchunk{defun mkLineList}
 \getchunk{defun mkprompt}
 \getchunk{defun msgCreate}
@@ -41330,6 +41796,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun tersyscommand}
 \getchunk{defun thisPosIsEqual}
 \getchunk{defun thisPosIsLess}
+\getchunk{defun throwEvalTypeMsg}
 \getchunk{defun toFile?}
 \getchunk{defun tokConstruct}
 \getchunk{defun token-stack-show}
