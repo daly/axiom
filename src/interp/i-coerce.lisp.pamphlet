@@ -40,63 +40,6 @@ The special routines that  do the coercions typically  involve a "2"
 \begin{chunk}{*}
 (IN-PACKAGE "BOOT" )
 
-;--%  Algebraic coercions using interactive code
-;algCoerceInteractive(p,source,target) ==
-;  -- now called in some groebner code
-;  $useConvertForCoercions : local := true
-;  source := devaluate source
-;  target := devaluate target
-;  u := coerceInteractive(objNewWrap(p,source),target)
-;  u => objValUnwrap(u)
-;  error ['"can't convert",p,'"of mode",source,'"to mode",target]
-
-(DEFUN |algCoerceInteractive| (|p| |source| |target|)
-  (PROG (|$useConvertForCoercions| |u|)
-    (DECLARE (SPECIAL |$useConvertForCoercions|))
-    (RETURN
-      (PROGN
-        (SPADLET |$useConvertForCoercions| 'T)
-        (SPADLET |source| (|devaluate| |source|))
-        (SPADLET |target| (|devaluate| |target|))
-        (SPADLET |u|
-                 (|coerceInteractive| (|objNewWrap| |p| |source|)
-                     |target|))
-        (COND
-          (|u| (|objValUnwrap| |u|))
-          ('T
-           (|error| (CONS "can't convert"
-                          (CONS |p|
-                                (CONS "of mode"
-                                      (CONS |source|
-                                       (CONS "to mode"
-                                        (CONS |target| NIL)))))))))))))
-
-
-;spad2BootCoerce(x,source,target) ==
-;  -- x : source and we wish to coerce to target
-;  -- used in spad code for Any
-;  null isValidType source => throwKeyedMsg("S2IE0004",[source])
-;  null isValidType target => throwKeyedMsg("S2IE0004",[target])
-;  x' := coerceInteractive(objNewWrap(x,source),target) =>
-;    objValUnwrap(x')
-;  throwKeyedMsgCannotCoerceWithValue(wrap x,source,target)
-
-(DEFUN |spad2BootCoerce| (|x| |source| |target|)
-  (PROG (|x'|)
-    (RETURN
-      (COND
-        ((NULL (|isValidType| |source|))
-         (|throwKeyedMsg| 'S2IE0004 (CONS |source| NIL)))
-        ((NULL (|isValidType| |target|))
-         (|throwKeyedMsg| 'S2IE0004 (CONS |target| NIL)))
-        ((SPADLET |x'|
-                  (|coerceInteractive| (|objNewWrap| |x| |source|)
-                      |target|))
-         (|objValUnwrap| |x'|))
-        ('T
-         (|throwKeyedMsgCannotCoerceWithValue| (|wrap| |x|) |source|
-             |target|))))))
-
 ;--%  Functions for Coercion or Else We'll Get Rough
 ;coerceOrFail(triple,t,mapName) ==
 ;  -- some code generated for this is in coerceInt0
@@ -163,136 +106,6 @@ The special routines that  do the coercions typically  involve a "2"
         (|objValUnwrap| |result|)))))
 
 ;--%  Retraction functions
-;retract object ==
-;  type := objMode object
-;  STRINGP type => 'failed
-;  type = $EmptyMode => 'failed
-;  val := objVal object
-;  not isWrapped val and val isnt ['MAP,:.] => 'failed
-;  type' := equiType(type)
-;  (ans := retract1 objNew(val,equiType(type))) = 'failed => ans
-;  objNew(objVal ans,eqType objMode ans)
-
-(DEFUN |retract| (|object|)
-  (PROG (|type| |val| |type'| |ans|)
-    (DECLARE (SPECIAL |$EmptyMode|))
-    (RETURN
-      (PROGN
-        (SPADLET |type| (|objMode| |object|))
-        (COND
-          ((STRINGP |type|) '|failed|)
-          ((BOOT-EQUAL |type| |$EmptyMode|) '|failed|)
-          ('T (SPADLET |val| (|objVal| |object|))
-           (COND
-             ((AND (NULL (|isWrapped| |val|))
-                   (NULL (AND (CONSP |val|) (EQ (QCAR |val|) 'MAP))))
-              '|failed|)
-             ('T (SPADLET |type'| (|equiType| |type|))
-              (COND
-                ((BOOT-EQUAL
-                     (SPADLET |ans|
-                              (|retract1|
-                                  (|objNew| |val| (|equiType| |type|))))
-                     '|failed|)
-                 |ans|)
-                ('T
-                 (|objNew| (|objVal| |ans|)
-                     (|eqType| (|objMode| |ans|)))))))))))))
-
-;retract1 object ==
-;  -- this function is the new version of the old "pullback"
-;  -- it first tries to change the datatype of an object to that of
-;  -- largest contained type. Examples: P RN -> RN, RN -> I
-;  -- This is mostly for cases such as constant polynomials or
-;  -- quotients with 1 in the denominator.
-;  type := objMode object
-;  STRINGP type => 'failed
-;  val := objVal object
-;  type = $PositiveInteger =>    objNew(val,$NonNegativeInteger)
-;  type = $NonNegativeInteger => objNew(val,$Integer)
-;  type = $Integer and SINTP unwrap val => objNew(val, $SingleInteger)
-;  type' := equiType(type)
-;  if not EQ(type,type') then object := objNew(val,type')
-;  (1 = #type') or (type' is ['Union,:.]) or
-;    (type' is ['FunctionCalled,.])
-;     or (type' is ['OrderedVariableList,.]) or (type is ['Variable,.]) =>
-;      (object' := retract2Specialization(object)) => object'
-;      'failed
-;  null (underDomain := underDomainOf type') => 'failed
-;  -- try to retract the "coefficients"
-;  -- think of P RN -> P I or M RN -> M I
-;  object' := retractUnderDomain(object,type,underDomain)
-;  object' ^= 'failed => object'
-;  -- see if we can use the retract functions
-;  (object' := coerceRetract(object,underDomain)) => object'
-;  -- see if we have a special case here
-;  (object' := retract2Specialization(object)) => object'
-;  'failed
-
-(DEFUN |retract1| (|object|)
-  (PROG (|type| |val| |type'| |ISTMP#1| |underDomain| |object'|)
-    (DECLARE (SPECIAL |$SingleInteger| |$Integer| |$NonNegativeInteger|
-                      |$PositiveInteger|))
-    (RETURN
-      (PROGN
-        (SPADLET |type| (|objMode| |object|))
-        (COND
-          ((STRINGP |type|) '|failed|)
-          ('T (SPADLET |val| (|objVal| |object|))
-           (COND
-             ((BOOT-EQUAL |type| |$PositiveInteger|)
-              (|objNew| |val| |$NonNegativeInteger|))
-             ((BOOT-EQUAL |type| |$NonNegativeInteger|)
-              (|objNew| |val| |$Integer|))
-             ((AND (BOOT-EQUAL |type| |$Integer|)
-                   (typep (|unwrap| |val|) 'fixnum))
-              (|objNew| |val| |$SingleInteger|))
-             ('T (SPADLET |type'| (|equiType| |type|))
-              (COND
-                ((NULL (EQ |type| |type'|))
-                 (SPADLET |object| (|objNew| |val| |type'|))))
-              (COND
-                ((OR (EQL 1 (|#| |type'|))
-                     (AND (CONSP |type'|) (EQ (QCAR |type'|) '|Union|))
-                     (AND (CONSP |type'|)
-                          (EQ (QCAR |type'|) '|FunctionCalled|)
-                          (PROGN
-                            (SPADLET |ISTMP#1| (QCDR |type'|))
-                            (AND (CONSP |ISTMP#1|)
-                                 (EQ (QCDR |ISTMP#1|) NIL))))
-                     (AND (CONSP |type'|)
-                          (EQ (QCAR |type'|) '|OrderedVariableList|)
-                          (PROGN
-                            (SPADLET |ISTMP#1| (QCDR |type'|))
-                            (AND (CONSP |ISTMP#1|)
-                                 (EQ (QCDR |ISTMP#1|) NIL))))
-                     (AND (CONSP |type|) (EQ (QCAR |type|) '|Variable|)
-                          (PROGN
-                            (SPADLET |ISTMP#1| (QCDR |type|))
-                            (AND (CONSP |ISTMP#1|)
-                                 (EQ (QCDR |ISTMP#1|) NIL)))))
-                 (COND
-                   ((SPADLET |object'|
-                             (|retract2Specialization| |object|))
-                    |object'|)
-                   ('T '|failed|)))
-                ((NULL (SPADLET |underDomain|
-                                (|underDomainOf| |type'|)))
-                 '|failed|)
-                ('T
-                 (SPADLET |object'|
-                          (|retractUnderDomain| |object| |type|
-                              |underDomain|))
-                 (COND
-                   ((NEQUAL |object'| '|failed|) |object'|)
-                   ((SPADLET |object'|
-                             (|coerceRetract| |object| |underDomain|))
-                    |object'|)
-                   ((SPADLET |object'|
-                             (|retract2Specialization| |object|))
-                    |object'|)
-                   ('T '|failed|))))))))))))
-
 ;retractUnderDomain(object,type,underDomain) ==
 ;  null (ud := underDomainOf underDomain) => 'failed
 ;  [c,:args] := deconstructT type
@@ -604,7 +417,7 @@ The special routines that  do the coercions typically  involve a "2"
                              (SPADLET |m| (|resolveTypeListAny| |tl|))
                              D)
                          NIL)
-                        ((BOOT-EQUAL D (|equiType| |m|)) NIL)
+                        ((BOOT-EQUAL D |m|) NIL)
                         ('T (SPADLET |vl'| NIL)
                          (DO ((G166358 |vl| (CDR G166358))
                               (|e| NIL)
@@ -704,7 +517,7 @@ The special routines that  do the coercions typically  involve a "2"
                 (SPADLET |val'| (|retract| (|objNew| |val| |rep|)))
                 (DO ()
                     ((NULL (AND (NEQUAL |val'| '|failed|)
-                                (NEQUAL (|equiType| (|objMode| |val'|))
+                                (NEQUAL (|objMode| |val'|)
                                         |k|)))
                      NIL)
                   (SEQ (EXIT (SPADLET |val'| (|retract| |val'|)))))
@@ -1370,8 +1183,8 @@ Interpreter Coercion Query Functions
                        (COND
                          ((BOOT-EQUAL |t2| |$OutputForm|)
                           (SPADLET |s1| |t1|) (SPADLET |s2| |t2|))
-                         ('T (SPADLET |s1| (|equiType| |t1|))
-                          (SPADLET |s2| (|equiType| |t2|))))
+                         ('T (SPADLET |s1| |t1|)
+                          (SPADLET |s2| |t2|)))
                        (COND
                          ((NULL (|isValidType| |t2|)) NIL)
                          ((NULL (|isLegitimateMode| |t2| NIL NIL)) NIL)
@@ -2472,8 +2285,8 @@ Interpreter Coercion Query Functions
            (COND
              ((BOOT-EQUAL |t2| |$OutputForm|) (SPADLET |s1| |t1|)
               (SPADLET |s2| |t2|))
-             ('T (SPADLET |s1| (|equiType| |t1|))
-              (SPADLET |s2| (|equiType| |t2|))
+             ('T (SPADLET |s1| |t1|)
+              (SPADLET |s2| |t2|)
               (COND
                 ((BOOT-EQUAL |s1| |s2|) (RETURN (|objNew| |val| |t2|))))))
            (COND

@@ -2098,6 +2098,7 @@ It is controlled with the {\tt )se me any} command.
 \end{chunk}
 
 \defun{printTypeAndTimeNormal}{printTypeAndTimeNormal}
+\calls{printTypeAndTimeNormal}{retract}
 \calls{printTypeAndTimeNormal}{qcar}
 \calls{printTypeAndTimeNormal}{retract}
 \calls{printTypeAndTimeNormal}{objNewWrap}
@@ -25009,6 +25010,26 @@ recurrence   specially compile recurrence relations     on
 
 \end{chunk}
 
+\defun{insertAlist}{insertAlist}
+\calls{insertAlist}{rplac}
+\calls{insertAlist}{?order}
+\begin{chunk}{defun insertAlist}
+(defun |insertAlist| (a b z)
+ (labels (
+  (fn (a b z)
+   (cond
+    ((null (cdr z)) (rplac (cdr z) (list (cons a b))))
+    ((equal a (elt (elt z 1) 0)) (rplac (cdr (elt z 1)) b))
+    ((?order (elt (elt z 1) 0) a) (rplac (cdr z) (cons (cons a b) (cdr z))))
+    (t (fn a b (cdr z))))))
+  (cond
+    ((null z) (list (cons a b)))
+    ((equal a (elt (elt z 0) 0)) (rplac (cdar z) b) z)
+    ((?order (elt (elt z 0) 0) a) (cons (cons a b) z))
+    (t (fn a b z) z))))
+
+\end{chunk}
+
 \defunsec{describeSetFunctionsCache}{Describe the set functions cache}
 \calls{describeSetFunctionsCache}{sayBrightly}
 \begin{chunk}{defun describeSetFunctionsCache}
@@ -38013,6 +38034,118 @@ but the Axiom semantics are not the same. Because Axiom was originally
 written in Maclisp, then VMLisp, and then Common Lisp some of these old
 semantics survive. 
 
+;spad2BootCoerce(x,source,target) ==
+;  -- x : source and we wish to coerce to target
+;  -- used in spad code for Any
+;  null isValidType source => throwKeyedMsg("S2IE0004",[source])
+;  null isValidType target => throwKeyedMsg("S2IE0004",[target])
+;  x' := coerceInteractive(objNewWrap(x,source),target) =>
+;    objValUnwrap(x')
+;  throwKeyedMsgCannotCoerceWithValue(wrap x,source,target)
+
+\section{AlgebraicFunction}
+\defun{retract}{retract}
+\calls{retract}{objMode}
+\calls{retract}{objVal}
+\calls{retract}{isWrapped}
+\calls{retract}{qcar}
+\calls{retract}{retract1}
+\calls{retract}{objNew}
+\refsdollar{retract}{EmptyMode}
+\begin{chunk}{defun retract}
+(defun |retract| (object)
+ (labels (
+  (retract1 (object)
+   (let (type val typep tmp1 underDomain objectp)
+   (declare (special |$SingleInteger| |$Integer| |$NonNegativeInteger|
+                     |$PositiveInteger|))
+    (setq type (|objMode| object))
+    (cond
+     ((stringp type) '|failed|)
+     (t 
+       (setq val (|objVal| object))
+       (cond
+        ((equal type |$PositiveInteger|) (|objNew| val |$NonNegativeInteger|))
+        ((equal type |$NonNegativeInteger|) (|objNew| val |$Integer|))
+        ((and (equal type |$Integer|) (typep (|unwrap| val) 'fixnum))
+          (|objNew| val |$SingleInteger|))
+        (t 
+          (cond
+           ((or (eql 1 (|#| type))
+                (and (consp type) (eq (qcar type) '|Union|))
+                (and (consp type) (eq (qcar type) '|FunctionCalled|)
+                     (and (consp (qcdr type)) (eq (qcddr type) nil)))
+                (and (consp type) (eq (qcar type) '|OrderedVariableList|)
+                     (and (consp (qcdr type)) (eq (qcddr type) nil)))
+                (and (consp type) (eq (qcar type) '|Variable|)
+                     (and (consp (qcdr type)) (eq (qcddr type) nil))))
+             (if (setq objectp (|retract2Specialization| object))
+               objectp
+               '|failed|))
+           ((null (setq underDomain (|underDomainOf| type)))
+             '|failed|)
+          ; try to retract the "coefficients", e.g. P RN -> P I or M RN -> M I
+           (t
+            (setq objectp (|retractUnderDomain| object type underDomain))
+            (cond
+             ((nequal objectp '|failed|) objectp)
+             ; see if we can use the retract functions
+             ((setq objectp (|coerceRetract| object underDomain)) objectp)
+             ; see if we have a special case here
+             ((setq objectp (|retract2Specialization| object)) objectp)
+           (t '|failed|)))))))))))
+ (let (type val ans)
+ (declare (special |$EmptyMode|))
+  (setq type (|objMode| object))
+  (cond
+   ((stringp type) '|failed|)
+   ((equal type |$EmptyMode|) '|failed|)
+   (t 
+    (setq val (|objVal| object))
+    (cond
+     ((and (null (|isWrapped| val))
+           (null (and (consp val) (eq (qcar val) 'map))))
+       '|failed|)
+     (t 
+      (cond
+       ((eq (setq ans (retract1 (|objNew| val type))) '|failed|)
+         ans)
+       (t
+        (|objNew| (|objVal| ans) (|eqType| (|objMode| ans))))))))))))
+
+\end{chunk}
+
+\section{Any}
+\defun{spad2BootCoerce}{spad2BootCoerce}
+\begin{chunk}{defun spad2BootCoerce}
+(defun |spad2BootCoerce| (x source target)
+ (let (xp)
+  (cond
+   ((null (|isValidType| source)) (|throwKeyedMsg| 'S2IE0004 (list source)))
+   ((null (|isValidType| target)) (|throwKeyedMsg| 'S2IE0004 (list target)))
+   ((setq xp (|coerceInteractive| (|objNewWrap| x source) target))
+     (|objValUnwrap| xp))
+   (t
+    (|throwKeyedMsgCannotCoerceWithValue| (|wrap| x) source target)))))
+
+\end{chunk}
+
+\section{ParametricLinearEquations}
+\defun{algCoerceInteractive}{algCoerceInteractive}
+\begin{chunk}{defun algCoerceInteractive}
+(defun |algCoerceInteractive| (p source target)
+ (let (|$useConvertForCoercions| u)
+ (declare (special |$useConvertForCoercions|))
+  (setq |$useConvertForCoercions| t)
+  (setq source (|devaluate| source))
+  (setq target (|devaluate| target))
+  (setq u (|coerceInteractive| (|objNewWrap| p source) target))
+  (if u
+   (|objValUnwrap| u)
+   (|error| (list "can't convert" p "of mode" source "to mode" target)))))
+
+\end{chunk}
+
 \section{NumberFormats}
 \defun{ncParseFromString}{ncParseFromString}
 \begin{chunk}{defun ncParseFromString}
@@ -40562,6 +40695,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun addNewInterpreterFrame}
 \getchunk{defun addoperations}
 \getchunk{defun addTraceItem}
+\getchunk{defun algCoerceInteractive}
 \getchunk{defun allConstructors}
 \getchunk{defun allOperations}
 \getchunk{defun alqlGetOrigin}
@@ -40801,6 +40935,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun initImPr}
 \getchunk{defun initroot}
 \getchunk{defun initToWhere}
+\getchunk{defun insertAlist}
 \getchunk{defun insertpile}
 \getchunk{defun InterpExecuteSpadSystemCommand}
 \getchunk{defun interpFunctionDepAlists}
@@ -41416,6 +41551,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun restart}
 \getchunk{defun restart0}
 \getchunk{defun restoreHistory}
+\getchunk{defun retract}
 \getchunk{defun /rf}
 \getchunk{defun /rq}
 \getchunk{defun rread}
@@ -41538,6 +41674,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun spadTrace,g}
 \getchunk{defun spadTrace,isTraceable}
 \getchunk{defun spadUntrace}
+\getchunk{defun spad2BootCoerce}
 \getchunk{defun specialChar}
 \getchunk{defun spleI}
 \getchunk{defun spleI1}
