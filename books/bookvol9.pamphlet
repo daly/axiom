@@ -6775,6 +6775,85 @@ constructMacro (form is [nam,[lam,vl,body]])
 
 \end{chunk}
 
+\defun{NRTputInTail}{NRTputInTail}
+\calls{NRTputInTail}{lassoc}
+\calls{NRTputInTail}{NRTassocIndex}
+\calls{NRTputInTail}{rplaca}
+\calls{NRTputInTail}{NRTputInHead}
+\refsdollar{NRTputInTail}{elt}
+\refsdollar{NRTputInTail}{devaluateList}
+\begin{chunk}{defun NRTputInTail}
+(defun |NRTputInTail| (x)
+ (let (u k)
+ (declare (special |$elt| |$devaluateList|))
+  (maplist #'(lambda (y)
+              (cond
+               ((atom (setq u (car y)))
+                 (cond
+                  ((or (eq u '$) (lassoc u |$devaluateList|))
+                    nil)
+                  ((setq k (|NRTassocIndex| u))
+                   (cond
+                    ; u atomic means that the slot will always contain a vector
+                    ((atom u) (rplaca y (list |$elt| '$ k)))
+                    ; this reference must check that slot is a vector
+                    (t (rplaca y (list 'spadcheckelt '$ k)))))
+                  (t nil)))
+               (t (|NRTputInHead| u))))
+    x)
+  x))
+
+\end{chunk}
+
+\defun{NRTputInHead}{NRTputInHead}
+\calls{NRTputInHead}{NRTputInTail}
+\calls{NRTputInHead}{NRTassocIndex}
+\calls{NRTputInHead}{NRTputInHead}
+\calls{NRTputInHead}{lastnode}
+\calls{NRTputInHead}{keyedSystemError}
+\refsdollar{NRTputInHead}{elt}
+\begin{chunk}{defun NRTputInHead}
+(defun |NRTputInHead| (bod)
+ (let (fn args |elt| clauses tmp1 dom tmp2 ind k)
+ (declare (special |$elt|))
+  (cond
+   ((atom bod) bod)
+   ((and (consp bod) (eq (qcar bod) 'spadcall) (consp (qcdr bod))
+         (progn (setq tmp2 (reverse (qcdr bod))) t) (consp tmp2))
+      (setq fn (qcar tmp2))
+      (|NRTputInTail| (cdr bod))
+      (cond
+        ((and (consp fn) (consp (qcdr fn)) (consp (qcdr (qcdr fn)))
+              (eq (qcdddr fn) nil) (null (eq (qsecond fn) '$))
+             (member (qcar fn) '(elt qrefelt const)))
+           (when (setq k (|NRTassocIndex| (qsecond fn)))
+              (rplaca (lastnode bod) (list |$elt| '$ k))))
+        (t (|NRTputInHead| fn) bod)))
+   ((and (consp bod) (eq (qcar bod) 'cond))
+      (setq clauses (qcdr bod))
+      (loop for cc in clauses do (|NRTputInTail| cc))
+      bod)
+   ((and (consp bod) (eq (qcar bod) 'quote)) bod)
+   ((and (consp bod) (eq (qcar bod) 'closedfn)) bod)
+   ((and (consp bod) (eq (qcar bod) 'spadconst) (consp (qcdr bod))
+         (consp (qcddr bod)) (eq (qcdddr bod) nil))
+      (setq dom (qsecond bod))
+      (setq ind (qthird bod))
+      (rplaca bod |$elt|)
+      (cond
+        ((eq dom '$) nil)
+        ((setq k (|NRTassocIndex| dom))
+          (rplaca (lastnode bod) (list |$elt| '$ k))
+          bod)
+        (t
+         (|keyedSystemError| 'S2GE0016
+           (list "NRTputInHead" "unexpected SPADCONST form")))))
+   (t
+     (|NRTputInHead| (car bod))
+     (|NRTputInTail| (cdr bod)) bod))))))
+
+\end{chunk}
+
 \defun{getArgumentModeOrMoan}{getArgumentModeOrMoan}
 \calls{getArgumentModeOrMoan}{getArgumentMode}
 \calls{getArgumentModeOrMoan}{stackSemanticError}
@@ -8260,6 +8339,97 @@ where item has form
      (|sayBrightly| "   cannot produce category object:")
      (|pp| target)
      nil)))))
+
+\end{chunk}
+
+\defun{NRTgetLookupFunction}{NRTgetLookupFunction}
+Compute the lookup function (complete or incomplete)
+\calls{NRTgetLookupFunction}{sublis}
+\calls{NRTgetLookupFunction}{NRTextendsCategory1}
+\calls{NRTgetLookupFunction}{getExportCategory}
+\calls{NRTgetLookupFunction}{sayBrightly}
+\calls{NRTgetLookupFunction}{sayBrightlyNT}
+\calls{NRTgetLookupFunction}{bright}
+\calls{NRTgetLookupFunction}{form2String}
+\defsdollar{NRTgetLookupFunction}{why}
+\refsdollar{NRTgetLookupFunction}{why}
+\refsdollar{NRTgetLookupFunction}{pairlis}
+\begin{chunk}{defun NRTgetLookupFunction}
+(defun |NRTgetLookupFunction| (domform exCategory addForm)
+ (let (|$why| extends u msg v)
+ (declare (special |$why| |$pairlis|))
+  (setq domform (sublis |$pairlis| domform))
+  (setq addForm (sublis |$pairlis| addForm))
+  (setq |$why| nil)
+  (cond
+    ((atom addForm) '|lookupComplete|)
+    (t
+     (setq extends
+      (|NRTextendsCategory1| domform exCategory (|getExportCategory| addForm)))
+     (cond
+      ((null extends) 
+        (setq u (car |$why|))
+        (setq msg (cadr |$why|))
+        (setq v (cddr |$why|))
+        (|sayBrightly|
+           "--------------non extending category----------------------")
+        (|sayBrightlyNT|
+         (cons ".."
+          (append (|bright| (|form2String| domform)) (list '|of cat |))))
+        (print u) 
+        (|sayBrightlyNT| (|bright| msg))
+        (if v (print (car v)) (terpri))))
+     (if extends 
+       '|lookupIncomplete|
+       '|lookupComplete|)))))
+
+\end{chunk}
+
+\defun{NRTgetLocalIndex}{NRTgetLocalIndex}
+\calls{NRTgetLocalIndex}{NRTassocIndex}
+\calls{NRTgetLocalIndex}{NRTaddInner}
+\calls{NRTgetLocalIndex}{compOrCroak}
+\calls{NRTgetLocalIndex}{rplaca}
+\refsdollar{NRTgetLocalIndex}{NRTaddForm}
+\refsdollar{NRTgetLocalIndex}{formalArgList}
+\refsdollar{NRTgetLocalIndex}{NRTdeltaList}
+\refsdollar{NRTgetLocalIndex}{NRTdeltaListComp}
+\refsdollar{NRTgetLocalIndex}{NRTdeltaLength}
+\defsdollar{NRTgetLocalIndex}{NRTbase}
+\defsdollar{NRTgetLocalIndex}{EmptyMode}
+\defsdollar{NRTgetLocalIndex}{e}
+\begin{chunk}{defun NRTgetLocalIndex}
+(defun |NRTgetLocalIndex| (item)
+ (let (k value saveNRTdeltaListComp saveIndex compEntry)
+ (declare (special |$e| |$EmptyMode| |$NRTdeltaLength| |$NRTbase|
+                   |$NRTdeltaListComp| |$NRTdeltaList| |$formalArgList|
+                   |$NRTaddForm|))
+   (cond
+     ((setq k (|NRTassocIndex| item)) k)
+     ((equal item |$NRTaddForm|) 5)
+     ((eq item '$) 0)
+     ((eq item '$$) 2)
+     (t
+       (when (member item |$formalArgList|) (setq value item))
+       (cond
+         ((and (atom item) (null (member item '($ $$))) (null value))
+           (setq |$NRTdeltaList|
+             (cons (cons '|domain| (cons (|NRTaddInner| item) value))
+                   |$NRTdeltaList|))
+           (setq |$NRTdeltaListComp| (cons item |$NRTdeltaListComp|))
+           (setq |$NRTdeltaLength| (1+ |$NRTdeltaLength|))
+           (1- (+ |$NRTbase| |$NRTdeltaLength|)))
+         (t
+          (setq |$NRTdeltaList|
+           (cons (cons '|domain| (cons (|NRTaddInner| item) value))
+                 |$NRTdeltaList|))
+          (setq saveNRTdeltaListComp
+            (setq |$NRTdeltaListComp| (cons nil |$NRTdeltaListComp|)))
+          (setq saveIndex (+ |$NRTbase| |$NRTdeltaLength|))
+          (setq |$NRTdeltaLength| (1+ |$NRTdeltaLength|))
+          (setq compEntry (car (|compOrCroak| item |$EmptyMode| |$e|)))
+          (rplaca saveNRTdeltaListComp compEntry)
+          saveIndex))))))
 
 \end{chunk}
 
@@ -10921,7 +11091,6 @@ Since we can't be sure we take the least disruptive course of action.
 \calls{doIt}{get}
 \calls{doIt}{NRTgetLocalIndex}
 \calls{doIt}{sublis}
-\calls{doIt}{NRTgetLocalIndexClear}
 \calls{doIt}{compOrCroak}
 \calls{doIt}{sayBrightly}
 \calls{doIt}{formatUnabbreviated}
@@ -11054,7 +11223,7 @@ Since we can't be sure we take the least disruptive course of action.
        ((and (consp code) (eq (qfirst code) 'let))
         (rplaca item (if |$QuickCode| 'qsetrefv 'setelt))
         (setq rhsCode rhsp)
-        (rplacd item (list '$ (|NRTgetLocalIndexClear| lhs) rhsCode)))
+        (rplacd item (list '$ (|NRTgetLocalIndex| lhs) rhsCode)))
        (t
         (rplaca item (car code))
         (rplacd item (cdr code)))))))
@@ -14046,6 +14215,35 @@ is still more than one complain else return the only signature.
             (list 'elt form 0)
             (car (|outputComp| form ep)))))))
     (list newform mp ep)))))
+
+\end{chunk}
+
+\defun{NRTassocIndex}{NRTassocIndex}
+This function returns the index of domain entry x in the association list
+\refsdollar{NRTassocIndex}{NRTaddForm}
+\refsdollar{NRTassocIndex}{NRTdeltaList}
+\refsdollar{NRTassocIndex}{found}
+\refsdollar{NRTassocIndex}{NRTbase}
+\refsdollar{NRTassocIndex}{NRTdeltaLength}
+\begin{chunk}{defun NRTassocIndex}
+(defun |NRTassocIndex| (x)
+ (let (k (i 0))
+ (declare (special |$NRTdeltaLength| |$NRTbase| |$found| |$NRTdeltaList|
+                   |$NRTaddForm|))
+ (cond
+  ((null x) x)
+  ((equal x |$NRTaddForm|) 5)
+  ((setq k
+    (let (result)
+     (loop for y in |$NRTdeltaList|
+      when (and (incf i) 
+                (eq (elt y 0) '|domain|)
+                (equal (elt y 1) x)
+                (setq |$found| y))
+      do (setq result (or result i)))
+     result))
+   (- (+ |$NRTbase| |$NRTdeltaLength|) k))
+  (t nil))))
 
 \end{chunk}
 
@@ -22614,6 +22812,11 @@ The current input line.
 \getchunk{defun next-token}
 \getchunk{defun new2OldLisp}
 \getchunk{defun nonblankloc}
+\getchunk{defun NRTassocIndex}
+\getchunk{defun NRTgetLocalIndex}
+\getchunk{defun NRTgetLookupFunction}
+\getchunk{defun NRTputInHead}
+\getchunk{defun NRTputInTail}
 
 \getchunk{defun optCall}
 \getchunk{defun optCallEval}
