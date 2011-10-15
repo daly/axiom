@@ -13,222 +13,6 @@
 
 (IN-PACKAGE "BOOT" )
 
-;--=======================================================
-;--             Lookup From Interpreter
-;--=======================================================
-;NRTevalDomain form ==
-;  form is ['SETELT,:.] => eval form
-;  evalDomain form
-
-(DEFUN |NRTevalDomain| (|form|)
-  (COND
-    ((AND (CONSP |form|) (EQ (QCAR |form|) 'SETELT)) (|eval| |form|))
-    ('T (|evalDomain| |form|))))
-
-;compiledLookup(op, sig, dollar) ==
-;  if not isDomain dollar then dollar := NRTevalDomain dollar
-;  basicLookup(op, sig, dollar, dollar)
-
-(DEFUN |compiledLookup| (|op| |sig| |dollar|)
-  (PROGN
-    (COND
-      ((NULL (|isDomain| |dollar|))
-       (SPADLET |dollar| (|NRTevalDomain| |dollar|))))
-    (|basicLookup| |op| |sig| |dollar| |dollar|)))
-
-;basicLookup(op,sig,domain,dollar) ==
-;   -- following case is for old domains like Record and Union
-;   -- or for getting operations out of yourself
-;  VECP domain =>
-;     isNewWorldDomain domain => -- getting ops from yourself (or for defaults)
-;        oldCompLookup(op, sig, domain, dollar)
-;     -- getting ops from Record or Union
-;     lookupInDomainVector(op,sig,domain,dollar)
-;  hashPercent :=
-;     VECP dollar => hashType(dollar.0,0)
-;     hashType(dollar,0)
-;  box := [nil]
-;  not VECP(dispatch := CAR domain) => error "bad domain format"
-;  lookupFun := dispatch.3
-;  dispatch.0 = 0 =>  -- new compiler domain object
-;       hashSig :=
-;           hashCode? sig => sig
-;           opIsHasCat op => hashType(sig, hashPercent)
-;           hashType(['Mapping,:sig], hashPercent)
-;       if SYMBOLP op then
-;          op = 'Zero => op := $hashOp0
-;          op = 'One => op := $hashOp1
-;          op = 'elt => op := $hashOpApply
-;          op = 'setelt => op := $hashOpSet
-;          op := hashString SYMBOL_-NAME op
-;       val:=CAR SPADCALL(CDR domain, dollar, op, hashSig, box, false,
-;                               lookupFun) => val
-;       hashCode? sig => nil
-;       #sig>1 or opIsHasCat op => nil
-;       boxval := SPADCALL(CDR dollar, dollar, op, hashType(first sig, hashPercent),
-;                     box, false, lookupFun) =>
-;          [FUNCTION IDENTITY,: CAR boxval]
-;       nil
-;  opIsHasCat op =>
-;      HasCategory(domain, sig)
-;  if hashCode? op then
-;     EQL(op, $hashOp1) => op := 'One
-;     EQL(op, $hashOp0) => op := 'Zero
-;     EQL(op, $hashOpApply) => op := 'elt
-;     EQL(op, $hashOpSet) => op := 'setelt
-;     EQL(op, $hashSeg) => op := 'SEGMENT
-;  hashCode? sig and EQL(sig, hashPercent) =>
-;      SPADCALL CAR SPADCALL(CDR dollar, dollar, op, '($), box, false, lookupFun)
-;  CAR SPADCALL(CDR dollar, dollar, op, sig, box, false, lookupFun)
-
-(DEFUN |basicLookup| (|op| |sig| |domain| |dollar|)
-  (PROG (|hashPercent| |box| |dispatch| |lookupFun| |hashSig| |val| |boxval|)
-  (declare (special |$hashSeg| |$hashOpSet| |$hashOpApply| |$hashOp0|
-                    |$hashOp1|))
-    (RETURN
-      (COND
-        ((VECP |domain|)
-         (COND
-           ((|isNewWorldDomain| |domain|)
-            (|oldCompLookup| |op| |sig| |domain| |dollar|))
-           ('T (|lookupInDomainVector| |op| |sig| |domain| |dollar|))))
-        ('T
-         (SPADLET |hashPercent|
-                  (COND
-                    ((VECP |dollar|) (|hashType| (ELT |dollar| 0) 0))
-                    ('T (|hashType| |dollar| 0))))
-         (SPADLET |box| (CONS NIL NIL))
-         (COND
-           ((NULL (VECP (SPADLET |dispatch| (CAR |domain|))))
-            (|error| '|bad domain format|))
-           ('T (SPADLET |lookupFun| (ELT |dispatch| 3))
-            (COND
-              ((EQL (ELT |dispatch| 0) 0)
-               (SPADLET |hashSig|
-                        (COND
-                          ((|hashCode?| |sig|) |sig|)
-                          ((|opIsHasCat| |op|)
-                           (|hashType| |sig| |hashPercent|))
-                          ('T
-                           (|hashType| (CONS '|Mapping| |sig|)
-                               |hashPercent|))))
-               (COND
-                 ((SYMBOLP |op|)
-                  (COND
-                    ((BOOT-EQUAL |op| '|Zero|)
-                     (SPADLET |op| |$hashOp0|))
-                    ((BOOT-EQUAL |op| '|One|)
-                     (SPADLET |op| |$hashOp1|))
-                    ((BOOT-EQUAL |op| '|elt|)
-                     (SPADLET |op| |$hashOpApply|))
-                    ((BOOT-EQUAL |op| '|setelt|)
-                     (SPADLET |op| |$hashOpSet|))
-                    ('T
-                     (SPADLET |op| (|hashString| (SYMBOL-NAME |op|)))))))
-               (COND
-                 ((SPADLET |val|
-                           (CAR (SPADCALL (CDR |domain|) |dollar| |op|
-                                    |hashSig| |box| NIL |lookupFun|)))
-                  |val|)
-                 ((|hashCode?| |sig|) NIL)
-                 ((OR (> (|#| |sig|) 1) (|opIsHasCat| |op|)) NIL)
-                 ((SPADLET |boxval|
-                           (SPADCALL (CDR |dollar|) |dollar| |op|
-                               (|hashType| (CAR |sig|) |hashPercent|)
-                               |box| NIL |lookupFun|))
-                  (CONS #'IDENTITY (CAR |boxval|)))
-                 ('T NIL)))
-              ((|opIsHasCat| |op|) (|HasCategory| |domain| |sig|))
-              ('T
-               (COND
-                 ((|hashCode?| |op|)
-                  (COND
-                    ((EQL |op| |$hashOp1|) (SPADLET |op| '|One|))
-                    ((EQL |op| |$hashOp0|) (SPADLET |op| '|Zero|))
-                    ((EQL |op| |$hashOpApply|) (SPADLET |op| '|elt|))
-                    ((EQL |op| |$hashOpSet|) (SPADLET |op| '|setelt|))
-                    ((EQL |op| |$hashSeg|) (SPADLET |op| 'SEGMENT)))))
-               (COND
-                 ((AND (|hashCode?| |sig|) (EQL |sig| |hashPercent|))
-                  (SPADCALL
-                      (CAR (SPADCALL (CDR |dollar|) |dollar| |op| '($)
-                               |box| NIL |lookupFun|))))
-                 ('T
-                  (CAR (SPADCALL (CDR |dollar|) |dollar| |op| |sig|
-                           |box| NIL |lookupFun|)))))))))))))
-
-;basicLookupCheckDefaults(op,sig,domain,dollar) ==
-;  box := [nil]
-;  not VECP(dispatch := CAR dollar) => error "bad domain format"
-;  lookupFun := dispatch.3
-;  dispatch.0 = 0  =>  -- new compiler domain object
-;       hashPercent :=
-;          VECP dollar => hashType(dollar.0,0)
-;          hashType(dollar,0)
-;       hashSig :=
-;         hashCode? sig => sig
-;         hashType( ['Mapping,:sig], hashPercent)
-;       if SYMBOLP op then op := hashString SYMBOL_-NAME op
-;       CAR SPADCALL(CDR dollar, dollar, op, hashSig, box, not $lookupDefaults, lookupFun)
-;  CAR SPADCALL(CDR dollar, dollar, op, sig, box, not $lookupDefaults, lookupFun)
-
-(DEFUN |basicLookupCheckDefaults| (|op| |sig| |domain| |dollar|)
-  (declare (ignore |domain|))
-  (PROG (|box| |dispatch| |lookupFun| |hashPercent| |hashSig|)
-  (declare (special |$lookupDefaults|))
-    (RETURN
-      (PROGN
-        (SPADLET |box| (CONS NIL NIL))
-        (COND
-          ((NULL (VECP (SPADLET |dispatch| (CAR |dollar|))))
-           (|error| '|bad domain format|))
-          ('T (SPADLET |lookupFun| (ELT |dispatch| 3))
-           (COND
-             ((EQL (ELT |dispatch| 0) 0)
-              (SPADLET |hashPercent|
-                       (COND
-                         ((VECP |dollar|)
-                          (|hashType| (ELT |dollar| 0) 0))
-                         ('T (|hashType| |dollar| 0))))
-              (SPADLET |hashSig|
-                       (COND
-                         ((|hashCode?| |sig|) |sig|)
-                         ('T
-                          (|hashType| (CONS '|Mapping| |sig|)
-                              |hashPercent|))))
-              (COND
-                ((SYMBOLP |op|)
-                 (SPADLET |op| (|hashString| (SYMBOL-NAME |op|)))))
-              (CAR (SPADCALL (CDR |dollar|) |dollar| |op| |hashSig|
-                       |box| (NULL |$lookupDefaults|) |lookupFun|)))
-             ('T
-              (CAR (SPADCALL (CDR |dollar|) |dollar| |op| |sig| |box|
-                       (NULL |$lookupDefaults|) |lookupFun|))))))))))
-
-;-- has cat questions lookup up twice if false
-;-- replace with following ?
-;--  not(opIsHasCat op) and
-;--     (u := lookupInDomainVector(op,sig,domvec,domvec)) => u
-;oldCompLookup(op, sig, domvec, dollar) ==
-;  $lookupDefaults:local := nil
-;  u := lookupInDomainVector(op,sig,domvec,dollar) => u
-;  $lookupDefaults := true
-;  lookupInDomainVector(op,sig,domvec,dollar)
-
-(DEFUN |oldCompLookup| (|op| |sig| |domvec| |dollar|)
-  (PROG (|$lookupDefaults| |u|)
-    (DECLARE (SPECIAL |$lookupDefaults|))
-    (RETURN
-      (PROGN
-        (SPADLET |$lookupDefaults| NIL)
-        (COND
-          ((SPADLET |u|
-                    (|lookupInDomainVector| |op| |sig| |domvec|
-                        |dollar|))
-           |u|)
-          ('T (SPADLET |$lookupDefaults| 'T)
-           (|lookupInDomainVector| |op| |sig| |domvec| |dollar|)))))))
-
 ;oldCompLookupNoDefaults(op, sig, domvec, dollar) ==
 ;  $lookupDefaults:local := nil
 ;  lookupInDomainVector(op,sig,domvec,dollar)
@@ -240,37 +24,6 @@
       (PROGN
         (SPADLET |$lookupDefaults| NIL)
         (|lookupInDomainVector| |op| |sig| |domvec| |dollar|)))))
-
-;compiledLookupCheck(op,sig,dollar) ==
-;  fn := compiledLookup(op,sig,dollar)
-;  -- NEW COMPILER COMPATIBILITY ON
-;  if      (fn = nil)  and (op = "^") then
-;    fn := compiledLookup("**",sig,dollar)
-;  else if (fn = nil)  and (op = "**") then
-;    fn := compiledLookup("^",sig,dollar)
-;  -- NEW COMPILER COMPATIBILITY OFF
-;  fn = nil =>
-;    keyedSystemError("S2NR0001",[op,formatSignature sig,dollar.0])
-;  fn
-
-(DEFUN |compiledLookupCheck| (|op| |sig| |dollar|)
-  (PROG (|fn|)
-    (RETURN
-      (PROGN
-        (SPADLET |fn| (|compiledLookup| |op| |sig| |dollar|))
-        (COND
-          ((AND (NULL |fn|) (BOOT-EQUAL |op| '^))
-           (SPADLET |fn| (|compiledLookup| '** |sig| |dollar|)))
-          ((AND (NULL |fn|) (BOOT-EQUAL |op| '**))
-           (SPADLET |fn| (|compiledLookup| '^ |sig| |dollar|)))
-          ('T NIL))
-        (COND
-          ((NULL |fn|)
-           (|keyedSystemError| 'S2NR0001
-               (CONS |op|
-                     (CONS (|formatSignature| |sig|)
-                           (CONS (ELT |dollar| 0) NIL)))))
-          ('T |fn|))))))
 
 ;--=======================================================
 ;--                 Lookup From Compiled Code
@@ -559,48 +312,19 @@
 ;    if null VECP addFormCell then addFormCell := eval addFormCell
 ;    lookupInDomainVector(op,sig,addFormCell,dollar)
 ;  nil
-
-(DEFUN |lookupInDomain| (|op| |sig| |addFormDomain| |dollar| |index|)
-  (PROG (|addFormCell|)
-    (RETURN
-      (SEQ (COND
-             ((SPADLET |addFormCell| (ELT |addFormDomain| |index|))
-              (COND
-                ((INTEGERP (KAR |addFormCell|))
-                 (PROG (G166242)
-                   (SPADLET G166242 NIL)
-                   (RETURN
-                     (DO ((G166248 NIL G166242)
-                          (G166249 |addFormCell| (CDR G166249))
-                          (|i| NIL))
-                         ((OR G166248 (ATOM G166249)
-                              (PROGN (SETQ |i| (CAR G166249)) NIL))
-                          G166242)
-                       (SEQ (EXIT (SETQ G166242
-                                        (OR G166242
-                                         (|lookupInDomain| |op| |sig|
-                                          |addFormDomain| |dollar| |i|)))))))))
-                ('T
-                 (COND
-                   ((NULL (VECP |addFormCell|))
-                    (SPADLET |addFormCell| (|eval| |addFormCell|))))
-                 (|lookupInDomainVector| |op| |sig| |addFormCell|
-                     |dollar|))))
-             ('T NIL))))))
-
-;lookupInDomainVector(op,sig,domain,dollar) ==
-;  CONSP domain => basicLookupCheckDefaults(op,sig,domain,domain)
-;  slot1 := domain.1
-;  SPADCALL(op,sig,dollar,slot1)
-
-(DEFUN |lookupInDomainVector| (|op| |sig| |domain| |dollar|)
-  (PROG (|slot1|)
-    (RETURN
-      (COND
-        ((CONSP |domain|)
-         (|basicLookupCheckDefaults| |op| |sig| |domain| |domain|))
-        ('T (SPADLET |slot1| (ELT |domain| 1))
-         (SPADCALL |op| |sig| |dollar| |slot1|))))))
+(defun |lookupInDomain| (op sig addFormDomain dollar index)
+ (let (addFormCell)
+  (when (setq addFormCell (elt addFormDomain index))
+   (cond
+    ((integerp (kar addFormCell))
+     (let (result)
+      (loop for i in addFormCell
+       do (setq result 
+           (or result (|lookupInDomain| op sig addFormDomain dollar i))))
+      result))
+    (t
+     (unless (vecp addFormCell) (setq addFormCell (|eval| addFormCell)))
+     (|lookupInDomainVector| op sig addFormCell dollar))))))
 
 ;--=======================================================
 ;--       Category Default Lookup (from goGet or lookupInAddChain)

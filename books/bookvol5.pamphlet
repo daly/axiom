@@ -17452,6 +17452,28 @@ TPDHERE: Note that this function also seems to parse out )except
 
 \end{chunk}
 
+\defun{compiledLookupCheck}{compiledLookupCheck}
+\calls{compiledLookupCheck}{compiledLookup}
+\calls{compiledLookupCheck}{keyedSystemError}
+\calls{compiledLookupCheck}{formatSignature}
+\begin{chunk}{defun compiledLookupCheck}
+(defun |compiledLookupCheck| (op sig dollar)
+ (let (fn)
+  (setq fn (|compiledLookup| op sig dollar))
+  (cond
+    ((and (null fn) (eq op '^))
+      (setq fn (|compiledLookup| '** sig dollar)))
+    ((and (null fn) (eq op '**))
+      (setq fn (|compiledLookup| '^ sig dollar)))
+    (t nil))
+  (cond
+   ((null fn)
+    (|keyedSystemError| 'S2NR0001
+      (list op (|formatSignature| sig) (elt dollar 0))))
+   (t fn))))
+
+\end{chunk}
+
 \defdollar{functionTable}
 \begin{chunk}{initvars}
 (defvar |$functionTable| nil)
@@ -36707,7 +36729,6 @@ the source file without any path information. We  hash the
 constructor abbreviation to pamphlet file name.
 \calls{make-databases}{localdatabase}
 \calls{make-databases}{getEnv}
-\calls{make-databases}{oldCompilerAutoloadOnceTrigger}
 \calls{make-databases}{browserAutoloadOnceTrigger}
 \calls{make-databases}{mkTopicHashTable}
 \calls{make-databases}{buildLibdb}
@@ -36809,7 +36830,6 @@ constructor abbreviation to pamphlet file name.
     'make-database))
 ;browse.daase
   (load (concatenate 'string (|getEnv| "AXIOM") "/autoload/topics"))  ;; hack
-  (|oldCompilerAutoloadOnceTrigger|)
   (|browserAutoloadOnceTrigger|)
   (|mkTopicHashTable|)
   (setq |$constructorList| nil) ;; affects buildLibdb
@@ -38405,6 +38425,178 @@ an AssociationList representation
       (get (bpiname (car fun)) '|SPADreplace|)
       nil))))
   (member (|knownEqualPred| dom) '(eq eql equal))))
+
+\end{chunk}
+
+\defun{compiledLookup}{compiledLookup}
+\calls{compiledLookup}{isDomain}
+\calls{compiledLookup}{NRTevalDomain}
+\begin{chunk}{defun compiledLookup}
+(defun |compiledLookup| (op sig dollar)
+ (unless (|isDomain| dollar) (setq dollar (|NRTevalDomain| dollar)))
+ (|basicLookup| op sig dollar dollar))
+
+\end{chunk}
+
+\defun{basicLookup}{basicLookup}
+\calls{basicLookup}{spadcall}
+\calls{basicLookup}{hashCode?}
+\calls{basicLookup}{opIsHasCat}
+\calls{basicLookup}{HasCategory}
+\calls{basicLookup}{hashType}
+\calls{basicLookup}{hashString}
+\calls{basicLookup}{error}
+\calls{basicLookup}{vecp}
+\calls{basicLookup}{isNewWorldDomain}
+\calls{basicLookup}{oldCompLookup}
+\calls{basicLookup}{lookupInDomainVector}
+\refsdollar{basicLookup}{hashSeg}
+\refsdollar{basicLookup}{hashOpSet}
+\refsdollar{basicLookup}{hashOpApply}
+\refsdollar{basicLookup}{hashOp0}
+\refsdollar{basicLookup}{hashOp1}
+\begin{chunk}{defun basicLookup}
+(defun |basicLookup| (op sig domain dollar)
+ (let (hashPercent box dispatch lookupFun hashSig val boxval)
+ (declare (special |$hashSeg| |$hashOpSet| |$hashOpApply| |$hashOp0|
+                   |$hashOp1|))
+  (cond
+   ((vecp domain)
+    (if (|isNewWorldDomain| domain)
+      (|oldCompLookup| op sig domain dollar)
+      (|lookupInDomainVector| op sig domain dollar)))
+  (t
+   (setq hashPercent
+    (if (vecp dollar)
+     (|hashType| (elt dollar 0) 0)
+     (|hashType| dollar 0)))
+   (setq box (cons nil nil))
+   (cond
+    ((null (vecp (setq dispatch (car domain))))
+      (|error| '|bad domain format|))
+    (t 
+      (setq lookupFun (elt dispatch 3))
+      (cond
+        ((eql (elt dispatch 0) 0)
+          (setq hashSig
+           (cond
+            ((|hashCode?| sig) sig)
+            ((|opIsHasCat| op) (|hashType| sig hashPercent))
+            (t (|hashType| (cons '|Mapping| sig) hashPercent))))
+          (when (symbolp op)
+           (cond
+             ((eq op '|Zero|)   (setq op |$hashOp0|))
+             ((eq op '|One|)    (setq op |$hashOp1|))
+             ((eq op '|elt|)    (setq op |$hashOpApply|))
+             ((eq op '|setelt|) (setq op |$hashOpSet|))
+             (t                 (setq op (|hashString| (symbol-name op))))))
+          (cond
+           ((setq val
+              (car
+                (spadcall (cdr domain) dollar op hashSig box nil lookupFun)))
+             val)
+           ((|hashCode?| sig) nil)
+           ((or (> (|#| sig) 1) (|opIsHasCat| op)) nil)
+           ((setq boxval
+            (spadcall (cdr dollar) dollar op
+                      (|hashType| (car sig) hashPercent)
+                      box nil lookupFun))
+             (cons #'identity (car boxval)))
+           (t nil)))
+        ((|opIsHasCat| op) (|HasCategory| domain sig))
+        (t
+         (when (|hashCode?| op)
+          (cond
+           ((eql op |$hashOp1|)     (setq op '|One|))
+           ((eql op |$hashOp0|)     (setq op '|Zero|))
+           ((eql op |$hashOpApply|) (setq op '|elt|))
+           ((eql op |$hashOpSet|)   (setq op '|setelt|))
+           ((eql op |$hashSeg|)     (setq op 'segment))))
+         (cond
+          ((and (|hashCode?| sig) (eql sig hashPercent))
+            (spadcall
+             (car (spadcall (cdr dollar) dollar op '($) box nil lookupFun))))
+          (t
+           (car 
+            (spadcall (cdr dollar) dollar op sig box nil lookupFun))))))))))))
+
+\end{chunk}
+
+\defun{lookupInDomainVector}{lookupInDomainVector}
+\calls{lookupInDomainVector}{basicLookupCheckDefaults}
+\calls{lookupInDomainVector}{spadcall}
+\begin{chunk}{defun lookupInDomainVector}
+(defun |lookupInDomainVector| (op sig domain dollar)
+ (if (consp domain)
+   (|basicLookupCheckDefaults| op sig domain domain)
+   (spadcall op sig dollar (elt domain 1))))
+
+\end{chunk}
+
+\defun{basicLookupCheckDefaults}{basicLookupCheckDefaults}
+\calls{basicLookupCheckDefaults}{vecp}
+\calls{basicLookupCheckDefaults}{error}
+\calls{basicLookupCheckDefaults}{hashType}
+\calls{basicLookupCheckDefaults}{hashCode?}
+\calls{basicLookupCheckDefaults}{hashString}
+\calls{basicLookupCheckDefaults}{spadcall}
+\refsdollar{basicLookupCheckDefaults}{lookupDefaults}
+\begin{chunk}{defun basicLookupCheckDefaults}
+(defun |basicLookupCheckDefaults| (op sig domain dollar)
+ (declare (ignore domain))
+ (let (box dispatch lookupFun hashPercent hashSig)
+ (declare (special |$lookupDefaults|))
+  (setq box (cons nil nil))
+  (cond
+   ((null (vecp (setq dispatch (car dollar))))
+     (|error| '|bad domain format|))
+   (t
+     (setq lookupFun (elt dispatch 3))
+     (cond
+      ((eql (elt dispatch 0) 0)
+        (setq hashPercent
+         (if (vecp dollar)
+           (|hashType| (elt dollar 0) 0)
+           (|hashType| dollar 0)))
+        (setq hashSig
+         (if (|hashCode?| sig) 
+          sig
+          (|hashType| (cons '|Mapping| sig) hashPercent)))
+        (when (symbolp op) (setq op (|hashString| (symbol-name op))))
+        (car (spadcall (cdr dollar) dollar op hashSig
+                        box (null |$lookupDefaults|) lookupFun)))
+      (t
+        (car (spadcall (cdr dollar) dollar op sig box
+                       (null |$lookupDefaults|) lookupFun))))))))
+
+\end{chunk}
+
+\defun{oldCompLookup}{oldCompLookup}
+\calls{oldCompLookup}{lookupInDomainVector}
+\defsdollar{oldCompLookup}{lookupDefaults}
+\begin{chunk}{defun oldCompLookup}
+(defun |oldCompLookup| (op sig domvec dollar)
+ (let (|$lookupDefaults| u)
+ (declare (special |$lookupDefaults|))
+  (setq |$lookupDefaults| nil)
+  (cond
+   ((setq u (|lookupInDomainVector| op sig domvec dollar))
+     u)
+   (t
+    (setq |$lookupDefaults| t)
+    (|lookupInDomainVector| op sig domvec dollar)))))
+
+\end{chunk}
+
+\defun{NRTevalDomain}{NRTevalDomain}
+\calls{NRTevalDomain}{qcar}
+\calls{NRTevalDomain}{eval}
+\calls{NRTevalDomain}{evalDomain}
+\begin{chunk}{defun NRTevalDomain}
+(defun |NRTevalDomain| (form)
+ (if (and (consp form) (eq (qcar form) 'setelt))
+  (|eval| form)
+  (|evalDomain| form)))
 
 \end{chunk}
 
@@ -40706,6 +40898,8 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun assertCond}
 \getchunk{defun augmentTraceNames}
 
+\getchunk{defun basicLookup}
+\getchunk{defun basicLookupCheckDefaults}
 \getchunk{defun break}
 \getchunk{defun breaklet}
 \getchunk{defun brightprint}
@@ -40743,6 +40937,8 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun commandUserLevelError}
 \getchunk{defun compareposns}
 \getchunk{defun compileBoot}
+\getchunk{defun compiledLookup}
+\getchunk{defun compiledLookupCheck}
 \getchunk{defun compressOpen}
 \getchunk{defun constoken}
 \getchunk{defun copyright}
@@ -40996,6 +41192,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun loadLibNoUpdate}
 \getchunk{defun localdatabase}
 \getchunk{defun localnrlib}
+\getchunk{defun lookupInDomainVector}
 \getchunk{defun loopIters2Sex}
 \getchunk{defun lotsof}
 \getchunk{defun ltrace}
@@ -41259,7 +41456,9 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun npWhile}
 \getchunk{defun npWith}
 \getchunk{defun npZeroOrMore}
+\getchunk{defun NRTevalDomain}
 
+\getchunk{defun oldCompLookup}
 \getchunk{defun oldHistFileName}
 \getchunk{defun openOutputLibrary}
 \getchunk{defun openserver}
