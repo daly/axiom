@@ -6814,7 +6814,7 @@ constructMacro (form is [nam,[lam,vl,body]])
 \refsdollar{NRTputInHead}{elt}
 \begin{chunk}{defun NRTputInHead}
 (defun |NRTputInHead| (bod)
- (let (fn args |elt| clauses tmp1 dom tmp2 ind k)
+ (let (fn clauses dom tmp2 ind k)
  (declare (special |$elt|))
   (cond
    ((atom bod) bod)
@@ -10353,6 +10353,77 @@ The way XLAMs work:
   (dolist (modemap (|get| (first x) '|modemap| env))
    (when (setq u (|compApplyModemap| x modemap env nil))
      (return (sublis (third u) modemap))))))
+
+\end{chunk}
+
+\defun{compApplyModemap}{compApplyModemap}
+\calls{compApplyModemap}{length}
+\calls{compApplyModemap}{pmatchWithSl}
+\calls{compApplyModemap}{sublis}
+\calls{compApplyModemap}{comp}
+\calls{compApplyModemap}{coerce}
+\calls{compApplyModemap}{compMapCond}
+\calls{compApplyModemap}{member}
+\calls{compApplyModemap}{genDeltaEntry}
+\refsdollar{compApplyModemap}{e}
+\refsdollar{compApplyModemap}{bindings}
+\defsdollar{compApplyModemap}{e}
+\defsdollar{compApplyModemap}{bindings}
+\begin{chunk}{defun compApplyModemap}
+(defun |compApplyModemap| (form modemap |$e| sl)
+ (declare (special |$e|))
+ (let (op argl mc mr margl fnsel g mp lt ltp temp1 f)
+ (declare (special |$bindings| |$e|))
+  ;  -- $e     is the current environment
+  ;  -- sl     substitution list, nil means bottom-up, otherwise top-down
+  ;  -- 0.  fail immediately if #argl=#margl
+  (setq op (car form))
+  (setq argl (cdr form))
+  (setq mc (caar modemap))
+  (setq mr (cadar modemap))
+  (setq margl (cddar modemap))
+  (setq fnsel (cdr modemap))
+  (when (= (|#| argl) (|#| margl))
+   ; 1.  use modemap to evaluate arguments, returning failed if not possible
+   (setq lt
+    (prog (t0)
+     (return
+      (do ((t1 argl (cdr t1)) (y NIL) (t2 margl (cdr t2)) (m nil))
+          ((or (atom t1) (atom t2)) (nreverse0 t0))
+        (setq y (car t1))
+        (setq m (car t2))
+        (setq t0
+         (cons
+          (progn
+           (setq sl (|pmatchWithSl| mp m sl))
+           (setq g (sublis sl m))
+           (setq temp1 (or (|comp| y g |$e|) (return '|failed|)))
+           (setq mp (cadr temp1))
+           (setq |$e| (caddr temp1))
+           temp1)
+            t0)))))))
+   ; 2.  coerce each argument to final domain, returning failed
+   ;     if not possible
+   (unless (eq lt '|failed|)
+     (setq ltp
+      (loop for y in lt for d in (sublis sl margl)
+       collect (or (|coerce| y d) (return '|failed|))))
+     (unless (eq ltp '|failed|)
+       ; 3.  obtain domain-specific function, if possible, and return
+       ; $bindings is bound by compMapCond
+       (setq temp1 (|compMapCond| op mc sl fnsel))
+       (when temp1
+        ; can no longer trust what the modemap says for a reference into
+        ; an exterior domain (it is calculating the displacement based on view
+        ; information which is no longer valid; thus ignore this index and
+        ; store the signature instead.
+        (setq f (car temp1))
+        (setq |$bindings| (cadr temp1))
+        (if (and (consp f) (consp (qcdr f)) (consp (qcddr f)) ; f is [op1,.]
+                 (eq (qcdddr f) nil)
+                 (|member| (qcar f) '(elt const |Subsumed|)))
+          (list (|genDeltaEntry| (cons op modemap)) ltp |$bindings|)
+          (list f ltp |$bindings|))))))))
 
 \end{chunk}
 
@@ -21018,6 +21089,42 @@ preferred to the underlying representation -- RDJ 9/12/83
 
 \end{chunk}
 
+\defun{compApply}{compApply}
+\calls{compApply}{comp}
+\calls{compApply}{Pair}
+\calls{compApply}{removeEnv}
+\calls{compApply}{resolve}
+\calls{compApply}{AddContour}
+\refsdollar{compApply}{EmptyMode}
+\begin{chunk}{defun compApply}
+(defun |compApply| (sig varl body argl m e)
+ (let (temp1 argtl contour code mq bodyq)
+ (declare (special |$EmptyMode|))
+  (setq argtl
+   (loop for x in argl
+    collect (progn
+             (setq temp1 (|comp| x |$EmptyMode| e))
+             (setq e (caddr temp1))
+             temp1)))
+  (setq contour
+   (loop for x in varl
+         for mq in (cdr sig)
+         for a in argl
+    collect 
+     (|Pair| x
+       (list
+        (list '|mode| mq)
+        (list '|value| (|removeEnv| (|comp| a mq e)))))))
+  (setq code
+   (cons (list 'lambda varl bodyq)
+    (loop for tt in argtl
+     collect (car tt))))
+  (setq mq (|resolve| m (car sig)))
+  (setq bodyq (car (|comp| body mq (|addContour| contour e))))
+  (list code mq e)))
+
+\end{chunk}
+
 \defun{compTypeOf}{compTypeOf}
 \calls{compTypeOf}{eqsubstlist}
 \calls{compTypeOf}{get}
@@ -21126,6 +21233,46 @@ preferred to the underlying representation -- RDJ 9/12/83
        ((stringp form) (list form form env ))
        (t (list form (or (|primitiveType| form) (return nil)) env ))))
      (|convert| tt mode))))))
+
+\end{chunk}
+
+\defun{compAtomWithModemap}{compAtomWithModemap}
+\calls{compAtomWithModemap}{transImplementation}
+\calls{compAtomWithModemap}{modeEqual}
+\calls{compAtomWithModemap}{convert}
+\refsdollar{compAtomWithModemap}{NoValueMode}
+\begin{chunk}{defun compAtomWithModemap}
+(defun |compAtomWithModemap| (x m env v)
+ (let (tt transimp y)
+ (declare (special |$NoValueMode|))
+  (cond
+   ((setq transimp
+    (loop for map in v
+     when  ; map is [[.,target],[.,fn]]]
+          (and (consp map) (consp (qcar map)) (consp (qcdar map))
+               (eq (qcddar map) nil)
+               (consp (qcdr map)) (eq (qcddr map) nil)
+               (consp (qcadr map)) (consp (qcdadr map))
+               (eq (qcddadr map) nil))
+     collect
+      (list (|transImplementation| x map (qcadadr map)) (qcadar map) env)))
+    (cond
+     ((setq tt
+       (let (result)
+        (loop for item in transimp
+         when (|modeEqual| m (cadr item))
+         do (setq result (or result item)))
+        result))
+       tt)
+     ((eql 1 (|#| (setq transimp
+                   (loop for ta in transimp
+                    when (setq y (|convert| ta m))
+                    collect y))))
+       (car transimp))
+     ((and (< 0 (|#| transimp)) (equal m |$NoValueMode|))
+       (car transimp))
+     (t (format t "compAtomWithModemap case 4~%")
+ nil))))))
 
 \end{chunk}
 
@@ -21366,6 +21513,27 @@ preferred to the underlying representation -- RDJ 9/12/83
          td)
        (t
          (|compToApply| op argl mode env)))))))
+
+\end{chunk}
+
+\defun{compToApply}{compToApply}
+\calls{compToApply}{compNoStacking}
+\calls{compToApply}{compApplication}
+\refsdollar{compToApply}{EmptyMode}
+\begin{chunk}{defun compToApply}
+(defun |compToApply| (op argl m e)
+ (let (tt m1)
+ (declare (special |$EmptyMode|))
+  (setq tt (|compNoStacking| op |$EmptyMode| e))
+  (when tt
+   (setq m1 (cadr tt))
+   (cond
+    ((and (consp (car tt)) (eq (qcar (car tt)) 'quote)
+          (consp (qcdr (car tt))) (eq (qcddr (car tt)) nil)
+          (equal (qcadr (car tt)) m1))
+      nil)
+    (t
+     (|compApplication| op argl m (caddr tt) tt))))))
 
 \end{chunk}
 
@@ -22572,9 +22740,12 @@ The current input line.
 \getchunk{defun comp2}
 \getchunk{defun comp3}
 \getchunk{defun compAdd}
+\getchunk{defun compApply}
+\getchunk{defun compApplyModemap}
 \getchunk{defun compArgumentConditions}
 \getchunk{defun compArgumentsAndTryAgain}
 \getchunk{defun compAtom}
+\getchunk{defun compAtomWithModemap}
 \getchunk{defun compAtSign}
 \getchunk{defun compBoolean}
 \getchunk{defun compCapsule}
@@ -22666,6 +22837,7 @@ The current input line.
 \getchunk{defun compSymbol}
 \getchunk{defun compSubsetCategory}
 \getchunk{defun compSuchthat}
+\getchunk{defun compToApply}
 \getchunk{defun compTopLevel}
 \getchunk{defun compTuple2Record}
 \getchunk{defun compTypeOf}
