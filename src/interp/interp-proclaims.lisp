@@ -214,7 +214,7 @@
             BOOT::|Un2E| BOOT::|SUP2Up| BOOT::OV2OV
             BOOT::|insertAlist,fn| BOOT::|replaceVars|
             BOOT::|compFromIf| BOOT::|Scr2Scr| BOOT::|compBoolean|
-            BOOT::|L2Record| BOOT::|Rm2V| VMLISP:RPLNODE
+            BOOT::|L2Record| BOOT::|Rm2V|
             BOOT::|domain2NDmp| BOOT::|Up2Up|
             BOOT::|augLisplibModemapsFromCategory| BOOT::|P2Mp|
             BOOT::|compWithMappingMode,FreeList| BOOT::|orderPredTran|
@@ -638,7 +638,7 @@
             BOOT::|putMapCode|)) 
 (PROCLAIM
     '(FTYPE (FUNCTION (T T *) T) BOOT::|pfLeaf| BOOT::BPITRACE
-            VMLISP:|remove| VMLISP:RREAD VMLISP:REMOVEQ
+            VMLISP:|remove| VMLISP:RREAD 
             BOOT::MATCH-LISP-TAG VMLISP:NREMOVE VMLISP:NREMOVEQ
             BOOT::|tokConstruct| BOOT::|pfAdd|
             BOOT:|ByteFileReadLineIntoString| BOOT:MATCH-TOKEN)) 
@@ -2843,7 +2843,7 @@
             BOOT::|throwKeyedMsg| BOOT::|canCoerceExplicit2Mapping|
             BOOT::|term1RWall| BOOT::|absolutelyCannotCoerce|
             BOOT::|rassocSub| BOOT::|coerceOrConvertOrRetract|
-            VMLISP:NCONC2 BOOT::|term1RW| BOOT::|coerceOrRetract|
+            BOOT::|term1RW| BOOT::|coerceOrRetract|
             BOOT::|resolveTMTaggedUnion| BOOT::|canCoerceUnion|
             BOOT::|acceptableTypesToResolve1| BOOT::|canCoercePermute|
             BOOT::|computeTTTranspositions| BOOT::|resolveTM2|
@@ -2876,10 +2876,10 @@
             BOOT::|replaceLast| BOOT::|coerceIntTest| VMLISP:ADDOPTIONS
             BOOT::|isSubTowerOf| BOOT::|starstarcond| BOOT::|equalOne|
             VMLISP:|assoc| VMLISP:SETSIZE BOOT::|evalSharpOne|
-            VMLISP:EFFACE BOOT::|canCoerceCommute|
+            BOOT::|canCoerceCommute|
             BOOT::|clearDependentMaps| BOOT::|constantInDomain?|
             VMLISP:EMBED BOOT::|translateMpVars2PVars|
-            VMLISP:LEXGREATERP VMLISP:RPLPAIR
+            VMLISP:LEXGREATERP
             BOOT::|addDmpLikeTermsAsTarget| VMLISP:HPUT*
             BOOT::|genMpFromDmpTerm| VMLISP:STRING2ID-N
             BOOT::|htMakeTemplates,substLabel| BOOT::|doDoitButton|
