@@ -33253,7 +33253,7 @@ Evaluates the arguments passed to a constructor
 \calls{evaluateType1}{bottumUp}
 \calls{evaluateType1}{qcar}
 \calls{evaluateType1}{qcdr}
-\calls{evaluateType1}{getAndEvalConstructorArguments}
+\calls{evaluateType1}{getAndEvalConstructorArgument}
 \calls{evaluateType1}{coerceOrRetract}
 \calls{evaluateType1}{objValUnwrap}
 \calls{evaluateType1}{throwKeyedMsgCannotCoerceWithValue}
@@ -34663,6 +34663,131 @@ o )library
        |%l| "   Available options are"
        ,@(|bright|
           "c ct e ec ect cls pause update patch compare record"))))))))
+
+\end{chunk}
+
+\chapter{Handlers for Special Forms}
+This file contains the functions which do type analysis and
+evaluation of special functions in the interpreter.
+Special functions are ones which are not defined in the algebra
+code, such as assignment, construct, COLLECT and declaration.
+
+Operators which require special handlers all have a LISP ``up''
+property which is the name of the special handler, which is
+always the word ``up'' followed by the operator name.
+If an operator has this ``up'' property the handler is called
+automatically from bottomUp instead of general modemap selection.
+
+The up handlers are usually split into two pieces, the first is
+the up function itself, which performs the type analysis, and an
+``eval'' function, which generates (and executes, if required) the
+code for the function.
+
+The up functions always take a single argument, which is the
+entire attributed tree for the operation, and return the modeSet
+of the node, which is a singleton list containing the type
+computed for the node.
+
+The eval functions can take any arguments deemed necessary.
+Actual evaluation is done if \verb|$genValue| is true, otherwise code is
+generated.
+
+(See the function analyzeMap for other things that may affect
+what is generated in these functions.)
+
+These functions are required to do two things:
+\begin{enumerate}
+\item do a putValue on the operator vector with the computed value
+     of the node, which is a triple.  This is usually done in the
+     eval functions.
+\item do a putModeSet on the operator vector with a list of the
+     computed type of the node.  This is usually done in the
+     up functions.
+\end{enumerate}
+
+There are several special modes used in these functions:
+\begin{enumerate}
+\item Void is the mode that should be used for all statements
+     that do not otherwise return values, such as declarations,
+     loops, IF-THEN's without ELSE's, etc..
+\item \verb|$NoValueMode| and \verb|$ThrowAwayMode| used to be used 
+      in situations where Void is now used, and are being phased out 
+      completely.
+\end{enumerate}
+
+\defun{getAndEvalConstructorArgument}{getAndEvalConstructorArgument}
+\calls{getAndEvalConstructorArgument}{getValue}
+\calls{getAndEvalConstructorArgument}{objMode}
+\calls{getAndEvalConstructorArgument}{isWrapped}
+\calls{getAndEvalConstructorArgument}{objVal}
+\calls{getAndEvalConstructorArgument}{isLocalVar}
+\calls{getAndEvalConstructorArgument}{compFailure}
+\calls{getAndEvalConstructorArgument}{objNewWrap}
+\calls{getAndEvalConstructorArgument}{timedEVALFUN}
+\begin{chunk}{defun getAndEvalConstructorArgument}
+(defun |getAndEvalConstructorArgument| (tree)
+ (let (triple)
+  (setq triple (|getValue| tree))
+  (cond
+   ((eq (|objMode| triple) '(|Domain|)) triple)
+   ((|isWrapped| (|objVal| triple)) triple)
+   ((|isLocalVar| (|objVal| triple))
+     (|compFailure| "   Local variable or parameter used in type"))
+   (t
+    (|objNewWrap| (|timedEVALFUN| (|objVal| triple)) (|objMode| triple))))))
+
+\end{chunk}
+
+\defun{replaceSharps}{replaceSharps}
+Replaces all sharps in x by the arguments of domain d.
+Replaces all replaces the triangle variables
+\calls{replaceSharps}{subCopy}
+\refsdollar{replaceSharps}{TriangleVariableList}
+\refsdollar{replaceSharps}{FormalMapVariableList}
+\begin{chunk}{defun replaceSharps}
+(defun |replaceSharps| (x d)
+ (let (sl)
+ (declare (special |$TriangleVariableList| |$FormalMapVariableList|))
+  (loop for e in (rest d) for var in |$FormalMapVariableList| 
+   do (setq sl (cons (cons var e) sl)))
+  (setq x (|subCopy| x sl))
+  (setq sl nil)
+  (loop for e in (rest d) for var in |$TriangleVariableList| 
+   do (setq sl (cons (cons var e) sl)))
+  (|subCopy| x sl)))
+
+\end{chunk}
+
+\defun{isDomainValuedVariable}{isDomainValuedVariable}
+Returns the value of form if form is a variable with a type value
+\calls{isDomainValuedVariable}{identp}
+\calls{isDomainValuedVariable}{get}
+\calls{isDomainValuedVariable}{member}
+\calls{isDomainValuedVariable}{objMode}
+\calls{isDomainValuedVariable}{objValUnwrap}
+\refsdollar{isDomainValuedVariable}{e}
+\refsdollar{isDomainValuedVariable}{env}
+\refsdollar{isDomainValuedVariable}{InteractiveFrame}
+\begin{chunk}{defun isDomainValuedVariable}
+(defun |isDomainValuedVariable| (form)
+ (let (val)
+ (declare (special |$e| |$env| |$InteractiveFrame|))
+  (when (and (identp form)
+             (setq val
+               (or (|get| form '|value| |$InteractiveFrame|)
+                   (and (consp |$env|)  (|get| form '|value| |$env|))
+                   (and (consp |$e|)    (|get| form '|value| |$e|))))
+             (|member| (|objMode| val) '((|Domain|) (|SubDomain| (|Domain|)))))
+    (|objValUnwrap| val))))
+
+\end{chunk}
+
+\defun{evalCategory}{evalCategory}
+\calls{evalCategory}{ofCategory}
+\calls{evalCategory}{isPartialMode}
+\begin{chunk}{defun evalCategory}
+(defun |evalCategory| (d c)
+  (or (|isPartialMode| d) (|ofCategory| d c)))
 
 \end{chunk}
 
@@ -38062,6 +38187,14 @@ Functions are used to do manipulations which are Common Lisp operations
 but the Axiom semantics are not the same. Because Axiom was originally
 written in Maclisp, then VMLisp, and then Common Lisp some of these old
 semantics survive. 
+
+\section{Void}
+\defun{voidValue}{voidValue}
+\begin{chunk}{defun voidValue}
+(defun |voidValue| () "()") 
+
+\end{chunk}
+
 
 \section{U32Vector}
 \defun{getrefv32}{getrefv32}
@@ -43015,6 +43148,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun erMsgCompare}
 \getchunk{defun erMsgSep}
 \getchunk{defun erMsgSort}
+\getchunk{defun evalCategory}
 \getchunk{defun evalDomain}
 \getchunk{defun evaluateSignature}
 \getchunk{defun evaluateType}
@@ -43045,6 +43179,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun genDomainTraceName}
 \getchunk{defun gensymInt}
 \getchunk{defun getAliasIfTracedMapParameter}
+\getchunk{defun getAndEvalConstructorArgument}
 \getchunk{defun getAndSay}
 \getchunk{defun getBpiNameIfTracedMap}
 \getchunk{defun getBrowseDatabase}
@@ -43160,6 +43295,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun ioclear}
 \getchunk{defun iostat}
 \getchunk{defun isDomainOrPackage}
+\getchunk{defun isDomainValuedVariable}
 \getchunk{defun isExposedConstructor}
 \getchunk{defun isgenvar}
 \getchunk{defun isInterpOnlyMap}
@@ -43792,6 +43928,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun removeTracedMapSigs}
 \getchunk{defun removeUndoLines}
 \getchunk{defun replaceFile}
+\getchunk{defun replaceSharps}
 \getchunk{defun reportOperations}
 \getchunk{defun reportOpsFromLisplib}
 \getchunk{defun reportOpsFromLisplib0}
@@ -44019,6 +44156,7 @@ This needs to work off the internal exposure list, not the file.
 
 \getchunk{defun validateOutputDirectory}
 \getchunk{defun vec2list}
+\getchunk{defun voidValue}
 
 \getchunk{defun what}
 \getchunk{defun whatCommands}
