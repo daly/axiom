@@ -19532,6 +19532,66 @@ deleting entries from u assumes that the first element is useless
 
 \end{chunk}
 
+\defun{checkRewrite}{checkRewrite}
+\calls{checkRewrite}{checkRemoveComments}
+\calls{checkRewrite}{checkAddIndented}
+\calls{checkRewrite}{checkGetArgs}
+\calls{checkRewrite}{newString2Words}
+\calls{checkRewrite}{checkAddSpaces}
+\calls{checkRewrite}{checkSplit2Words}
+\calls{checkRewrite}{checkAddMacros}
+\calls{checkRewrite}{checkTexht}
+\calls{checkRewrite}{checkArguments}
+\calls{checkRewrite}{checkFixCommonProblem}
+\calls{checkRewrite}{checkRecordHash}
+\calls{checkRewrite}{checkDecorateForHt}
+\refsdollar{checkRewrite}{checkErrorFlag}
+\refsdollar{checkRewrite}{argl}
+\refsdollar{checkRewrite}{checkingXmptex?}
+\begin{chunk}{defun checkRewrite}
+(defun |checkRewrite| (name lines)
+ (declare (ignore name))
+ (prog (|$checkErrorFlag| margin w verbatim u2 okBefore u)
+ (declare (special |$checkErrorFlag| |$argl| |$checkingXmptex?|))
+  (setq |$checkErrorFlag| t)
+  (setq margin 0)
+  (setq lines (|checkRemoveComments| lines))
+  (setq u lines)
+  (when |$checkingXmptex?|
+   (setq u
+    (loop for x in u
+     collect (|checkAddIndented| x margin))))
+  (setq |$argl| (|checkGetArgs| (car u)))
+  (setq u2 nil)
+  (setq verbatim nil)
+  (loop for x in u
+   do
+    (setq w (|newString2Words| x))
+    (cond
+     (verbatim
+      (cond
+       ((and w (equal (car w) "\\end{verbatim}"))
+         (setq verbatim nil)
+         (setq u2 (append u2 w)))
+       (t
+         (setq u2 (append u2 (list x))))))
+     ((and w (equal (car w) "\\begin{verbatim}"))
+      (setq verbatim t)
+      (setq u2 (append u2 w)))
+     (t (setq u2 (append u2 w)))))
+  (setq u u2)
+  (setq u (|checkAddSpaces| u))
+  (setq u (|checkSplit2Words| u))
+  (setq u (|checkAddMacros| u))
+  (setq u (|checkTexht| u))
+  (setq okBefore (null |$checkErrorFlag|))
+  (|checkArguments| u)
+  (when |$checkErrorFlag| (setq u (|checkFixCommonProblem| u)))
+  (|checkRecordHash| u)
+  (|checkDecorateForHt| u)))
+
+\end{chunk}
+
 \defun{checkDocError1}{checkDocError1}
 \calls{checkDocError1}{checkDocError}
 \refsdollar{checkDocError1}{compileDocumentation}
@@ -19672,6 +19732,26 @@ deleting entries from u assumes that the first element is useless
 
 \end{chunk}
 
+\defun{checkArguments}{checkArguments}
+\calls{checkArguments}{hget}
+\calls{checkArguments}{checkHTargs}
+\refsdollar{checkArguments}{htMacroTable}
+\begin{chunk}{defun checkArguments}
+(defun |checkArguments| (u)
+ (let (x k)
+ (declare (special |$htMacroTable|))
+  (loop while u
+   do (setq x (car u))
+      (cond
+       ((null (setq k (hget |$htMacroTable| x))) '|skip|)
+       ((eql k 0) '|skip|)
+       ((> k 0) (|checkHTargs| x (cdr u) k nil))
+       (t (|checkHTargs| x (cdr u) -k t)))
+       (pop u))
+  u))
+
+\end{chunk}
+
 \defun{checkTransformFirsts}{checkTransformFirsts}
 \calls{checkTransformFirsts}{pname}
 \calls{checkTransformFirsts}{leftTrim}
@@ -19801,6 +19881,66 @@ deleting entries from u assumes that the first element is useless
                 (t
                  (strconc "\\spad{" (substring u 0 k) "}"
                                     (substring u k nil))))))))))))))))))
+
+\end{chunk}
+
+\defun{checkSkipBlanks}{checkSkipBlanks}
+\refsdollar{checkSkipBlanks}{charBlank}
+\begin{chunk}{defun checkSkipBlanks}
+(defun |checkSkipBlanks| (u i m)
+ (declare (special |$charBlank|))
+  (do ()
+      ((null (and (> m i) (equal (elt u i) |$charBlank|))) nil)
+   (setq i (1+ i)))
+  (unless (= i m) i))
+
+\end{chunk}
+
+\defun{checkSkipIdentifierToken}{checkSkipIdentifierToken}
+\calls{checkSkipIdentifierToken}{checkAlphabetic}
+\begin{chunk}{defun checkSkipIdentifierToken}
+(defun |checkSkipIdentifierToken| (u i m)
+ (do ()
+   ((null (and (> m i) (|checkAlphabetic| (elt u i)))) nil)
+  (setq i (1+ i)))
+  (unless (= i m) i))
+
+\end{chunk}
+
+\defun{checkAlphabetic}{checkAlphabetic}
+\refsdollar{checkAlphabetic}{charIdentifierEndings}
+\begin{chunk}{defun checkAlphabetic}
+(defun |checkAlphabetic| (c)
+ (declare (special |$charIdentifierEndings|))
+ (or (alpha-char-p c) (digitp c) (member c |$charIdentifierEndings|)))
+
+\end{chunk}
+
+\defun{checkSkipToken}{checkSkipToken}
+\calls{checkSkipToken}{checkSkipIdentifierToken}
+\calls{checkSkipToken}{checkSkipOpToken}
+\begin{chunk}{defun checkSkipToken}
+(defun |checkSkipToken| (u i m)
+ (if (alpha-char-p (elt u i)) 
+  (|checkSkipIdentifierToken| u i m)
+  (|checkSkipOpToken| u i m)))
+
+\end{chunk}
+
+\defun{checkSkipOpToken}{checkSkipOpToken}
+\calls{checkSkipOpToken}{checkAlphabetic}
+\calls{checkSkipOpToken}{member}
+\refsdollar{checkSkipOpToken}{charDelimiters}
+\begin{chunk}{defun checkSkipOpToken}
+(defun |checkSkipOpToken| (u i m)
+ (declare (special |$charDelimiters|))
+  (do () 
+      ((null (and (> m i)
+                  (null (|checkAlphabetic| (elt u i)))
+                  (null (|member| (elt u i) |$charDelimiters|))))
+         nil)
+   (setq i (1+ i)))
+   (unless (= i m) i))
 
 \end{chunk}
 
@@ -23863,7 +24003,9 @@ The current input line.
 \getchunk{defun canReturn}
 \getchunk{defun char-eq}
 \getchunk{defun char-ne}
+\getchunk{defun checkAlphabetic}
 \getchunk{defun checkAndDeclare}
+\getchunk{defun checkArguments}
 \getchunk{defun checkComments}
 \getchunk{defun checkDocError}
 \getchunk{defun checkDocError1}
@@ -23872,6 +24014,11 @@ The current input line.
 \getchunk{defun checkGetMargin}
 \getchunk{defun checkIeEg}
 \getchunk{defun checkIeEgfun}
+\getchunk{defun checkRewrite}
+\getchunk{defun checkSkipBlanks}
+\getchunk{defun checkSkipIdentifierToken}
+\getchunk{defun checkSkipOpToken}
+\getchunk{defun checkSkipToken}
 \getchunk{defun checkTransformFirsts}
 \getchunk{defun checkWarning}
 \getchunk{defun coerce}
