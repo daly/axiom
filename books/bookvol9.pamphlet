@@ -381,7 +381,7 @@ Equation(S: Type): public == private where
              ++ the lhs of eq2 should be a kernel
 
   private ==> add
-    Rep := Record(lhs: S, rhs: S)
+    Rep := Recod(lhs: S, rhs: S)
     eq1,eq2: $
     s : S
     if S has IntegralDomain then
@@ -7641,6 +7641,53 @@ Make pattern variable substitutions.
   (rpackfile (list libName 'doclb))
   (replaceFile (list libName |$spadLibFT|) (list libName 'doclb))
   (list '|dummy| |$EmptyMode| |$e|)))
+
+\end{chunk}
+
+\defun{checkExtract}{checkExtract}
+\calls{checkExtract}{firstNonBlankPosition}
+\calls{checkExtract}{substring?}
+\calls{checkExtract}{charPosition}
+\calls{checkExtract}{nequal}
+\calls{checkExtract}{length}
+\calls{checkExtract}{nreverse}
+\begin{chunk}{defun checkExtract}
+(defun |checkExtract| (header lines)
+ (let (line u margin firstLines m k j i acc)
+  ;; throw away lines until we find the header
+  (while lines
+   (setq line (car lines))
+   (setq k (|firstNonBlankPosition| line))
+   (when (|substring?| header line k) (return))
+   (pop lines))
+  ;; collect up the lines
+  (when lines
+   (setq u (car lines))
+   (setq j (|charPosition| (|char| '|:|) u k))
+   (setq margin k)
+   (setq firstLines
+    (if (nequal (setq k (|firstNonBlankPosition| u (1+ j))) -1)
+     (cons (substring u (1+ j) nil) (cdr lines))
+     (cdr lines)))
+   (setq acc nil)
+   ;; look for another header; if found skip all the rest of the lines
+   (loop for line in firstLines 
+    do
+     (setq m (|#| line))
+     (cond
+      ;; include if blank
+      ((eql (setq k (|firstNonBlankPosition| line)) -1) '|skip|)
+      ;; include if indented
+      ((> k margin) '|skip|)
+      ;; include if not uppercased
+      ((null (upper-case-p (elt line k))) '|skip|)
+      ;; include if not colon
+      ((eql (setq j (|charPosition| (|char| '|:|) line k)) m) '|skip|)
+      ;; include if blank before colon
+      ((> j (setq i (|charPosition| (|char| '| |) line (1+ k)))) '|skip|)
+      (t (return nil)))
+     (setq acc (cons line acc)))
+    (nreverse acc))))
 
 \end{chunk}
 
@@ -19148,6 +19195,736 @@ Stack of results of reduced productions.
 
 \end{chunk}
 
+\chapter{Comment handlers}
+\defun{recordSignatureDocumentation}{recordSignatureDocumentation}
+\calls{recordSignatureDocumentation}{recordDocumentation}
+\calls{recordSignatureDocumentation}{postTransform}
+\begin{chunk}{defun recordSignatureDocumentation}
+(defun |recordSignatureDocumentation| (opSig lineno)
+  (|recordDocumentation| (cdr (|postTransform| opSig)) lineno))
+
+\end{chunk}
+
+
+\defun{recordAttributeDocumentation}{recordAttributeDocumentation}
+\calls{recordAttributeDocumentation}{opOf}
+\calls{recordAttributeDocumentation}{pname}
+\calls{recordAttributeDocumentation}{upper-case-p}
+\calls{recordAttributeDocumentation}{recordDocumentation}
+\calls{recordAttributeDocumentation}{ifcdr}
+\calls{recordAttributeDocumentation}{postTransform}
+\begin{chunk}{defun recordAttributeDocumentation}
+(defun |recordAttributeDocumentation| (arg lineno)
+ (let (att name)
+  (setq att (cadr arg))
+  (setq name (|opOf| att))
+  (cond
+   ((upper-case-p (elt (pname name) 0)) nil)
+   (t
+    (|recordDocumentation|
+     (list name (cons '|attribute| (ifcdr (|postTransform| att)))) lineno)))))
+
+\end{chunk}
+
+\defun{recordDocumentation}{recordDocumentation}
+\calls{recordDocumentation}{recordHeaderDocumentation}
+\calls{recordDocumentation}{collectComBlock}
+\defsdollar{recordDocumentation}{maxSignatureLineNumber}
+\defsdollar{recordDocumentation}{docList}
+\begin{chunk}{defun recordDocumentation}
+(defun |recordDocumentation| (key lineno)
+ (let (u)
+ (declare (special |$docList| |$maxSignatureLineNumber|))
+  (|recordHeaderDocumentation| lineno)
+  (setq u (|collectComBlock| lineno))
+  (setq |$maxSignatureLineNumber| lineno)
+  (setq |$docList| (cons (cons key u) |$docList|))))
+
+\end{chunk}
+
+\defun{recordHeaderDocumentation}{recordHeaderDocumentation}
+\calls{recordHeaderDocumentation}{assocright}
+\refsdollar{recordHeaderDocumentation}{maxSignatureLineNumber}
+\refsdollar{recordHeaderDocumentation}{comblocklist}
+\refsdollar{recordHeaderDocumentation}{headerDocumentation}
+\defsdollar{recordHeaderDocumentation}{headerDocumentation}
+\defsdollar{recordHeaderDocumentation}{comblocklist}
+\begin{chunk}{defun recordHeaderDocumentation}
+(defun |recordHeaderDocumentation| (lineno)
+ (let (al)
+ (declare (special |$headerDocumentation| |$maxSignatureLineNumber|
+                    $comblocklist))
+  (when (eql |$maxSignatureLineNumber| 0)
+    (setq al
+      (loop for p in $comblocklist
+       when (or (null (car p)) (null lineno) (> lineno (car p)))
+       collect p))
+    (setq $comblocklist (setdifference $comblocklist al))
+    (setq |$headerDocumentation| (assocright al))
+    (when |$headerDocumentation| (setq |$maxSignatureLineNumber| 1))
+    |$headerDocumentation|)))
+
+\end{chunk}
+
+\defun{collectComBlock}{collectComBlock}
+\calls{collectComBlock}{collectAndDeleteAssoc}
+\defsdollar{collectComBlock}{comblocklist}
+\begin{chunk}{defun collectComBlock}
+(defun |collectComBlock| (x)
+ (let (val u)
+ (declare (special $comblocklist))
+  (cond
+   ((and (consp $comblocklist)
+         (consp (qcar $comblocklist)) 
+         (equal (qcaar $comblocklist) x))
+     (setq val (qcdar $comblocklist))
+     (setq u (append val (|collectAndDeleteAssoc| x)))
+     (setq $comblocklist (cdr $comblocklist))
+     u)
+   (t (|collectAndDeleteAssoc| x)))))
+
+\end{chunk}
+
+\defun{collectAndDeleteAssoc}{collectAndDeleteAssoc}
+\begin{verbatim}
+   u is (.. (x . a) .. (x . b) .. )  ==> (a b ..) 
+\end{verbatim}
+deleting entries from u assumes that the first element is useless
+\refsdollar{collectAndDeleteAssoc}{comblocklist}
+\begin{chunk}{defun collectAndDeleteAssoc}
+(defun |collectAndDeleteAssoc| (x)
+ (let (r res s)
+ (declare (special $comblocklist))
+  (maplist 
+   #'(lambda (y) 
+      (when (setq s (cdr y))
+       (do ()
+           ((null (and s (consp (car s)) (equal (qcar (car s)) x))) nil)
+        (setq r (qcdr (car s)))
+        (setq res (append res r))
+        (setq s (cdr s))
+        (rplacd y s))))
+    $comblocklist)
+  res))
+
+\end{chunk}
+
+\defun{finalizeDocumentation}{finalizeDocumentation}
+\calls{finalizeDocumentation}{bright}
+\calls{finalizeDocumentation}{sayMSG}
+\calls{finalizeDocumentation}{stringimage}
+\calls{finalizeDocumentation}{strconc}
+\calls{finalizeDocumentation}{sayKeyedMsg}
+\calls{finalizeDocumentation}{form2String}
+\calls{finalizeDocumentation}{formatOpSignature}
+\calls{finalizeDocumentation}{transDocList}
+\calls{finalizeDocumentation}{msubst}
+\calls{finalizeDocumentation}{assocleft}
+\calls{finalizeDocumentation}{remdup}
+\calls{finalizeDocumentation}{macroExpand}
+\calls{finalizeDocumentation}{sublislis}
+\refsdollar{finalizeDocumentation}{e}
+\refsdollar{finalizeDocumentation}{lisplibForm}
+\refsdollar{finalizeDocumentation}{docList}
+\refsdollar{finalizeDocumentation}{op}
+\refsdollar{finalizeDocumentation}{comblocklist}
+\refsdollar{finalizeDocumentation}{FormalMapVariableList}
+\begin{chunk}{defun finalizeDocumentation}
+(defun |finalizeDocumentation| ()
+ (labels (
+  (fn (x env)
+   (declare (special |$lisplibForm| |$FormalMapVariableList|))
+   (cond
+    ((atom x) (list x nil))
+    (t
+     (when (> (|#| x) 2) (setq x (take 2 x)))
+     (sublislis |$FormalMapVariableList| (cdr |$lisplibForm|)
+                   (|macroExpand| x env)))))
+  (hn (u)
+    ; ((op,sig,doc), ...)  --> ((op ((sig doc) ...)) ...)
+   (let (opList)
+    (setq opList (remdup (assocleft u)))
+    (loop for op in opList
+     collect
+      (cons op
+       (loop for item in u
+        when (equal op (first item))
+        collect (cons (second item) (third item))))))))
+ (let (unusedCommentLineNumbers docList u noHeading attributes signatures name
+       bigcnt s litcnt a n)
+  (declare (special |$e| |$lisplibForm| |$docList| |$op| $comblocklist))
+   (setq unusedCommentLineNumbers
+    (loop for x in $comblocklist
+     do (cdr x)
+     collect x))
+   (setq docList (msubst '$ '% (|transDocList| |$op| |$docList|)))
+   (cond
+     ((setq u
+       (loop for sig in docList
+        when (null (cdr sig))
+        collect sig))
+      (loop for y in u
+       do
+        (cond
+         ((eq y '|constructor|) (setq noHeading t))
+         ((and (consp y) (consp (qcdr y)) (eq (qcddr y) nil) (consp (qcadr y))
+               (eq (qcaadr y) '|attribute|))
+            (setq attributes (cons (cons (qcar y) (qcdadr y)) attributes)))
+         (t (setq signatures (cons y signatures)))))
+      (setq name (car |$lisplibForm|))
+      (when (or noHeading signatures attributes unusedCommentLineNumbers)
+         (|sayKeyedMsg| 'S2CD0001 nil)
+         (setq bigcnt 1)
+         (when (or noHeading signatures attributes)
+            (|sayKeyedMsg| 'S2CD0002
+              (cons (strconc (stringimage bigcnt) ".") (list name)))
+            (setq bigcnt (1+ bigcnt))
+            (setq litcnt 1)
+            (when noHeading
+              (|sayKeyedMsg| 'S2CD0003
+               (list (strconc "(" (stringimage litcnt) ")") name))
+              (setq litcnt (1+ litcnt)))
+            (when signatures
+              (|sayKeyedMsg| 'S2CD0004
+                (list (strconc "(" (stringimage litcnt) ")")))
+              (setq litcnt (1+ litcnt))
+              (loop for item in signatures
+               do
+                (setq s (|formatOpSignature| (first item) (second item)))
+                (|sayMSG|
+                 (if (atom s)
+                   (list '|%x9| s)
+                   (cons '|%x9| s)))))
+            (when attributes
+             (|sayKeyedMsg| 'S2CD0005
+              (list (strconc "(" (stringimage litcnt) ")")))
+             (setq litcnt (1+ litcnt))
+             (loop for x in attributes
+              do
+               (setq a (|form2String| x))
+               (|sayMSG|
+                (if (atom a)
+                  (list '|%x9| a)
+                  (cons '|%x9| a))))))
+         (when unusedCommentLineNumbers
+           (|sayKeyedMsg| 'S2CD0006
+             (list (strconc (stringimage bigcnt) ".") name))
+           (loop for item in unusedCommentLineNumbers
+            do (|sayMSG| 
+                (cons "   " 
+                 (append (|bright| n) (list "   " (second item))))))))))
+   (hn
+    (loop for item in docList 
+     collect (fn (car item) |$e|))))))
+
+\end{chunk}
+
+\section{Transformation of ++ comments}
+\defun{transDocList}{transDocList}
+\calls{transDocList}{sayBrightly}
+\calls{transDocList}{transDoc}
+\calls{transDocList}{checkDocError}
+\calls{transDocList}{checkDocError1}
+\refsdollar{transDocList}{constructorName}
+\begin{chunk}{defun transDocList}
+(defun |transDocList| (|$constructorName| doclist)
+ (declare (special |$constructorName|))
+ (let (commentList conEntry acc)
+  (|sayBrightly|
+   (list "   Processing " |$constructorName| " for Browser database:"))
+  (setq commentList (|transDoc| |$constructorName| doclist))
+  (setq acc nil)
+  (loop for entry in commentList
+   do
+    (cond
+     ((and (consp entry) (eq (qcar entry) '|constructor|)
+           (consp (qcdr entry)) (eq (qcddr entry) nil))
+       (if conEntry 
+        (|checkDocError| (list "Spurious comments: " (qcadr entry)))
+        (setq conEntry entry)))
+     (t (setq acc (cons entry acc)))))
+  (if conEntry 
+   (cons conEntry acc)
+   (progn
+    (|checkDocError1| (list "Missing Description"))
+    acc))))
+
+\end{chunk}
+
+\defun{transDoc}{transDoc}
+\calls{transDoc}{checkDocError1}
+\calls{transDoc}{checkTrim}
+\calls{transDoc}{checkExtract}
+\calls{transDoc}{transformAndRecheckComments}
+\calls{transDoc}{nreverse}
+\refsdollar{transDoc}{x}
+\refsdollar{transDoc}{attribute?}
+\defsdollar{transDoc}{x}
+\defsdollar{transDoc}{attribute?}
+\defsdollar{transDoc}{argl}
+\begin{chunk}{defun transDoc}
+(defun |transDoc| (conname doclist)
+ (declare (ignore conname))
+ (let (|$x| |$attribute?| |$argl| rlist lines u v longline acc)
+ (declare (special |$x| |$attribute?| |$argl|))
+  (setq |$x| nil)
+  (setq rlist (reverse doclist))
+  (loop for item in rlist
+   do
+    (setq |$x| (car item))
+    (setq lines (cdr item))
+    (setq |$attribute?|
+      (and (consp |$x|) (consp (qcdr |$x|)) (eq (qcddr |$x|) nil)
+           (consp (qcadr |$x|)) (eq (qcdadr |$x|) nil)
+           (eq (qcaadr |$x|) '|attribute|)))
+    (cond
+     ((null lines)
+      (unless |$attribute?| (|checkDocError1| (list "Not documented!!!!"))))
+     (t
+      (setq u
+       (|checkTrim| |$x|
+        (cond
+         ((stringp lines) (list lines))
+         ((eq |$x| '|constructor|) (car lines))
+         (t lines))))
+      (setq |$argl| nil) ;; possibly unused -- tpd
+      (setq longline
+       (cond
+        ((eq |$x| '|constructor|)
+          (setq v
+           (or
+            (|checkExtract| "Description:" u)
+            (and u (|checkExtract| "Description:" 
+                    (cons (strconc "Description: " (car u)) (cdr u))))))
+          (|transformAndRecheckComments| '|constructor| (or v u)))
+        (t (|transformAndRecheckComments| |$x| u))))
+      (setq acc (cons (list |$x| longline) acc)))))
+    (nreverse acc)))
+
+\end{chunk}
+
+\defun{transformAndRecheckComments}{transformAndRecheckComments}
+\calls{transformAndRecheckComments}{sayBrightly}
+\refsdollar{transformAndRecheckComments}{exposeFlagHeading}
+\defsdollar{transformAndRecheckComments}{checkingXmptex?}
+\defsdollar{transformAndRecheckComments}{x}
+\defsdollar{transformAndRecheckComments}{name}
+\defsdollar{transformAndRecheckComments}{origin}
+\defsdollar{transformAndRecheckComments}{recheckingFlag}
+\defsdollar{transformAndRecheckComments}{exposeFlagHeading}
+\begin{chunk}{defun transformAndRecheckComments}
+(defun |transformAndRecheckComments| (name lines)
+ (let (|$x| |$name| |$origin| |$recheckingFlag| |$exposeFlagHeading| u)
+ (declare (special |$x| |$name| |$origin| |$recheckingFlag|
+                   |$exposeFlagHeading| |$exposeFlag| |$checkingXmptex?|))
+  (setq |$checkingXmptex?| nil)
+  (setq |$x| name)
+  (setq |$name| '|GlossaryPage|)
+  (setq |$origin| '|gloss|)
+  (setq |$recheckingFlag| nil)
+  (setq |$exposeFlagHeading| (list "--------" name "---------"))
+  (unless |$exposeFlag| (|sayBrightly| |$exposeFlagHeading|))
+  (setq u (|checkComments| name lines))
+  (setq |$recheckingFlag| t)
+  (|checkRewrite| name (list u))
+  (setq |$recheckingFlag| nil)
+  u))
+
+\end{chunk}
+
+\defun{checkDocError1}{checkDocError1}
+\calls{checkDocError1}{checkDocError}
+\refsdollar{checkDocError1}{compileDocumentation}
+\begin{chunk}{defun checkDocError1}
+(defun |checkDocError1| (u)
+ (declare (special |$compileDocumentation|))
+ (if (and (boundp '|$compileDocumentation|) |$compileDocumentation|) 
+  nil
+  (|checkDocError| u)))
+
+\end{chunk}
+
+\defun{checkDocError}{checkDocError}
+\calls{checkDocError}{checkDocMessage}
+\calls{checkDocError}{concat}
+\calls{checkDocError}{saybrightly1}
+\calls{checkDocError}{sayBrightly}
+\refsdollar{checkDocError}{checkErrorFlag}
+\refsdollar{checkDocError}{recheckingFlag}
+\refsdollar{checkDocError}{constructorName}
+\refsdollar{checkDocError}{exposeFlag}
+\refsdollar{checkDocError}{exposeFlagHeading}
+\refsdollar{checkDocError}{outStream}
+\defsdollar{checkDocError}{checkErrorFlag}
+\defsdollar{checkDocError}{exposeFlagHeading}
+\begin{chunk}{defun checkDocError}
+(defun |checkDocError| (u)
+ (let (msg)
+ (declare (special |$outStream| |$exposeFlag| |$exposeFlagHeading|
+                   |$constructorName| |$recheckingFlag| |$checkErrorFlag|))
+  (setq |$checkErrorFlag| t)
+  (setq msg
+   (cond
+    (|$recheckingFlag|
+      (if |$constructorName| 
+        (|checkDocMessage| u)
+        (|concat| "> " u)))
+    (|$constructorName| (|checkDocMessage| u))
+    (t u)))
+  (when (and |$exposeFlag| |$exposeFlagHeading|)
+     (saybrightly1 |$exposeFlagHeading| |$outStream|)
+     (|sayBrightly| |$exposeFlagHeading|)
+     (setq |$exposeFlagHeading| nil))
+  (|sayBrightly| msg)
+  (when |$exposeFlag| (saybrightly1 msg |$outStream|))))
+
+\end{chunk}
+
+\defun{checkDocMessage}{checkDocMessage}
+\calls{checkDocMessage}{getdatabase}
+\calls{checkDocMessage}{whoOwns}
+\calls{checkDocMessage}{concat}
+\refsdollar{checkDocMessage}{x}
+\refsdollar{checkDocMessage}{constructorName}
+\begin{chunk}{defun checkDocMessage}
+(defun |checkDocMessage| (u)
+ (let (sourcefile person middle)
+ (declare (special |$constructorName| |$x|))
+  (setq sourcefile (getdatabase |$constructorName| 'sourcefile))
+  (setq person (or (|whoOwns| |$constructorName|) "---"))
+  (setq middle
+   (if (boundp '|$x|)
+    (list "(" |$x| "): ")
+    (list ": ")))
+  (|concat| person ">" sourcefile "-->" |$constructorName| middle u)))
+
+\end{chunk}
+
+\defun{checkComments}{checkComments}
+\calls{checkComments}{checkGetMargin}
+\calls{checkComments}{nequal}
+\calls{checkComments}{checkTransformFirsts}
+\calls{checkComments}{checkIndentedLines}
+\calls{checkComments}{checkGetArgs}
+\calls{checkComments}{newString2Words}
+\calls{checkComments}{checkAddSpaces}
+\calls{checkComments}{checkIeEg}
+\calls{checkComments}{checkSplit2Words}
+\calls{checkComments}{checkBalance}
+\calls{checkComments}{checkArguments}
+\calls{checkComments}{checkFixCommonProblems}
+\calls{checkComments}{checkDecorate}
+\calls{checkComments}{strconc}
+\calls{checkComments}{checkAddPeriod}
+\calls{checkComments}{pp}
+\refsdollar{checkComments}{attribute?}
+\refsdollar{checkComments}{checkErrorFlag}
+\defsdollar{checkComments}{argl}
+\defsdollar{checkComments}{checkErrorFlag}
+\begin{chunk}{defun checkComments}
+(defun |checkComments| (nameSig lines)
+ (let (|$checkErrorFlag| margin w verbatim u2 okBefore u v res)
+ (declare (special |$checkErrorFlag| |$argl| |$attribute?|))
+  (setq |$checkErrorFlag| nil)
+  (setq margin (|checkGetMargin| lines))
+  (cond
+   ((and (or (null (boundp '|$attribute?|)) (null |$attribute?|))
+         (nequal nameSig '|constructor|))
+     (setq lines
+      (cons 
+       (|checkTransformFirsts| (car nameSig) (car lines) margin)
+       (cdr lines)))))
+     (setq u (|checkIndentedLines| lines margin))
+     (setq |$argl| (|checkGetArgs| (car u)))
+     (setq u2 nil)
+     (setq verbatim nil)
+     (loop for x in u
+      do (setq w (|newString2Words| x))
+         (cond
+          (verbatim
+           (cond
+            ((and w (equal (car w) "\\end{verbatim}"))
+              (setq verbatim nil)
+              (setq u2 (append u2 w)))
+            (t
+             (setq u2 (append u2 (list x))))))
+          ((and w (equal (car w) "\\begin{verbatim}"))
+            (setq verbatim t)
+            (setq u2 (append u2 w)))
+          (t (setq u2 (append u2 w)))))
+     (setq u u2)
+     (setq u (|checkAddSpaces| u))
+     (setq u (|checkIeEg| u))
+     (setq u (|checkSplit2Words| u))
+     (|checkBalance| u)
+     (setq okBefore (null |$checkErrorFlag|))
+     (|checkArguments| u)
+     (when |$checkErrorFlag| (setq u (|checkFixCommonProblem| u)))
+     (setq v (|checkDecorate| u))
+     (setq res
+      (let ((result ""))
+       (loop for y in v
+        do (setq result (strconc result y)))
+      result))
+     (setq res (|checkAddPeriod| res))
+     (when |$checkErrorFlag| (|pp| res))
+     res))
+
+\end{chunk}
+
+\defun{checkTransformFirsts}{checkTransformFirsts}
+\calls{checkTransformFirsts}{pname}
+\calls{checkTransformFirsts}{leftTrim}
+\calls{checkTransformFirsts}{fillerSpaces}
+\calls{checkTransformFirsts}{checkTransformFirsts}
+\calls{checkTransformFirsts}{maxindex}
+\calls{checkTransformFirsts}{checkSkipToken}
+\calls{checkTransformFirsts}{checkSkipBlanks}
+\calls{checkTransformFirsts}{getMatchingRightPren}
+\calls{checkTransformFirsts}{nequal}
+\calls{checkTransformFirsts}{checkDocError}
+\calls{checkTransformFirsts}{strconc}
+\calls{checkTransformFirsts}{getl}
+\calls{checkTransformFirsts}{lassoc}
+\refsdollar{checkTransformFirsts}{checkPrenAlist}
+\refsdollar{checkTransformFirsts}{charBack}
+\begin{chunk}{defun checkTransformFirsts}
+(defun |checkTransformFirsts| (opname u margin)
+ (prog (namestring s m infixOp p open close z n i prefixOp j k firstWord)
+ (declare (special |$checkPrenAlist| |$charBack|))
+  (return 
+   (progn
+; case 1: \spad{...
+; case 2: form(args)
+    (setq namestring (pname opname))
+    (cond
+     ((equal namestring "Zero") (setq namestring "0"))
+     ((equal namestring "One")  (setq namestring "1"))
+     (t nil))
+    (cond
+     ((> margin 0) 
+      (setq s (|leftTrim| u))
+      (strconc (|fillerSpaces| margin) (|checkTransformFirsts| opname s 0)))
+     (t 
+      (setq m (maxindex u))
+      (cond
+       ((> 2 m) u)
+       ((equal (elt u 0) |$charBack|) u)
+       ((alpha-char-p (elt u 0))
+         (setq i (or (|checkSkipToken| u 0 m) (return u)))
+         (setq j (or (|checkSkipBlanks| u i m) (return u)))
+         (setq open (elt u j))
+         (cond
+          ((or (and (equal open #\[) (setq close #\]))
+               (and (equal open #\() (setq close #\))))
+            (setq k (|getMatchingRightPren| u (1+ j) open close))
+            (cond
+             ((nequal namestring (setq firstWord (substring u 0 i)))
+               (|checkDocError| 
+                 (list "Improper first word in comments: " firstWord))
+                 u)
+             ((null k)
+              (cond
+               ((equal open (|char| '[))
+                 (|checkDocError| 
+                   (list "Missing close bracket on first line: " u)))
+               (t
+                 (|checkDocError|
+                   (list "Missing close parenthesis on first line: " u))))
+                    u)
+             (t
+              (strconc "\\spad{" (substring u 0 (1+ k)) "}"
+                                 (substring u (1+ k) nil)))))
+          (t
+           (setq k (or (|checkSkipToken| u j m) (return u)))
+           (setq infixOp (intern (substring u j (- k j))))
+           (cond
+; case 3: form arg
+            ((null (getl infixOp '|Led|))
+             (cond
+              ((nequal namestring (setq firstWord (substring u 0 i)))
+               (|checkDocError|
+                (list "Improper first word in comments: " firstWord))
+               u)
+              ((and (eql (|#| (setq p (pname infixOp))) 1)
+                (setq open (elt p 0))
+                (setq close (lassoc open |$checkPrenAlist|)))
+               (setq z (|getMatchingRightPren| u (1+ k) open close))
+               (when (> z (maxindex u)) (setq z (1- k)))
+               (strconc "\\spad{" (substring u 0 (1+ z)) "}"
+                                  (substring u (1+ z) nil)))
+              (t
+               (strconc "\\spad{" (substring u 0 k) "}"
+                                  (substring u k nil)))))
+            (t
+             (setq z (or (|checkSkipBlanks| u k m) (return u)))
+             (setq n (or (|checkSkipToken| u z m) (return u)))
+             (cond
+              ((nequal namestring (pname infixOp))
+                (|checkDocError|
+                 (list "Improper initial operator in comments: " infixOp))
+                u)
+              (t
+                (strconc "\\spad{" (substring u 0 n) "}"
+                                   (substring u n nil)))))))))
+; case 4: arg op arg
+       (t
+        (setq i(or (|checkSkipToken| u 0 m) (return u)))
+        (cond
+         ((nequal namestring (setq firstWord (substring u 0 i)))
+           (|checkDocError|
+            (list "Improper first word in comments: " firstWord))
+           u)
+         (t 
+           (setq prefixOp (intern (substring u 0 i)))
+           (cond
+            ((null (getl prefixOp '|Nud|)) u)
+            (t
+             (setq j (or (|checkSkipBlanks| u i m) (return u)))
+             (cond
+; case 5: op arg
+              ((equal (elt u j) (|char| '|(|))
+                (setq j
+                 (|getMatchingRightPren| u (1+ j) (|char| '|(|) (|char| '|)|)))
+                (cond
+                 ((> j m) u)
+                 (t
+                  (strconc "\\spad{" (substring u 0 (1+ j)) "}"
+                                     (substring u (1+ j) nil)))))
+              (t
+               (setq k (or (|checkSkipToken| u j m) (return u)))
+               (cond
+                ((nequal namestring (setq firstWord (substring u 0 i)))
+                  (|checkDocError|
+                   (list "Improper first word in comments: " firstWord))
+                  u)
+                (t
+                 (strconc "\\spad{" (substring u 0 k) "}"
+                                    (substring u k nil))))))))))))))))))
+
+\end{chunk}
+
+\defun{getMatchingRightPren}{getMatchingRightPren}
+\calls{getMatchingRightPren}{maxindex}
+\begin{chunk}{defun getMatchingRightPren}
+(defun |getMatchingRightPren| (u j open close)
+ (let (m c found count)
+  (setq count 0)
+  (setq m (maxindex u))
+  (loop for i from j to m
+   do
+    (setq c (elt u i))
+    (cond
+     ((equal c close)
+      (if (eql count 0) 
+       (return (setq found i))
+       (setq count (1- count))))
+     ((equal c open)
+       (setq count (1+ count)))))
+  found))
+
+\end{chunk}
+
+\defun{checkGetMargin}{checkGetMargin}
+\calls{checkGetMargin}{firstNonBlankPosition}
+\begin{chunk}{defun checkGetMargin}
+(defun |checkGetMargin| (lines)
+ (let (x k margin)
+  (loop while lines
+   do
+    (setq x (car lines))
+    (setq k (|firstNonBlankPosition| x))
+    (unless (= k -1) (setq margin (if margin (min margin k) k)))
+    (pop lines))
+  (or margin 0)))
+
+\end{chunk}
+
+\defun{firstNonBlankPosition}{firstNonBlankPosition}
+\calls{firstNonBlankPosition}{nequal}
+\calls{firstNonBlankPosition}{maxindex}
+\begin{chunk}{defun firstNonBlankPosition}
+(defun |firstNonBlankPosition| (&rest therest)
+ (let ((x (car therest)) (options (cdr therest)) start k)
+ (declare (special |$charBlank|))
+  (setq start (or (ifcar options) 0))
+  (setq k -1)
+  (loop for i from start to (maxindex x)
+   do (when (nequal (elt x i) |$charBlank|) (return (setq k i))))
+  k))
+
+\end{chunk}
+
+\defun{checkIeEg}{checkIeEg}
+\calls{checkIeEg}{checkIeEgfun}
+\calls{checkIeEg}{nreverse}
+\begin{chunk}{defun checkIeEg}
+(defun |checkIeEg| (u)
+ (let (x verbatim z acc)
+  (setq acc nil)
+  (setq verbatim nil)
+  (loop while u
+   do
+    (setq x (car u))
+    (setq acc
+     (cond
+      ((equal x "\\end{verbatim}")
+       (setq verbatim nil)
+       (cons x acc))
+      (verbatim (cons x acc))
+      ((equal x "\\begin{verbatim}")
+       (setq verbatim t)
+       (cons x acc))
+      ((setq z (|checkIeEgfun| x))
+       (append (nreverse z) acc))
+      (t (cons x acc))))
+    (setq u (cdr u)))
+   (nreverse acc)))
+
+\end{chunk}
+
+\defun{checkIeEgfun}{checkIeEgfun}
+\calls{checkIeEgfun}{maxindex}
+\calls{checkIeEgfun}{checkIeEgFun}
+\refsdollar{checkIeEgfun}{charPeriod}
+\begin{chunk}{defun checkIeEgfun}
+(defun |checkIeEgfun| (x)
+ (let (m key firstPart result)
+ (declare (special |$charPeriod|))
+  (cond
+   ((characterp x) nil)
+   ((equal x "") nil)
+   (t
+    (setq m (maxindex x))
+    (loop for k from 0 to (- m 3) 
+     do
+      (cond
+       ((and
+          (equal (elt x (1+ k)) |$charPeriod|)
+          (equal (elt x (+ k 3)) |$charPeriod|)
+          (or
+           (and
+            (equal (elt x k) #\i)
+            (equal (elt x (+ k 2)) #\e)
+            (setq key "that is"))
+           (and
+            (equal (elt x k) #\e)
+            (equal (elt x (+ k 2)) #\g)
+            (setq key "for example"))))
+         (progn
+          (setq firstPart (when (> k 0) (cons (substring x 0 k) nil)))
+          (setq result
+           (append firstPart
+            (cons "\\spadignore{"
+             (cons (substring x k 4)
+              (cons "}"
+               (|checkIeEgfun| (substring x (+ k 4) nil)))))))))))
+    result))))
+
+\end{chunk}
+
+
+
 \chapter{Utility Functions}
 
 \defun{translabel}{translabel}
@@ -23087,6 +23864,15 @@ The current input line.
 \getchunk{defun char-eq}
 \getchunk{defun char-ne}
 \getchunk{defun checkAndDeclare}
+\getchunk{defun checkComments}
+\getchunk{defun checkDocError}
+\getchunk{defun checkDocError1}
+\getchunk{defun checkDocMessage}
+\getchunk{defun checkExtract}
+\getchunk{defun checkGetMargin}
+\getchunk{defun checkIeEg}
+\getchunk{defun checkIeEgfun}
+\getchunk{defun checkTransformFirsts}
 \getchunk{defun checkWarning}
 \getchunk{defun coerce}
 \getchunk{defun coerceable}
@@ -23096,6 +23882,8 @@ The current input line.
 \getchunk{defun coerceExtraHard}
 \getchunk{defun coerceHard}
 \getchunk{defun coerceSubset}
+\getchunk{defun collectAndDeleteAssoc}
+\getchunk{defun collectComBlock}
 \getchunk{defun comma2Tuple}
 \getchunk{defun comp}
 \getchunk{defun comp2}
@@ -23247,8 +24035,10 @@ The current input line.
 \getchunk{defun extractCodeAndConstructTriple}
 
 \getchunk{defun flattenSignatureList}
+\getchunk{defun finalizeDocumentation}
 \getchunk{defun finalizeLisplib}
 \getchunk{defun fincomblock}
+\getchunk{defun firstNonBlankPosition}
 \getchunk{defun fixUpPredicate}
 \getchunk{defun floatexpid}
 \getchunk{defun formal2Pattern}
@@ -23265,6 +24055,7 @@ The current input line.
 \getchunk{defun getFormModemaps}
 \getchunk{defun getFunctorOpsAndAtts}
 \getchunk{defun getInverseEnvironment}
+\getchunk{defun getMatchingRightPren}
 \getchunk{defun getModemap}
 \getchunk{defun getModemapList}
 \getchunk{defun getModemapListFromDomain}
@@ -23610,6 +24401,10 @@ The current input line.
 
 \getchunk{defun read-a-line}
 \getchunk{defun recompile-lib-file-if-necessary}
+\getchunk{defun recordAttributeDocumentation}
+\getchunk{defun recordDocumentation}
+\getchunk{defun recordHeaderDocumentation}
+\getchunk{defun recordSignatureDocumentation}
 \getchunk{defun replaceExitEtc}
 \getchunk{defun removeSuperfluousMapping}
 \getchunk{defun replaceVars}
@@ -23650,6 +24445,9 @@ The current input line.
 \getchunk{defun token-install}
 \getchunk{defun token-lookahead-type}
 \getchunk{defun token-print}
+\getchunk{defun transDoc}
+\getchunk{defun transDocList}
+\getchunk{defun transformAndRecheckComments}
 \getchunk{defun transformOperationAlist}
 \getchunk{defun transImplementation}
 \getchunk{defun transIs}
