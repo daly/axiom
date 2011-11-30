@@ -441,13 +441,13 @@
 (defun makeHelpFiles ()
  (let ((AXIOM (si::getenv "AXIOM")) (BOOKS (si::getenv "BOOKS")) HELP PAT)
   (setq HELP (concatenate 'string AXIOM "/doc/spadhelp"))
-  (setq PAT1 ".help")
-  (setq PAT2 ".help>>")
-  (allchunks PAT1 (concatenate 'string BOOKS "/bookvol5.pamphlet") HELP nil)
-  (allchunks PAT2 (concatenate 'string BOOKS "/bookvol10.2.pamphlet") HELP t)
-  (allchunks PAT2 (concatenate 'string BOOKS "/bookvol10.3.pamphlet") HELP t)
-  (allchunks PAT2 (concatenate 'string BOOKS "/bookvol10.4.pamphlet") HELP t)
-  (allchunks PAT2 (concatenate 'string BOOKS "/bookvol10.5.pamphlet") HELP t)))
+  (setq PAT ".help")
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol5.pamphlet") HELP nil)
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.2.pamphlet") HELP nil)
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.3.pamphlet") HELP nil)
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.4.pamphlet") HELP nil)
+  (allchunks PAT
+   (concatenate 'string BOOKS "/bookvol10.5.pamphlet") HELP nil)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; 13 makeInputFiles
@@ -468,11 +468,12 @@
 (defun makeInputFiles ()
  (let ((SPD (si::getenv "SPD")) (BOOKS (si::getenv "BOOKS")) INPUT PAT)
   (setq INPUT (concatenate 'string SPD "/int/input"))
-  (setq PAT ".input>>")
-  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.2.pamphlet") INPUT t)
-  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.3.pamphlet") INPUT t)
-  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.4.pamphlet") INPUT t)
-  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.5.pamphlet") INPUT t)))
+  (setq PAT ".input")
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.2.pamphlet") INPUT nil)
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.3.pamphlet") INPUT nil)
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol10.4.pamphlet") INPUT nil)
+  (allchunks PAT
+   (concatenate 'string BOOKS "/bookvol10.5.pamphlet") INPUT nil)))
 
 
 
