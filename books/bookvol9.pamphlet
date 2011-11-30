@@ -19700,6 +19700,27 @@ deleting entries from u assumes that the first element is useless
 
 \end{chunk}
 
+\defun{removeBackslashes}{removeBackslashes}
+\calls{removeBackslashes}{charPosition}
+\calls{removeBackslashes}{removeBackslashes}
+\calls{removeBackslashes}{strconc}
+\calls{removeBackslashes}{length}
+\refsdollar{removeBackslashes}{charBack}
+\begin{chunk}{defun removeBackslashes}
+(defun |removeBackslashes| (s)
+ (let (k)
+ (declare (special |$charBack|))
+  (cond
+   ((string= s "") "")
+   ((> (|#| s) (setq k (|charPosition| |$charBack| s 0)))
+    (if (eql k 0) 
+     (|removeBackslashes| (substring s 1 nil))
+     (strconc (substring s 0 k)
+              (|removeBackslashes| (substring s (1+ k) nil)))))
+   (t s))))
+
+\end{chunk}
+
 \defun{checkTexht}{checkTexht}
 \calls{checkTexht}{ifcar}
 \calls{checkTexht}{checkDocError}
@@ -20510,6 +20531,758 @@ This returns a line beginning with right brace
               (cons "}"
                (|checkIeEgfun| (substring x (+ k 4) nil)))))))))))
     result))))
+
+\end{chunk}
+
+\defun{checkSplitBrace}{checkSplitBrace}
+\calls{checkSplitBrace}{charp}
+\calls{checkSplitBrace}{length}
+\calls{checkSplitBrace}{checkSplitBackslash}
+\calls{checkSplitBrace}{checkSplitBrace}
+\calls{checkSplitBrace}{checkSplitOn}
+\calls{checkSplitBrace}{checkSplitPunctuation}
+\begin{chunk}{defun checkSplitBrace}
+(defun |checkSplitBrace| (x)
+ (let (m u)
+  (cond
+   ((charp x) (list x))
+   ((eql (|#| x) 1) (list (elt x 0)))
+   ((and (setq u (|checkSplitBackslash| x)) (cdr u))
+     (let (result)
+      (loop for y in u do (append result (|checkSplitBrace| y)))
+      result))
+    (t
+      (setq m (maxindex x))
+      (cond
+        ((and (setq u (|checkSplitOn| x)) (cdr u))
+         (let (result)
+          (loop for y in u do (append result (|checkSplitBrace| y)))
+          result))
+        ((and (setq u (|checkSplitPunctuation| x)) (cdr u))
+         (let (result)
+          (loop for y in u do (append result (|checkSplitBrace| y)))
+          result))
+        (t (list x)))))))
+
+\end{chunk}
+
+\defun{checkSplitBackslash}{checkSplitBackslash}
+\calls{checkSplitBackslash}{checkSplitBackslash}
+\calls{checkSplitBackslash}{maxindex}
+\calls{checkSplitBackslash}{charPosition}
+\refsdollar{checkSplitBackslash}{charBack}
+\begin{chunk}{defun checkSplitBackslash}
+(defun |checkSplitBackslash| (x)
+ (let (m k u v)
+ (declare (special |$charBack|))
+  (cond
+   ((null (stringp x)) (list x))
+   (t
+    (setq m (maxindex x))
+    (cond
+     ((> m (setq k (|charPosition| |$charBack| x 0)))
+      (cond
+       ((or (eql m 1) (alpha-char-p (elt x (1+ k)))) ;starts with backslash so
+        (if (> m (setq k (|charPosition| |$charBack| x 1))) 
+         ; yes, another backslash
+         (cons (substring x 0 k) (|checkSplitBackslash| (substring x k nil)))
+         ; no, just return the line
+         (list x)))
+       ((eql k 0)
+         ; starts with backspace but x.1 is not a letter; break it up
+         (cons (substring x 0 2)
+           (|checkSplitBackslash| (substring x 2 nil))))
+       (t 
+         (setq u (substring x 0 k))
+         (setq v (substring x k 2))
+         (if (= (1+ k) m)
+            (list u v)
+           (cons u
+            (cons v
+             (|checkSplitBackslash|
+              (substring x (+ k 2) nil))))))))
+     (t (list x)))))))
+
+\end{chunk}
+
+\defun{checkSplitPunctuation}{checkSplitPunctuation}
+\calls{checkSplitPunctuation}{charp}
+\calls{checkSplitPunctuation}{maxindex}
+\calls{checkSplitPunctuation}{checkSplitPunctuation}
+\calls{checkSplitPunctuation}{charPosition}
+\calls{checkSplitPunctuation}{hget}
+\refsdollar{checkSplitPunctuation}{charDash}
+\refsdollar{checkSplitPunctuation}{htMacroTable}
+\refsdollar{checkSplitPunctuation}{charQuote}
+\refsdollar{checkSplitPunctuation}{charPeriod}
+\refsdollar{checkSplitPunctuation}{charSemiColon}
+\refsdollar{checkSplitPunctuation}{charComma}
+\refsdollar{checkSplitPunctuation}{charBack}
+\begin{chunk}{defun checkSplitPunctuation}
+(defun |checkSplitPunctuation| (x)
+ (let (m lastchar v k u)
+ (declare (special |$charDash| |$htMacroTable| |$charBack| |$charQuote|
+                   |$charComma| |$charSemiColon| |$charPeriod|))
+  (cond
+   ((charp x) (list x))
+   (t
+     (setq m (maxindex x))
+     (cond
+      ((> 1 m) (list x))
+      (t
+       (setq lastchar (elt x m))
+       (cond
+        ((and (equal lastchar |$charPeriod|)
+              (equal (elt x (1- m)) |$charPeriod|))
+          (cond
+           ((eql m 1) (list x))
+           ((and (> m 3) (equal (elt x (- m 2)) |$charPeriod|))
+             (append (|checkSplitPunctuation| (substring x 0 (- m 2)))
+                     (list "...")))
+           (t
+             (append (|checkSplitPunctuation| (substring x 0 (1- m)))
+                     (list "..")))))
+        ((or (equal lastchar |$charPeriod|)
+             (equal lastchar |$charSemiColon|)
+             (equal lastchar |$charComma|))
+          (list (substring x 0 m) lastchar))
+        ((and (> m 1) (equal (elt x (1- m)) |$charQuote|))
+          (list (substring x 0 (1- m)) (substring x (1- m) nil)))
+        ((> m (setq k (|charPosition| |$charBack| x 0)))
+          (cond
+           ((eql k 0)
+            (cond
+             ((or (eql m 1) (hget |$htMacroTable| x) (alpha-char-p (elt x 1)))
+               (list x))
+             (t
+              (setq v (substring x 2 nil))
+                (cons (substring x 0 2) (|checkSplitPunctuation| v)))))
+           (t
+             (setq u (substring x 0 k))
+             (setq v (substring x k nil))
+             (append (|checkSplitPunctuation| u)
+                     (|checkSplitPunctuation| v)))))
+        ((> m (setq k (|charPosition| |$charDash| x 1)))
+             (setq u (substring x (1+ k) nil))
+             (cons (substring x 0 k)
+               (cons |$charDash| (|checkSplitPunctuation| u))))
+        (t
+         (list x)))))))))
+
+\end{chunk}
+
+\defun{checkSplitOn}{checkSplitOn}
+\calls{checkSplitOn}{checkSplitOn}
+\calls{checkSplitOn}{charp}
+\calls{checkSplitOn}{maxindex}
+\calls{checkSplitOn}{charPosition}
+\refsdollar{checkSplitOn}{charBack}
+\refsdollar{checkSplitOn}{charSplitList}
+\begin{chunk}{defun checkSplitOn}
+(defun |checkSplitOn| (x)
+ (let (m char k z)
+ (declare (special |$charBack| |$charSplitList|))
+  (cond
+   ((charp x) (list x))
+   (t
+    (setq z |$charSplitList|)
+    (setq m (maxindex x))
+    (loop while z
+     do
+      (setq char (car z))
+      (cond
+       ((and (eql m 0) (equal (elt x 0) char))
+         (return (setq k -1)))
+       (t
+         (setq k (|charPosition| char x 0))
+         (cond
+          ((and (> k 0) (equal (elt x (1- k)) |$charBack|)) (list x))
+          ((<= k m) (return k)))))
+      (pop z))
+    (cond
+     ((null z) (list x))
+     ((eql k -1) (list char))
+     ((eql k 0) (list char (substring x 1 nil)))
+     ((eql k (maxindex x)) (list (substring x 0 k) char))
+     (t
+       (cons (substring x 0 k)
+             (cons char (|checkSplitOn| (substring x (1+ k) nil))))))))))
+
+\end{chunk}
+
+\defun{checkNumOfArgs}{checkNumOfArgs}
+A nil return implies that the argument list length does not match
+\calls{checkNumOfArgs}{opOf}
+\calls{checkNumOfArgs}{constructor?}
+\calls{checkNumOfArgs}{abbreviation?}
+\calls{checkNumOfArgs}{getdatabase}
+\begin{chunk}{defun checkNumOfArgs}
+(defun |checkNumOfArgs| (conform)
+ (let (conname)
+  (setq conname (|opOf| conform))
+  (when (or (|constructor?| conname) (setq conname (|abbreviation?| conname)))
+     (|#| (getdatabase conname 'constructorargs)))))
+
+\end{chunk}
+
+\defun{checkRemoveComments}{checkRemoveComments}
+\calls{checkRemoveComments}{checkTrimCommented}
+\begin{chunk}{defun checkRemoveComments}
+(defun |checkRemoveComments| (lines)
+ (let (line acc)
+  (loop while lines
+   do
+   (setq line (|checkTrimCommented| (car lines)))
+   (when (>= (|firstNonBlankPosition| line) 0) (push line acc))
+   (pop lines))
+  (nreverse acc)))
+
+\end{chunk}
+
+\defun{checkTrimCommented}{checkTrimCommented}
+\calls{checkTrimCommented}{length}
+\calls{checkTrimCommented}{htcharPosition}
+\calls{checkTrimCommented}{nequal}
+\begin{chunk}{defun checkTrimCommented}
+(defun |checkTrimCommented| (line)
+ (let (n k)
+  (setq n (|#| line))
+  (setq k (|htcharPosition| (|char| '%) line 0))
+  (cond
+   ((eql k 0) "")
+   ((or (>= k (1- n)) (nequal (elt line (1+ k)) #\%)) line)
+   ((> (|#| line) k) (substring line 0 k))
+   (t line))))
+
+\end{chunk}
+
+\defun{htcharPosition}{htcharPosition}
+\calls{htcharPosition}{length}
+\calls{htcharPosition}{charPosition}
+\calls{htcharPosition}{nequal}
+\calls{htcharPosition}{htcharPosition}
+\refsdollar{htcharPosition}{charBack}
+\begin{chunk}{defun htcharPosition}
+(defun |htcharPosition| (char line i)
+ (let (m k)
+ (declare (special |$charBack|))
+  (setq m (|#| line))
+  (setq k (|charPosition| char line i))
+  (cond
+   ((eql k m) k)
+   ((> k 0)
+    (if (nequal (elt line (1- k)) |$charBack|)
+     k
+     (|htcharPosition| char line (1+ k))))
+   (t 0))))
+
+\end{chunk}
+
+\defun{checkAddMacros}{checkAddMacros}
+\calls{checkAddMacros}{lassoc}
+\calls{checkAddMacros}{nreverse}
+\refsdollar{checkAddMacros}{HTmacs}
+\begin{chunk}{defun checkAddMacros}
+(defun |checkAddMacros| (u)
+ (let (x verbatim y acc)
+ (declare (special |$HTmacs|))
+  (loop while u
+   do
+   (setq x (car u))
+   (setq acc
+    (cond
+     ((string= x "\\end{verbatim}")
+       (setq verbatim nil)
+       (cons x acc))
+     (verbatim 
+       (cons x acc))
+     ((string= x "\\begin{verbatim}")
+       (setq verbatim t)
+       (cons x acc))
+     ((setq y (lassoc x |$HTmacs|))
+       (append y acc))
+     (t (cons x acc))))
+   (pop u))
+  (nreverse acc)))
+
+\end{chunk}
+
+\defun{checkIndentedLines}{checkIndentedLines}
+\calls{checkIndentedLines}{firstNonBlankPosition}
+\calls{checkIndentedLines}{strconc}
+\refsdollar{checkIndentedLines}{charFauxNewline}
+\begin{chunk}{defun checkIndentedLines}
+(defun |checkIndentedLines| (u margin)
+ (let (k s verbatim u2)
+ (declare (special |$charFauxNewline|))
+  (loop for x in u
+   do
+    (setq k (|firstNonBlankPosition| x))
+    (cond
+     ((eql k -1)
+      (if verbatim 
+       (setq u2 (append u2 (list |$charFauxNewline|)))
+       (setq u2 (append u2 (list "\\blankline ")))))
+     (t 
+      (setq s (substring x k nil))
+      (cond
+       ((string= s "\\begin{verbatim}")
+         (setq verbatim t)
+         (setq u2 (append u2 (list s))))
+       ((string= s "\\end{verbatim}")
+         (setq verbatim nil)
+         (setq u2 (append u2 (list s))))
+       (verbatim
+         (setq u2 (append u2 (list (substring x margin nil)))))
+       ((eql margin k)
+         (setq u2 (append u2 (list s))))
+       (t
+         (setq u2 
+          (append u2 
+           (list (strconc "\\indented{" (stringimage (- k margin))
+                          "}{" (|checkAddSpaceSegments| s 0) "}")))))))))
+  u2))
+
+\end{chunk}
+
+\defun{newString2Words}{newString2Words}
+\calls{newString2Words}{newWordFrom}
+\calls{newString2Words}{nreverse0}
+\begin{chunk}{defun newString2Words}
+(defun |newString2Words| (z)
+ (let (m tmp1 w i result)
+  (cond
+   ((null (stringp z)) (list z))
+   (t
+    (setq m (maxindex z))
+    (cond
+     ((eql m -1) nil)
+     (t
+      (setq i 0)
+      (do () ; [w while newWordFrom(l,i,m) is [w,i]]
+          ((null (progn
+                  (setq tmp1 (|newWordFrom| z i m))
+                  (and (consp tmp1)
+                       (progn
+                        (setq w (qcar tmp1))
+                        (and (consp (qcdr tmp1))
+                             (eq (qcddr tmp1) nil)
+                             (progn
+                              (setq i (qcadr tmp1))
+                              t))))))
+             (nreverse0 result))
+          (setq result (cons (qcar tmp1) result)))))))))
+
+\end{chunk}
+
+\defun{newWordFrom}{newWordFrom}
+\refsdollar{newWordFrom}{stringFauxNewline}
+\refsdollar{newWordFrom}{charBlank}
+\refsdollar{newWordFrom}{charFauxNewline}
+\begin{chunk}{defun newWordFrom}
+(defun |newWordFrom| (z i m)
+ (let (ch done buf)
+ (declare (special |$charFauxNewline| |$charBlank| |$stringFauxNewline|))
+  (loop while (and (<= i m) (char= (elt z i) #\space)) do (incf i))
+  (cond
+   ((> i m) nil)
+   (t
+    (setq buf "")
+    (setq ch (elt z i))
+    (cond
+     ((equal ch |$charFauxNewline|)
+       (list |$stringFauxNewline| (1+ i)))
+     (t
+      (setq done nil)
+      (loop while (and (<= i m) (null done)) 
+       do
+        (setq ch (elt z i))
+        (cond
+         ((or (equal ch |$charBlank|) (equal ch |$charFauxNewline|))
+           (setq done t))
+         (t
+          (setq buf (strconc buf ch))
+          (setq i (1+ i)))))
+      (list buf i)))))))
+
+\end{chunk}
+
+\defun{checkGetArgs}{checkGetArgs}
+\calls{checkGetArgs}{maxindex}
+\calls{checkGetArgs}{firstNonBlankPosition}
+\calls{checkGetArgs}{checkGetArgs}
+\calls{checkGetArgs}{stringPrefix?}
+\calls{checkGetArgs}{getMatchingRightPren}
+\calls{checkGetArgs}{charPosition}
+\calls{checkGetArgs}{nequal}
+\calls{checkGetArgs}{trimString}
+\refsdollar{checkGetArgs}{charComma}
+\begin{chunk}{defun checkGetArgs}
+(defun |checkGetArgs| (u)
+ (let (m k acc i)
+ (declare (special |$charComma|))
+  (cond
+   ((null (stringp u)) nil)
+   (t
+    (setq m (maxindex u))
+    (setq k (|firstNonBlankPosition| u))
+    (cond
+     ((> k 0)
+      (|checkGetArgs| (substring u k nil)))
+     ((|stringPrefix?| "\\spad{" u)
+      (setq k (or (|getMatchingRightPren| u 6 #\{ #\}) m))
+      (|checkGetArgs| (substring u 6 (- k 6))))
+     ((> (setq i (|charPosition| #\( u 0)) m)
+      nil)
+     ((nequal (elt u m) #\))
+      nil)
+     (t
+      (do ()
+          ((null (> m (setq k (|charPosition| |$charComma| u (1+ i))))) nil)
+        (setq acc 
+         (cons (|trimString| (substring u (1+ i) (1- (- k i)))) acc))
+        (setq i k))
+      (nreverse (cons (substring u (1+ i) (1- (- m i))) acc))))))))
+
+\end{chunk}
+
+\defun{checkAddSpaceSegments}{checkAddSpaceSegments}
+\calls{checkAddSpaceSegments}{checkAddSpaceSegments}
+\calls{checkAddSpaceSegments}{maxindex}
+\calls{checkAddSpaceSegments}{charPosition}
+\calls{checkAddSpaceSegments}{strconc}
+\refsdollar{checkAddSpaceSegments}{charBlank}
+\begin{chunk}{defun checkAddSpaceSegments}
+(defun |checkAddSpaceSegments| (u k)
+ (let (m i j n)
+ (declare (special |$charBlank|))
+  (setq m (maxindex u))
+  (setq i (|charPosition| |$charBlank| u k))
+  (cond
+   ((> i m) u)
+   (t
+    (setq j i)
+    (loop while (and (incf j) (char= (elt u j) #\space)))
+    (setq n (- j i)) ; number of blanks
+    (if (> n 1)
+     (strconc (substring u 0 i) "\\space{" (stringimage n) "}"
+               (|checkAddSpaceSegments| (substring u (+ i n) nil) 0))
+     (|checkAddSpaceSegments| u j))))))
+
+\end{chunk}
+
+\defun{checkTrim}{checkTrim}
+\calls{checkTrim}{charPosition}
+\calls{checkTrim}{nequal}
+\calls{checkTrim}{systemError}
+\calls{checkTrim}{checkDocError}
+\refsdollar{checkTrim}{charBlank}
+\refsdollar{checkTrim}{x}
+\refsdollar{checkTrim}{charPlus}
+\begin{chunk}{defun checkTrim}
+(defun |checkTrim| (|$x| lines)
+ (declare (special |$x|))
+ (labels (
+  (trim (s)
+   (let (k)
+   (declare (special |$charBlank|))
+    (setq k (wherePP s))
+    (substring s (+ k 2) nil)))
+  (wherePP (u)
+   (let (k)
+   (declare (special |$charPlus|))
+    (setq k (|charPosition| |$charPlus| u 0))
+    (if (or (eql k (|#| u))
+            (nequal (|charPosition| |$charPlus| u (1+ k)) (1+ k)))
+      (|systemError| " Improper comment found")
+      k))))
+ (let (j s)
+  (setq s  (list (wherePP (car lines))))
+  (loop for x in (rest lines)
+   do
+    (setq j (wherePP x))
+    (unless (member j s)
+      (|checkDocError| (list |$x| " has varying indentation levels"))
+      (setq s (cons j s))))
+  (loop for y in lines
+   collect (trim y)))))
+
+\end{chunk}
+
+\defun{checkExtract}{checkExtract}
+\calls{checkExtract}{firstNonBlankPosition}
+\calls{checkExtract}{substring?}
+\calls{checkExtract}{charPosition}
+\calls{checkExtract}{length}
+\begin{chunk}{defun checkExtract}
+(defun |checkExtract| (header lines)
+ (let (line u margin firstLines m k j i acc)
+  (loop while lines
+   do
+    (setq line (car lines))
+    (setq k (|firstNonBlankPosition| line)) ; gives margin of description
+    (if (|substring?| header line k) 
+      (return nil)
+      (setq lines (cdr lines))))
+  (cond
+   ((null lines) nil)
+   (t
+    (setq u (car lines))
+    (setq j (|charPosition| #\: u k))
+    (setq margin k)
+    (setq firstLines
+     (if (nequal (setq k (|firstNonBlankPosition| u (1+ j))) -1)
+       (cons (substring u (1+ j) nil) (cdr lines))
+       (cdr lines)))
+    ; now look for another header; if found skip all rest of these lines
+    (setq acc nil)
+    (loop for line in firstLines
+     do
+      (setq m (|#| line))
+      (cond
+       ((eql (setq k (|firstNonBlankPosition| line)) -1) '|skip|)
+       ((> k margin) '|skip|)
+       ((null (upper-case-p (elt line k))) '|skip|)
+       ((equal (setq j (|charPosition| #\: line k)) m) '|skip|)
+       ((> j (setq i (|charPosition| #\space line (1+ k)))) '|skip|)
+       (t (return nil)))
+      (setq acc (cons line acc)))
+    (nreverse acc)))))
+
+\end{chunk}
+
+\defun{checkFixCommonProblem}{checkFixCommonProblem}
+\calls{checkFixCommonProblem}{member}
+\calls{checkFixCommonProblem}{ifcar}
+\calls{checkFixCommonProblem}{ifcdr}
+\calls{checkFixCommonProblem}{nequal}
+\calls{checkFixCommonProblem}{checkDocError}
+\refsdollar{checkFixCommonProblem}{charLbrace}
+\refsdollar{checkFixCommonProblem}{HTspadmacros}
+\begin{chunk}{defun checkFixCommonProblem}
+(defun |checkFixCommonProblem| (u)
+ (let (x next acc)
+ (declare (special |$charLbrace| |$HTspadmacros|))
+  (loop while u
+   do
+    (setq x (car u))
+    (cond
+     ((and (equal x |$charLbrace|)
+           (|member| (setq next (ifcar (cdr u))) |$HTspadmacros|)
+           (nequal (ifcar (ifcdr (cdr u))) |$charLbrace|))
+       (|checkDocError| (list "Reversing " next " and left brace"))
+       (setq acc (cons |$charLbrace| (cons next |acc|)))
+       (setq u (cddr u)))
+     (t
+      (setq acc (cons x acc))
+      (setq u (cdr u)))))
+  (nreverse acc)))
+
+\end{chunk}
+
+\defun{checkDecorate}{checkDecorate}
+\calls{checkDecorate}{checkDocError}
+\calls{checkDecorate}{member}
+\calls{checkDecorate}{checkAddBackSlashes}
+\calls{checkDecorate}{hasNoVowels}
+\refsdollar{checkDecorate}{checkingXmptex?}
+\refsdollar{checkDecorate}{charExclusions}
+\refsdollar{checkDecorate}{argl}
+\refsdollar{checkDecorate}{charBack}
+\refsdollar{checkDecorate}{charRbrace}
+\refsdollar{checkDecorate}{charLbrace}
+\begin{chunk}{defun checkDecorate}
+(defun |checkDecorate| (u)
+ (let (x count mathSymbolsOk spadflag verbatim v xcount acc)
+ (declare (special |$charLbrace| |$charRbrace| |$charBack| |$argl|
+                   |$charExclusions| |$checkingXmptex?|))
+  (setq count 0)
+  (loop while u 
+   do
+    (setq x (car u))
+    (cond
+     ((null verbatim)
+      (cond
+       ((string= x "\\em")
+        (cond
+         ((> count 0)
+           (setq mathSymbolsOk (1- count))
+           (setq spadflag (1- count)))
+         (t
+          (|checkDocError| (list "\\em must be enclosed in braces"))))))
+      (when (|member| x '("\\spadpaste" "\\spad" "\\spadop"))
+        (setq mathSymbolsOk count))
+      (cond
+       ((|member| x '("\\s" "\\spadtype" "\\spadsys" "\\example" "\\andexample"
+                      "\\spadop" "\\spad" "\\spadignore" "\\spadpaste"
+                      "\\spadcommand" "\\footnote"))
+         (setq spadflag count))
+       ((equal x |$charLbrace|)
+         (setq count (1+ count)))
+       ((equal x |$charRbrace|)
+         (setq count (1- count))
+         (when (eql mathSymbolsOk count) (setq mathSymbolsOk nil))
+         (when (eql spadflag count) (setq spadflag nil)))
+       ((and (null |mathSymbolsOk|)
+             (|member| x '("+" "*" "=" "==" "->")))
+        (when |$checkingXmptex?|
+          (|checkDocError| 
+           (list '|Symbol | x " appearing outside \\spad{}")))))))
+    (setq acc
+     (cond
+      ((string= x "\\end{verbatim}")
+        (setq verbatim nil)
+        (cons x acc))
+      (verbatim (cons x acc))
+      ((string= x "\\begin{verbatim}")
+       (setq verbatim t)
+       (cons x acc))
+      ((and (string= x "\\begin")
+            (equal (car (setq v (ifcdr u))) |$charLbrace|)
+            (string= (car (setq v (ifcdr v))) "detail")
+            (equal (car (setq v (ifcdr v))) |$charRbrace|))
+        (setq u v)
+        (cons "\\blankline " acc))
+      ((and (string= x "\\end")
+            (equal (car (setq v (ifcdr u))) |$charLbrace|)
+            (string= (car (setq v (ifcdr v))) "detail")
+            (equal (car (setq v (ifcdr v))) |$charRbrace|))
+        (setq u v) 
+        acc)
+      ((or (char= x #\$) (string= x "$"))
+        (cons "\\$" acc))
+      ((or (char= x #\%) (string= x "%"))
+        (cons "\\%" acc))
+      ((or (char= x #\,) (string= x ","))
+        (cons ",{}" acc))
+      ((string= x "\\spad")
+        (cons "\\spad" acc))
+      ((and (stringp x) (digitp (elt x 0)))
+        (cons x acc))
+      ((and (null spadflag)
+            (or (and (charp x) 
+                     (alpha-char-p x) 
+                     (null (member x |$charExclusions|)))
+                (|member| x |$argl|)))
+        (cons |$charRbrace| (cons x (cons |$charLbrace| (cons "\\spad" acc)))))
+      ((and (null spadflag)
+            (or (and (stringp x)
+                     (null (equal (elt x 0) |$charBack|))
+                     (digitp (elt x (maxindex x))))
+                (|member| x '("true" "false"))))
+        (cons |$charRbrace| (cons x (cons |$charLbrace| (cons "\\spad" acc)))))
+      (t
+       (setq xcount (|#| x))
+       (cond
+        ((and (eql xcount 3)
+              (char= (elt x 1) #\t)
+              (char= (elt x 2) #\h))
+          (cons "th" (cons |$charRbrace|
+            (cons (elt x 0) (cons |$charLbrace| (cons "\\spad" acc))))))
+        ((and (eql xcount 4)
+              (char= (elt x 1) #\-)
+              (char= (elt x 2) #\t)
+              (char= (elt x 3) #\h))
+         (cons "-th" (cons |$charRbrace|
+           (cons (elt x 0) (cons |$charLbrace| (cons "\\spad" acc))))))
+        ((or (and (eql xcount 2)
+                  (char= (elt x 1) #\i))
+             (and (null spadflag)
+                  (> xcount 0)
+                  (> 4 xcount)
+                  (null (|member| x '("th" "rd" "st")))
+                  (|hasNoVowels| x)))
+         (cons |$charRbrace|
+           (cons x (cons |$charLbrace| (cons "\\spad" acc)))))
+        (t
+         (cons (|checkAddBackSlashes| x) acc))))))
+    (setq u (cdr u)))
+  (nreverse acc)))
+
+\end{chunk}
+
+\defun{hasNoVowels}{hasNoVowels}
+\calls{hasNoVowels}{maxindex}
+\begin{chunk}{defun hasNoVowels}
+(defun |hasNoVowels| (x)
+ (labels (
+  (isVowel (c)
+   (or (eq c #\a) (eq c #\e) (eq c #\i) (eq c #\o) (eq c #\u)
+       (eq c #\A) (eq c #\E) (eq c #\I) (eq c #\O) (eq c #\U))))
+ (let (max)
+  (setq max (maxindex x))
+  (cond
+   ((char= (elt x max) #\y) nil)
+   (t
+    (let ((result t))
+     (loop for i from 0 to max
+      do (setq result (and result (null (isVowel (elt x i))))))
+     result))))))
+
+\end{chunk}
+
+\defun{checkAddBackSlashes}{checkAddBackSlashes}
+\calls{checkAddBackSlashes}{strconc}
+\calls{checkAddBackSlashes}{maxindex}
+\calls{checkAddBackSlashes}{checkAddBackSlashes}
+\refsdollar{checkAddBackSlashes}{charBack}
+\refsdollar{checkAddBackSlashes}{charEscapeList}
+\begin{chunk}{defun checkAddBackSlashes}
+(defun |checkAddBackSlashes| (s)
+ (let (c m char insertIndex k)
+ (declare (special |$charBack| |$charEscapeList|))
+  (cond
+   ((or (and (charp s) (setq c s))
+        (and (eql (|#| s) 1) (setq c (elt s 0))))
+     (if (member s |$charEscapeList|)
+      (strconc |$charBack| c)
+      s))
+    (t
+     (setq k 0)
+     (setq m (maxindex s))
+     (setq insertIndex nil)
+     (loop while (< k m)
+      do
+       (setq char (elt s k))
+       (cond
+        ((char= char |$charBack|) (setq k (+ k 2)))
+        ((member char |$charEscapeList|) (return (setq insertIndex k))))
+        (setq k (1+ k)))
+     (cond
+      (insertIndex
+       (|checkAddBackSlashes|
+        (strconc (substring s 0 insertIndex) |$charBack| (elt s k)
+                 (substring s (1+ insertIndex) nil))))
+      (T s))))))
+
+\end{chunk}
+
+\defun{checkAddSpaces}{checkAddSpaces}
+\refsdollar{checkAddSpaces}{charBlank}
+\refsdollar{checkAddSpaces}{charFauxNewline}
+\begin{chunk}{defun checkAddSpaces}
+(defun |checkAddSpaces| (u)
+ (let (u2 space)
+ (declare (special |$charBlank| |$charFauxNewline|))
+  (cond
+   ((null u) nil)
+   ((null (cdr u)) u)
+   (t
+    (setq space |$charBlank|) 
+    (setq i 0)
+    (loop for f in u 
+     do
+      (incf i)
+      (when (string= f "\\begin{verbatim}")
+        (setq space |$charFauxNewline|)
+        (unless u2 (setq u2 (list space))))
+      (if (> i 1) 
+        (setq u2 (append u2 (list space f)))
+        (setq u2 (append u2 (list f))))
+      (when (string= f "\\end{verbatim}")
+        (setq u2 (append u2 (list space)))
+        (setq space |$charBlank|)))
+    u2))))
 
 \end{chunk}
 
@@ -24451,34 +25224,51 @@ The current input line.
 \getchunk{defun canReturn}
 \getchunk{defun char-eq}
 \getchunk{defun char-ne}
+\getchunk{defun checkAddBackSlashes}
+\getchunk{defun checkAddMacros}
 \getchunk{defun checkAddPeriod}
+\getchunk{defun checkAddSpaceSegments}
 \getchunk{defun checkAlphabetic}
 \getchunk{defun checkAndDeclare}
 \getchunk{defun checkArguments}
 \getchunk{defun checkBalance}
 \getchunk{defun checkBeginEnd}
 \getchunk{defun checkComments}
+\getchunk{defun checkDecorate}
 \getchunk{defun checkDecorateForHt}
 \getchunk{defun checkDocError}
 \getchunk{defun checkDocError1}
 \getchunk{defun checkDocMessage}
+\getchunk{defun checkExtract}
+\getchunk{defun checkFixCommonProblem}
+\getchunk{defun checkGetArgs}
 \getchunk{defun checkGetMargin}
 \getchunk{defun checkGetParse}
 \getchunk{defun checkHTargs}
 \getchunk{defun checkIeEg}
 \getchunk{defun checkIeEgfun}
+\getchunk{defun checkIndentedLines}
 \getchunk{defun checkLookForLeftBrace}
 \getchunk{defun checkLookForRightBrace}
+\getchunk{defun checkNumOfArgs}
 \getchunk{defun checkTexht}
 \getchunk{defun checkRecordHash}
+\getchunk{defun checkRemoveComments}
 \getchunk{defun checkRewrite}
 \getchunk{defun checkSayBracket}
 \getchunk{defun checkSkipBlanks}
 \getchunk{defun checkSkipIdentifierToken}
 \getchunk{defun checkSkipOpToken}
 \getchunk{defun checkSkipToken}
+\getchunk{defun checkAddSpaces}
+\getchunk{defun checkSplitBackslash}
+\getchunk{defun checkSplitBrace}
+\getchunk{defun checkSplitOn}
+\getchunk{defun checkSplitPunctuation}
 \getchunk{defun checkSplit2Words}
 \getchunk{defun checkTransformFirsts}
+\getchunk{defun checkTrim}
+\getchunk{defun checkTrimCommented}
 \getchunk{defun checkWarning}
 \getchunk{defun coerce}
 \getchunk{defun coerceable}
@@ -24690,8 +25480,10 @@ The current input line.
 \getchunk{defun hasAplExtension}
 \getchunk{defun hasFormalMapVariable}
 \getchunk{defun hasFullSignature}
+\getchunk{defun hasNoVowels}
 \getchunk{defun hasSigInTargetCategory}
 \getchunk{defun hasType}
+\getchunk{defun htcharPosition}
 
 \getchunk{defun indent-pos}
 \getchunk{defun infixtok}
@@ -24765,10 +25557,12 @@ The current input line.
 \getchunk{defun mustInstantiate}
 
 \getchunk{defun ncINTERPFILE}
+\getchunk{defun newWordFrom}
 \getchunk{defun next-char}
 \getchunk{defun next-line}
 \getchunk{defun next-tab-loc}
 \getchunk{defun next-token}
+\getchunk{defun newString2Words}
 \getchunk{defun new2OldLisp}
 \getchunk{defun nonblankloc}
 \getchunk{defun NRTassocIndex}
@@ -25012,6 +25806,7 @@ The current input line.
 \getchunk{defun recordHeaderDocumentation}
 \getchunk{defun recordSignatureDocumentation}
 \getchunk{defun replaceExitEtc}
+\getchunk{defun removeBackslashes}
 \getchunk{defun removeSuperfluousMapping}
 \getchunk{defun replaceVars}
 \getchunk{defun resolve}
