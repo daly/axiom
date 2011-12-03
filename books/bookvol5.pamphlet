@@ -636,10 +636,12 @@ information is initialized.
 \calls{fillerSpaces}{ifcar}
 \begin{chunk}{defun fillerSpaces}
 (defun |fillerSpaces| (&rest arglist &aux charPart n)
- (dsetq (n . charPart) arglist)
- (if (<= n 0) 
-  ""
-  (make-string n :initial-element (character (or (ifcar charPart) " ")))))
+ (let (n charPart)
+  (setq n (car arglist))
+  (setq charPart (cdr arglist))
+  (if (<= n 0) 
+   ""
+   (make-string n :initial-element (character (or (ifcar charPart) " "))))))
 
 \end{chunk}
 
@@ -870,7 +872,7 @@ on this message after the fact. The cmpnote function is used nowhere
 else in GCL so stepping on the function call seems best. We're unhappy
 with this hack and will try to convince the GCL crowd to fix this.
 \begin{chunk}{defun cmpnote}
-#+:gcl (defun compiler::cmpnote (&rest x))
+#+:gcl (defun compiler::cmpnote (&rest x) (declare (ignore x)))
 
 \end{chunk}
 
@@ -1891,9 +1893,10 @@ are compiling. This variable is only defined and used locally.
 \usesdollar{interpret}{genValue}
 \begin{chunk}{defun interpret}
 (defun |interpret| (&rest arg &aux restargs x)
- (dsetq (x . restargs) arg)
- (let (|$env| |$eval| |$genValue| posnForm)
+ (let (|$env| |$eval| |$genValue| posnForm x restargs)
  (declare (special |$env| |$eval| |$genValue|))
+  (setq x (car arg))
+  (setq restargs (cdr arg))
   (if (consp restargs)
     (setq posnForm (car restargs))
     (setq posnForm restargs))
@@ -8606,7 +8609,7 @@ the original Macro pform.
     (dolist (par symlist)
      (setq replist
       (let ((pr (assoc par replist :test #'equal)))
-       (if pr (remove par replist :test #'equal) l))))
+       (when pr (remove par replist :test #'equal)))))
     replist)
    ((|pfMLambda?| pform) ;construct assoclist ( identifier . replacement )
     (setq parlist (|pf0MLambdaArgs| pform)) ; extract parameter list
@@ -8808,7 +8811,7 @@ of the form ('expression expr position)
 \calls{pfMapParts}{pfAbSynOp}
 \begin{chunk}{defun pfMapParts}
 (defun |pfMapParts| (f pform)
- (let (same parts1 parts0)
+ (let (parts1 parts0)
   (if (|pfLeaf?| pform) 
    pform
    (progn
@@ -10265,6 +10268,7 @@ of the form ('expression expr position)
 \defun{pfParen}{Return the part of a parenthesised expression}
 \begin{chunk}{defun pfParen}
 (defun |pfParen| (a part)
+ (declare (ignore a))
  part)
 
 \end{chunk}
@@ -12644,6 +12648,7 @@ Give message and throw to a recovery point.
 \defun{desiredMsg}{desiredMsg}
 \begin{chunk}{defun desiredMsg 0}
 (defun |desiredMsg| (erMsgKey &rest optCatFlag)
+ (declare (ignore erMsgKey))
  (cond
   ((null (null optCatFlag)) (car optCatFlag))
   (t t)))
@@ -12721,7 +12726,7 @@ Give message and throw to a recovery point.
 \calls{getStFromMsg}{tabbing}
 \begin{chunk}{defun getStFromMsg}
 (defun |getStFromMsg| (msg)
- (let (st msgKey posStL preStL)
+ (let (st posStL preStL)
   (setq preStL (|getPreStL| (|getMsgPrefix?| msg)))
   (cond
    ((eq (|getMsgTag| msg) '|line|)
@@ -13132,7 +13137,7 @@ org prints out the word noposition or console
 \usesdollar{getMsgInfoFromKey}{msgDatabaseName}
 \begin{chunk}{defun getMsgInfoFromKey}
 (defun |getMsgInfoFromKey| (msg)
- (let (|$msgDatabaseName| attributes tmp msgText dbl msgKey)
+ (let (|$msgDatabaseName| attributes tmp msgText msgKey)
  (declare (special |$msgDatabaseName|))
   (setq |$msgDatabaseName| nil)
   (setq msgText
@@ -15188,6 +15193,301 @@ Get the entry for key k on x's association list
     v))))
 
 \end{chunk}
+
+\chapter{Function Selection}
+\begin{verbatim}
+New Selection of Modemaps
+
+selection of applicable modemaps is done in two steps:
+  first it tries to find a modemap inside an argument domain, and if
+  this fails, by evaluation of pattern modemaps
+the result is a list of functions with signatures, which have the
+  following form:
+  [sig,elt,cond] where
+    sig is the signature gained by evaluating the modemap condition
+    elt is the slot number to get the implementation
+    cond are runtime checks which are the results of evaluating the
+    modemap condition
+
+the following flags are used:
+ $Coerce is NIL, if function selection is done which requires exact
+   matches (e.g. for coercion functions)
+ if $SubDom is true, then runtime checks have to be compiled
+\end{verbatim}
+
+\defun{ofCategory}{ofCategory}
+\calls{ofCategory}{identp}
+\calls{ofCategory}{ofCategory}
+\calls{ofCategory}{nequal}
+\calls{ofCategory}{hasCaty}
+\defsdollar{ofCategory}{Subst}
+\defsdollar{ofCategory}{hope}
+\begin{chunk}{defun ofCategory}
+(defun |ofCategory| (dom cat)
+ (let (|$Subst| |$hope|)
+ (declare (special |$Subst| |$hope|))
+  (cond
+   ((identp dom) nil)
+   ((and (listp cat) (eq (car cat) '|Join|))
+    (every #'(lambda (c) (|ofCategory| dom c)) (cdr cat)))
+   (t (nequal (|hasCaty| dom cat nil) '|failed|)))))
+
+\end{chunk}
+
+\defun{isPartialMode}{isPartialMode}
+The isPartialMode function tests whether m contains \verb|$EmptyMode|. The
+constant \verb|$EmptyMode| evaluates to \verb?|$EmptyMode|?. This constant 
+is inserted in a modemap during compile time if the modemap is not yet 
+complete.
+\calls{isPartialMode}{contained}
+\refsdollar{isPartialMode}{EmptyMode}
+\begin{chunk}{defun isPartialMode}
+(defun |isPartialMode| (m)
+ (declare (special |$EmptyMode|))
+ (contained |$EmptyMode| m))
+
+\end{chunk}
+
+\defun{hasCaty}{hasCaty}
+This calls hasCat, which looks up a hashtable and returns:
+\begin{verbatim}
+ 1. T, NIL or a (has x1 x2) condition, if cat is not parameterized
+ 2. a list of pairs (argument to cat,condition) otherwise
+\end{verbatim}
+then the substitution sl is augmented, or the result is 'failed
+\calls{hasCaty}{hasAttSig}
+\calls{hasCaty}{subCopy}
+\calls{hasCaty}{constructSubst}
+\calls{hasCaty}{hasSig}
+\calls{hasCaty}{hasAtt}
+\calls{hasCaty}{hasCat}
+\calls{hasCaty}{opOf}
+\calls{hasCaty}{kdr}
+\calls{hasCaty}{mkDomPvar}
+\calls{hasCaty}{domArg}
+\calls{hasCaty}{augmentSub}
+\calls{hasCaty}{domArg2}
+\calls{hasCaty}{unifyStruct}
+\calls{hasCaty}{hasCaty1}
+\refsdollar{hasCaty}{domPvar}
+\begin{chunk}{defun hasCaty}
+(defun |hasCaty| (d cat sl)
+ (let (x y S z cond sp dom zp s1 ncond i)
+ (declare (special |$domPvar|))
+  (cond
+   ((and (consp cat) (eq (qcar cat) 'category) (consp (qcdr cat)))
+     (|hasAttSig| d (|subCopy| (qcddr cat) (|constructSubst| d)) sl))
+   ((and (consp cat) (eq (qcar cat) 'signature) (consp (qcdr cat))
+         (consp (qcddr cat)) (eq (qcdddr cat) nil))
+     (|hasSig| d (qcadr cat) (|subCopy| (qcaddr cat) (|constructSubst| d)) sl))
+   ((and (consp cat) (eq (qcar cat) 'attribute)
+         (consp (qcdr cat)) (eq (qcddr cat) nil))
+     (|hasAtt| d (|subCopy| (qcadr cat) (|constructSubst| d)) sl))
+   ((setq x (|hasCat| (|opOf| d) (|opOf| cat)))
+    (cond
+     ((setq y (kdr cat))
+       (setq s (|constructSubst| d))
+       (do ((next x (cdr next)) (endtest nil (null (eq s1 '|failed|))))
+           ((or (atom next) endtest) nil)
+         (setq z (caar next))
+         (setq cond (cdar next))
+         (setq sp
+          (loop for item in s
+           collect (cons (car item) (|mkDomPvar| (car item) (cdr item) z y))))
+         (when |$domPvar|
+           (setq i -1)
+           (setq dom
+            (cons (car d)
+             (loop for arg in (rest d)
+              collect (|domArg| arg (incf i) z y))))
+           (setq sl (|augmentSub| |$domPvar| dom (copy sl))))
+         (setq zp
+          (loop for a in z
+           collect (|domArg2| a s sp)))
+         (setq s1 (|unifyStruct| y zp (copy sl)))
+         (cond
+          ((null (eq s1 '|failed|))
+            (setq s1
+             (cond
+              ((atom cond) s1)
+              (t
+               (setq ncond (|subCopy| cond s))
+               (cond
+                ((and (consp ncond) (eq (qcar ncond) '|has|)
+                      (consp (qcdr ncond)) (equal (qcadr ncond) d)
+                      (consp (qcddr ncond)) (eq (qcdddr ncond) nil)
+                      (equal (qcaddr ncond) cat))
+                  '|failed|)
+                (t (|hasCaty1| ncond s1)))))))
+          (t nil)))
+        s1)
+     ((atom x) sl)
+     (t
+      (setq ncond (|subCopy| x (|constructSubst| d)))
+      (cond
+       ((and (consp ncond) (eq (qcar ncond) '|has|) (consp (qcdr ncond))
+             (equal (qcadr ncond) d) (consp (qcddr ncond))
+             (eq (qcdddr ncond) nil) (equal (qcaddr ncond) cat))
+         '|failed|)
+       (t (|hasCaty1| ncond sl))))))
+   (t '|failed|))))
+
+\end{chunk}
+
+\defun{domArg}{domArg}
+\refsdollar{domArg}{FormalMapVariableList}
+\begin{chunk}{defun domArg}
+(defun |domArg| (type i subs y)
+ (let (p)
+  (declare (special |$FormalMapVariableList|))
+  (if (setq p (member (elt |$FormalMapVariableList| i) subs))
+   (elt y (- (|#| subs) (|#| p)))
+   type)))
+
+\end{chunk}
+
+\defun{domArg2}{domArg2}
+\calls{domArg2}{isSharpVar}
+\calls{domArg2}{subCopy}
+\refsdollar{domArg2}{domPvar}
+\begin{chunk}{defun domArg2}
+(defun |domArg2| (arg sl1 sl2)
+ (declare (special |$domPvar|))
+ (cond
+  ((|isSharpVar| arg) (|subCopy| arg sl1))
+  ((and (eq arg '$) |$domPvar|) |$domPvar|)
+  (t (|subCopy| arg sl2))))
+
+\end{chunk}
+
+\defun{hasSig}{hasSig}
+The function hasSig tests whether domain dom has function foo with 
+signature sig under substitution sl.
+\calls{hasSig}{constructor?}
+\calls{hasSig}{cnstructSubst}
+\calls{hasSig}{assq}
+\calls{hasSig}{getOperationAlistFromLisplib}
+\calls{hasSig}{hasCate}
+\calls{hasSig}{subCopy}
+\calls{hasSig}{hasSigAnd}
+\calls{hasSig}{hasSigOr}
+\calls{hasSig}{keyedSystemError}
+\calls{hasSig}{unifyStruct}
+\defsdollar{hasSig}{domPvar}
+\begin{chunk}{defun hasSig}
+(defun |hasSig| (dom foo sig sl)
+ (let (|$domPvar| fun s0 p x cond s)
+ (declare (special |$domPvar|))
+  (cond
+   ((setq fun (|constructor?| (car dom)))
+     (setq s0 (|constructSubst| dom))
+     (cond
+      ((setq p (assq foo (|getOperationAlistFromLisplib| (car dom))))
+        (do ((next (cdr p) (cdr next))
+             (endtest nil (null (eq s '|failed|))))
+            ((or (atom next) endtest) nil)
+          (setq x (caar next))
+          (setq cond (caddar next))
+          (setq s
+           (cond
+            ((atom cond) (copy sl))
+            ((and (consp cond) (eq (qcar cond) '|has|)
+                  (consp (qcdr cond)) (consp (qcddr cond)) 
+                  (eq (qcdr (qcddr cond)) nil))
+              (|hasCate| (|subCopy| (qcadr cond) s0)
+                         (|subCopy| (qcaddr cond) s0)
+                         (copy sl)))
+            ((and (consp cond) 
+                  (or (eq (qcar cond) 'and) (eq (qcar cond) '|and|)))
+              (|hasSigAnd| (qcdr cond) s0 sl))
+            ((and (consp cond) 
+                  (or (eq (qcar cond) 'or) (eq (qcar cond) '|or|)))
+              (|hasSigOr| (qcdr cond) s0 sl))
+            (t
+             (|keyedSystemError| 'S2GE0016
+              (list "hasSig" "unexpected condition for signature")))))
+          (unless (eq s '|failed|)
+            (setq s (|unifyStruct| (|subCopy| x s0) sig s))))
+        s)
+      (t '|failed|)))
+   (t '|failed|))))
+
+\end{chunk}
+
+\defun{hasAtt}{hasAtt}
+The hasAtt function tests whether dom has attribute att under sl
+needs s0 similar to hasSig.
+\calls{hasAtt}{subCopy}
+\calls{hasAtt}{getdatabase}
+\calls{hasAtt}{constructSubst}
+\calls{hasAtt}{getInfovec}
+\calls{hasAtt}{unifyStruct}
+\calls{hasAtt}{hasCatExpression}
+\defsdollar{hasAtt}{domPvar}
+\begin{chunk}{defun hasAtt}
+(defun |hasAtt| (dom att sl)
+ (let (|$domPvar| fun atts u x cond s)
+ (declare (special |$domPvar|))
+  (cond
+   ((setq fun (car dom))
+    (cond
+     ((setq atts 
+        (|subCopy| (getdatabase fun 'attributes) (|constructSubst| dom)))
+       (cond
+        ((consp (setq u (|getInfovec| (car dom))))
+          (do ((next atts (cdr next))
+               (endtest nil (null (eq s '|failed|))))
+              ((or (atom next) endtest) nil)
+            (setq x (caar next))
+            (setq cond (cdar next))
+            (setq s (|unifyStruct| x att (copy sl)))
+            (cond
+             ((and (null (atom cond)) (null (eq s '|failed|)))
+               (setq s (|hasCatExpression| cond s)))))
+          s)
+        (t
+         (do ((next atts (cdr next))
+              (endtest nil (null (eq s '|failed|))))
+             ((or (atom next) endtest) nil)
+           (setq x (caar next))
+           (setq cond (cadar next))
+           (setq s (|unifyStruct| x att (copy sl)))
+           (cond
+            ((and (null (atom cond)) (null (eq s '|failed|)))
+              (setq s (|hasCatExpression| cond s)))))
+         s)))
+     (t '|failed|)))
+   (t '|failed|))))
+
+\end{chunk}
+
+\defun{hasSigAnd}{hasSigAnd}
+\calls{hasSigAnd}{hasCate}
+\calls{hasSigAnd}{subCopy}
+\calls{hasSigAnd}{keyedSystemError}
+\begin{chunk}{defun hasSigAnd}
+(defun |hasSigAnd| (andCls s0 sl)
+ (let (tmp1 a tmp2 b sa dead)
+  (setq sa '|failed|)
+  (loop for cls in andCls
+   do
+    (when dead (return))
+    (setq sa
+     (cond
+      ((atom cls) (copy sl))
+      ((and (consp cls) (eq (qcar cls) '|has|) (consp (qcdr cls))
+            (consp (qcddr cls)) (eq (qcdddr cls) nil))
+        (|hasCate| (|subCopy| (qcadr cls) s0) 
+                   (|subCopy| (qcaddr cls) s0) 
+                   (copy sl)))
+      (t
+        (|keyedSystemError| 'S2GE0016
+         (list  "hasSigAnd" "unexpected condition for signature")))))
+    (when (eq sa '|failed|) (setq dead t)))
+  sa))
+
+\end{chunk}
+
 
 \chapter{System Command Handling}
 The system commands are the top-level commands available in Axiom
@@ -29500,8 +29800,9 @@ o )what
     ((member name (elt |$localExposureData| 2)) nil)
     ((member name (elt |$localExposureData| 1)) t)
     (t 
-     (loop for g in (elt |$localExposureData| 0) do
-      while (not found)
+     (loop for g in (elt |$localExposureData| 0) 
+      when (not found)
+      do
         (setq x (getalist |$globalExposureGroupAlist| g))
         (when (and x (getalist x name)) (setq found t)))
      found))))
@@ -29709,8 +30010,9 @@ where <kind> =  ELT | CONST | Subsumed | (XLAM..) ..
 \begin{chunk}{defun getOplistWithUniqueSignatures}
 (defun |getOplistWithUniqueSignatures| (op pairlis signatureAlist)
  (let (sig slotNumber pred kind alist)
-  (loop for item in signatureAlist do
-   where (nequal (fourth item) '|Subsumed|) 
+  (loop for item in signatureAlist 
+   when (nequal (fourth item) '|Subsumed|) 
+   do
      (setq sig (first item))
      (setq slotNumber (second item))
      (setq pred (third item))
@@ -33069,7 +33371,7 @@ alternate polynomial types of Symbols.
 \refsdollar{mkEvalable}{EmptyMode}
 \begin{chunk}{defun mkEvalable}
 (defun |mkEvalable| (form)
- (let (op argl kind cosig tmp1 y)
+ (let (op argl kind cosig)
  (declare (special |$Integer| |$EmptyMode|))
   (cond
    ((consp form)
@@ -33135,11 +33437,10 @@ alternate polynomial types of Symbols.
 \calls{mkEvalableRecord}{mkEvalable}
 \begin{chunk}{defun mkEvalableRecord}
 (defun |mkEvalableRecord| (form)
- (let (n d)
   (cons
    (car form)
    (loop for item in (rest form)
-    collect (list (quote |:|) (second item) (|mkEvalable| (third item)))))))
+    collect (list (quote |:|) (second item) (|mkEvalable| (third item))))))
 
 \end{chunk}
 
@@ -35075,6 +35376,7 @@ searchCurrentEnv(x,currentEnv) ==
 \uses{spad-long-error}{spaderrorstream}
 \begin{chunk}{defun spad-long-error}
 (defun spad-long-error ()
+ (declare (special spaderrorstream))
   (spad-error-loc spaderrorstream)
   (iostat)
   (unless (equal out-stream spaderrorstream)
@@ -35178,7 +35480,8 @@ The IO state manipulation routines assume that
 \usesdollar{ioclear}{spad}
 \begin{chunk}{defun ioclear}
 (defun ioclear (&optional (in t) (out t))
- (declare (special current-fragment current-line $boot $spad))
+ (declare (special current-fragment current-line $boot $spad)
+          (ignore in out))
   (setq current-fragment nil)
   (line-clear current-line)
   (token-install nil nil current-token nil)
@@ -38245,7 +38548,7 @@ semantics survive.
 (defun |retract| (object)
  (labels (
   (retract1 (object)
-   (let (type val typep tmp1 underDomain objectp)
+   (let (type val underDomain objectp)
    (declare (special |$SingleInteger| |$Integer| |$NonNegativeInteger|
                      |$PositiveInteger|))
     (setq type (|objMode| object))
@@ -41235,7 +41538,8 @@ encoding enc.
 \defun{om-closeDev}{om-closeDev}
 This closes dev, flushing output if necessary.
 \begin{chunk}{defun om-closeDev}
-(defun om-closeDev (dev))
+(defun om-closeDev (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
@@ -41256,19 +41560,22 @@ These are covered in the OpenMathConnection domain in Volume 10.3.
 
 \defun{om-closeConn}{om-closeConn}
 \begin{chunk}{defun om-closeConn}
-(defun om-closeConn (conn))
+(defun om-closeConn (conn)
+ (declare (ignore conn)))
 
 \end{chunk}
 
 \defun{om-getConnInDev}{om-getConnInDev}
 \begin{chunk}{defun om-getConnInDev}
-(defun om-getConnInDev (conn))
+(defun om-getConnInDev (conn)
+ (declare (ignore conn)))
 
 \end{chunk}
 
 \defun{om-getConnOutDev}{om-getConnOutDev}
 \begin{chunk}{defun om-getConnOutDev}
-(defun om-getConnOutDev (conn))
+(defun om-getConnOutDev (conn)
+ (declare (ignore conn)))
 
 \end{chunk}
 
@@ -41282,13 +41589,15 @@ See OMconn.h
 
 \defun{om-bindTCP}{om-bindTCP}
 \begin{chunk}{defun om-bindTCP}
-(defun om-bindTCP (conn port))
+(defun om-bindTCP (conn port)
+ (declare (ignore conn port)))
 
 \end{chunk}
 
 \defun{om-connectTCP}{om-connectTCP}
 \begin{chunk}{defun om-connectTCP}
-(defun om-connectTCP (conn host port))
+(defun om-connectTCP (conn host port)
+ (declare (ignore conn host port)))
 
 \end{chunk}
 
@@ -41362,35 +41671,40 @@ Note that putSymbol2 is not implemented.
 \defun{om-getApp}{om-getApp}
 Reads a begin application token from dev.
 \begin{chunk}{defun om-getApp}
-(defun om-getApp (dev))
+(defun om-getApp (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getAtp}{om-getAtp}
 Reads a begin attribute pair token from dev.
 \begin{chunk}{defun om-getAtp}
-(defun om-getAtp (dev))
+(defun om-getAtp (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getAttr}{om-getAttr}
 Reads a begin attribute token from dev
 \begin{chunk}{defun om-getAttr}
-(defun om-getAttr (dev))
+(defun om-getAttr (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getBind}{om-getBind}
 Reads a begin binder token from dev.
 \begin{chunk}{defun om-getBind}
-(defun om-getBind (dev))
+(defun om-getBind (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getBVar}{om-getBVar}
 Reads a begin bound variable list token from dev.
 \begin{chunk}{defun om-getBVar}
-(defun om-getBVar (dev))
+(defun om-getBVar (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
@@ -41404,244 +41718,280 @@ Reads a byte array from dev.
 \defun{om-getEndApp}{om-getEndApp}
 Reads an end application token from dev
 \begin{chunk}{defun om-getEndApp}
-(defun om-getEndApp (dev))
+(defun om-getEndApp (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getEndAtp}{om-getEndAtp}
 Reads an end attribute pair token from dev.
 \begin{chunk}{defun om-getEndAtp}
-(defun om-getEndAtp (dev))
+(defun om-getEndAtp (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getEndAttr}{om-getEndAttr}
 Reads an end attribute token from dev.
 \begin{chunk}{defun om-getEndAttr}
-(defun om-getEndAttr (dev))
+(defun om-getEndAttr (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getEndBind}{om-getEndBind}
 Reads an end binder token from dev.
 \begin{chunk}{defun om-getEndBind}
-(defun om-getEndBind (dev))
+(defun om-getEndBind (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getEndBVar}{om-getEndBVar}
 Reads an end bound variable list token from dev.
 \begin{chunk}{defun om-getEndBVar}
-(defun om-getEndBVar (dev))
+(defun om-getEndBVar (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getEndError}{om-getEndError}
 Reads an end error token from dev.
 \begin{chunk}{defun om-getEndError}
-(defun om-getEndError (dev))
+(defun om-getEndError (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getEndObject}{om-getEndObject}
 Reads an end object token from dev.
 \begin{chunk}{defun om-getEndObject}
-(defun om-getEndObject (dev))
+(defun om-getEndObject (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getError}{om-getError}
 Reads a begin error token from dev.
 \begin{chunk}{defun om-getError}
-(defun om-getError (dev))
+(defun om-getError (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getFloat}{om-getFloat}
 Reads a float from dev.
 \begin{chunk}{defun om-getFloat}
-(defun om-getFloat (dev))
+(defun om-getFloat (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getInt}{om-getInt}
 Reads an integer from dev.
 \begin{chunk}{defun om-getInt}
-(defun om-getInt (dev))
+(defun om-getInt (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getObject}{om-getObject}
 Reads a begin object token from dev.
 \begin{chunk}{defun om-getObject}
-(defun om-getObject (dev))
+(defun om-getObject (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getString}{om-getString}
 Reads a string from dev.
 \begin{chunk}{defun om-getString}
-(defun om-getString (dev))
+(defun om-getString (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getSymbol}{om-getSymbol}
 Reads a symbol from dev.
 \begin{chunk}{defun om-getSymbol}
-(defun om-getSymbol (dev))
+(defun om-getSymbol (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getType}{om-getType}
 Returns the type of the next object on dev.
 \begin{chunk}{defun om-getType}
-(defun om-getType (dev))
+(defun om-getType (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-getVar}{om-getVar}
 Reads a variable from dev.
 \begin{chunk}{defun om-getVar}
-(defun om-getVar (dev))
+(defun om-getVar (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-putApp}{om-putApp}
 Writes a begin application token to dev.
 \begin{chunk}{defun om-putApp}
-(defun om-putApp (dev))
+(defun om-putApp (dev)
+ (declare (ignore dev)))
+
 \end{chunk}
 
 \defun{om-putAtp}{om-putAtp}
 This writea a begin application pair token to dev.
 \begin{chunk}{defun om-putAtp}
-(defun om-putAtp (dev))
+(defun om-putAtp (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-putAttr}{om-putAttr}
 This writes a begin attribute token to dev.
 \begin{chunk}{defun om-putAttr}
-(defun om-putAttr (dev))
+(defun om-putAttr (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-putBind}{om-putBind}
 This writes a begin binder token to dev.
 \begin{chunk}{defun om-putBind}
-(defun om-putBind (dev))
+(defun om-putBind (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-putBVar}{om-putBVar}
 This writes a begin bound variable list token to dev.
 \begin{chunk}{defun om-putBVar}
-(defun om-putBVar (dev))
+(defun om-putBVar (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-putByteArray}{om-putByteArray}
 This writes a byte array to dev.
 \begin{chunk}{defun om-putByteArray}
-(defun om-putByteArray (dev b))
+(defun om-putByteArray (dev b)
+ (declare (ignore dev b)))
 
 \end{chunk}
 
 \defun{om-putEndApp}{om-putEndApp}
 This writes an end application token to dev.
 \begin{chunk}{defun om-putEndApp}
-(defun om-putEndApp (dev))
+(defun om-putEndApp (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-putEndAtp}{om-putEndAtp}
 This writes an end attribute pair to dev.
 \begin{chunk}{defun om-putEndAtp}
-(defun om-putEndAtp (dev))
+(defun om-putEndAtp (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-putEndAttr}{om-putEndAttr}
 This writes an end attribute token to dev.
 \begin{chunk}{defun om-putEndAttr}
-(defun om-putEndAttr (dev))
+(defun om-putEndAttr (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-putEndBind}{om-putEndBind}
 This writes an end binder token to dev.
 \begin{chunk}{defun om-putEndBind}
-(defun om-putEndBind (dev))
+(defun om-putEndBind (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-putEndBVar}{om-putEndBVar}
 This writes and end bound variable list token to dev
 \begin{chunk}{defun om-putEndBVar}
-(defun om-putEndBVar (dev))
+(defun om-putEndBVar (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-putEndError}{om-putEndError}
 This writes an end error token to dev
 \begin{chunk}{defun om-putEndError}
-(defun om-putEndError (dev))
+(defun om-putEndError (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-putEndObject}{om-putEndObject}
 This writes an end object token to dev.
 \begin{chunk}{defun om-putEndObject}
-(defun om-putEndObject (dev))
+(defun om-putEndObject (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-putError}{om-putError}
 This writes a begin error token to dev.
 \begin{chunk}{defun om-putError}
-(defun om-putError (dev))
+(defun om-putError (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-putFloat}{om-putFloat}
 This writes the float f to dev.
 \begin{chunk}{defun om-putFloat}
-(defun om-putFloat (dev f))
+(defun om-putFloat (dev f)
+ (declare (ignore dev f)))
 
 \end{chunk}
 
 \defun{om-putInt}{om-putInt}
 This writes the integer i to dev
 \begin{chunk}{defun om-putInt}
-(defun om-putInt (dev i))
+(defun om-putInt (dev i)
+ (declare (ignore dev i)))
 
 \end{chunk}
 
 \defun{om-putObject}{om-putObject}
 This writes a begin object token to dev.
 \begin{chunk}{defun om-putObject}
-(defun om-putObject (dev))
+(defun om-putObject (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
 \defun{om-putString}{om-putString}
 This writes the string s to dev.
 \begin{chunk}{defun om-putString}
-(defun om-putString (dev s))
+(defun om-putString (dev s)
+ (declare (ignore dev s)))
 
 \end{chunk}
 
 \defun{om-putSymbol}{om-putSymbol}
 This writes the symbol nm using semantics from cd to dev.
 \begin{chunk}{defun om-putSymbol}
-(defun om-putSymbol (dev cd nm))
+(defun om-putSymbol (dev cd nm)
+ (declare (ignore dev cd nm)))
 
 \end{chunk}
 
 \defun{om-putVar}{om-putVar}
 This writes the variable v to dev.
 \begin{chunk}{defun om-putVar}
-(defun om-putVar (dev v))
+(defun om-putVar (dev v)
+ (declare (ignore dev v)))
 
 \end{chunk}
 
@@ -41650,7 +42000,8 @@ This is used in the SingleInteger domain in Volume 10.3.
 This is supposed to return the string from its address?
 It would appear to be a nop in lisp.
 \begin{chunk}{defun om-stringToStringPtr}
-(defun om-stringToStringPtr (str))
+(defun om-stringToStringPtr (str)
+ (declare (ignore str)))
 
 \end{chunk}
 
@@ -41659,7 +42010,8 @@ This is used in the SingleInteger domain in Volume 10.3.
 This is supposed to return the string address from a string?
 It would appear to be a nop in lisp.
 \begin{chunk}{defun om-stringPtrToString}
-(defun om-stringPtrToString (str))
+(defun om-stringPtrToString (str)
+ (declare (ignore str)))
 
 \end{chunk}
 
@@ -43132,6 +43484,8 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun displayValue}
 \getchunk{defun displayWorkspaceNames}
 \getchunk{defun domainToGenvar}
+\getchunk{defun domArg}
+\getchunk{defun domArg2}
 \getchunk{defun doSystemCommand}
 \getchunk{defun dqConcat}
 \getchunk{defun dropInputLibrary}
@@ -43213,9 +43567,13 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun handleNoParseCommands}
 \getchunk{defun handleParsedSystemCommands}
 \getchunk{defun handleTokensizeSystemCommands}
+\getchunk{defun hasAtt}
+\getchunk{defun hasCaty}
 \getchunk{defun hashable}
 \getchunk{defun hasOption}
 \getchunk{defun hasPair}
+\getchunk{defun hasSig}
+\getchunk{defun hasSigAnd}
 \getchunk{defun help}
 \getchunk{defun helpSpad2Cmd}
 \getchunk{defun histFileErase}
@@ -43301,6 +43659,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun isInterpOnlyMap}
 \getchunk{defun isListOfIdentifiers}
 \getchunk{defun isListOfIdentifiersOrStrings}
+\getchunk{defun isPartialMode}
 \getchunk{defun isSharpVar}
 \getchunk{defun isSharpVarWithNum}
 \getchunk{defun isSubForRedundantMapName}
@@ -43599,6 +43958,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun npZeroOrMore}
 \getchunk{defun NRTevalDomain}
 
+\getchunk{defun ofCategory}
 \getchunk{defun oldCompLookup}
 \getchunk{defun oldHistFileName}
 \getchunk{defun om-bindTCP}
