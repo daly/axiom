@@ -636,12 +636,11 @@ information is initialized.
 \calls{fillerSpaces}{ifcar}
 \begin{chunk}{defun fillerSpaces}
 (defun |fillerSpaces| (&rest arglist &aux charPart n)
- (let (n charPart)
   (setq n (car arglist))
   (setq charPart (cdr arglist))
   (if (<= n 0) 
    ""
-   (make-string n :initial-element (character (or (ifcar charPart) " "))))))
+   (make-string n :initial-element (character (or (ifcar charPart) " ")))))
 
 \end{chunk}
 
@@ -1893,7 +1892,7 @@ are compiling. This variable is only defined and used locally.
 \usesdollar{interpret}{genValue}
 \begin{chunk}{defun interpret}
 (defun |interpret| (&rest arg &aux restargs x)
- (let (|$env| |$eval| |$genValue| posnForm x restargs)
+ (let (|$env| |$eval| |$genValue| posnForm)
  (declare (special |$env| |$eval| |$genValue|))
   (setq x (car arg))
   (setq restargs (cdr arg))
@@ -6182,7 +6181,7 @@ fn must transform the head of the stack
   (|npEqKey| 'let)
   (or (|npDefinition|) (|npTrap|))
   (|npCompMissing| 'in)
-  (or #'f (|npTrap|))
+  (or (funcall f) (|npTrap|))
   (|npPush| (|pfWhere| (|npPop2|) (|npPop1|)))))
 
 \end{chunk}
@@ -15467,7 +15466,7 @@ needs s0 similar to hasSig.
 \calls{hasSigAnd}{keyedSystemError}
 \begin{chunk}{defun hasSigAnd}
 (defun |hasSigAnd| (andCls s0 sl)
- (let (tmp1 a tmp2 b sa dead)
+ (let (sa dead)
   (setq sa '|failed|)
   (loop for cls in andCls
    do
@@ -15488,6 +15487,144 @@ needs s0 similar to hasSig.
 
 \end{chunk}
 
+\defun{hasSigOr}{hasSigOr}
+\calls{hasSigOr}{hasCate}
+\calls{hasSigOr}{hasSigAnd}
+\calls{hasSigOr}{keyedSystemError}
+\begin{chunk}{defun hasSigOr}
+(defun |hasSigOr| (orCls s0 sl)
+ (let (sa found)
+  (setq sa '|failed|)
+  (loop for cls in orCls 
+   until found
+   do
+    (setq sa
+     (cond
+      ((atom cls) (copy sl))
+      ((and (consp cls) (eq (qcar cls) '|has|) (consp (qcdr cls))
+            (consp (qcddr cls)) (eq (qcdddr cls) nil))
+        (|hasCate| (|subCopy| (qcadr cls) s0) 
+                   (|subCopy| (qcaddr cls) s0) 
+                   (copy sl)))
+      ((and (consp cls) 
+            (or (eq (qcar cls) 'and) (eq (qcar cls) '|and|)))
+        (|hasSigAnd| (qcdr cls) s0 sl))
+      (t
+       (|keyedSystemError| 'S2GE0016
+        (list  "hasSigOr" "unexpected condition for signature")))))
+    (unless (eq sa '|failed|) (setq found t)))
+  sa))
+
+\end{chunk}
+
+\defun{hasAttSig}{hasAttSig}
+The argument d is domain, x is a list of attributes and signatures.
+The result is an augmented SL, if d has x, 'failed otherwise.
+\calls{hasAttSig}{hasAtt}
+\calls{hasAttSig}{hasSig}
+\calls{hasAttSig}{keyedSystemError}
+\begin{chunk}{defun hasAttSig}
+(defun |hasAttSig| (d x sl)
+  (loop for y in x
+   until (eq sl '|failed|)
+   do
+    (setq sl
+     (cond
+      ((and (consp y) (eq (qcar y) 'attribute) 
+            (consp (qcdr y)) (eq (qcddr y) nil))
+        (|hasAtt| d (qcadr y) sl))
+      ((and (consp y) (eq (qcar y) 'signature)
+            (consp (qcdr y)) (consp (qcddr y)) (eq (qcdddr y) nil))
+        (|hasSig| d (qcadr y) (qcaddr y) sl))
+      (t
+       (|keyedSystemError| 'S2GE0016
+        (list  "hasAttSig" "unexpected form of unnamed category"))))))
+  sl)
+
+\end{chunk}
+
+\defun{hasCate1}{hasCate1}
+\calls{hasCate1}{hasCate}
+\defsdollar{hasCate1}{domPvar}
+\begin{chunk}{defun hasCate1}
+(defun |hasCate1| (dom cat sl domPvar)
+ (let (|$domPvar|)
+ (declare (special |$domPvar|))
+  (setq |$domPvar| domPvar)
+  (|hasCate| dom cat sl)))
+
+\end{chunk}
+
+\defun{hasCatExpression}{hasCatExpression}
+\calls{hasCatExpression}{hasCatExpression}
+\calls{hasCatExpression}{nequal}
+\calls{hasCatExpression}{hasCate}
+\calls{hasCatExpression}{keyedSystemError}
+\begin{chunk}{defun hasCatExpression}
+(defun |hasCatExpression| (cond sl)
+ (let (y)
+  (cond
+   ((and (consp cond) (eq (qcar cond) 'or))
+    (when 
+     (let (result)
+       (loop for x in (qcdr cond)
+        do (setq result 
+            (or result 
+                (nequal (setq y (|hasCatExpression| x sl)) '|failed|))))
+        result)
+     y))
+   ((and (consp cond) (eq (qcar cond) 'and))
+    (when
+     (let ((result t))
+       (loop for x in (qcdr cond)
+        do (setq result
+            (and result 
+                 (nequal (setq sl (|hasCatExpression| x sl)) '|failed|))))
+       result)
+     sl))
+   ((and (consp cond) (eq (qcar cond) '|has|)
+         (consp (qcdr cond)) (consp (qcddr cond)) (eq (qcdddr cond) nil))
+     (|hasCate| (qcadr cond) (qcaddr cond) sl))
+   (t
+    (|keyedSystemError| 'S2GE0016
+     (list  "hasSig" "unexpected condition for attribute"))))))
+
+\end{chunk}
+
+\defun{unifyStruct}{unifyStruct}
+\calls{unifyStruct}{isPatternVar}
+\calls{unifyStruct}{unifyStructVar}
+\calls{unifyStruct}{unifyStruct}
+\begin{chunk}{defun unifyStruct}
+(defun |unifyStruct| (s1 s2 sl)
+ (declare (special |$domPvar| |$hope| |$Coerce| |$Subst|))
+  (cond
+   ((equal s1 s2) sl)
+   (t
+    (when (and (consp s1) (eq (qcar s1) '|:|)
+               (consp (qcdr s1)) (consp (qcddr s1)) (eq (qcdddr s1) nil))
+       (setq s1 (qcadr s1)))
+    (when (and (consp s2) (eq (qcar s2) '|:|)
+               (consp (qcdr s2)) (consp (qcddr s2)) (eq (qcdddr s2) nil))
+       (setq s2 (qcadr s2)))
+    (when (and (null (atom s1)) (eq (car s1) '|#|))
+       (setq s1 (length (cadr s1))))
+    (when (and (null (atom s2)) (eq (car s2) '|#|))
+       (setq s2 (length (cadr s2))))
+    (cond
+      ((equal s1 s2) sl)
+      ((|isPatternVar| s1) (|unifyStructVar| s1 s2 sl))
+      ((|isPatternVar| s2) (|unifyStructVar| s2 s1 sl))
+      ((or (atom s1) (atom s2)) '|failed|)
+      (t
+       (loop until (or (null s1) (null s2) (eq sl '|failed|))
+        do
+         (setq sl (|unifyStruct| (car s1) (car s2) sl))
+         (setq s1 (cdr s1))
+         (setq s2 (cdr s2)))
+       (if (or s1 s2) '|failed| sl))))))
+
+\end{chunk}
 
 \chapter{System Command Handling}
 The system commands are the top-level commands available in Axiom
@@ -41455,7 +41592,8 @@ This is used in OpenMathPackage in Volume 10.4.
 \defun{om-Read}{om-Read}
 Read an OpenMath object from dev.
 \begin{chunk}{defun om-Read}
-(defun om-Read (dev))
+(defun om-Read (dev)
+ (declare (ignore dev)))
 
 \end{chunk}
 
@@ -41476,13 +41614,15 @@ Lists all the symbols in CD
 \defun{om-supportsCD}{om-supportsCD}
 Return true if Axiom supports this CD.
 \begin{chunk}{defun om-supportsCD}
-(defun om-supportsCD (cd))
+(defun om-supportsCD (cd)
+ (declare (ignore cd)))
 
 \end{chunk}
 
 \defun{om-supportsSymbol}{om-supportsSymbol}
 \begin{chunk}{defun om-supportsSymbol}
-(defun om-supportsSymbol (cd name))
+(defun om-supportsSymbol (cd name)
+ (declare (ignore cd name)))
 
 \end{chunk}
 
@@ -41509,7 +41649,8 @@ The lisp conversion functions are:
 This sets the encoding used for reading or writeing OpenMath objects to
 or from dev to enc.
 \begin{chunk}{defun om-setDevEncoding}
-(defun om-setDevEncoding (dev enc))
+(defun om-setDevEncoding (dev enc)
+ (declare (ignore dev enc)))
 
 \end{chunk}
 
@@ -41524,14 +41665,17 @@ or from dev to enc.
 This opens file fname for reading or writing OpenMath objects.
 The mode can be ``r'' for read, ``w'' for write, or ''a'' for append.
 \begin{chunk}{defun om-openFileDev}
-(defun om-openFileDev (fname fmode enc))
+(defun om-openFileDev (fname fmode enc)
+ (declare (ignore fname fmode enc)))
+
 \end{chunk}
 
 \defun{om-openStringDev}{om-openStringDev}
 This opens the string str for reading and writing OpenMath objects in 
 encoding enc.
 \begin{chunk}{defun om-openStringDev}
-(defun om-openStringDev (str enc))
+(defun om-openStringDev (str enc)
+ (declare (ignore str enc)))
 
 \end{chunk}
 
@@ -41554,7 +41698,8 @@ These are covered in the OpenMathConnection domain in Volume 10.3.
 
 \defun{om-makeConn}{om-makeConn}
 \begin{chunk}{defun om-makeConn}
-(defun om-makeConn (conn))
+(defun om-makeConn (conn)
+ (declare (ignore conn)))
 
 \end{chunk}
 
@@ -43568,12 +43713,16 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun handleParsedSystemCommands}
 \getchunk{defun handleTokensizeSystemCommands}
 \getchunk{defun hasAtt}
+\getchunk{defun hasAttSig}
+\getchunk{defun hasCatExpression}
+\getchunk{defun hasCate1}
 \getchunk{defun hasCaty}
 \getchunk{defun hashable}
 \getchunk{defun hasOption}
 \getchunk{defun hasPair}
 \getchunk{defun hasSig}
 \getchunk{defun hasSigAnd}
+\getchunk{defun hasSigOr}
 \getchunk{defun help}
 \getchunk{defun helpSpad2Cmd}
 \getchunk{defun histFileErase}
@@ -44499,6 +44648,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun undoSingleStep}
 \getchunk{defun undoSteps}
 \getchunk{defun unescapeStringsInForm}
+\getchunk{defun unifyStruct}
 \getchunk{defun unsqueeze}
 \getchunk{defun untrace}
 \getchunk{defun untraceDomainConstructor}
