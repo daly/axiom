@@ -3502,6 +3502,135 @@ Equation(S: Type): public == private where
 
 \end{verbatim}
 
+\section{boot transformations}
+
+\defun{string2BootTree}{string2BootTree}
+\calls{string2BootTree}{new2OldLisp}
+\calls{string2BootTree}{def-rename}
+\uses{string2BootTree}{boot-line-stack}
+\uses{string2BootTree}{xtokenreader}
+\uses{string2BootTree}{line-handler}
+\defsdollar{string2BootTree}{boot}
+\defsdollar{string2BootTree}{spad}
+\begin{chunk}{defun string2BootTree}
+(defun |string2BootTree| (s)
+ (init-boot/spad-reader)
+ (let* ((boot-line-stack (list (cons 1 s)))
+        ($boot t)
+        ($spad nil)
+        (xtokenreader 'get-boot-token)
+        (line-handler 'next-boot-line)
+        (parseout (progn (|PARSE-Expression|) (pop-stack-1))))
+ (declare (special boot-line-stack $boot $spad xtokenreader line-handler))
+ (def-rename (|new2OldLisp| parseout))))
+
+\end{chunk}
+
+\defun{new2OldLisp}{new2OldLisp}
+\calls{new2OldLisp}{new2OldTran}
+\calls{new2OldLisp}{postTransform}
+\begin{chunk}{defun new2OldLisp}
+(defun |new2OldLisp| (x)
+ (|new2OldTran| (|postTransform| x)))
+
+\end{chunk}
+
+\defun{new2OldTran}{new2OldTran}
+\calls{new2OldTran}{dcq}
+\calls{new2OldTran}{new2OldTran}
+\calls{new2OldTran}{newDef2Def}
+\calls{new2OldTran}{newIf2Cond}
+\calls{new2OldTran}{newConstruct}
+\refsdollar{new2OldTran}{new2OldRenameAssoc}
+\begin{chunk}{defun new2OldTran}
+(defun |new2OldTran| (x)
+ (prog (tmp1 tmp2 tmp3 tmp4 tmp5 tmp6 a b c d)
+ (declare (special |$new2OldRenameAssoc|))
+  (return
+   (prog nil
+    (if (atom x)
+     (return (let ((y (assoc x |$new2OldRenameAssoc|)))
+                   (if y (cdr y) x))))
+    (if (and (dcq (tmp1 a b . tmp2) x)
+             (null tmp2)
+             (eq tmp1 '|where|)
+             (dcq (tmp3 . tmp4) b)
+             (dcq ((tmp5 d . tmp6) . c) (reverse tmp4))
+             (null tmp6)
+             (eq tmp5 '|exit|)
+             (eq tmp3 'seq)
+             (or (setq c (nreverse c)) t))
+        (return
+         `(|where| ,(|new2OldTran| a) ,@(|new2OldTran| c)
+                   ,(|new2OldTran| d))))
+     (return
+      (case (car x)
+       (quote x)
+       (def (|newDef2Def| x))
+       (if (|newIf2Cond| x))
+       ; construct === #'list (see patches.lisp) TPD 12/2011
+       (|construct| (|newConstruct| (|new2OldTran| (cdr x))))
+       (t `(,(|new2OldTran| (car x)) . ,(|new2OldTran| (cdr x))))))))))
+
+\end{chunk}
+
+\defun{newIf2Cond}{newIf2Cond}
+\calls{newIf2Cond}{let-error}
+\calls{newIf2Cond}{new2OldTran}
+\begin{chunk}{defun newIf2Cond}
+(defun |newIf2Cond| (cond-expr)
+  (if (not (and (= (length cond-expr) 4) (eq (car cond-expr) 'if)))
+    (let_error "(IF,a,b,c)" cond-expr)
+    (let ((a (second cond-expr))
+          (b (third cond-expr))
+          (c (fourth cond-expr)))
+      (setq a (|new2OldTran| a) b (|new2OldTran| b) c (|new2OldTran| c))
+      (if (eq c '|noBranch|)
+        `(if ,a ,b))
+        `(if ,a ,b ,c))))
+
+\end{chunk}
+
+\defun{newDef2Def}{newDef2Def}
+\calls{newDef2Def}{let-error}
+\calls{newDef2Def}{new2OldDefForm}
+\calls{newDef2Def}{new2OldTran}
+\begin{chunk}{defun newDef2Def}
+(defun |newDef2Def| (def-expr)
+ (if (not (and (= (length def-expr) 5) (eq (car def-expr) 'def)))
+   (let_error "(DEF,form,a,b,c)" def-expr)
+   (let ((form (second def-expr))
+         (a (third def-expr))
+         (b (fourth def-expr))
+         (c (fifth def-expr)))
+    `(def ,(|new2OldDefForm| form) ,(|new2OldTran| a)
+          ,(|new2OldTran| b) ,(|new2OldTran| c)))))
+
+\end{chunk}
+
+\defun{new2OldDefForm}{new2OldDefForm}
+\calls{new2OldDefForm}{new2OldTran}
+\calls{new2OldDefForm}{new2OldDefForm}
+\begin{chunk}{defun new2OldDefForm}
+(defun |new2OldDefForm| (x)
+ (cond
+  ((atom x) (|new2OldTran| x))
+  ((and (listp x) (listp (car x)) (eq (caar x) '|is|) (= (length (car x)) 3))
+    (let ((a (second (car x))) (b (third (car x))) (y (cdr x)))
+     (|new2OldDefForm| `((spadlet ,a ,b) ,@y))))
+  ((cons (|new2OldTran| (car x)) (|new2OldDefForm| (cdr x))))))
+
+\end{chunk}
+
+\defun{newConstruct}{newConstruct}
+\begin{chunk}{defun newConstruct}
+(defun |newConstruct| (z)
+ (if (atom z) 
+   z
+  `(cons  ,(car z) ,(|newConstruct| (cdr z)))))
+
+\end{chunk}
+
 \section{preparse}
 
 The first large transformation of this input occurs in the function
@@ -4146,7 +4275,6 @@ leave it alone."
 \end{chunk}
 
 \defun{preparseReadLine}{preparseReadLine}
-\calls{preparseReadLine}{dcq}
 \calls{preparseReadLine}{preparseReadLine1}
 \calls{preparseReadLine}{initial-substring}
 \calls{preparseReadLine}{string2BootTree}
@@ -4225,10 +4353,12 @@ leave it alone."
 \calls{preparseReadLine1}{maxindex}
 \calls{preparseReadLine1}{strconc}
 \calls{preparseReadLine1}{preparseReadLine1}
-\usesdollar{preparseReadLine1}{linelist}
-\usesdollar{preparseReadLine1}{preparse-last-line}
-\usesdollar{preparseReadLine1}{index}
-\usesdollar{preparseReadLine1}{EchoLineStack}
+\refsdollar{preparseReadLine1}{linelist}
+\defsdollar{preparseReadLine1}{linelist}
+\defsdollar{preparseReadLine1}{preparse-last-line}
+\refsdollar{preparseReadLine1}{index}
+\defsdollar{preparseReadLine1}{index}
+\defsdollar{preparseReadLine1}{EchoLineStack}
 \begin{chunk}{defun preparseReadLine1}
 (defun preparseReadLine1 ()
  (labels (
@@ -4259,7 +4389,7 @@ leave it alone."
 \section{I/O Handling}
 \defun{preparse-echo}{preparse-echo}
 \uses{preparse-echo}{Echo-Meta}
-\usesdollar{preparse-echo}{EchoLineStack}
+\refsdollar{preparse-echo}{EchoLineStack}
 \begin{chunk}{defun preparse-echo}
 (defun preparse-echo (linelist)
  (declare (special $EchoLineStack Echo-Meta) (ignore linelist))
@@ -4416,7 +4546,6 @@ A reduction of a rule is any S-Expression the rule chooses to stack.
 \chapter{Parse Transformers}
 \section{Direct called parse routines}
 \defun{parseTransform}{parseTransform}
-\calls{parseTransform}{msubst}
 \calls{parseTransform}{parseTran}
 \usesdollar{parseTransform}{defOp}
 \begin{chunk}{defun parseTransform}
@@ -4424,11 +4553,10 @@ A reduction of a rule is any S-Expression the rule chooses to stack.
  (let (|$defOp|)
  (declare (special |$defOp|))
   (setq |$defOp| nil)
-  (setq x (msubst '$ '% x)) ; for new compiler compatibility
+  (setq x (subst '$ '% x :test #'equal)) ; for new compiler compatibility
   (|parseTran| x)))
 
 \end{chunk}
-
 
 \defun{parseTran}{parseTran}
 \calls{parseTran}{parseAtom}
@@ -4619,12 +4747,11 @@ of the symbol being parsed. The original list read:
 \end{chunk}
 
 \defun{parseType}{parseType}
-\calls{parseType}{msubst}
 \calls{parseType}{parseTran}
 \begin{chunk}{defun parseType}
 (defun |parseType| (x)
  (declare (special |$EmptyMode| |$quadSymbol|))
- (setq x (msubst |$EmptyMode| |$quadSymbol| x))
+ (setq x (subst |$EmptyMode| |$quadSymbol| x :test #'equal))
  (if (and (consp x) (eq (qfirst x) '|typeOf|)
           (consp (qrest x)) (eq (qcddr x) nil))
     (list '|typeOf| (|parseTran| (qsecond x)))
@@ -4830,13 +4957,12 @@ of the symbol being parsed. The original list read:
 \end{chunk}
 
 \defun{parseDollarGreaterThan}{parseDollarGreaterThan}
-\calls{parseDollarGreaterThan}{msubst}
 \calls{parseDollarGreaterThan}{parseTran}
 \usesdollar{parseDollarGreaterThan}{op}
 \begin{chunk}{defun parseDollarGreaterThan}
 (defun |parseDollarGreaterThan| (arg)
  (declare (special |$op|))
-  (list (msubst '$< '$> |$op|)
+  (list (subst '$< '$> |$op| :test #'equal)
         (|parseTran| (second arg))
         (|parseTran| (first arg))))
 
@@ -4850,13 +4976,12 @@ of the symbol being parsed. The original list read:
 \end{chunk}
 
 \defun{parseDollarGreaterEqual}{parseDollarGreaterEqual}
-\calls{parseDollarGreaterEqual}{msubst}
 \calls{parseDollarGreaterEqual}{parseTran}
 \usesdollar{parseDollarGreaterEqual}{op}
 \begin{chunk}{defun parseDollarGreaterEqual}
 (defun |parseDollarGreaterEqual| (arg)
  (declare (special |$op|))
-  (|parseTran| (list '|not| (cons (msubst '$< '$>= |$op|) arg))))
+  (|parseTran| (list '|not| (cons (subst '$< '$>= |$op| :test #'equal) arg))))
 
 \end{chunk}
 
@@ -4868,13 +4993,12 @@ of the symbol being parsed. The original list read:
 \end{chunk}
 
 \defun{parseDollarLessEqual}{parseDollarLessEqual}
-\calls{parseDollarLessEqual}{msubst}
 \calls{parseDollarLessEqual}{parseTran}
 \usesdollar{parseDollarLessEqual}{op}
 \begin{chunk}{defun parseDollarLessEqual}
 (defun |parseDollarLessEqual| (arg)
  (declare (special |$op|))
-  (|parseTran| (list '|not| (cons (msubst '$> '$<= |$op|) arg))))
+  (|parseTran| (list '|not| (cons (subst '$> '$<= |$op| :test #'equal) arg))))
 
 \end{chunk}
 
@@ -4887,12 +5011,11 @@ of the symbol being parsed. The original list read:
 
 \defun{parseDollarNotEqual}{parseDollarNotEqual}
 \calls{parseDollarNotEqual}{parseTran}
-\calls{parseDollarNotEqual}{msubst}
 \usesdollar{parseDollarNotEqual}{op}
 \begin{chunk}{defun parseDollarNotEqual}
 (defun |parseDollarNotEqual| (arg)
  (declare (special |$op|))
- (|parseTran| (list '|not| (cons (msubst '$= '$^= |$op|) arg))))
+ (|parseTran| (list '|not| (cons (subst '$= '$^= |$op| :test #'equal) arg))))
 
 \end{chunk}
 
@@ -4952,7 +5075,7 @@ of the symbol being parsed. The original list read:
 \begin{chunk}{defun parseGreaterEqual}
 (defun |parseGreaterEqual| (arg)
  (declare (special |$op|))
- (|parseTran| (list '|not| (cons (msubst '< '>= |$op|) arg))))
+ (|parseTran| (list '|not| (cons (subst '< '>= |$op| :test #'equal) arg))))
 
 \end{chunk}
 
@@ -4969,7 +5092,7 @@ of the symbol being parsed. The original list read:
 \begin{chunk}{defun parseGreaterThan}
 (defun |parseGreaterThan| (arg)
  (declare (special |$op|))
- (list (msubst '< '> |$op|)
+ (list (subst '< '> |$op| :test #'equal)
   (|parseTran| (second arg)) (|parseTran| (first arg))))
 
 \end{chunk}
@@ -5513,7 +5636,7 @@ of the symbol being parsed. The original list read:
 \begin{chunk}{defun parseLessEqual}
 (defun |parseLessEqual| (arg)
  (declare (special |$op|))
- (|parseTran| (list '|not| (cons (msubst '> '<= |$op|) arg))))
+ (|parseTran| (list '|not| (cons (subst '> '<= |$op| :test #'equal) arg))))
 
 \end{chunk}
 
@@ -5620,12 +5743,11 @@ of the symbol being parsed. The original list read:
 
 \defun{parseNotEqual}{parseNotEqual}
 \calls{parseNotEqual}{parseTran}
-\calls{parseNotEqual}{msubst}
 \usesdollar{parseNotEqual}{op}
 \begin{chunk}{defun parseNotEqual}
 (defun |parseNotEqual| (arg)
  (declare (special |$op|))
- (|parseTran| (list '|not| (cons (msubst '= '^= |$op|) arg))))
+ (|parseTran| (list '|not| (cons (subst '= '^= |$op| :test #'equal) arg))))
 
 \end{chunk}
 
@@ -6094,7 +6216,6 @@ $\rightarrow$
 \calls{mkCategoryPackage}{JoinInner}
 \calls{mkCategoryPackage}{assoc}
 \calls{mkCategoryPackage}{sublislis}
-\calls{mkCategoryPackage}{msubst}
 \usesdollar{mkCategoryPackage}{options}
 \usesdollar{mkCategoryPackage}{categoryPredicateList}
 \usesdollar{mkCategoryPackage}{e}
@@ -6144,10 +6265,10 @@ $\rightarrow$
    (setq nils (loop for x in argl collect nil))
    (setq packageSig (cons packageCategory (cons form nils)))
    (setq |$categoryPredicateList|
-     (msubst nameForDollar '$ |$categoryPredicateList|))
-   (msubst nameForDollar '$
+     (subst nameForDollar '$ |$categoryPredicateList| :test #'equal))
+   (subst nameForDollar '$
      (list 'def (cons packageName packageArgl) 
-           packageSig (cons nil nils) def))))))
+           packageSig (cons nil nils) def)  :test #'equal)))))
 
 \end{chunk}
 
@@ -6505,7 +6626,6 @@ $\rightarrow$
 
 \defun{encodeFunctionName}{encodeFunctionName}
 Code for encoding function names inside package or domain
-\calls{encodeFunctionName}{msubst}
 \calls{encodeFunctionName}{mkRepititionAssoc}
 \calls{encodeFunctionName}{encodeItem}
 \calls{encodeFunctionName}{stringimage}
@@ -6521,7 +6641,7 @@ Code for encoding function names inside package or domain
  (declare (special |$lisplibSignatureAlist| $lisplib))
   (setq packageName (car package))
   (setq arglist (cdr package))
-  (setq signaturep (msubst '$ package signature))
+  (setq signaturep (subst '$ package signature  :test #'equal))
   (setq reducedSig
    (|mkRepititionAssoc| (append (cdr signaturep) (list (car signaturep)))))
   (setq encodedSig
@@ -6901,7 +7021,7 @@ All references to it should be removed.
   (setq signature (sublis sl signature))
   (when (setq opAlist (sublis sl (elt |$domainShell| 1)))
    (setq nonCategorySigAlist
-    (|mkAlistOfExplicitCategoryOps| (msubst '*1 '$ body)))
+    (|mkAlistOfExplicitCategoryOps| (subst '*1 '$ body :test #'equal)))
    (setq domainList
     (loop for a in (rest form) for m in (rest signature)
      when (|isCategoryForm| m |$EmptyEnvironment|)
@@ -7078,11 +7198,10 @@ variables, and predicates
 \defun{replaceVars}{replaceVars}
 Replace every identifier in oldvars with the corresponding
 identifier in newvars in the expression x
-\calls{replaceVars}{msubst}
 \begin{chunk}{defun replaceVars}
 (defun |replaceVars| (x oldvars newvars)
  (loop for old in oldvars for new in newvars
-  do (setq x (msubst new old x)))
+  do (setq x (subst new old x :test #'equal)))
  x)
 
 \end{chunk}
@@ -7348,7 +7467,7 @@ identifier in newvars in the expression x
         (cons 'or
          (let (tmp1)
           (loop for tt in (cdr x)
-           do (setq tmp1 (cons (cons 'and (msubst tt x q)) tmp1)))
+           do (setq tmp1 (cons (cons 'and (subst tt x q :test #'equal)) tmp1)))
           (nreverse0 tmp1)))))
      (t (cons 'and q))))
    (t p))))
@@ -7367,7 +7486,7 @@ identifier in newvars in the expression x
 ;      (|moveORsOutside|
 ;       (cons 'or
 ;        (loop for tt in (cdr x)
-;         collect (cons 'and (msubst tt x q)))))
+;         collect (cons 'and (subst tt x q :test #'equal)))))
 ;      (cons 'and q)))
 ;   ('t p))))
 
@@ -7375,7 +7494,6 @@ identifier in newvars in the expression x
 
 \defun{substVars}{substVars}
 Make pattern variable substitutions.
-\calls{substVars}{msubst}
 \calls{substVars}{nsubst}
 \calls{substVars}{contained}
 \refsdollar{substVars}{FormalMapVariableList}
@@ -7388,22 +7506,23 @@ Make pattern variable substitutions.
    #'(lambda (x)
       (setq patVar (caar x))
       (setq value (cdar x))
-      (setq pred (msubst patVar value pred))
+      (setq pred (subst patVar value pred :test #'equal))
       (setq patternAlist (|nsubst| patVar value patternAlist))
-      (setq domainPredicates (msubst patVar value domainPredicates))
+      (setq domainPredicates 
+        (subst patVar value domainPredicates :test #'equal))
       (unless (member value |$FormalMapVariableList|)
        (setq domainPredicates
          (cons (list '|isDomain| patVar value) domainPredicates))))
      patternAlist)
   (setq everything (list pred patternAlist domainPredicates))
-  (dolist (|var| |$FormalMapVariableList|)
+  (dolist (var |$FormalMapVariableList|)
     (cond
-     ((contained |var| everything)
+     ((contained var everything)
         (setq replacementVar (car patternVarList))
         (setq patternVarList (cdr patternVarList))
-        (setq pred (msubst replacementVar |var| pred))
+        (setq pred (subst replacementVar var pred :test #'equal))
         (setq domainPredicates
-          (msubst replacementVar |var| domainPredicates)))))
+          (subst replacementVar var domainPredicates :test #'equal)))))
   (list pred domainPredicates)))
 
 \end{chunk}
@@ -8465,7 +8584,6 @@ Compute the lookup function (complete or incomplete)
 \calls{augmentLisplibModemapsFromFunctor}{mkAlistOfExplicitCategoryOps}
 \calls{augmentLisplibModemapsFromFunctor}{allLASSOCs}
 \calls{augmentLisplibModemapsFromFunctor}{member}
-\calls{augmentLisplibModemapsFromFunctor}{msubst}
 \calls{augmentLisplibModemapsFromFunctor}{mkDatabasePred}
 \calls{augmentLisplibModemapsFromFunctor}{mkpf}
 \calls{augmentLisplibModemapsFromFunctor}{listOfPatternIds}
@@ -8501,12 +8619,12 @@ Compute the lookup function (complete or incomplete)
         do (setq result (or result  (|member| sig catSig))))
        result)
      (setq skip (when (and argl (contained '$ (cdr sig))) 'skip))
-     (setq sel (msubst form '$ sel))
+     (setq sel (subst form '$ sel :test #'equal))
      (setq predList
       (loop for a in argl for m in (rest signature)
        when (|member| a |$PatternVariableList|)
        collect (list a m)))
-     (setq sig (msubst form '$ sig))
+     (setq sig (subst form '$ sig :test #'equal))
      (setq predp
       (mkpf
        (cons pred (loop for y in predList collect (|mkDatabasePred| y)))
@@ -8690,7 +8808,6 @@ Compute the lookup function (complete or incomplete)
 
 \defun{makeFunctorArgumentParameters}{makeFunctorArgumentParameters}
 \calls{makeFunctorArgumentParameters}{assq}
-\calls{makeFunctorArgumentParameters}{msubst}
 \calls{makeFunctorArgumentParameters}{isCategoryForm}
 \calls{makeFunctorArgumentParameters}{qcar}
 \calls{makeFunctorArgumentParameters}{qcdr}
@@ -8711,7 +8828,7 @@ Compute the lookup function (complete or incomplete)
       (if (and (consp s) (eq (qfirst s) '|Join|))
        (progn 
         (if (setq u (assq 'category ss))
-         (msubst (append u ss) u s)
+         (subst (append u ss) u s :test #'equal)
          (cons '|Join|
           (append (rest s) (list (cons 'category (cons '|package| ss)))))))
        (list '|Join| s (cons 'category (cons '|package| ss)))))
@@ -8889,7 +9006,6 @@ Compute the lookup function (complete or incomplete)
 \calls{mkOpVec}{qcdr}
 \calls{mkOpVec}{sublis}
 \calls{mkOpVec}{AssocBarGensym}
-\calls{mkOpVec}{msubst}
 \usesdollar{mkOpVec}{FormalMapVariableList}
 \uses{mkOpVec}{Undef}
 \begin{chunk}{defun mkOpVec}
@@ -8917,7 +9033,8 @@ Compute the lookup function (complete or incomplete)
      (t
       (setq noplist (sublis substargs u))
       (setq tmp1
-        (|AssocBarGensym| (msubst (elt dom 0) '$ (second opSig)) noplist))
+        (|AssocBarGensym| 
+          (subst (elt dom 0) '$ (second opSig) :test #'equal) noplist))
       (cond
        ((and (consp tmp1) (consp (qrest tmp1)) (consp (qcddr tmp1))
              (consp (qcdddr tmp1))
@@ -9594,7 +9711,7 @@ optPackageCall.
        (setq g (qcadar z))
        (setq x (qcaddar z))
        (setq r (qrest z))
-       (getRidOfTemps (msubst x g r)))
+       (getRidOfTemps (subst x g r :test #'equal)))
      ((eq (car z) '|/throwAway|)
        (getRidOfTemps (cdr z)))
      (t
@@ -10298,14 +10415,13 @@ The way XLAMs work:
 \end{chunk}
 
 \defun{substituteCategoryArguments}{substituteCategoryArguments}
-\calls{substituteCategoryArguments}{msubst}
 \calls{substituteCategoryArguments}{internl}
 \calls{substituteCategoryArguments}{stringimage}
 \calls{substituteCategoryArguments}{sublis}
 \begin{chunk}{defun substituteCategoryArguments}
 (defun |substituteCategoryArguments| (argl catform)
  (let (arglAssoc (i 0))
-  (setq argl (msubst '$$ '$ argl))
+  (setq argl (subst '$$ '$ argl :test #'equal))
   (setq arglAssoc
    (loop for a in argl 
     collect (cons (internl '|#| (stringimage (incf i))) a)))
@@ -10316,9 +10432,6 @@ The way XLAMs work:
 \defun{addConstructorModemaps}{addConstructorModemaps}
 \calls{addConstructorModemaps}{putDomainsInScope}
 \calls{addConstructorModemaps}{getl}
-\calls{addConstructorModemaps}{msubst}
-\calls{addConstructorModemaps}{qcar}
-\calls{addConstructorModemaps}{qcdr}
 \calls{addConstructorModemaps}{addModemap}
 \defsdollar{addConstructorModemaps}{InteractiveMode}
 \begin{chunk}{defun addConstructorModemaps}
@@ -10340,8 +10453,9 @@ The way XLAMs work:
                (consp (qcddr opcode)) 
                (eq (qcdddr opcode) nil)
                (eq (qfirst opcode) 'elt))
-       (setq nsig (msubst '$$$ name sig))
-       (setq nsig (msubst '$ '$$$ (msubst '$$ '$ nsig)))
+       (setq nsig (subst '$$$ name sig :test #'equal))
+       (setq nsig 
+        (subst '$ '$$$ (subst '$$ '$ nsig :test #'equal) :test #'equal))
        (setq opcode (list (first opcode) (second opcode) nsig)))
     (setq env (|addModemap| op name sig t opcode env)))
   env))
@@ -10841,7 +10955,6 @@ add flag identifiers as literals in the environment
 \end{chunk}
 
 \defun{substNames}{substNames}
-\calls{substNames}{substq}
 \calls{substNames}{isCategoryPackageName}
 \calls{substNames}{eqsubstlist}
 \calls{substNames}{nreverse0}
@@ -10850,7 +10963,7 @@ add flag identifiers as literals in the environment
 (defun |substNames| (domainName viewName functorForm opalist)
  (let (nameForDollar sel pos modemapform tmp0 tmp1)
  (declare (special |$FormalMapVariableList|))
-  (setq functorForm (substq '$$ '$ functorForm))
+  (setq functorForm (subst '$$ '$ functorForm))
   (setq nameForDollar
    (if (|isCategoryPackageName| functorForm)
      (second functorForm)
@@ -10866,7 +10979,7 @@ add flag identifiers as literals in the environment
    (setq modemapform (nreverse (cdr tmp1)))
   (push
     (append
-     (substq '$ '$$ (substq nameForDollar '$ modemapform))
+     (subst '$ '$$ (subst nameForDollar '$ modemapform))
      (list
        (list sel viewName (if (eq domainName '$) pos (cadar modemapform)))))
     tmp0))))
@@ -10879,7 +10992,6 @@ add flag identifiers as literals in the environment
 \calls{augModemapsFromCategoryRep}{compilerMessage}
 \calls{augModemapsFromCategoryRep}{putDomainsInScope}
 \calls{augModemapsFromCategoryRep}{assoc}
-\calls{augModemapsFromCategoryRep}{msubst}
 \calls{augModemapsFromCategoryRep}{addModemap}
 \defsdollar{augModemapsFromCategoryRep}{base}
 \begin{chunk}{defun augModemapsFromCategoryRep}
@@ -10920,7 +11032,7 @@ add flag identifiers as literals in the environment
     (setq sig (cadar term))
     (setq cond (cadr term))
     (setq fnsel (caddr term))
-    (setq u (|assoc| (msubst '|Rep| domainName lhs) repFnAlist))
+    (setq u (|assoc| (subst '|Rep| domainName lhs :test #'equal) repFnAlist))
     (if (and u (null (redefinedList op functorBody)))
       (setq env (|addModemap| op domainName sig cond (caddr u) env))
       (setq env (|addModemap| op domainName sig cond fnsel env))))
@@ -10992,7 +11104,6 @@ add flag identifiers as literals in the environment
 \end{chunk}
 
 \defun{addModemap1}{addModemap1}
-\calls{addModemap1}{msubst}
 \calls{addModemap1}{getProplist}
 \calls{addModemap1}{mkNewModemapList}
 \calls{addModemap1}{lassoc}
@@ -11002,7 +11113,7 @@ add flag identifiers as literals in the environment
 \begin{chunk}{defun addModemap1}
 (defun |addModemap1| (op mc sig pred fn env)
  (let (currentProplist newModemapList newProplist newProplistp)
-  (when (eq mc '|Rep|) (setq sig (msubst '$ '|Rep| sig)))
+  (when (eq mc '|Rep|) (setq sig (subst '$ '|Rep| sig :test #'equal)))
   (setq currentProplist (or (|getProplist| op env) nil))
   (setq newModemapList
    (|mkNewModemapList| mc sig pred fn
@@ -12572,7 +12683,6 @@ An angry JHD - August 15th., 1984
 \calls{compileCases}{eval}
 \calls{compileCases}{qcar}
 \calls{compileCases}{qcdr}
-\calls{compileCases}{msubst}
 \calls{compileCases}{compile}
 \calls{compileCases}{getSpecialCaseAssoc}
 \calls{compileCases}{get}
@@ -12609,7 +12719,7 @@ An angry JHD - August 15th., 1984
       do
         (setq v (second item))
         (setq u (third item))
-      when (and (equal (second u) r) (|eval| (msubst rp r u)))
+      when (and (equal (second u) r) (|eval| (subst rp r u :test #'equal)))
       collect v)))))
  (let (|$specialCaseKeyList| specialCaseAssoc listOfDomains listOfAllCases cl)
  (declare (special |$specialCaseKeyList| |$true| |$insideFunctorIfTrue|))
@@ -12696,7 +12806,6 @@ An angry JHD - August 15th., 1984
 \end{chunk}
 
 \defun{compArgumentConditions}{compArgumentConditions}
-\calls{compArgumentConditions}{msubst}
 \calls{compArgumentConditions}{compOrCroak}
 \refsdollar{compArgumentConditions}{Boolean}
 \refsdollar{compArgumentConditions}{argumentConditionList}
@@ -12711,7 +12820,7 @@ An angry JHD - August 15th., 1984
      (setq n (first item))
      (setq a (second item))
      (setq x (third item))
-     (setq y (msubst a '|#1| x))
+     (setq y (subst a '|#1| x :test #'equal))
      (setq tmp1 (|compOrCroak| y |$Boolean| env))
      (setq env (third tmp1))
     collect
@@ -12752,7 +12861,6 @@ An angry JHD - August 15th., 1984
 \defun{stripOffArgumentConditions}{stripOffArgumentConditions}
 \calls{stripOffArgumentConditions}{qcar}
 \calls{stripOffArgumentConditions}{qcdr}
-\calls{stripOffArgumentConditions}{msubst}
 \refsdollar{stripOffArgumentConditions}{argumentConditionList}
 \defsdollar{stripOffArgumentConditions}{argumentConditionList}
 \begin{chunk}{defun stripOffArgumentConditions}
@@ -12765,7 +12873,7 @@ An angry JHD - August 15th., 1984
     (cond
      ((and (consp x) (eq (qfirst x) '|\||) (consp (qrest x))
            (consp (qcddr x)) (eq (qcdddr x) nil))
-       (setq condition (msubst '|#1| (second x) (third x)))
+       (setq condition (subst '|#1| (second x) (third x) :test #'equal))
        (setq |$argumentConditionList|
         (cons (list i (second x) condition) |$argumentConditionList|))
        (second x))
@@ -13765,7 +13873,6 @@ is still more than one complain else return the only signature.
 \calls{compReduce1}{comp}
 \calls{compReduce1}{parseTran}
 \calls{compReduce1}{getIdentity}
-\calls{compReduce1}{msubst}
 \usesdollar{compReduce1}{sideEffectsList}
 \usesdollar{compReduce1}{until}
 \usesdollar{compReduce1}{initList}
@@ -13838,7 +13945,7 @@ is still more than one complain else return the only signature.
           (setq untilCode (first tmp1))
           (setq env (third tmp1))
           (setq finalCode
-           (msubst (list 'until untilCode) '|$until| finalCode)))
+           (subst (list 'until untilCode) '|$until| finalCode :test #'equal)))
           (list finalCode mode env ))))))))))
 
 \end{chunk}
@@ -13864,7 +13971,6 @@ is still more than one complain else return the only signature.
 \calls{compRepeatOrCollect}{stackMessage}
 \calls{compRepeatOrCollect}{compOrCroak}
 \calls{compRepeatOrCollect}{comp}
-\calls{compRepeatOrCollect}{msubst}
 \calls{compRepeatOrCollect}{coerceExit}
 \calls{compRepeatOrCollect}{}
 \calls{compRepeatOrCollect}{}
@@ -13921,7 +14027,8 @@ is still more than one complain else return the only signature.
          (setq tmp1 (|comp| |$until| |$Boolean| ep))
          (setq untilCode (first tmp1))
          (setq ep (third tmp1))
-         (setq itlp (msubst (list 'until untilCode) '|$until| itlp)))
+         (setq itlp 
+           (subst (list 'until untilCode) '|$until| itlp :test #'equal)))
        (setq formp (cons repeatOrCollect (append itlp (list bodyp))))
        (setq mpp
         (cond
@@ -14654,7 +14761,6 @@ This function returns the index of domain entry x in the association list
 \tpdhere{See LocalAlgebra for an example call}
 \calls{compSubsetCategory}{put}
 \calls{compSubsetCategory}{comp}
-\calls{compSubsetCategory}{msubst}
 \usesdollar{compSubsetCategory}{lhsOfColon}
 \begin{chunk}{defun compSubsetCategory}
 (defun |compSubsetCategory| (form mode env)
@@ -14668,11 +14774,11 @@ This function returns the index of domain entry x in the association list
   ;  --2. give the subset domain modemaps of cat plus 3 new functions
   (|comp|
     (list '|Join| cat
-      (msubst |$lhsOfColon| '$
+      (subst |$lhsOfColon| '$
              (list 'category '|domain|
               (list 'signature '|coerce| (list r '$))
                (list 'signature '|lift| (list r '$))
-                (list 'signature '|reduce| (list '$ r)))))
+                (list 'signature '|reduce| (list '$ r))) :test #'equal))
      mode env)))
 
 \end{chunk}
@@ -14797,7 +14903,6 @@ One should always call the correct function, since the representation
 of basic objects may not be the same.
 \calls{coerce}{keyedSystemError}
 \calls{coerce}{rplac}
-\calls{coerce}{msubst}
 \calls{coerce}{coerceEasy}
 \calls{coerce}{coerceSubset}
 \calls{coerce}{coerceHard}
@@ -14818,7 +14923,7 @@ of basic objects may not be the same.
    (|keyedSystemError| 'S2GE0016
     (list "coerce" "function coerce called from the interpreter."))
    (progn
-    (|rplac| (cadr tt) (msubst '$ |$Rep| (cadr tt)))
+    (|rplac| (cadr tt) (subst '$ |$Rep| (cadr tt) :test #'equal))
     (cond
      ((setq tp (|coerceEasy| tt mode)) tp)
      ((setq tp (|coerceSubset| tt mode)) tp)
@@ -14859,7 +14964,6 @@ of basic objects may not be the same.
 \calls{coerceSubset}{get}
 \calls{coerceSubset}{opOf}
 \calls{coerceSubset}{eval}
-\calls{coerceSubset}{msubst}
 \calls{coerceSubset}{isSubset}
 \calls{coerceSubset}{maxSuperType}
 \begin{chunk}{defun coerceSubset}
@@ -14875,10 +14979,10 @@ of basic objects may not be the same.
          (consp (qrest m)) (equal (qsecond m) mp))
      (list x mp env))
    ((and (setq pred (lassoc (|opOf| mp) (|get| (|opOf| m) '|SubDomain| env)))
-          (integerp x) (|eval| (msubst x '|#1| pred)))
+          (integerp x) (|eval| (subst x '|#1| pred :test #'equal)))
      (list x mp env))
    ((and (setq pred (|isSubset| mp (|maxSuperType| m env) env))
-          (integerp x) (|eval| (msubst x '* pred)))
+          (integerp x) (|eval| (subst x '* pred :test #'equal)))
      (list x mp env))
    (t nil))))
 
@@ -15091,7 +15195,6 @@ of basic objects may not be the same.
 \calls{compCoerce1}{resolve}
 \calls{compCoerce1}{coerce}
 \calls{compCoerce1}{coerceByModemap}
-\calls{compCoerce1}{msubst}
 \calls{compCoerce1}{mkq}
 \begin{chunk}{defun compCoerce1}
 (defun |compCoerce1| (form mode env)
@@ -15106,7 +15209,7 @@ of basic objects may not be the same.
      ((setq tp (|coerceByModemap| td mode)) tp)
      ((setq pred (|isSubset| mode (second td) env))
        (setq gg (gensym))
-       (setq pred (msubst gg '* pred))
+       (setq pred (subst gg '* pred :test #'equal))
        (setq code
         (list 'prog1
          (list 'let gg (first td))
@@ -15368,8 +15471,6 @@ This orders Unions
 \defun{postTran}{postTran}
 \calls{postTran}{postAtom}
 \calls{postTran}{postTran}
-\calls{postTran}{qcar}
-\calls{postTran}{qcdr}
 \calls{postTran}{unTuple}
 \calls{postTran}{postTranList}
 \calls{postTran}{postForm}
@@ -15420,7 +15521,7 @@ This orders Unions
 
 
 \defun{postAtom}{postAtom}
-\usesdollar{postAtom}{boot}
+\refsdollar{postAtom}{boot}
 \begin{chunk}{defun postAtom}
 (defun |postAtom| (x)
  (declare (special $boot))
@@ -16677,8 +16778,7 @@ of the symbol being parsed. The original list read:
 \calls{aplTran1}{aplTran1}
 \calls{aplTran1}{hasAplExtension}
 \calls{aplTran1}{nreverse0}
-\calls{aplTran1}{}
-\usesdollar{aplTran1}{boot}
+\refsdollar{aplTran1}{boot}
 \begin{chunk}{defun aplTran1}
 (defun |aplTran1| (x)
  (let (op argl1 argl f y opprime yprime tmp1 arglAssoc futureArgl g)
@@ -16759,7 +16859,6 @@ of the symbol being parsed. The original list read:
 \calls{hasAplExtension}{deepestExpression}
 \calls{hasAplExtension}{genvar}
 \calls{hasAplExtension}{aplTran1}
-\calls{hasAplExtension}{msubst}
 \begin{chunk}{defun hasAplExtension}
 (defun |hasAplExtension| (argl)
  (let (tmp2 tmp3 y z g arglAssoc u)
@@ -16776,7 +16875,7 @@ of the symbol being parsed. The original list read:
            (setq z (|deepestExpression| y))
            (setq arglAssoc
             (cons (cons (setq g (genvar)) (|aplTran1| z)) arglAssoc))
-           (msubst g z y))
+           (subst g z y :test #'equal))
           x)
          tmp3)))
     (cons arglAssoc u))))
@@ -16826,8 +16925,6 @@ of the symbol being parsed. The original list read:
 \end{chunk}
 
 \defun{decodeScripts}{decodeScripts}
-\calls{decodeScripts}{qcar}
-\calls{decodeScripts}{qcdr}
 \calls{decodeScripts}{strconc}
 \calls{decodeScripts}{decodeScripts}
 \begin{chunk}{defun decodeScripts}
@@ -19155,6 +19252,13 @@ Stack of results of reduced productions.
 
 \chapter{Comment Recording}
 
+This is the graph of the functions used for recording comments.
+The syntax is a graphviz dot file.
+To generate this graph as a JPEG file, type:
+\begin{verbatim}
+tangle v9CommentRecording.dot bookvol9.pamphlet >v9cr.dot
+dot -Tjpg v9cr.dot >v9cr.jpg
+\end{verbatim}
 \begin{chunk}{v9CommentRecording.dot}
 digraph pic {
  fontsize=10;
@@ -19309,6 +19413,13 @@ deleting entries from u assumes that the first element is useless
 
 \chapter{Comment Syntax Checking}
 
+This is the graph of the functions used for comment syntax checking.
+The syntax is a graphviz dot file.
+To generate this graph as a JPEG file, type:
+\begin{verbatim}
+tangle v9CommentSyntaxChecking.dot bookvol9.pamphlet >v9csc.dot
+dot -Tjpg v9csc.dot >v9csc.jpg
+\end{verbatim}
 \begin{chunk}{v9CommentSyntaxChecking.dot}
 digraph hierarchy {
  fontsize=10;
@@ -19567,7 +19678,6 @@ digraph hierarchy {
 \calls{finalizeDocumentation}{form2String}
 \calls{finalizeDocumentation}{formatOpSignature}
 \calls{finalizeDocumentation}{transDocList}
-\calls{finalizeDocumentation}{msubst}
 \calls{finalizeDocumentation}{assocleft}
 \calls{finalizeDocumentation}{remdup}
 \calls{finalizeDocumentation}{macroExpand}
@@ -19610,7 +19720,7 @@ digraph hierarchy {
    (loop for x in $comblocklist
     when (cdr x)
     collect x))
-  (setq docList (msubst '$ '% (|transDocList| |$op| |$docList|)))
+  (setq docList (subst '$ '% (|transDocList| |$op| |$docList|) :test #'equal))
   (cond
    ((setq u
      (loop for item in docList
@@ -20902,9 +21012,11 @@ Note that {\tt u} should start with an open brace.
 \end{chunk}
 
 \defun{checkGetStringBeforeRightBrace}{checkGetStringBeforeRightBrace}
+\refsdollar{checkGetStringBeforeRightBrace}{charRbrace}
 \begin{chunk}{defun checkGetStringBeforeRightBrace}
 (defun |checkGetStringBeforeRightBrace| (u)
  (prog (x acc)
+ (declare (special |$charRbrace|))
   (return
    (loop while u
     do
@@ -21804,16 +21916,6 @@ Since it has no side effects we define it to return nil.
           (|postError| (list "   Constructor" x "has missing label" )))
        (t x)))
    (t x))))
-
-\end{chunk}
-
-
-\defun{new2OldLisp}{new2OldLisp}
-\calls{new2OldLisp}{new2OldTran}
-\calls{new2OldLisp}{postTransform}
-\begin{chunk}{defun new2OldLisp}
-(defun |new2OldLisp| (x)
- (|new2OldTran| (|postTransform| x)))
 
 \end{chunk}
 
@@ -24595,7 +24697,7 @@ preferred to the underlying representation -- RDJ 9/12/83
    (when sv
      (loop for x in argl for ss in |$FormalMapVariableList|
       do (when (|member| ss sv)
-            (setq modemap (msubst x ss modemap))
+            (setq modemap (subst x ss modemap :test #'equal))
             (setq map (car modemap))
             (setq target (cadar modemap))
             (setq cexpr (cdr modemap))
@@ -25523,7 +25625,6 @@ The current input line.
 \end{chunk}
  
 \defun{initial-substring}{initial-substring}
-\calls{initial-substring}{mismatch}
 \begin{chunk}{defun initial-substring}
 (defun initial-substring (pattern line)
    (let ((ind (mismatch pattern line)))
@@ -25953,7 +26054,12 @@ The current input line.
 \getchunk{defun next-line}
 \getchunk{defun next-tab-loc}
 \getchunk{defun next-token}
+\getchunk{defun newConstruct}
+\getchunk{defun newDef2Def}
+\getchunk{defun newIf2Cond}
 \getchunk{defun newString2Words}
+\getchunk{defun new2OldDefForm}
+\getchunk{defun new2OldTran}
 \getchunk{defun new2OldLisp}
 \getchunk{defun nonblankloc}
 \getchunk{defun NRTassocIndex}
@@ -26225,6 +26331,7 @@ The current input line.
 \getchunk{defun stack-pop}
 \getchunk{defun stack-push}
 \getchunk{defun storeblanks}
+\getchunk{defun string2BootTree}
 \getchunk{defun stripOffArgumentConditions}
 \getchunk{defun stripOffSubdomainConditions}
 \getchunk{defun subrname}
