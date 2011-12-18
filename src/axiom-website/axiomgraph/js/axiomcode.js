@@ -7,29 +7,29 @@
     
     var tencolors = {
       "back"   : "#ECEA81",
-      "defun"  : "#000000",
+      "Black"  : "#000000", "defun"  : "#000000",
       "Brown"  : "#A52A2A",
-      "refs"   : "#FF0000",
-      "defs"   : "#FFA500",
-      "Yellow" : "#FFFF00",
-      "Green"  : "#00FF00",
-      "calls"  : "#0000FF",
+      "Red"    : "#FF0000", "deffed" : "#FF0000",
+      "Orange" : "#FFA500", 
+      "Yellow" : "#FFFF00", "reffed" : "#FFFF00",
+      "Green"  : "#00FF00", "defref" : "#00FF00",
+      "Blue"   : "#0000FF", "calls"  : "#0000FF",
       "Violet" : "#800080",
-      "Gray"   : "#808080",
+      "Gray"   : "#808080", "caller" : "#808080",
       "White"  : "#FFFFFF",
     }
 
     var tencomplement = {
       "back"   : "#13157E",
-      "defun"  : "#FFFFFF",
-      "calls"  : "#5AD5D5",
-      "refs"   : "#00FFFF",
-      "defs"   : "#005AFF",
-      "Yellow" : "#0000FF",
-      "Green"  : "#FF00FF",
-      "calls"  : "#FFFF00",
+      "Black"  : "#FFFFFF", "defun"  : "#FFFFFF",
+      "Brown"  : "#5AD5D5",
+      "Red"    : "#00FFFF", "deffed" : "#00FFFF",
+      "Orange" : "#005AFF",
+      "Yellow" : "#0000FF", "reffed" : "#0000FF",
+      "Green"  : "#FF00FF", "defref" : "#FF00FF",
+      "Blue"   : "#FFFF00", "calls"  : "#FFFF00",
       "Violet" : "#7FFF7F",
-      "Gray"   : "#FFFFFF",
+      "Gray"   : "#7F7F7F", "caller" : "#000000",
       "White"  : "#000000",
     }
 
@@ -180,6 +180,10 @@
       dstruct:{title:"Data", p:{stiffness:500}, source:_sources.flyleaf},
       algebra:{title:"Algebra", p:{stiffness:600}, source:_sources.flyleaf},
       nine:{title:"Compiler", p:{stiffness:500}, source:_sources.book9},
+      funsel:{title:"FunctionSelection", 
+              p:{stiffness:500}, source:_sources.book9},
+      comment:{title:"Comment", p:{stiffness:500}, source:_sources.book9},
+      parse:{title:"Parse", p:{stiffness:500}, source:_sources.book9}
     }
     
     var that = {
@@ -188,7 +192,7 @@
           _links.append("<li><a href='#/"+stub+"' class='"+stub+"'>"+map.title+"</a></li>")
         })
         _links.find('li > a').click(that.mapClick)
-        _links.find('.dstruct').click()
+        _links.find('.parse').click()
         return that
       },
 
