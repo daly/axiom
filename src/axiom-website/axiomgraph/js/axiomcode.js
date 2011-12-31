@@ -183,7 +183,9 @@
       funsel:{title:"FunctionSelection", 
               p:{stiffness:500}, source:_sources.book9},
       comment:{title:"Comment", p:{stiffness:500}, source:_sources.book9},
-      parse:{title:"Parse", p:{stiffness:500}, source:_sources.book9}
+      parse:{title:"Parse", p:{stiffness:500}, source:_sources.book9},
+      compile:{title:"Compile", p:{stiffness:500}, source:_sources.book9},
+      compiler:{title:"Compiler", p:{stiffness:500}, source:_sources.book9}
     }
     
     var that = {
@@ -192,7 +194,7 @@
           _links.append("<li><a href='#/"+stub+"' class='"+stub+"'>"+map.title+"</a></li>")
         })
         _links.find('li > a').click(that.mapClick)
-        _links.find('.parse').click()
+        _links.find('.compiler').click()
         return that
       },
 
