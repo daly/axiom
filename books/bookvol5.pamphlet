@@ -15995,6 +15995,7 @@ See:\\
 \item The \fnref{pquit} command
 \item The \fnref{quit} command
 \item The \fnref{read} command
+\item The \fnref{regress} command
 \item The \fnref{savesystem} command
 \item The \fnref{set} command
 \item The \fnref{show} command
@@ -16002,6 +16003,7 @@ See:\\
 \item The \fnref{summary} command
 \item The \fnref{synonym} command
 \item The \fnref{system} command
+\item The \fnref{tangle} command
 \item The \fnref{trace} command
 \item The \fnref{trademark} command
 \item The \fnref{undo} command
@@ -16045,6 +16047,7 @@ See:\\
    (|pquit|                          . |interpreter|)
    (|quit|                           . |interpreter|)
    (|read|                           . |interpreter|)
+   (|regress|                        . |interpreter|)
    (|savesystem|                     . |interpreter|)
    (|set|                            . |interpreter|)
    (|show|                           . |interpreter|)
@@ -16052,6 +16055,7 @@ See:\\
    (|summary|                        . |interpreter|)
    (|synonym|                        . |interpreter|)
    (|system|                         . |interpreter|)
+   (|tangle|                         . |interpreter|)
    (|trace|                          . |interpreter|)
    (|trademark|                      . |interpreter|)
    (|undo|                           . |interpreter|)
@@ -17362,9 +17366,11 @@ tokenized and validated the input before calling the history function.
     |load|
     |ltrace|
     |read|
+    |regress|
     |savesystem|
     |set|
     |spool|
+    |tangle|
     |undo|
     |what|
     |with|
@@ -23146,6 +23152,179 @@ o )history
 
 
 \end{chunk}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\cmdhead{regress help page}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{chunk}{regress.help}
+====================================================================
+A.20.  )regress
+====================================================================
+ 
+User Level Required:  interpreter
+ 
+Command Syntax: 
+ 
+  -  )regress fileName
+ 
+Command Description: 
+ 
+The regress command will run the regress function that was compiled
+as part of the lisp image build process. This function expects an
+input filename, possibly containing a path prefix. 
+
+If the filename contains a period then we consider it a fully formed
+filename, otherwise we append ``.output'', which is the default file
+extension.
+
+  )regress matrix
+  )regress matrix.output
+  )regress /path/to/file/matrix
+  )regress /path/to/file/matrix.output
+ 
+will test the contents of the file matrix.output.
+
+The idea behind regression testing is to check that the results
+we currently get match the results we used to get. In order to
+do that we create input files with a special comment format that
+contains the prior results. These are easy to create as all you
+need to do is run the Axiom function, capture the results, and
+turn them input specially formed comments using the -- comment.
+
+A regression file caches the result of an Axiom function so we
+can automate the testing process. It is a file of many tests,
+each with their own output.
+
+The regression file format uses the Axiom -- comment syntax to keep
+a copy of the expected output from an Axiom command. This expected
+output is compared character by character against the actual output.
+
+The regression file is broken into numbered blocks, delimited by
+a --S for the beginning and a --E for the end. The total number of
+blocks is also given so missing or failed tests also raise an error.
+
+There are 4 special kinds of -- comments in regression files:
+
+  --S n of M        this is test n of M tests in this file
+  --E n             this marks the end of test n
+  --R any output    this marks the actual expected output line
+  --I any output    this line is compared but ignored
+
+A regression test file looks like:
+
+  )set break resume
+  )spool foo.output
+  )set message type off
+  )clear all
+
+  --S 1 of 3
+  2+3
+  --R                     this is the exact Axiom output
+  --R   (1)  5
+  --E 1
+
+  --S 2 of 3
+  2+3
+  --R                     this should fail to match
+  --R   (2)  7
+  --E 2
+
+  --S 3 of 3
+  2+3
+  --R                     this fails to match but we
+  --I   (3)  7            use --I to ignore this line
+  --E 3
+
+We can now run this file with
+
+  )read foo.input
+
+Note that when this file is run it will create a spool file called
+"foo.output" because of the lines:
+  
+  )spool foo.output
+  )spool
+
+The "foo.output" file contains the console image of the result. 
+It will look like:
+
+  Starts dribbling to foo.output (2012/2/28, 12:25:7).
+  )set message type off
+  )clear all
+
+  --S 1 of 3
+  2+3
+  
+     (1)  5
+  --R
+  --R   (1)  5
+  --E 1
+  
+  --S 2 of 3
+  2+3
+  
+     (2)  5
+  --R
+  --R   (2)  7
+  --E 2
+
+  --S 3 of 3
+  2+3
+  
+     (3)  5
+  --R
+  --I   (3)  7
+  --E 3
+
+  )spool
+
+This "foo.output" file can now be checked using the )regress command.
+ 
+When we run the )regress foo.output we see;
+
+  testing foo
+  passed foo  1 of 3
+  MISMATCH
+  expected:"   (2)  7"
+       got:"   (2)  5"
+  FAILED foo  2 of 2
+  passed foo  3 of 3
+  regression result FAILED 1 of 3 stanzas file foo
+
+Tests either pass or fail. A passing test generates the message:
+
+    passed foo  1 of 3
+
+A failing test will give a reversed printout of the expected vs
+actual output as well as a FAILED message, as in:
+
+  MISMATCH
+  expected:"   (2)  7"
+       got:"   (2)  5"
+  FAILED foo  2 of 3
+
+The last line of output is a summary:
+
+  regression result FAILED 1 of 3 stanzas file foo
+
+ 
+\end{chunk} 
+
+\begin{chunk}{defun regress}
+(defun |regress| (arg)
+ (let (|$InteractiveMode| namestring dot1 outfile (extension "output"))
+ (declare (special |$InteractiveMode|))
+  (setq |$InteractiveMode| t)
+  (setq namestring (symbol-name (car arg)))
+  (setq dot1 (position #\. namestring))
+  (unless dot1
+   (setq outfile (concatenate 'string (subseq namestring 0) "." extension)))
+  (if (probe-file outfile)
+   (regress outfile)
+   (format t (concatenate 'string outfile ~%" file not found")))))
+
+\end{chunk}
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \cmdhead{savesystem help page}
@@ -30827,6 +31006,60 @@ This command is in the list of \verb|$noParseCommands|
 \ref{noParseCommands} which means that its arguments are passed
 verbatim. This will eventually result in a call to the function
 \verb|handleNoParseCommands| \ref{handleNoParseCommands}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\cmdhead{tangle help page}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{chunk}{tangle.help}
+====================================================================
+A.20.  )tangle
+====================================================================
+ 
+User Level Required:  interpreter
+ 
+Command Syntax: 
+ 
+  -  )tangle [fileName]
+ 
+Command Description: 
+ 
+This command is used to tangle pamphlet files.
+ 
+)tangle matrix.input.pamphlet
+ 
+will tangle the contents of the file matrix.input.pamphlet into 
+matrix.input. The ``.input.pamphlet'' is optional.
+ 
+\end{chunk} 
+
+\begin{chunk}{defun tangle}
+(defun |tangle| (arg)
+ (let (|$InteractiveMode| fullopt namestring dot1 dot2 outfile 
+      (chunkname "*") (extension "input"))      
+ (declare (special |$InteractiveMode| |$options|))
+  (setq |$InteractiveMode| t)
+  (setq namestring (symbol-name (car arg)))
+  (setq dot1 (position #\. namestring))
+  (if dot1
+   (setq outfile 
+    (concatenate 'string (subseq namestring 0 dot1) "." extension))
+   (setq outfile 
+    (concatenate 'string (subseq namestring 0) "." extension)))
+  (setq dot2 (position #\. namestring :from-end t))
+  (cond
+   ((and (numberp dot1) (numberp dot2) (< dot1 dot2)))
+   ((and (numberp dot1) (numberp dot2) (= dot1 dot2))
+    (setq namestring (concatenate 'string namestring ".pamphlet")))
+   (t
+    (setq namestring (concatenate 'string namestring ".input.pamphlet"))))
+  (if (probe-file namestring)
+   (progn
+    (tangle namestring chunkname outfile)
+    (format t (concatenate 'string outfile " created from " namestring "~%")))
+   (format t (concatenate 'string namestring " file not found~%")))))
+
+\end{chunk}
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \cmdhead{trace help page}
@@ -44759,6 +44992,7 @@ This needs to work off the internal exposure list, not the file.
 \getchunk{defun recordOldValue}
 \getchunk{defun recordOldValue0}
 \getchunk{defun redundant}
+\getchunk{defun regress}
 \getchunk{defun remFile}
 \getchunk{defun removeOption}
 \getchunk{defun remover}
@@ -44938,6 +45172,7 @@ This needs to work off the internal exposure list, not the file.
 
 \getchunk{defun ?t}
 \getchunk{defun tabbing}
+\getchunk{defun tangle}
 \getchunk{defun terminateSystemCommand}
 \getchunk{defun tersyscommand}
 \getchunk{defun thisPosIsEqual}
