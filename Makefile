@@ -57,7 +57,7 @@ GCLVERSION=gcl-2.6.8pre7
 GCLDIR:=${LSP}/${GCLVERSION}
 GCLOPTS="--enable-vssize=65536*2 --disable-locbfd --disable-dynsysbfd \
          --disable-statsysbfd --enable-maxpage=512*1024 --disable-xgcl \
-         --disable-tkconfig --enable-custreloc --disable-tkconfig 
+         --disable-tkconfig --enable-custreloc --disable-tkconfig"
 LISP:=lsp
 
 ##### C related variables
