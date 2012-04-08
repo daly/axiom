@@ -52,11 +52,12 @@ BYE:=bye
 #GCLVERSION=gcl-2.6.8pre
 #GCLVERSION=gcl-2.6.8pre2
 #GCLVERSION=gcl-2.6.8pre3 
-GCLVERSION=gcl-2.6.8pre4
+#GCLVERSION=gcl-2.6.8pre4
+GCLVERSION=gcl-2.6.8pre7
 GCLDIR:=${LSP}/${GCLVERSION}
-GCLOPTS="--enable-vssize=65536*2 --enable-locbfd --disable-dynsysbfd \
+GCLOPTS="--enable-vssize=65536*2 --disable-locbfd --disable-dynsysbfd \
          --disable-statsysbfd --enable-maxpage=512*1024 --disable-xgcl \
-         --disable-tkconfig"
+         --disable-tkconfig --enable-custreloc --disable-tkconfig 
 LISP:=lsp
 
 ##### C related variables
