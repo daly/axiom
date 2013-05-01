@@ -462,7 +462,7 @@
 ;;;
 ;;; This will find all of the .input chunks in the books
 ;;; and write each chunk to the target directory in its own filename.
-;;; So if a chunk name is <<somedomain.input>> the above call will create
+;;; So if a chunk name is {somedomain.input} the above call will create
 ;;; the file "/tmp/help/somedomain.input" containing the chunk value.
 
 (defun makeInputFiles ()
@@ -474,6 +474,29 @@
   (allchunks PAT (concatenate 'string BOOKS "/bookvol10.4.pamphlet") INPUT nil)
   (allchunks PAT
    (concatenate 'string BOOKS "/bookvol10.5.pamphlet") INPUT nil)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; 14 makeXHTMLFiles
+;;;
+;;; The makeXHTMLFiles function creates all of the xhtml files in a single
+;;; pass over the file. The usual method of extracting each individual
+;;; input file requires hundreds of passes over the file.
+;;;
+;;; An example call is:
+;;;
+;;; (makeXHTMLFiles)
+;;;
+;;; This will find all of the .xhtml chunks in the books
+;;; and write each chunk to the target directory in its own filename.
+;;; So if a chunk name is {somedomain.xhtml} the above call will create
+;;; the file "/somedomain.xhtml" containing the chunk value.
+
+(defun makeXHTMLFiles ()
+ (let ((MNT (si::getenv "MNT")) (BOOKS (si::getenv "BOOKS")) INPUT PAT)
+  (setq INPUT (concatenate 'string MNT "/doc"))
+  (setq PAT ".xhtml")
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol11.pamphlet") INPUT nil)))
+
 
 
 
