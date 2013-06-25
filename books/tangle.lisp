@@ -163,7 +163,8 @@
   (if (and file (stringp file))
    (with-open-file (out file :direction :output)
      (gcl-expand topchunk noweb? out))
-   (gcl-expand topchunk noweb? t))))
+   (gcl-expand topchunk noweb? t)))
+  (values))
 
 
 
@@ -447,7 +448,8 @@
   (allchunks PAT (concatenate 'string BOOKS "/bookvol10.3.pamphlet") HELP nil)
   (allchunks PAT (concatenate 'string BOOKS "/bookvol10.4.pamphlet") HELP nil)
   (allchunks PAT
-   (concatenate 'string BOOKS "/bookvol10.5.pamphlet") HELP nil)))
+   (concatenate 'string BOOKS "/bookvol10.5.pamphlet") HELP nil)
+  (values)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; 13 makeInputFiles
@@ -473,7 +475,8 @@
   (allchunks PAT (concatenate 'string BOOKS "/bookvol10.3.pamphlet") INPUT nil)
   (allchunks PAT (concatenate 'string BOOKS "/bookvol10.4.pamphlet") INPUT nil)
   (allchunks PAT
-   (concatenate 'string BOOKS "/bookvol10.5.pamphlet") INPUT nil)))
+   (concatenate 'string BOOKS "/bookvol10.5.pamphlet") INPUT nil)
+  (values)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; 14 makeXHTMLFiles
@@ -495,7 +498,8 @@
  (let ((MNT (si::getenv "MNT")) (BOOKS (si::getenv "BOOKS")) INPUT PAT)
   (setq INPUT (concatenate 'string MNT "/doc"))
   (setq PAT ".xhtml")
-  (allchunks PAT (concatenate 'string BOOKS "/bookvol11.pamphlet") INPUT nil)))
+  (allchunks PAT (concatenate 'string BOOKS "/bookvol11.pamphlet") INPUT nil)
+ (values)))
 
 
 
