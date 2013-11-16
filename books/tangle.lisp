@@ -125,7 +125,7 @@
 ;;;
 ;;; and referenced by <<name>> which gets replaced by the code
 
-:;; There are several ways to invoke the tangle function. 
+;;; There are several ways to invoke the tangle function. 
 ;;;
 ;;; The first argument is always the file from which to extract code
 ;;;
@@ -439,6 +439,7 @@
 ;;; The ``See Also:'' section lists the domain with the ``show'' command
 ;;; and the path to the source file in dvi format.
 
+#+:GCL
 (defun makeHelpFiles ()
  (let ((AXIOM (si::getenv "AXIOM")) (BOOKS (si::getenv "BOOKS")) HELP PAT)
   (setq HELP (concatenate 'string AXIOM "/doc/spadhelp"))
@@ -467,6 +468,7 @@
 ;;; So if a chunk name is {somedomain.input} the above call will create
 ;;; the file "/tmp/help/somedomain.input" containing the chunk value.
 
+#+:GCL
 (defun makeInputFiles ()
  (let ((SPD (si::getenv "SPD")) (BOOKS (si::getenv "BOOKS")) INPUT PAT)
   (setq INPUT (concatenate 'string SPD "/int/input"))
@@ -494,6 +496,7 @@
 ;;; So if a chunk name is {somedomain.xhtml} the above call will create
 ;;; the file "/somedomain.xhtml" containing the chunk value.
 
+#+:GCL
 (defun makeXHTMLFiles ()
  (let ((MNT (si::getenv "MNT")) (BOOKS (si::getenv "BOOKS")) INPUT PAT)
   (setq INPUT (concatenate 'string MNT "/doc"))
