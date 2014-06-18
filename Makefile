@@ -145,7 +145,7 @@ all: noweb ${MNT}/${SYS}/bin/document
 	   ( echo s4 starting serial make of input files ; \
 	     mkdir -p ${MNT}/${SYS}/doc/src/input ; \
              cd ${MNT}/${SYS}/doc/src/input ; \
-	     cp ${SRC}/scripts/tex/axiom.sty . ; \
+	     cp ${BOOKS}/axiom.sty . ; \
 	     for i in `ls ${SRC}/input/*.input.pamphlet` ; do \
 	      if [ .${NOISE} = . ] ; \
 	      then \
@@ -189,7 +189,7 @@ input:
 	@ if [ "${BUILD}" = "full" ] ; then \
 	  ( mkdir -p ${MNT}/${SYS}/doc/src/input ; \
             cd ${MNT}/${SYS}/doc/src/input ; \
-	    cp ${SRC}/scripts/tex/axiom.sty . ; \
+	    cp ${BOOKS}/axiom.sty . ; \
 	    for i in `ls ${SRC}/input/*.input.pamphlet` ; \
               do latex $$i ; \
               done ; \
@@ -281,7 +281,6 @@ clean:
 	@ rm -f axiom.sty
 	@ rm -f books/Makefile
 	@ rm -f books/Makefile.dvi
-	@ rm -f books/axiom.sty
 	@ rm -f src/algebra/axiom.sty
 	@ rm -f lsp/axiom.sty
 	@ rm -f src/axiom.sty
