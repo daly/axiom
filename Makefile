@@ -127,7 +127,7 @@ WEAVE=${WEAVE} \
 XLIB=${XLIB} \
 ZIPS=${ZIPS} 
 
-all: noweb ${MNT}/${SYS}/bin/document
+all: tangle noweb ${MNT}/${SYS}/bin/document
 	@ echo p1 making a parallel system build
 	@ echo 1 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
 	@ echo 2 Environment ${ENV}
@@ -220,6 +220,10 @@ book:
 	  rm book.aux )
 	@ echo 80 The book is at ${MNT}/${SYS}/doc/book.dvi 
 
+tangle: books/tangle.c
+	@echo t01 making tangle from tangle.c
+	@( cd books ; gcc -o tangle tangle.c )
+
 noweb:
 	@echo 13 making noweb
 	@mkdir -p ${OBJ}/noweb
@@ -306,4 +310,5 @@ clean:
 	@ for i in `find src -name "Makefile"` ; do rm -f $$i ; done
 	@ for i in `find src -name "Makefile.dvi"` ; do rm -f $$i ; done
 	@ rm -f lastBuildDate
+	@ rm -f books/tangle
 
