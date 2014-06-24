@@ -131,7 +131,7 @@ int getchunk(char *chunkname) {
 int main(int argc, char *argv[]) {
   int fd;
   struct stat filestat;
-  if ((argc < 2) || (argc > 3)) { 
+  if ((argc == 1) || (argc > 3)) { 
     perror("Usage: tangle filename chunkname");
     exit(-1);
   }
@@ -151,7 +151,11 @@ int main(int argc, char *argv[]) {
     perror("Error reading the file");
     exit(-4);
   }
-  getchunk(argv[2]);
+  if (argc == 2) {
+    getchunk("*");
+  } else {
+    getchunk(argv[2]);
+  }
   close(fd);
   return(0);
 }

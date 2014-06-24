@@ -19,6 +19,7 @@ DAASE:=${SRC}/share
 
 SPADBIN:=${MNT}/${SYS}/bin
 DOCUMENT:=${SPADBIN}/document
+EXTRACT:=${BOOKS}/extract
 
 ##### installation paths
 DESTDIR:=/usr/local/axiom
@@ -92,6 +93,7 @@ COMMAND=${COMMAND} \
 DAASE=${DAASE} \
 DESTDIR=${DESTDIR} \
 DOCUMENT=${DOCUMENT} \
+EXTRACT=${EXTRACT} \
 GCLDIR=${GCLDIR} \
 GCLOPTS=${GCLOPTS} \
 GCLVERSION=${GCLVERSION} \
@@ -167,16 +169,16 @@ all: tangle noweb ${MNT}/${SYS}/bin/document
 	      echo s3 ${SPD}/books/Makefile from \
                    ${SPD}/books/Makefile.pamphlet ; \
 	      cd ${SPD}/books ; \
-              ${DOCUMENT} Makefile ; \
-              cp Makefile.dvi ${MNT}/${SYS}/doc/src/books.Makefile.dvi ; \
+              ${EXTRACT} Makefile ; \
+              cp Makefile.pdf ${MNT}/${SYS}/doc/src/books.Makefile.pdf ; \
 	      ${ENV} ${MAKE} & ) ; \
 	  else \
 	    ( echo s2 starting serial make of books ; \
 	      echo s3 ${SPD}/books/Makefile from \
                    ${SPD}/books/Makefile.pamphlet ; \
 	      cd ${SPD}/books ; \
-              ${DOCUMENT} Makefile ; \
-              cp Makefile.dvi ${MNT}/${SYS}/doc/src/books.Makefile.dvi ; \
+              ${EXTRACT} Makefile ; \
+              cp Makefile.pdf ${MNT}/${SYS}/doc/src/books.Makefile.pdf ; \
               if [ "${BUILD}" = "full" ] ; then \
 	      ${ENV} ${MAKE} ; fi ) ; \
 	  fi
@@ -219,6 +221,7 @@ book:
 	  rm book.log ; \
 	  rm book.aux )
 	@ echo 80 The book is at ${MNT}/${SYS}/doc/book.dvi 
+
 
 tangle: books/tangle.c
 	@echo t01 making tangle from tangle.c
