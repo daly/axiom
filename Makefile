@@ -33,10 +33,6 @@ TAR:=tar
 TOUCH:=touch
 UNCOMPRESS:=gunzip
 
-##### noweb
-TANGLE:=${SPADBIN}/lib/notangle
-WEAVE:=${SPADBIN}/lib/noweave
-
 ##### lisp related variables
 BYE:=bye
 #GCLVERSION=gcl-2.4.1
@@ -129,16 +125,14 @@ WEAVE=${WEAVE} \
 XLIB=${XLIB} \
 ZIPS=${ZIPS} 
 
-all: tangle noweb ${MNT}/${SYS}/bin/document
-	@ echo p1 making a parallel system build
+all: rootdirs tangle ${MNT}/${SYS}/bin/document
 	@ echo 1 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
 	@ echo 2 Environment ${ENV}
-	@ ${TANGLE} -t8 -RMakefile.${SYS} Makefile.pamphlet >Makefile.${SYS}
-	@ ${DOCUMENT} Makefile
-	@ mkdir -p ${MNT}/${SYS}/doc/src
+	@ ${BOOKS}/tangle Makefile.pamphlet "Makefile.${SYS}" >Makefile.${SYS}
 	@ cp books/dvipdfm.def ${MNT}/${SYS}/doc
 	@ cp books/changepage.sty ${MNT}/${SYS}/doc
-	@ cp Makefile.dvi ${MNT}/${SYS}/doc/src/root.Makefile.dvi
+	@ ${EXTRACT} Makefile.pamphlet
+	@ cp Makefile.pdf ${MNT}/${SYS}/doc/src/root.Makefile.pdf
 	@ if [ "${RUNTYPE}" = "parallel" ] ; then \
 	   ( echo p4 starting parallel make of input files ; \
 	     ${ENV} ${MAKE} input ${NOISE} & ) ; \
@@ -186,6 +180,15 @@ all: tangle noweb ${MNT}/${SYS}/bin/document
 	@ ${ENV} $(MAKE) -f Makefile.${SYS} 
 	@ echo 3 finished system build on `date` | tee >lastBuildDate
 
+rootdirs:
+	@ echo 11 checking directory structure
+	@ mkdir -p ${TMP}
+	@ mkdir -p ${INT}/doc/lsp
+	@ mkdir -p ${INT}/doc/src
+	@ mkdir -p ${OBJ}/${SYS}
+	@ mkdir -p ${MNT}/${SYS}/bin/lib
+	@ mkdir -p ${MNT}/${SYS}/doc/src
+
 input:
 	@ echo p9 making input documents
 	@ if [ "${BUILD}" = "full" ] ; then \
@@ -227,28 +230,6 @@ tangle: books/tangle.c
 	@echo t01 making tangle from tangle.c
 	@( cd books ; gcc -o tangle tangle.c )
 
-noweb:
-	@echo 13 making noweb
-	@mkdir -p ${OBJ}/noweb
-	@mkdir -p ${TMP}
-	@mkdir -p ${MNT}/${SYS}/bin/lib
-	@( cd ${OBJ}/noweb ; \
-	tar -zxf ${ZIPS}/noweb-2.10a.tgz ; \
-	cd ${OBJ}/noweb/src/c ; \
-	${PATCH} <${ZIPS}/noweb.modules.c.patch ; \
-	cd ${OBJ}/noweb/src ; \
-	${PATCH} <${ZIPS}/noweb.src.Makefile.patch ; \
-	./awkname ${AWK} ; \
-	${ENV} ${MAKE} BIN=${MNT}/${SYS}/bin/lib LIB=${MNT}/${SYS}/bin/lib \
-                MAN=${MNT}/${SYS}/bin/man \
-                TEXINPUTS=${MNT}/${SYS}/bin/tex all install >${TMP}/trace )
-	@echo The file marks the fact that noweb has been made > noweb
-
-nowebclean:
-	@echo 14 cleaning ${OBJ}/noweb
-	@rm -rf ${OBJ}/noweb
-	@rm -f noweb
-
 ${MNT}/${SYS}/bin/document:
 	@echo 0 ${ENV}
 	@echo 10 copying ${SRC}/scripts to ${MNT}/${SYS}/bin
@@ -272,10 +253,10 @@ install:
 	@echo 
 
 
-document: noweb ${MNT}/${SYS}/bin/document
+document: ${MNT}/${SYS}/bin/document
 	@ echo 4 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
 	@ echo 5 Environment ${ENV}
-	@ ${TANGLE} -t8 -RMakefile.${SYS} Makefile.pamphlet >Makefile.${SYS}
+	@ ${BOOKS}/tangle Makefile.pamphlet "Makefile.${SYS}" >Makefile.${SYS}
 	@ ${ENV} $(MAKE) -f Makefile.${SYS} document
 	@echo 6 finished system build on `date` | tee >lastBuildDate
 
@@ -302,7 +283,6 @@ clean:
 	@ rm -f lsp/Makefile.dvi
 	@ rm -f lsp/Makefile
 	@ rm -rf lsp/gcl*
-	@ rm -f noweb 
 	@ rm -f trace
 	@ rm -f Makefile.${SYS}
 	@ rm -f Makefile.dvi
