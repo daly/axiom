@@ -5,6 +5,7 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 
+// set this to 3 for further information
 #define DEBUG 0
 
 /* forward reference for the C compiler */
@@ -34,15 +35,19 @@ int printline(int i, int length) {
 int foundchunk(int i, char *chunkname) {
   if ((strncmp(&buffer[i+14],chunkname,strlen(chunkname)) == 0) &&
       (buffer[i+13] == '{') &&
-      (buffer[i+14+strlen(chunkname)] == '}')) return(1);
+      (buffer[i+14+strlen(chunkname)] == '}')) {
+    if (DEBUG==3) { printf("foundchunk(%s)\n",chunkname); }
+    return(1); 
+  }
   return(0);
 }
 
 /* handle end{chunk}   */
 /* is it really an end? */
-int foundEnd(int i) {
+int foundEnd(int i, char* chunkname) {
   if ((buffer[i] == '\\') && 
       (strncmp(&buffer[i+1],"end{chunk}",10) == 0)) {
+    if (DEBUG==3) { printf("foundEnd(%s)\n",chunkname); }
     return(1); 
   }
   return(0);
@@ -75,18 +80,16 @@ int printchunk(int i, int chunklinelen, char *chunkname) {
   int linelen;
   char *getname;
   int getlen = 0;
+  if (DEBUG==3) { printf("===   \\start{%s}   ===\n",chunkname); }
   for (k=i+chunklinelen+1; ((linelen=nextline(k)) != -1); ) {
-    if (DEBUG==2) { 
-      printf(">>>>"); printline(k,linelen); printf("<<<<\n"); 
-    }
     if ((getlen=foundGetchunk(k,linelen)) > 0) {
        getname = getChunkname(k,getlen);
        getchunk(getname);
        free(getname);
        k=k+getlen+12l;
     } else {
-    if ((linelen >= 11) && (foundEnd(k) == 1)) {
-      if (DEBUG) { printf("=================\\end{%s}\n",chunkname); }
+      if ((linelen >= 11) && (foundEnd(k,chunkname) == 1)) {
+      if (DEBUG==3) { printf("===   \\end{%s}   ===\n",chunkname); }
       return(k+12);
     } else {
       if (DEBUG==2) { 
@@ -108,12 +111,13 @@ int getchunk(char *chunkname) {
   int j;
   int linelen;
   int chunklen = strlen(chunkname);
+  if (DEBUG==3) { printf("getchunk(%s)\n",chunkname); }
   for (i=0; ((linelen=nextline(i)) != -1); ) {
     if (DEBUG==2) { 
       printf("----"); printline(i,linelen); printf("----\n"); 
     }
     if ((linelen >= chunklen+15) && (foundchunk(i,chunkname) == 1)) {
-      if (DEBUG) {
+      if (DEBUG==2) {
          fprintf(stderr,"=================\\getchunk(%s)\n",chunkname); 
       }
       i=printchunk(i,linelen,chunkname);
@@ -121,7 +125,7 @@ int getchunk(char *chunkname) {
       i=i+linelen+1;
     }
   }
-  if (DEBUG) { 
+  if (DEBUG==2) { 
     fprintf(stderr,"=================getchunk returned=%d\n",i); 
   }
   return(i);
