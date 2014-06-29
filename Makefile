@@ -73,8 +73,8 @@ PART:=	cprogs
 SUBPART:= everything
 RUNTYPE:=serial
 # can be richtests, catstests, regresstests (see src/input/Makefile)
-# alltests
-TESTSET:=regresstests
+# alltests, notests
+TESTSET:=notests
 BUILD:=full
 
 
