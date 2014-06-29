@@ -2492,7 +2492,7 @@
             BOOT::|bool| BOOT::|e04mbfSolve,fd| BOOT::|orderList|
             BOOT::|e04mbfSolve,fc| BOOT::|upLoopIters| BOOT::NMSORT
             BOOT::|pr| BOOT::|e04fdfSolve,fb| BOOT::|interpIter|
-            BOOT::|functionp| BOOT::|quoteCatOp| BOOT::|e04fdfSolve,fa|
+            BOOT::canFuncall? BOOT::|quoteCatOp| BOOT::|e04fdfSolve,fa|
             BOOT::|isLetter| BOOT::|mkNestedElts| BOOT::|charRangeTest|
             BOOT::|instantiate| BOOT::|isUpperCaseLetter|
             BOOT::|e04gcfSolve,fb| BOOT::|flattenSexpr|
