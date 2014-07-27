@@ -124,10 +124,10 @@ WEAVE=${WEAVE} \
 XLIB=${XLIB} \
 ZIPS=${ZIPS} 
 
-all: rootdirs tangle ${MNT}/${SYS}/bin/document
+all: rootdirs tanglec ${MNT}/${SYS}/bin/document
 	@ echo 1 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
 	@ echo 2 Environment ${ENV}
-	@ ${BOOKS}/tangle Makefile.pamphlet "Makefile.${SYS}" >Makefile.${SYS}
+	@ ${BOOKS}/tanglec Makefile.pamphlet "Makefile.${SYS}" >Makefile.${SYS}
 	@ cp books/dvipdfm.def ${MNT}/${SYS}/doc
 	@ cp books/changepage.sty ${MNT}/${SYS}/doc
 	@ ${EXTRACT} Makefile.pamphlet
@@ -225,9 +225,9 @@ book:
 	@ echo 80 The book is at ${MNT}/${SYS}/doc/book.dvi 
 
 
-tangle: books/tangle.c
-	@echo t01 making tangle from tangle.c
-	@( cd books ; gcc -o tangle tangle.c )
+tanglec: books/tanglec.c
+	@echo t01 making tanglec from books/tanglec.c
+	@( cd books ; gcc -o tanglec tanglec.c )
 
 ${MNT}/${SYS}/bin/document:
 	@echo 0 ${ENV}
@@ -255,7 +255,7 @@ install:
 document: ${MNT}/${SYS}/bin/document
 	@ echo 4 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
 	@ echo 5 Environment ${ENV}
-	@ ${BOOKS}/tangle Makefile.pamphlet "Makefile.${SYS}" >Makefile.${SYS}
+	@ ${BOOKS}/tanglec Makefile.pamphlet "Makefile.${SYS}" >Makefile.${SYS}
 	@ ${ENV} $(MAKE) -f Makefile.${SYS} document
 	@echo 6 finished system build on `date` | tee >lastBuildDate
 
@@ -292,11 +292,11 @@ clean:
 	@ for i in `find src -name "Makefile"` ; do rm -f $$i ; done
 	@ for i in `find src -name "Makefile.dvi"` ; do rm -f $$i ; done
 	@ rm -f lastBuildDate
-	@ rm -f books/tangle.o
+	@ rm -f books/tanglec
 	@ rm -f Makefile.pdf books/Makefile.pdf 
 	@ rm -f lsp/Makefile.pdf lsp/Makefile.pdf src/Makefile.pdf
 	@ rm -f src/algebra/Makefile.pdf src/clef/Makefile.pdf 
-	@ rm -f src/doc/Makefile.pdf src/lib/Makefile.pdf
+	@ rm -f src/doc/Makefile.pdf
 	@ rm -f src/etc/Makefile.pdf src/input/Makefile.pdf 
 	@ rm -f src/interp/Makefile.pdf
 	@ rm -f src/scripts/Makefile.pdf src/share/Makefile.pdf
