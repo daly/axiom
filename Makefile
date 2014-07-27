@@ -50,11 +50,10 @@ BYE:=bye
 #GCLVERSION=gcl-2.6.8pre2
 #GCLVERSION=gcl-2.6.8pre3 
 #GCLVERSION=gcl-2.6.8pre4
-GCLVERSION=gcl-2.6.8pre7
+#GCLVERSION=gcl-2.6.8pre7
+GCLVERSION=gcl-cygwin
 GCLDIR:=${LSP}/${GCLVERSION}
-GCLOPTS="--enable-vssize=65536*2 --enable-locbfd --disable-dynsysbfd \
-         --disable-statsysbfd --enable-maxpage=512*1024 --disable-xgcl \
-         --disable-tkconfig"
+GCLOPTS="--enable-vssize=65536*2 --disable-xgcl --disable-tkconfig" 
 LISP:=lsp
 
 ##### C related variables
@@ -293,5 +292,12 @@ clean:
 	@ for i in `find src -name "Makefile"` ; do rm -f $$i ; done
 	@ for i in `find src -name "Makefile.dvi"` ; do rm -f $$i ; done
 	@ rm -f lastBuildDate
-	@ rm -f books/tangle
+	@ rm -f books/tangle.o
+	@ rm -f Makefile.pdf books/Makefile.pdf 
+	@ rm -f lsp/Makefile.pdf lsp/Makefile.pdf src/Makefile.pdf
+	@ rm -f src/algebra/Makefile.pdf src/clef/Makefile.pdf 
+	@ rm -f src/doc/Makefile.pdf src/lib/Makefile.pdf
+	@ rm -f src/etc/Makefile.pdf src/input/Makefile.pdf 
+	@ rm -f src/interp/Makefile.pdf
+	@ rm -f src/scripts/Makefile.pdf src/share/Makefile.pdf
 
