@@ -50,8 +50,8 @@ BYE:=bye
 #GCLVERSION=gcl-2.6.8pre2
 #GCLVERSION=gcl-2.6.8pre3 
 #GCLVERSION=gcl-2.6.8pre4
-#GCLVERSION=gcl-2.6.8pre7
-GCLVERSION=gcl-cygwin
+GCLVERSION=gcl-2.6.8pre7
+#GCLVERSION=gcl-cygwin
 GCLDIR:=${LSP}/${GCLVERSION}
 GCLOPTS="--enable-vssize=65536*2 --disable-xgcl --disable-tkconfig" 
 LISP:=lsp
@@ -124,7 +124,7 @@ WEAVE=${WEAVE} \
 XLIB=${XLIB} \
 ZIPS=${ZIPS} 
 
-all: rootdirs tanglec ${MNT}/${SYS}/bin/document
+all: rootdirs tanglec 
 	@ echo 1 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
 	@ echo 2 Environment ${ENV}
 	@ ${BOOKS}/tanglec Makefile.pamphlet "Makefile.${SYS}" >Makefile.${SYS}
@@ -229,11 +229,6 @@ tanglec: books/tanglec.c
 	@echo t01 making tanglec from books/tanglec.c
 	@( cd books ; gcc -o tanglec tanglec.c )
 
-${MNT}/${SYS}/bin/document:
-	@echo 0 ${ENV}
-	@echo 10 copying ${SRC}/scripts to ${MNT}/${SYS}/bin
-	@cp -pr ${SRC}/scripts/* ${MNT}/${SYS}/bin
-
 install:
 	@echo 78 installing Axiom in ${DESTDIR}
 	@mkdir -p ${DESTDIR}
@@ -252,7 +247,7 @@ install:
 	@echo 
 
 
-document: ${MNT}/${SYS}/bin/document
+document: 
 	@ echo 4 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
 	@ echo 5 Environment ${ENV}
 	@ ${BOOKS}/tanglec Makefile.pamphlet "Makefile.${SYS}" >Makefile.${SYS}
