@@ -31,9 +31,14 @@ int printline(int i, int length) {
 }
 
 /* handle begin{chunk}{chunkname}        */
-/* is this chunk name we are looking for? */
+/* is this chunk name we are looking for? &&
+   does the line start with \begin{chunk}? &&
+   is the next character a \{ &&
+   is the last character after the chunkname a \}
+*/
 int foundchunk(int i, char *chunkname) {
   if ((strncmp(&buffer[i+14],chunkname,strlen(chunkname)) == 0) &&
+      (strncmp(&buffer[i],"\\begin{chunk}",13) == 0) &&
       (buffer[i+13] == '{') &&
       (buffer[i+14+strlen(chunkname)] == '}')) {
     if (DEBUG==3) { printf("foundchunk(%s)\n",chunkname); }
