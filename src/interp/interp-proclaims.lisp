@@ -2883,7 +2883,7 @@
             BOOT::|addDmpLikeTermsAsTarget| VMLISP:HPUT*
             BOOT::|genMpFromDmpTerm| VMLISP:STRING2ID-N
             BOOT::|htMakeTemplates,substLabel| BOOT::|doDoitButton|
-            VMLISP:$FINDFILE BOOT::|keyedMsgCompFailure| BOOT::|objNew|
+            VMLISP:$FINDFILE BOOT::|keyedMsgCompFailure| 
             BOOT::|putValue| BOOT::|getAtree| BOOT::|putModeSet|
             VMLISP:$SHOWLINE VMLISP:RDROPITEMS BOOT::|bottomUpType|
             BOOT::|bottomUpIdentifier| BOOT::|transferPropsToNode|
@@ -3063,7 +3063,7 @@
             BOOT::|addSuffix| BOOT::|processPackage,opt|
             BOOT::|subTree| BOOT::|mkRepititionAssoc,mkRepfun|
             BOOT::|setPackageLocals| BOOT::|UnionPrint|
-            BOOT::|JoinInner| BOOT::|objNewWrap|
+            BOOT::|JoinInner| 
             BOOT::|coerceByFunction| BOOT::|MappingPrint|
             BOOT::|parseTypeEvaluateArgs| BOOT::|createEnum|
             BOOT::|parseTranCheckForRecord| BOOT::|installConstructor|
@@ -3311,7 +3311,7 @@
             BOOT::|printNamedStatsByProperty| BOOT::|Delay|
             BOOT::|initializeTimedNames| BOOT::|searchTailEnv|
             BOOT::|searchCurrentEnv| BOOT::|search|
-            BOOT::|e04ycfSolve,fc| BOOT::|insertWOC,fn| BOOT::|mkObj|
+            BOOT::|e04ycfSolve,fc| BOOT::|insertWOC,fn| 
             VMLISP:|union| BOOT::|coerceInt| BOOT::|deleteAssocWOC|
             BOOT::|e04nafSolve,fa| BOOT::|deleteAssocWOC,fn|
             BOOT::|e04nafSolve,fb| BOOT::|deleteLassoc| BOOT::REMALIST
@@ -3369,7 +3369,7 @@
             BOOT::|formJoin1| BOOT::|app2StringWrap| BOOT:S-
             BOOT::|mkLessOrEqual| BOOT::|formArguments2String|
             BOOT::|putValueValue| BOOT::|asTupleNew| BOOT::|objSetVal|
-            BOOT::|objNewCode| FOAM-USER::H-ERROR BOOT::|displayRule|
+            FOAM-USER::H-ERROR BOOT::|displayRule|
             BOOT::|coerceInteractive| BOOT::|canMakeTuple|
             FOAM-USER::H-STRING BOOT:CARCDREXPAND
             BOOT::|formatOpSymbol| FOAM-USER::H-INTEGER
