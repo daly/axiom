@@ -49939,6 +49939,153 @@ This needs to work off the internal exposure list, not the file.
 \end{chunk}
 
 \chapter{HyperDoc Basic Command support}
+
+\section{Hyperdoc macro handling and util.ht}
+
+All of the macros used in hyperdoc are in this hash table.
+User-defined macros are read from the file {\bf doc/util.ht}
+
+\defdollar{htMacroTable}
+\begin{chunk}{initvars}
+(defvar |$htMacroTable| (make-hash-table :test #'equal))
+
+\end{chunk}
+
+These are the primitive hyperdoc commands. They are directly
+implemented. The {\bf buildHtMacroTable} function adds these
+to the \verb|$htMacroTable| at startup.
+
+\defdollar{primitiveHtCommands}
+\begin{chunk}{initvars}
+(defvar |$primitiveHtCommands|
+  '(("\\ContinueButton" . 1)
+    ("\\andexample" . 1)
+    ("\\autobutt" . 0)
+    ("\\autobuttons" . 0)
+    ("\\begin" . 1)
+    ("\\beginscroll" . 0)
+    ("\\bound" . 1)
+    ("\\fbox" . 1)
+    ("\\centerline" . 1)
+    ("\\downlink" . 2)
+    ("\\em" . 0)
+    ("\\end" . 1)
+    ("\\endscroll" . 0)
+    ("\\example" . 1)
+    ("\\free" . 1)
+    ("\\graphpaste" . 1)
+    ("\\helppage" . 1)
+    ("\\htbmdir" . 0)
+    ("\\htbmfile" . 1)
+    ("\\indent" . 1)
+    ("\\inputbitmap" . 1)
+    ("\\inputstring" . 3)
+    ("\\item" . 0)
+    ("\\keyword" . 1)
+    ("\\link" . 2)
+    ("\\lispdownlink" . 2)
+    ("\\lispmemolink" . 2)
+    ("\\lispwindowlink" . 2)
+    ("\\menudownlink" . 2)
+    ("\\menuitemstyle" . 1)
+    ("\\menulink" . 2)
+    ("\\menulispdownlink" . 2)
+    ("\\menulispmemolink" . 2)
+    ("\\menulispwindowlink" . 2)
+    ("\\menumemolink" . 2)
+    ("\\menuwindowlink" . 2)
+    ("\\newline" . 0)
+    ("\\radioboxes" . 3)
+    ("\\space" . 1)
+    ("\\spadcommand" . 1)
+    ("\\stringvalue" . 1)
+    ("\\tab" . 1)
+    ("\\table" . 1)
+    ("\\vspace" . 1)
+    ("\\windowlink" . 2)))
+
+\end{chunk}
+
+\defun{buildHtMacroTable}{Build the table of hyperdoc macros}
+Hash user-defined macros from {\bf doc/util.ht} into {\bf htMacroTable}.
+Hash primitive hyperdoc macros into {\bf htMacroTable}.
+\seebook{buildHtMacroTable}{util.ht}{7.1}
+\calls{buildHtMacroTable}{getHtMacroItem}
+\calls{buildHtMacroTable}{sayBrightly}
+\calls{buildHtMacroTable}{concat}
+\calls{buildHtMacroTable}{getEnv}
+\calls{buildHtMacroTable}{hput}
+\usesdollar{buildHtMacroTable}{htMacroTable}
+\usesdollar{buildHtMacroTable}{primitiveHtCommands}
+\begin{chunk}{defun buildHtMacroTable}
+(defun |buildHtMacroTable| ()
+ (let (fn instream)
+  (declare (special |$htMacroTable| |$primitiveHtCommands|))
+  (setq fn (concat (|getEnv| "AXIOM") "/doc/util.ht"))
+  (cond 
+   ((probe-file fn)
+    (with-open-file (instream fn)
+     (loop
+       for line = (read-line instream nil :eof)
+       until (eq line :eof)
+       do
+        (when 
+         (mulitple-value-bind (command numOfArgs) (|getHtMacroItem| line)
+          (hput |$htMacroTable| command numOfArgs))))
+     (dolist (pair |$primitiveHtCommands|)
+      (hput |$htMacroTable| (car pair) (cdr pair)))))
+   (t (|sayBrightly| "Warning: macro table not found")))
+  |$htMacroTable|))
+
+\end{chunk}
+
+\defun{getHtMacroItem}{Get new command name and number of args}
+This processes {\bf newcommand} lines read from {\bf doc/util.ht}
+An example newcommand looks like
+\begin{verbatim}
+   \newcommand{\menulink}[2]        {\menudownlink{#1}{#2}}
+\end{verbatim}
+This function returns a pair whose CAR is the new command name
+and whose CDR is the number of arguments. If there are zero arguments
+the brackets and number will not appear.
+
+However brackets can appear in the new command so we need to fix
+the original code to handle this new case. We set up a wall
+starting after the first closing brace.
+\begin{verbatim}
+   \newcommand{\beginmenu}          {\beginitems[\MenuDotBitmap]}
+\end{verbatim}
+
+\seebook{getHtMacroItem}{util.ht}{7.1}
+
+\sig{getHtMacroItem}{String}{Values (String NonNegativeInteger)}
+\begin{chunk}{defun getHtMacroItem}
+(defun |getHtMacroItem| (line)
+ (let (k command m i j wall digitString)
+  (when (|stringPrefix?| "\\newcommand{" line)
+    (setq k (position #\} line :start 11))
+    (setq wall (position #\{ line :start k)) ; wall off the body of command
+    (setq command (substring line 12 (- k 12)))
+    (setq m (length line))
+    (setq i (position #\[ line :start k))
+    (if (and i (< i m) (< i wall))
+     (progn                 ; brackets. parse number of args
+      (setq j (position #\] line :start (+ i 1)))
+      (setq digitString (substring line (+ i 1) (- (- j i) 1)))
+      (when (every #'digitp digitString)
+       (values command (parse-integer digitString))))
+     (values command 0)))))  ; no brackets
+
+\end{chunk}
+
+We populate the htMacroTable at load time.
+\begin{chunk}{postvars}
+(eval-when (eval load)
+ (|buildHtMacroTable|))
+
+\end{chunk}
+
+\section{Functions creating pages}
 Most of the functions create a new page with a call to the function
 {\tt htMakePage}. This function takes an association list which has
 several possible keys.
