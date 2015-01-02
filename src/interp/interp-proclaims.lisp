@@ -1836,7 +1836,7 @@
             BOOT::|parseAndEval| BOOT::|getDomainHash| BOOT::|aplTran1|
             BOOT::|hasAplExtension| BOOT::|htpDomainConditions|
             BOOT::|aplTranList| BOOT::|postDefArgs|
-            BOOT::|postTranScripts| BOOT::|getHtMacroItem|
+            BOOT::|postTranScripts| 
             BOOT::|postTranScripts,fn| BOOT::|unTuple|
             BOOT::|isPackageType| BOOT::|buttonNames|
             BOOT::|postcheckTarget| BOOT::|postcheck|
