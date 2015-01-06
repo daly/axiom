@@ -962,6 +962,483 @@ as part of the history file name.
 \end{chunk}
 
 \chapter{The undo mechanism}
+\section{Data Structures}
+\verb|$frameRecord = [delta1, delta2,... ]| where
+delta(i) contains changes in the ``backwards'' direction.
+Each delta(i) has the form \verb|((var . proplist)...)| where
+proplist denotes an ordinary proplist. For example, an entry
+of the form \verb|((x (value) (mode (Integer)))...)| indicates that
+to undo 1 step, x's value is cleared and its mode should be set
+to (Integer).
+
+A delta(i) of the form (systemCommand . delta) is a special
+delta indicating changes due to system commands executed between
+the last command and the current command. By recording these deltas
+separately, it is possible to undo to either BEFORE or AFTER
+the command. These special delta(i)s are given ONLY when a
+a system command is given which alters the environment.
+
+recordFrame('system) is called before a command is executed, and
+recordFrame('normal) is called after (see processInteractive1).
+If no changes are found for former, no special entry is given.
+
+The \verb|$previousBindings| is a copy of the 
+\verb|CAAR $InteractiveFrame|. This is used to
+compute the delta(i)s stored in \verb|$frameRecord|.
+
+\section{Initial Undo Variables}
+\begin{verbatim}
+$undoFlag := true     --Default setting for undo is "on"
+$frameRecord  := nil  --Initial setting for frame record
+$previousBindings := nil
+\end{verbatim}
+
+\defdollar{undoFlag}
+\begin{chunk}{initvars}
+(defvar |$undoFlag| t "t means we record undo information")
+
+\end{chunk}
+
+\defdollar{frameRecord}
+\begin{chunk}{initvars}
+(defvar |$frameRecord| nil "a list of value changes") 
+
+\end{chunk}
+
+\defdollar{previousBindings}
+\begin{chunk}{initvars}
+(defvar |$previousBindings| nil "a copy of Interactive Frame info for undo") 
+
+\end{chunk}
+
+\defdollar{reportundo}
+\begin{chunk}{initvars}
+(defvar |$reportundo| nil "t means we report the steps undo takes")
+
+\end{chunk}
+
+\section{The undo functions}
+\defun{undo}{undo}
+\calls{undo}{stringPrefix?}
+\calls{undo}{pname}
+\calls{undo}{read}
+\calls{undo}{userError}
+\calls{undo}{qcdr}
+\calls{undo}{qcar}
+\calls{undo}{spaddifference}
+\calls{undo}{identp}
+\calls{undo}{undoSteps}
+\calls{undo}{undoCount}
+\usesdollar{undo}{options}
+\usesdollar{undo}{InteractiveFrame}
+\begin{chunk}{defun undo}
+(defun |undo| (l)
+ (let (tmp1 key s undoWhen n)
+ (declare (special |$options| |$InteractiveFrame|))
+  (setq undoWhen '|after|)
+  (when
+    (and (consp |$options|)
+         (eq (qcdr |$options|) nil)
+         (progn
+          (setq tmp1 (qcar |$options|))
+          (and (consp tmp1)
+               (eq (qcdr tmp1) nil)
+               (progn (setq key (qcar tmp1)) t)))
+     (cond
+      ((|stringPrefix?| (setq s (pname key)) "redo")
+        (setq |$options| nil) 
+        (|read| '(|redo.input|)))
+      ((null (|stringPrefix?| s "before"))
+        (|userError| "only option to undo is \")redo\""))
+      (t 
+        (setq undoWhen '|before|)))))
+  (if (null l)
+    (setq n (- 1))
+    (setq n (car l)))
+  (when (identp n)
+    (setq n (parse-integer (pname n)))
+    (unless (integerp n)
+      (|userError| "undo argument must be an integer")))
+  (setq |$InteractiveFrame| (|undoSteps| (|undoCount| n) undoWhen))
+  nil))
+
+\end{chunk}
+
+\defun{undoSteps}{undoSteps}
+\begin{verbatim}
+-- undoes m previous commands; if )before option, then undo one extra at end
+--Example: if $IOindex now is 6 and m = 2 then general layout of $frameRecord,
+--  after the call to recordFrame below will be:
+--  (<change for systemcommands>
+--  (<change for #5> <change for system commands>
+--  (<change for #4> <change for system commands>
+--  (<change for #3> <change for system commands>
+--   <change for #2> <change for system commands>
+--   <change for #1> <change for system commands>) where system
+--  command entries are optional and identified by (systemCommand . change).
+--  For a ")undo 3 )after", m = 2 and undoStep swill restore the environment
+--  up to, but not including <change for #3>.
+--  An "undo 3 )before" will additionally restore <change for #3>.
+--  Thus, the later requires one extra undo at the end.
+\end{verbatim}
+\calls{undoSteps}{writeInputLines}
+\calls{undoSteps}{spaddifference}
+\calls{undoSteps}{recordFrame}
+\calls{undoSteps}{copy}
+\calls{undoSteps}{undoSingleStep}
+\calls{undoSteps}{qcdr}
+\calls{undoSteps}{qcar}
+\usesdollar{undoSteps}{IOindex}
+\usesdollar{undoSteps}{InteractiveFrame}
+\usesdollar{undoSteps}{frameRecord}
+\begin{chunk}{defun undoSteps}
+(defun |undoSteps| (m beforeOrAfter)
+ (let (tmp1 tmp2 systemDelta lastTailSeen env)
+ (declare (special |$IOindex| |$InteractiveFrame| |$frameRecord|))
+  (|writeInputLines| '|redo| (spaddifference |$IOindex| m))
+  (|recordFrame| '|normal|)
+  (setq env (copy (caar |$InteractiveFrame|)))
+  (do ((i 0 (1+ i)) (framelist |$frameRecord| (cdr framelist)))
+      ((or (> i m) (atom framelist)) nil)
+    (setq env (|undoSingleStep| (CAR framelist) env))
+    (if (and (consp framelist) 
+            (progn
+             (setq tmp1 (qcdr framelist))
+             (and (consp tmp1) 
+                  (progn
+                   (setq tmp2 (qcar tmp1))
+                   (and (consp tmp2)
+                        (eq (qcar tmp2) '|systemCommand|)
+                        (progn 
+                         (setq systemDelta (qcdr tmp2))
+                         t))))))
+      (progn
+        (setq framelist (cdr framelist))
+        (setq env (|undoSingleStep| systemDelta env)))
+      (setq lastTailSeen framelist)))
+  (cond
+   ((eq beforeOrAfter '|before|)
+     (setq env (|undoSingleStep| (car (cdr lastTailSeen)) env))))
+  (setq |$frameRecord| (cdr |$frameRecord|))
+  (setq |$InteractiveFrame| (list (list env)))))
+
+\end{chunk}
+
+\defun{undoSingleStep}{undoSingleStep}
+\begin{verbatim}
+undoSingleStep(changes,env) ==
+--Each change is a name-proplist pair. For each change:
+--  (1) if there exists a proplist in env, then for each prop-value change:
+--      (a) if the prop exists in env, RPLAC in the change value
+--      (b) otherwise, CONS it onto the front of prop-values for that name
+--  (2) add change to the front of env
+--  pp '"----Undoing 1 step--------"
+--  pp changes
+\end{verbatim}
+\calls{undoSingleStep}{assq}
+\calls{undoSingleStep}{seq}
+\calls{undoSingleStep}{exit}
+\calls{undoSingleStep}{lassoc}
+\calls{undoSingleStep}{undoLocalModemapHack}
+\begin{chunk}{defun undoSingleStep}
+(defun |undoSingleStep| (changes env)
+ (prog (name changeList pairlist proplist prop value node)
+  (return
+   (seq
+    (progn
+     (do ((tmp0 changes (cdr tmp0)) (|change| nil))
+         ((or (atom tmp0) 
+              (progn (setq |change| (car tmp0)) nil)
+              (progn 
+               (progn 
+                (setq name (car |change|))
+                (setq changeList (cdr |change|))
+                |change|)
+               nil))
+             nil)
+      (seq
+       (exit
+        (progn
+         (when (lassoc '|localModemap| changeList)
+           (setq changeList (|undoLocalModemapHack| changeList)))
+         (cond
+          ((setq pairlist (assq name env))
+            (cond
+             ((setq proplist (cdr pairlist))
+               (do ((tmp1 changeList (cdr tmp1)) (pair nil))
+                   ((or (atom tmp1) 
+                        (progn (setq pair (car tmp1)) nil)
+                        (progn
+                         (progn
+                          (setq prop (car pair))
+                          (setq value (cdr pair))
+                          pair)
+                          nil))
+                        nil)
+                (seq
+                 (exit
+                  (cond
+                   ((setq node (assq prop proplist))
+                     (rplacd node value))
+                   (t
+                     (rplacd proplist
+                       (cons (car proplist) (cdr proplist)))
+                     (rplaca proplist pair)))))))
+             (t (rplacd pairlist changeList))))
+          (t 
+            (setq env (cons |change| env))))))))
+     env))))) 
+
+\end{chunk}
+
+\defun{undoLocalModemapHack}{undoLocalModemapHack}
+\calls{undoLocalModemapHack}{seq}
+\calls{undoLocalModemapHack}{exit}
+\begin{chunk}{defun undoLocalModemapHack}
+(defun |undoLocalModemapHack| (changeList)
+ (prog (name value)
+  (return
+   (seq
+    (prog (tmp0)
+     (setq tmp0 nil)
+     (return
+      (do ((tmp1 changeList (cdr tmp1)) (pair nil))
+          ((or (atom tmp1) 
+               (progn (setq pair (car tmp1)) nil)
+               (progn
+                (progn
+                 (setq name (car pair))
+                 (setq value (cdr pair))
+                 pair)
+                nil))
+              (nreverse0 tmp0))
+       (seq
+        (exit
+         (cond
+          ((cond
+             ((eq name '|localModemap|) (cons name nil))
+             (t pair))
+           (setq tmp0 
+            (cons 
+             (cond 
+              ((eq name '|localModemap|) (cons name nil))
+              (t pair)) tmp0))))))))))))) 
+
+\end{chunk}
+
+\Defun{removeUndoLines}{Remove undo lines from history write}
+Removing undo lines from \verb|)hist )write linelist|
+\calls{removeUndoLines}{stringPrefix?}
+\calls{removeUndoLines}{seq}
+\calls{removeUndoLines}{exit}
+\calls{removeUndoLines}{trimString}
+\calls{removeUndoLines}{substring}
+\calls{removeUndoLines}{charPosition}
+\calls{removeUndoLines}{maxindex}
+\calls{removeUndoLines}{undoCount}
+\calls{removeUndoLines}{spaddifference}
+\calls{removeUndoLines}{concat}
+\usesdollar{removeUndoLines}{currentLine}
+\usesdollar{removeUndoLines}{IOindex}
+\begin{chunk}{defun removeUndoLines}
+(defun |removeUndoLines| (u)
+ "Remove undo lines from history write"
+ (prog (xtra savedIOindex s s1 m s2 x code c n acc)
+ (declare (special |$currentLine| |$IOindex|))
+  (return
+   (seq
+    (progn
+     (setq xtra 
+      (cond
+       ((stringp |$currentLine|) (cons |$currentLine| nil))
+       (t (reverse |$currentLine|))))
+     (setq xtra
+      (prog (tmp0)
+       (setq tmp0 nil)
+       (return
+        (do ((tmp1 xtra (cdr tmp1)) (x nil))
+            ((or (atom tmp1)
+                 (progn (setq x (car tmp1)) nil))
+               (nreverse0 tmp0))
+         (seq
+          (exit
+           (cond
+            ((null (|stringPrefix?| ")history" x))
+              (setq tmp0 (cons x tmp0))))))))))
+     (setq u (append u xtra))
+     (cond
+      ((null
+        (prog (tmp2)
+         (setq tmp2 nil)
+         (return
+          (do ((tmp3 nil tmp2) (tmp4 u (cdr tmp4)) (x nil))
+              ((or tmp3 (atom tmp4) (progn (setq x (car tmp4)) nil)) tmp2)
+           (seq
+            (exit
+             (setq tmp2 
+               (or tmp2 (|stringPrefix?| ")undo" x))))))))) u)
+      (t
+        (setq savedIOindex |$IOindex|)
+        (setq |$IOindex| 1)
+        (do ((y u (cdr y)))
+            ((atom y) nil)
+         (seq
+          (exit
+           (cond
+            ((eql (elt (setq x (car y)) 0) #\) )
+              (cond
+               ((|stringPrefix?| ")undo"
+                                 (setq s (|trimString| x)))
+                (setq s1 (|trimString| (substring s 5 nil)))
+                (cond
+                  ((not (string= s1 ")redo"))
+                    (setq m (|charPosition| #\) s1 0))
+                    (setq code
+                     (cond
+                       ((> (maxindex s1) m) (elt s1 (1+ m)))
+                       (t #\a)))
+                    (setq s2 (|trimString| (substring s1 0 m)))))
+                (setq n
+                 (cond
+                  ((string= s1 ")redo")
+                     0)
+                  ((not (string= s2 ""))
+                    (|undoCount| (parse-integer s2)))
+                  (t -1)))
+                (rplaca y
+                  (concat ">" code (princ-to-string n))))
+               (t nil)))
+            (t (setq |$IOindex| (1+ |$IOindex|)))))))
+        (setq acc nil)
+        (do ((y (nreverse u) (cdr y)))
+            ((atom y) nil)
+         (seq
+          (exit
+           (cond
+            ((eql (elt (setq x (car y)) 0) #\>)
+              (setq code (elt x 1))
+              (setq n (parse-integer (substring x 2 nil)))
+              (setq y (cdr y))
+              (do () 
+                  ((null y) nil)
+               (seq
+                (exit
+                 (progn
+                  (setq c (car y))
+                  (cond 
+                   ((or (eql (elt c 0) #\))
+                        (eql (elt c 0) #\>))
+                     (setq y (cdr y)))
+                   ((eql n 0)
+                     (return nil))
+                   (t
+                     (setq n (spaddifference n 1))
+                     (setq y (cdr y))))))))
+              (cond
+               ((and y (not (eql code #\b)))
+                 (setq acc (cons c acc)))))
+            (t (setq acc (cons x acc)))))))
+        (setq |$IOindex| savedIOindex)
+        acc)))))))
+
+\end{chunk}
+
+\defun{reportUndo}{reportUndo}
+This function is enabled by setting \verb|$reportundo| to a non-nil value.
+An example of the output generated is:
+\begin{verbatim}
+r := binary(22/7)
+ 
+
+           ___
+   (1)  11.001
+                                                        Type: BinaryExpansion
+Properties of % ::
+  value was: NIL
+  value is:  ((|BinaryExpansion|) WRAPPED . #(1 (1 1) NIL (0 0 1)))
+Properties of r ::
+  value was: NIL
+  value is:  ((|BinaryExpansion|) WRAPPED . #(1 (1 1) NIL (0 0 1)))
+
+\end{verbatim}
+
+\calls{reportUndo}{seq}
+\calls{reportUndo}{exit}
+\calls{reportUndo}{sayBrightly}
+\calls{reportUndo}{concat}
+\calls{reportUndo}{pname}
+\calls{reportUndo}{lassoc}
+\calls{reportUndo}{sayBrightlyNT}
+\calls{reportUndo}{pp}
+\usesdollar{reportundo}{InteractiveFrame}
+\begin{chunk}{defun reportUndo}
+(defun |reportUndo| (acc)
+ (prog (name proplist curproplist prop value)
+ (declare (special |$InteractiveFrame|))
+  (return
+   (seq
+    (do ((tmp0 acc (cdr tmp0)) (tmp1 nil))
+        ((or (atom tmp0) 
+             (progn (setq tmp1 (car tmp0)) nil)
+             (progn
+              (progn
+               (setq name (car tmp1))
+               (setq proplist (cdr tmp1))
+               tmp1)
+              nil))
+            nil)
+     (seq
+      (exit
+       (progn
+        (|sayBrightly|
+          (concat '|Properties of | (pname name) " ::"))
+        (setq curproplist (lassoc name (caar |$InteractiveFrame|)))
+        (do ((tmp2 proplist (cdr tmp2)) (tmp3 nil))
+            ((or (atom tmp2) 
+                 (progn (setq tmp3 (car tmp2)) nil)
+                 (progn 
+                  (progn 
+                   (setq prop (car tmp3))
+                   (setq value (cdr tmp3))
+                   tmp3)
+                  nil))
+                nil)
+         (seq
+          (exit
+           (progn
+            (|sayBrightlyNT|
+             (cons "  " (cons prop (cons " was: " nil))))
+            (|pp| value)
+            (|sayBrightlyNT| 
+             (cons "  " (cons prop (cons " is:  " nil))))
+            (|pp| (lassoc prop curproplist)))))))))))))) 
+
+\end{chunk}
+
+\Defun{undoCount}{Undo previous n commands}
+\calls{undoCount}{spaddifference}
+\calls{undoCount}{userError}
+\calls{undoCount}{concat}
+\usesdollar{undoCount}{IOindex}
+\begin{chunk}{defun undoCount}
+(defun |undoCount| (n)
+ "Undo previous n commands"
+ (prog (m)
+ (declare (special |$IOindex|))
+  (return
+   (progn
+    (setq m 
+     (cond 
+       ((>= n 0) (spaddifference (spaddifference |$IOindex| n) 1))
+       (t (spaddifference n))))
+    (cond
+     ((>= m |$IOindex|)
+       (|userError| 
+        (concat "Magnitude of undo argument must be less than step number ("
+           (princ-to-string |$IOindex|) ").")))
+     (t m)))))) 
+
+\end{chunk}
 
 \chapter{Exposure groups}
 
@@ -40688,105 +41165,6 @@ Calls evaluateType on a signature.
 
 \end{chunk}
 
-\section{\enspace{}Data Structures}
-\verb|$frameRecord = [delta1, delta2,... ]| where
-delta(i) contains changes in the ``backwards'' direction.
-Each delta(i) has the form \verb|((var . proplist)...)| where
-proplist denotes an ordinary proplist. For example, an entry
-of the form \verb|((x (value) (mode (Integer)))...)| indicates that
-to undo 1 step, x's value is cleared and its mode should be set
-to (Integer).
-
-A delta(i) of the form (systemCommand . delta) is a special
-delta indicating changes due to system commands executed between
-the last command and the current command. By recording these deltas
-separately, it is possible to undo to either BEFORE or AFTER
-the command. These special delta(i)s are given ONLY when a
-a system command is given which alters the environment.
-
-recordFrame('system) is called before a command is executed, and
-recordFrame('normal) is called after (see processInteractive1).
-If no changes are found for former, no special entry is given.
-
-The \verb|$previousBindings| is a copy of the 
-\verb|CAAR $InteractiveFrame|. This is used to
-compute the delta(i)s stored in \verb|$frameRecord|.
-
-\subsection{Initial Undo Variables}
-\begin{verbatim}
-$undoFlag := true     --Default setting for undo is "on"
-$frameRecord  := nil  --Initial setting for frame record
-$previousBindings := nil
-\end{verbatim}
-
-\defdollar{undoFlag}
-\begin{chunk}{initvars}
-(defvar |$undoFlag| t "t means we record undo information")
-
-\end{chunk}
-
-\defdollar{frameRecord}
-\begin{chunk}{initvars}
-(defvar |$frameRecord| nil "a list of value changes") 
-
-\end{chunk}
-
-\defdollar{previousBindings}
-\begin{chunk}{initvars}
-(defvar |$previousBindings| nil "a copy of Interactive Frame info for undo") 
-
-\end{chunk}
-
-\defdollar{reportundo}
-\begin{chunk}{initvars}
-(defvar |$reportundo| nil "t means we report the steps undo takes")
-
-\end{chunk}
-\defun{undo}{undo}
-\calls{undo}{stringPrefix?}
-\calls{undo}{pname}
-\calls{undo}{read}
-\calls{undo}{userError}
-\calls{undo}{qcdr}
-\calls{undo}{qcar}
-\calls{undo}{spaddifference}
-\calls{undo}{identp}
-\calls{undo}{undoSteps}
-\calls{undo}{undoCount}
-\usesdollar{undo}{options}
-\usesdollar{undo}{InteractiveFrame}
-\begin{chunk}{defun undo}
-(defun |undo| (l)
- (let (tmp1 key s undoWhen n)
- (declare (special |$options| |$InteractiveFrame|))
-  (setq undoWhen '|after|)
-  (when
-    (and (consp |$options|)
-         (eq (qcdr |$options|) nil)
-         (progn
-          (setq tmp1 (qcar |$options|))
-          (and (consp tmp1)
-               (eq (qcdr tmp1) nil)
-               (progn (setq key (qcar tmp1)) t)))
-     (cond
-      ((|stringPrefix?| (setq s (pname key)) "redo")
-        (setq |$options| nil) 
-        (|read| '(|redo.input|)))
-      ((null (|stringPrefix?| s "before"))
-        (|userError| "only option to undo is \")redo\""))
-      (t 
-        (setq undoWhen '|before|)))))
-  (if (null l)
-    (setq n (spaddifference 1))
-    (setq n (car l)))
-  (when (identp n)
-    (setq n (parse-integer (pname n)))
-    (unless (integerp n)
-      (|userError| "undo argument must be an integer")))
-  (setq |$InteractiveFrame| (|undoSteps| (|undoCount| n) undoWhen))
-  nil))
-
-\end{chunk}
 \defun{recordFrame}{recordFrame}
 \calls{recordFrame}{kar}
 \calls{recordFrame}{diffAlist}
@@ -40845,6 +41223,7 @@ $previousBindings := nil
        (car |$frameRecord|))))))) 
 
 \end{chunk}
+
 \defun{diffAlist}{diffAlist}
 \begin{verbatim}
 diffAlist(new,old) ==
@@ -40994,77 +41373,7 @@ diffAlist(new,old) ==
       (exit res))))))) 
 
 \end{chunk}
-\defun{reportUndo}{reportUndo}
-This function is enabled by setting \verb|$reportundo| to a non-nil value.
-An example of the output generated is:
-\begin{verbatim}
-r := binary(22/7)
- 
 
-           ___
-   (1)  11.001
-                                                        Type: BinaryExpansion
-Properties of % ::
-  value was: NIL
-  value is:  ((|BinaryExpansion|) WRAPPED . #(1 (1 1) NIL (0 0 1)))
-Properties of r ::
-  value was: NIL
-  value is:  ((|BinaryExpansion|) WRAPPED . #(1 (1 1) NIL (0 0 1)))
-
-\end{verbatim}
-
-\calls{reportUndo}{seq}
-\calls{reportUndo}{exit}
-\calls{reportUndo}{sayBrightly}
-\calls{reportUndo}{concat}
-\calls{reportUndo}{pname}
-\calls{reportUndo}{lassoc}
-\calls{reportUndo}{sayBrightlyNT}
-\calls{reportUndo}{pp}
-\usesdollar{reportundo}{InteractiveFrame}
-\begin{chunk}{defun reportUndo}
-(defun |reportUndo| (acc)
- (prog (name proplist curproplist prop value)
- (declare (special |$InteractiveFrame|))
-  (return
-   (seq
-    (do ((tmp0 acc (cdr tmp0)) (tmp1 nil))
-        ((or (atom tmp0) 
-             (progn (setq tmp1 (car tmp0)) nil)
-             (progn
-              (progn
-               (setq name (car tmp1))
-               (setq proplist (cdr tmp1))
-               tmp1)
-              nil))
-            nil)
-     (seq
-      (exit
-       (progn
-        (|sayBrightly|
-          (concat '|Properties of | (pname name) " ::"))
-        (setq curproplist (lassoc name (caar |$InteractiveFrame|)))
-        (do ((tmp2 proplist (cdr tmp2)) (tmp3 nil))
-            ((or (atom tmp2) 
-                 (progn (setq tmp3 (car tmp2)) nil)
-                 (progn 
-                  (progn 
-                   (setq prop (car tmp3))
-                   (setq value (cdr tmp3))
-                   tmp3)
-                  nil))
-                nil)
-         (seq
-          (exit
-           (progn
-            (|sayBrightlyNT|
-             (cons "  " (cons prop (cons " was: " nil))))
-            (|pp| value)
-            (|sayBrightlyNT| 
-             (cons "  " (cons prop (cons " is:  " nil))))
-            (|pp| (lassoc prop curproplist)))))))))))))) 
-
-\end{chunk}
 \defun{clearFrame}{clearFrame}
 \calls{clearFrame}{clearCmdAll}
 \usesdollar{clearFrame}{frameRecord}
@@ -41075,305 +41384,6 @@ Properties of r ::
   (|clearCmdAll|)
   (setq |$frameRecord| nil) 
   (setq |$previousBindings| nil))
-
-\end{chunk}
-\defunsec{undoCount}{Undo previous n commands}
-\calls{undoCount}{spaddifference}
-\calls{undoCount}{userError}
-\calls{undoCount}{concat}
-\usesdollar{undoCount}{IOindex}
-\begin{chunk}{defun undoCount}
-(defun |undoCount| (n)
- "Undo previous n commands"
- (prog (m)
- (declare (special |$IOindex|))
-  (return
-   (progn
-    (setq m 
-     (cond 
-       ((>= n 0) (spaddifference (spaddifference |$IOindex| n) 1))
-       (t (spaddifference n))))
-    (cond
-     ((>= m |$IOindex|)
-       (|userError| 
-        (concat "Magnitude of undo argument must be less than step number ("
-           (princ-to-string |$IOindex|) ").")))
-     (t m)))))) 
-
-\end{chunk}
-\defun{undoSteps}{undoSteps}
-\begin{verbatim}
--- undoes m previous commands; if )before option, then undo one extra at end
---Example: if $IOindex now is 6 and m = 2 then general layout of $frameRecord,
---  after the call to recordFrame below will be:
---  (<change for systemcommands>
---  (<change for #5> <change for system commands>
---  (<change for #4> <change for system commands>
---  (<change for #3> <change for system commands>
---   <change for #2> <change for system commands>
---   <change for #1> <change for system commands>) where system
---  command entries are optional and identified by (systemCommand . change).
---  For a ")undo 3 )after", m = 2 and undoStep swill restore the environment
---  up to, but not including <change for #3>.
---  An "undo 3 )before" will additionally restore <change for #3>.
---  Thus, the later requires one extra undo at the end.
-\end{verbatim}
-\calls{undoSteps}{writeInputLines}
-\calls{undoSteps}{spaddifference}
-\calls{undoSteps}{recordFrame}
-\calls{undoSteps}{copy}
-\calls{undoSteps}{undoSingleStep}
-\calls{undoSteps}{qcdr}
-\calls{undoSteps}{qcar}
-\usesdollar{undoSteps}{IOindex}
-\usesdollar{undoSteps}{InteractiveFrame}
-\usesdollar{undoSteps}{frameRecord}
-\begin{chunk}{defun undoSteps}
-(defun |undoSteps| (m beforeOrAfter)
- (let (tmp1 tmp2 systemDelta lastTailSeen env)
- (declare (special |$IOindex| |$InteractiveFrame| |$frameRecord|))
-  (|writeInputLines| '|redo| (spaddifference |$IOindex| m))
-  (|recordFrame| '|normal|)
-  (setq env (copy (caar |$InteractiveFrame|)))
-  (do ((i 0 (1+ i)) (framelist |$frameRecord| (cdr framelist)))
-      ((or (> i m) (atom framelist)) nil)
-    (setq env (|undoSingleStep| (CAR framelist) env))
-    (if (and (consp framelist) 
-            (progn
-             (setq tmp1 (qcdr framelist))
-             (and (consp tmp1) 
-                  (progn
-                   (setq tmp2 (qcar tmp1))
-                   (and (consp tmp2)
-                        (eq (qcar tmp2) '|systemCommand|)
-                        (progn 
-                         (setq systemDelta (qcdr tmp2))
-                         t))))))
-      (progn
-        (setq framelist (cdr framelist))
-        (setq env (|undoSingleStep| systemDelta env)))
-      (setq lastTailSeen framelist)))
-  (cond
-   ((eq beforeOrAfter '|before|)
-     (setq env (|undoSingleStep| (car (cdr lastTailSeen)) env))))
-  (setq |$frameRecord| (cdr |$frameRecord|))
-  (setq |$InteractiveFrame| (list (list env)))))
-
-\end{chunk}
-\defun{undoSingleStep}{undoSingleStep}
-\begin{verbatim}
-undoSingleStep(changes,env) ==
---Each change is a name-proplist pair. For each change:
---  (1) if there exists a proplist in env, then for each prop-value change:
---      (a) if the prop exists in env, RPLAC in the change value
---      (b) otherwise, CONS it onto the front of prop-values for that name
---  (2) add change to the front of env
---  pp '"----Undoing 1 step--------"
---  pp changes
-\end{verbatim}
-\calls{undoSingleStep}{assq}
-\calls{undoSingleStep}{seq}
-\calls{undoSingleStep}{exit}
-\calls{undoSingleStep}{lassoc}
-\calls{undoSingleStep}{undoLocalModemapHack}
-\begin{chunk}{defun undoSingleStep}
-(defun |undoSingleStep| (changes env)
- (prog (name changeList pairlist proplist prop value node)
-  (return
-   (seq
-    (progn
-     (do ((tmp0 changes (cdr tmp0)) (|change| nil))
-         ((or (atom tmp0) 
-              (progn (setq |change| (car tmp0)) nil)
-              (progn 
-               (progn 
-                (setq name (car |change|))
-                (setq changeList (cdr |change|))
-                |change|)
-               nil))
-             nil)
-      (seq
-       (exit
-        (progn
-         (when (lassoc '|localModemap| changeList)
-           (setq changeList (|undoLocalModemapHack| changeList)))
-         (cond
-          ((setq pairlist (assq name env))
-            (cond
-             ((setq proplist (cdr pairlist))
-               (do ((tmp1 changeList (cdr tmp1)) (pair nil))
-                   ((or (atom tmp1) 
-                        (progn (setq pair (car tmp1)) nil)
-                        (progn
-                         (progn
-                          (setq prop (car pair))
-                          (setq value (cdr pair))
-                          pair)
-                          nil))
-                        nil)
-                (seq
-                 (exit
-                  (cond
-                   ((setq node (assq prop proplist))
-                     (rplacd node value))
-                   (t
-                     (rplacd proplist
-                       (cons (car proplist) (cdr proplist)))
-                     (rplaca proplist pair)))))))
-             (t (rplacd pairlist changeList))))
-          (t 
-            (setq env (cons |change| env))))))))
-     env))))) 
-
-\end{chunk}
-\defun{undoLocalModemapHack}{undoLocalModemapHack}
-\calls{undoLocalModemapHack}{seq}
-\calls{undoLocalModemapHack}{exit}
-\begin{chunk}{defun undoLocalModemapHack}
-(defun |undoLocalModemapHack| (changeList)
- (prog (name value)
-  (return
-   (seq
-    (prog (tmp0)
-     (setq tmp0 nil)
-     (return
-      (do ((tmp1 changeList (cdr tmp1)) (pair nil))
-          ((or (atom tmp1) 
-               (progn (setq pair (car tmp1)) nil)
-               (progn
-                (progn
-                 (setq name (car pair))
-                 (setq value (cdr pair))
-                 pair)
-                nil))
-              (nreverse0 tmp0))
-       (seq
-        (exit
-         (cond
-          ((cond
-             ((eq name '|localModemap|) (cons name nil))
-             (t pair))
-           (setq tmp0 
-            (cons 
-             (cond 
-              ((eq name '|localModemap|) (cons name nil))
-              (t pair)) tmp0))))))))))))) 
-
-\end{chunk}
-\defunsec{removeUndoLines}{Remove undo lines from history write}
-Removing undo lines from \verb|)hist )write linelist|
-\calls{removeUndoLines}{stringPrefix?}
-\calls{removeUndoLines}{seq}
-\calls{removeUndoLines}{exit}
-\calls{removeUndoLines}{trimString}
-\calls{removeUndoLines}{substring}
-\calls{removeUndoLines}{charPosition}
-\calls{removeUndoLines}{maxindex}
-\calls{removeUndoLines}{undoCount}
-\calls{removeUndoLines}{spaddifference}
-\calls{removeUndoLines}{concat}
-\usesdollar{removeUndoLines}{currentLine}
-\usesdollar{removeUndoLines}{IOindex}
-\begin{chunk}{defun removeUndoLines}
-(defun |removeUndoLines| (u)
- "Remove undo lines from history write"
- (prog (xtra savedIOindex s s1 m s2 x code c n acc)
- (declare (special |$currentLine| |$IOindex|))
-  (return
-   (seq
-    (progn
-     (setq xtra 
-      (cond
-       ((stringp |$currentLine|) (cons |$currentLine| nil))
-       (t (reverse |$currentLine|))))
-     (setq xtra
-      (prog (tmp0)
-       (setq tmp0 nil)
-       (return
-        (do ((tmp1 xtra (cdr tmp1)) (x nil))
-            ((or (atom tmp1)
-                 (progn (setq x (car tmp1)) nil))
-               (nreverse0 tmp0))
-         (seq
-          (exit
-           (cond
-            ((null (|stringPrefix?| ")history" x))
-              (setq tmp0 (cons x tmp0))))))))))
-     (setq u (append u xtra))
-     (cond
-      ((null
-        (prog (tmp2)
-         (setq tmp2 nil)
-         (return
-          (do ((tmp3 nil tmp2) (tmp4 u (cdr tmp4)) (x nil))
-              ((or tmp3 (atom tmp4) (progn (setq x (car tmp4)) nil)) tmp2)
-           (seq
-            (exit
-             (setq tmp2 
-               (or tmp2 (|stringPrefix?| ")undo" x))))))))) u)
-      (t
-        (setq savedIOindex |$IOindex|)
-        (setq |$IOindex| 1)
-        (do ((y u (cdr y)))
-            ((atom y) nil)
-         (seq
-          (exit
-           (cond
-            ((eql (elt (setq x (car y)) 0) #\) )
-              (cond
-               ((|stringPrefix?| ")undo"
-                                 (setq s (|trimString| x)))
-                (setq s1 (|trimString| (substring s 5 nil)))
-                (cond
-                  ((not (string= s1 ")redo"))
-                    (setq m (|charPosition| #\) s1 0))
-                    (setq code
-                     (cond
-                       ((> (maxindex s1) m) (elt s1 (1+ m)))
-                       (t #\a)))
-                    (setq s2 (|trimString| (substring s1 0 m)))))
-                (setq n
-                 (cond
-                  ((string= s1 ")redo")
-                     0)
-                  ((not (string= s2 ""))
-                    (|undoCount| (parse-integer s2)))
-                  (t -1)))
-                (rplaca y
-                  (concat ">" code (princ-to-string n))))
-               (t nil)))
-            (t (setq |$IOindex| (1+ |$IOindex|)))))))
-        (setq acc nil)
-        (do ((y (nreverse u) (cdr y)))
-            ((atom y) nil)
-         (seq
-          (exit
-           (cond
-            ((eql (elt (setq x (car y)) 0) #\>)
-              (setq code (elt x 1))
-              (setq n (parse-integer (substring x 2 nil)))
-              (setq y (cdr y))
-              (do () 
-                  ((null y) nil)
-               (seq
-                (exit
-                 (progn
-                  (setq c (car y))
-                  (cond 
-                   ((or (eql (elt c 0) #\))
-                        (eql (elt c 0) #\>))
-                     (setq y (cdr y)))
-                   ((eql n 0)
-                     (return nil))
-                   (t
-                     (setq n (spaddifference n 1))
-                     (setq y (cdr y))))))))
-              (cond
-               ((and y (not (eql code #\b)))
-                 (setq acc (cons c acc)))))
-            (t (setq acc (cons x acc)))))))
-        (setq |$IOindex| savedIOindex)
-        acc)))))))
 
 \end{chunk}
 
