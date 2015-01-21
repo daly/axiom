@@ -140,6 +140,7 @@ all: rootdirs tanglec libspad
 	   ( echo s4 starting serial make of input files ; \
              cd ${MNT}/${SYS}/doc/src/input ; \
 	     cp ${BOOKS}/axiom.sty . ; \
+             cp ${SRC}/input/*.eps . ; \
 	     for i in `ls ${SRC}/input/*.input.pamphlet` ; do \
 	      if [ .${NOISE} = . ] ; \
 	      then \
@@ -288,6 +289,7 @@ clean:
 	@ rm -f books/Makefile
 	@ rm -f books/Makefile.dvi
 	@ rm -f books/Makefile.pdf
+	@ rm -f books/axiom.bib
 	@ rm -f lsp/axiom.sty
 	@ rm -f lsp/Makefile lsp/Makefile.dvi lsp/Makefile.pdf
 	@ rm -rf lsp/gcl*
