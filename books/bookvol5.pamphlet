@@ -872,6 +872,268 @@ The {\bf \ref{restart}} function
 The {\bfref undoSteps} function, part of the undo mechanism can
 reset the \verb|$InteractiveFrame|.
 
+\chapter{The Message Mechanism}
+Throughout the interpreter there are messages printed using a symbol
+for a database lookup. This was done to enable translation of these
+messages languages other than English.
+
+Axiom messages are read from a flat file database and returned
+as one long string.  They are preceded in the database by a key and
+this is how they are referenced from code.  For example, one key is
+S2IL0001 which means:
+\begin{verbatim}
+   S2          Scratchpad II designation
+   I           from the interpreter
+   L           originally from LISPLIB BOOT
+   0001        a sequence number
+\end{verbatim}
+
+Each message may contain formatting codes and and parameter codes.
+The formatting codes are:
+\begin{verbatim}
+   %b          turn on bright printing
+   %ceoff      turn off centering
+   %ceon       turn on centering
+   %d          turn off bright printing
+   %f          user defined printing
+   %i          start indentation of 3 more spaces
+   %l          start a new line
+   %m          math-print an expression
+   %rjoff      turn off right justification (actually ragged left)
+   %rjon       turn on right justification (actually ragged left)
+   %s          pretty-print as an S-expression
+   %u          unindent 3 spaces
+   %x#         insert # spaces
+\end{verbatim}
+
+The parameter codes look like \%1, \%2b, \%3p, \%4m, \%5bp, \%6s where the
+digit is the parameter number and the letters following indicate
+additional formatting. You can indicate as many additional formatting
+qualifiers as you like, to the degree they make sense. 
+\begin{itemize}
+\item The ``p'' code means to call prefix2String on the parameter, 
+a standard way of printing abbreviated types.  
+\item The ``P'' operator maps prefix2String over its arguments.  
+\item The ``o'' operation formats the argument as an operation name.  
+\item The ``b'' means to print that parameter in a bold (bright) font. 
+\item The ``c'' means to center that parameter on a new line.
+\item The ``r'' means to right justify (ragged left) the argument.
+\item The ``f'' means that the parameter is a list [fn, :args]
+and that ``fn'' is to be called on ``args'' to get the text. 
+\end{itemize}
+
+Look in the file with the name defined in \verb|$defaultMsgDatabaseName|
+above for examples.
+
+\defdollar{cacheMessages}
+This is used for debugging
+\begin{chunk}{initvars}
+(defvar |$cacheMessages| t)
+
+\end{chunk}
+
+\defdollar{msgAlist}
+\begin{chunk}{initvars}
+(defvar |$msgAlist| nil) 
+
+\end{chunk}
+
+\defdollar{testingErrorPrefix}
+\begin{chunk}{initvars}
+(defvar |$testingErrorPrefix| "Daly Bug")
+
+\end{chunk}
+
+\defdollar{texFormatting}
+\begin{chunk}{initvars}
+(defvar |$texFormatting| nil) 
+
+\end{chunk}
+
+\defvar{*msghash*}
+\begin{chunk}{initvars}
+(defvar *msghash* nil "hash table keyed by msg number")
+
+\end{chunk}
+
+\defdollar{msgdbPrims}
+\begin{chunk}{initvars}
+(defvar |$msgdbPrims|
+ '(|%b| |%d| |%l| |%i| |%u| %U |%n| |%x| |%ce| |%rj| "%U" "%b" "%d"
+   "%l" "%i" "%u" "%U" "%n" "%x" "%ce" "%rj"))
+
+\end{chunk}
+
+\defdollar{msgdbPunct}
+\begin{chunk}{initvars}
+(defvar |$msgdbPunct|
+  '(|.| |,| ! |:| |;| ? ] |)| "." "," "!" ":" ";" "?" "]" ")"))
+
+\end{chunk}
+
+\defdollar{msgdbNoBlanksBeforeGroup}
+\begin{chunk}{initvars}
+(defvar |$msgdbNoBlanksBeforeGroup|
+ `(" " | | "%" % ,@|$msgdbPrims| ,@|$msgdbPunct|))
+
+\end{chunk}
+
+\defdollar{msgdbNoBlanksAfterGroup}
+\begin{chunk}{initvars}
+(defvar |$msgdbNoBlanksAfterGroup|
+ `(" " | | "%" % ,@|$msgdbPrims| [ |(| "[" "("))
+
+\end{chunk}
+
+\defun{fetchKeyedMsg}{Fetch a message from the message database}
+If the {\tt *msghash*} hash table is empty we call {\tt cacheKeyedMsg}
+to fill the table, otherwise we do a key lookup in the hash table.
+\calls{fetchKeyedMsg}{object2Identifier}
+\calls{fetchKeyedMsg}{cacheKeyedMsg}
+\usesdollar{fetchKeyedMsg}{defaultMsgDatabaseName}
+\uses{fetchKeyedMsg}{*msghash*}
+\begin{chunk}{defun fetchKeyedMsg}
+(defun |fetchKeyedMsg| (key ignore)
+ (declare (ignore ignore) (special *msghash* |$defaultMsgDatabaseName|))
+ (setq key (|object2Identifier| key))
+ (unless *msghash*
+  (setq *msghash* (make-hash-table))
+  (cacheKeyedMsg |$defaultMsgDatabaseName|))
+ (gethash key *msghash*))
+
+\end{chunk}
+
+\defun{cacheKeyedMsg}{Cache messages read from message database}
+\catches{cacheKeyedMsg}{done}
+\throws{cacheKeyedMsg}{done}
+\uses{cacheKeyedMsg}{*msghash*}
+\begin{chunk}{defun cacheKeyedMsg}
+(defun cacheKeyedMsg (file)
+ (let ((line "") (msg "") key)
+ (declare (special *msghash*))
+  (with-open-file (in file)
+   (catch 'done
+    (loop
+     (setq line (read-line in nil nil))
+     (cond
+      ((null line)
+       (when key (setf (gethash key *msghash*) msg))
+       (throw 'done nil))
+      ((= (length line) 0))
+      ((char= (schar line 0) #\S)
+       (when key (setf (gethash key *msghash*) msg))
+       (setq key (intern line "BOOT"))
+       (setq msg ""))
+      ('else
+       (setq msg (concatenate 'string msg line)))))))))
+
+\end{chunk}
+
+\defun{sayKeyedMsg}{Say a message using a keyed lookup}
+\calls{sayKeyedMsg}{sayKeyedMsgLocal}
+\usesdollar{sayKeyedMsg}{texFormatting}
+\begin{chunk}{defun sayKeyedMsg}
+(defun |sayKeyedMsg| (key args)
+ (let (|$texFormatting|)
+ (declare (special |$texFormatting|))
+  (setq |$texFormatting| nil)
+  (|sayKeyedMsgLocal| key args)))
+
+\end{chunk}
+
+\defun{sayKeyedMsgLocal}{Handle msg formatting and print to file}
+\calls{sayKeyedMsgLocal}{segmentKeyedMsg}
+\calls{sayKeyedMsgLocal}{substituteSegmentedMsg}
+\calls{sayKeyedMsgLocal}{flowSegmentedMsg}
+\calls{sayKeyedMsgLocal}{sayMSG2File}
+\calls{sayKeyedMsgLocal}{sayMSG}
+\usesdollar{sayKeyedMsgLocal}{printMsgsToFile}
+\usesdollar{sayKeyedMsgLocal}{linelength}
+\usesdollar{sayKeyedMsgLocal}{margin}
+\usesdollar{sayKeyedMsgLocal}{displayMsgNumber}
+\begin{chunk}{defun sayKeyedMsgLocal}
+(defun |sayKeyedMsgLocal| (key args)
+ (let (msg msgp)
+ (declare (special |$printMsgsToFile| $linelength $margin |$displayMsgNumber|))
+  (setq msg (|segmentKeyedMsg| (|fetchKeyedMsg| key nil)))
+  (setq msg (|substituteSegmentedMsg| msg args))
+  (when |$displayMsgNumber| (setq msg `("%b" ,key |:| "%d" . ,msg)))
+  (setq msgp (|flowSegmentedMsg| msg $linelength $margin))
+  (when |$printMsgsToFile| (|sayMSG2File| msgp))
+  (|sayMSG| msgp)))
+
+\end{chunk}
+
+\defun{segmentKeyedMsg}{Break a message into words}
+\calls{segmentKeyedMsg}{string2Words}
+\begin{chunk}{defun segmentKeyedMsg}
+(defun |segmentKeyedMsg| (msg) (|string2Words| msg)) 
+
+\end{chunk}
+
+\defun{sayMSG2File}{Write a msg into spadmsg.listing file}
+\calls{sayMSG2File}{makePathname}
+\calls{sayMSG2File}{defiostream}
+\calls{sayMSG2File}{sayBrightly1}
+\calls{sayMSG2File}{shut}
+\begin{chunk}{defun sayMSG2File}
+(defun |sayMSG2File| (msg)
+ (let (file str)
+  (setq file (|makePathname| '|spadmsg| '|listing| 'a))
+  (setq str (defiostream `((mode . output) (file . ,file)) 255 0))
+  (sayBrightly1 msg str)
+  (shut str)))
+ 
+\end{chunk}
+
+\defun{sayMSG}{sayMSG}
+\calls{saymsg}{saybrightly1}
+\usesdollar{sayMSG}{algebraOutputStream}
+\begin{chunk}{defun sayMSG}
+(defun |sayMSG| (x)
+ (declare (special |$algebraOutputStream|))
+ (when x (sayBrightly1 x |$algebraOutputStream|)))
+
+\end{chunk}
+
+The \verb|$defaultMsgDatabaseName| variable contains the location of the
+international message database. This can be changed to use a translated
+version of the messages. It defaults to the United States English version.
+The relative pathname used as the default is hardcoded in the 
+\refto{reroot} function.
+This value is prefixed with the \verb|$spadroot| to make the path absolute.
+
+In general, all Axiom message text should be stored in this file to 
+enable internationalization of messages.
+
+An example of a runtime value is:
+\begin{verbatim}
+|$defaultMsgDatabaseName| =
+  #p"/research/test/mnt/ubuntu/doc/msgs/s2-us.msgs"
+\end{verbatim}
+
+\defdollar{defaultMsgDatabaseName}
+\begin{chunk}{initvars}
+(defvar |$defaultMsgDatabaseName| nil)
+
+\end{chunk}
+
+\begin{verbatim}
+|$defaultMsgDatabaseName| = #p"/research/test/mnt/ubuntu/doc/msgs/s2-us.msgs"
+\end{verbatim}
+
+This function is called in {\bf reroot}. It is a temporary function
+intended to be removed when the message database is removed.
+\usesdollar{setDefaultMsgDatabaseName}{defaultMsgDatabaseName}
+\usesdollar{setDefaultMsgDatabaseName}{msgDatabaseName}
+\begin{chunk}{defun setDefaultMsgDatabaseName}
+(defun setDefaultMsgDatabaseName ()
+ (declare (special |$defaultMsgDatabaseName| |$msgDatabaseName|))
+ (setq |$defaultMsgDatabaseName|
+        (pathname (make-absolute-filename "/doc/msgs/s2-us.msgs")))
+ (setq |$msgDatabaseName| ()))
+
+\end{chunk}
 
 \chapter{The History Mechanism}
 \defdollar{HiFiAccess}
@@ -3275,29 +3537,6 @@ $current-directory = "/research/test/"
 \defdollar{current-directory}
 \begin{chunk}{initvars}
 (defvar $current-directory nil)
-
-\end{chunk}
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-The \verb|$defaultMsgDatabaseName| variable contains the location of the
-international message database. This can be changed to use a translated
-version of the messages. It defaults to the United States English version.
-The relative pathname used as the default is hardcoded in the 
-\refto{reroot} function.
-This value is prefixed with the \verb|$spadroot| to make the path absolute.
-
-In general, all Axiom message text should be stored in this file to 
-enable internationalization of messages.
-
-An example of a runtime value is:
-\begin{verbatim}
-|$defaultMsgDatabaseName| =
-  #p"/research/test/mnt/ubuntu/doc/msgs/s2-us.msgs"
-\end{verbatim}
-
-\defdollar{defaultMsgDatabaseName}
-\begin{chunk}{initvars}
-(defvar |$defaultMsgDatabaseName| nil)
 
 \end{chunk}
 
@@ -8296,10 +8535,8 @@ and the empty string.
                     13> (|printTypeAndTimeNormal| 1 (|PositiveInteger|))
                     14> (|sayKeyedMsg| S2GL0012 ((|PositiveInteger|)))
                     15> (|sayKeyedMsgLocal| S2GL0012 ((|PositiveInteger|)))
-                    16> (|getKeyedMsg| S2GL0012)
                     17> (|fetchKeyedMsg| S2GL0012 NIL)
                     <17 (|fetchKeyedMsg| " %rjon Type: %1p %rjoff" T)
-                    <16 (|getKeyedMsg| " %rjon Type: %1p %rjoff" T)
                     16> (|segmentKeyedMsg| " %rjon Type: %1p %rjoff")
                     <16 (|segmentKeyedMsg| ("%rjon" "Type:" "%1p" "%rjoff"))
                     16> (|member| "%rjon" (|%ceon| "%ceon"))
@@ -9668,35 +9905,30 @@ $relative-library-directory-list = ("/algebra/")
 
 $library-directory-list =  ("/research/test/mnt/ubuntu/algebra/")
 
-|$defaultMsgDatabaseName| = #p"/research/test/mnt/ubuntu/doc/msgs/s2-us.msgs"
-
 |$msgDatabaseName| = nil
 
 $current-directory = "/research/test/"
 \end{verbatim}
 
 \calls{reroot}{make-absolute-filename}
+\calls{reroot}{setDefaultMsgDatabaseName}
 \usesdollar{reroot}{spadroot}
 \usesdollar{reroot}{directory-list}
 \usesdollar{reroot}{relative-directory-list}
 \usesdollar{reroot}{library-directory-list}
 \usesdollar{reroot}{relative-library-directory-list}
-\usesdollar{reroot}{defaultMsgDatabaseName}
-\usesdollar{reroot}{msgDatabaseName}
 \usesdollar{reroot}{current-directory}
 \begin{chunk}{defun reroot}
 (defun reroot (dir)
   (declare (special $spadroot $directory-list $relative-directory-list
      $library-directory-list $relative-library-directory-list
-     |$defaultMsgDatabaseName| |$msgDatabaseName| $current-directory))
+     $current-directory))
   (setq $spadroot dir)
   (setq $directory-list
    (mapcar #'make-absolute-filename $relative-directory-list))
   (setq $library-directory-list
    (mapcar #'make-absolute-filename $relative-library-directory-list))
-  (setq |$defaultMsgDatabaseName|
-        (pathname (make-absolute-filename "/doc/msgs/s2-us.msgs")))
-  (setq |$msgDatabaseName| ())
+  (setDefaultMsgDatabaseName)
   (setq $current-directory $spadroot))
 
 \end{chunk}
@@ -10567,7 +10799,6 @@ sameUnionBranch(uArg, m) ==
 
 \defun{msgText}{msgText}
 \calls{msgText}{segmentKeyedMsg}
-\calls{msgText}{getKeyedMsg}
 \calls{msgText}{substituteSegmentedMsg}
 \calls{msgText}{flowSegmentedMsg}
 \usesdollar{msgText}{linelength}
@@ -10576,7 +10807,7 @@ sameUnionBranch(uArg, m) ==
 (defun |msgText| (key args)
  (let (msg)
  (declare (special $linelength $margin))
-  (setq msg (|segmentKeyedMsg| (|getKeyedMsg| key)))
+  (setq msg (|segmentKeyedMsg| (|fetchKeyedMsg| key nil)))
   (setq msg (|substituteSegmentedMsg| msg args))
   (setq msg (|flowSegmentedMsg| msg $linelength $margin))
   (apply #'concat (mapcar #'princ-to-string (cdar msg)))))
@@ -20238,238 +20469,6 @@ output is an old-parser-style s-expression.
 
 \end{chunk}
 
-\chapter{Keyed Message Handling}
-Throughout the interpreter there are messages printed using a symbol
-for a database lookup. This was done to enable translation of these
-messages languages other than English.
-
-Axiom messages are read from a flat file database and returned
-as one long string.  They are preceded in the database by a key and
-this is how they are referenced from code.  For example, one key is
-S2IL0001 which means:
-\begin{verbatim}
-   S2          Scratchpad II designation
-   I           from the interpreter
-   L           originally from LISPLIB BOOT
-   0001        a sequence number
-\end{verbatim}
-
-Each message may contain formatting codes and and parameter codes.
-The formatting codes are:
-\begin{verbatim}
-   %b          turn on bright printing
-   %ceoff      turn off centering
-   %ceon       turn on centering
-   %d          turn off bright printing
-   %f          user defined printing
-   %i          start indentation of 3 more spaces
-   %l          start a new line
-   %m          math-print an expression
-   %rjoff      turn off right justification (actually ragged left)
-   %rjon       turn on right justification (actually ragged left)
-   %s          pretty-print as an S-expression
-   %u          unindent 3 spaces
-   %x#         insert # spaces
-\end{verbatim}
-
-The parameter codes look like \%1, \%2b, \%3p, \%4m, \%5bp, \%6s where the
-digit is the parameter number and the letters following indicate
-additional formatting. You can indicate as many additional formatting
-qualifiers as you like, to the degree they make sense. 
-\begin{itemize}
-\item The ``p'' code means to call prefix2String on the parameter, 
-a standard way of printing abbreviated types.  
-\item The ``P'' operator maps prefix2String over its arguments.  
-\item The ``o'' operation formats the argument as an operation name.  
-\item The ``b'' means to print that parameter in a bold (bright) font. 
-\item The ``c'' means to center that parameter on a new line.
-\item The ``r'' means to right justify (ragged left) the argument.
-\item The ``f'' means that the parameter is a list [fn, :args]
-and that ``fn'' is to be called on ``args'' to get the text. 
-\end{itemize}
-
-Look in the file with the name defined in \verb|$defaultMsgDatabaseName|
-above for examples.
-
-\defdollar{cacheMessages}
-This is used for debugging
-\begin{chunk}{initvars}
-(defvar |$cacheMessages| t)
-
-\end{chunk}
-
-\defdollar{msgAlist}
-\begin{chunk}{initvars}
-(defvar |$msgAlist| nil) 
-
-\end{chunk}
-
-\defdollar{testingErrorPrefix}
-\begin{chunk}{initvars}
-(defvar |$testingErrorPrefix| "Daly Bug")
-
-\end{chunk}
-
-\defdollar{texFormatting}
-\begin{chunk}{initvars}
-(defvar |$texFormatting| nil) 
-
-\end{chunk}
-
-\defvar{*msghash*}
-\begin{chunk}{initvars}
-(defvar *msghash* nil "hash table keyed by msg number")
-
-\end{chunk}
-
-\defdollar{msgdbPrims}
-\begin{chunk}{initvars}
-(defvar |$msgdbPrims|
- '(|%b| |%d| |%l| |%i| |%u| %U |%n| |%x| |%ce| |%rj| "%U" "%b" "%d"
-   "%l" "%i" "%u" "%U" "%n" "%x" "%ce" "%rj"))
-
-\end{chunk}
-
-\defdollar{msgdbPunct}
-\begin{chunk}{initvars}
-(defvar |$msgdbPunct|
-  '(|.| |,| ! |:| |;| ? ] |)| "." "," "!" ":" ";" "?" "]" ")"))
-
-\end{chunk}
-
-\defdollar{msgdbNoBlanksBeforeGroup}
-\begin{chunk}{initvars}
-(defvar |$msgdbNoBlanksBeforeGroup|
- `(" " | | "%" % ,@|$msgdbPrims| ,@|$msgdbPunct|))
-
-\end{chunk}
-
-\defdollar{msgdbNoBlanksAfterGroup}
-\begin{chunk}{initvars}
-(defvar |$msgdbNoBlanksAfterGroup|
- `(" " | | "%" % ,@|$msgdbPrims| [ |(| "[" "("))
-
-\end{chunk}
-
-\defun{fetchKeyedMsg}{Fetch a message from the message database}
-If the {\tt *msghash*} hash table is empty we call {\tt cacheKeyedMsg}
-to fill the table, otherwise we do a key lookup in the hash table.
-\calls{fetchKeyedMsg}{object2Identifier}
-\calls{fetchKeyedMsg}{cacheKeyedMsg}
-\usesdollar{fetchKeyedMsg}{defaultMsgDatabaseName}
-\uses{fetchKeyedMsg}{*msghash*}
-\begin{chunk}{defun fetchKeyedMsg}
-(defun |fetchKeyedMsg| (key ignore)
- (declare (ignore ignore) (special *msghash* |$defaultMsgDatabaseName|))
- (setq key (|object2Identifier| key))
- (unless *msghash*
-  (setq *msghash* (make-hash-table))
-  (cacheKeyedMsg |$defaultMsgDatabaseName|))
- (gethash key *msghash*))
-
-\end{chunk}
-
-\defun{cacheKeyedMsg}{Cache messages read from message database}
-\catches{cacheKeyedMsg}{done}
-\throws{cacheKeyedMsg}{done}
-\uses{cacheKeyedMsg}{*msghash*}
-\begin{chunk}{defun cacheKeyedMsg}
-(defun cacheKeyedMsg (file)
- (let ((line "") (msg "") key)
- (declare (special *msghash*))
-  (with-open-file (in file)
-   (catch 'done
-    (loop
-     (setq line (read-line in nil nil))
-     (cond
-      ((null line)
-       (when key (setf (gethash key *msghash*) msg))
-       (throw 'done nil))
-      ((= (length line) 0))
-      ((char= (schar line 0) #\S)
-       (when key (setf (gethash key *msghash*) msg))
-       (setq key (intern line "BOOT"))
-       (setq msg ""))
-      ('else
-       (setq msg (concatenate 'string msg line)))))))))
-
-\end{chunk}
-
-\defun{getKeyedMsg}{getKeyedMsg}
-\calls{getKeyedMsg}{fetchKeyedMsg}
-\begin{chunk}{defun getKeyedMsg}
-(defun |getKeyedMsg| (key) (|fetchKeyedMsg| key nil)) 
-
-\end{chunk}
-
-\defun{sayKeyedMsg}{Say a message using a keyed lookup}
-\calls{sayKeyedMsg}{sayKeyedMsgLocal}
-\usesdollar{sayKeyedMsg}{texFormatting}
-\begin{chunk}{defun sayKeyedMsg}
-(defun |sayKeyedMsg| (key args)
- (let (|$texFormatting|)
- (declare (special |$texFormatting|))
-  (setq |$texFormatting| nil)
-  (|sayKeyedMsgLocal| key args)))
-
-\end{chunk}
-
-\defun{sayKeyedMsgLocal}{Handle msg formatting and print to file}
-\calls{sayKeyedMsgLocal}{segmentKeyedMsg}
-\calls{sayKeyedMsgLocal}{getKeyedMsg}
-\calls{sayKeyedMsgLocal}{substituteSegmentedMsg}
-\calls{sayKeyedMsgLocal}{flowSegmentedMsg}
-\calls{sayKeyedMsgLocal}{sayMSG2File}
-\calls{sayKeyedMsgLocal}{sayMSG}
-\usesdollar{sayKeyedMsgLocal}{printMsgsToFile}
-\usesdollar{sayKeyedMsgLocal}{linelength}
-\usesdollar{sayKeyedMsgLocal}{margin}
-\usesdollar{sayKeyedMsgLocal}{displayMsgNumber}
-\begin{chunk}{defun sayKeyedMsgLocal}
-(defun |sayKeyedMsgLocal| (key args)
- (let (msg msgp)
- (declare (special |$printMsgsToFile| $linelength $margin |$displayMsgNumber|))
-  (setq msg (|segmentKeyedMsg| (|getKeyedMsg| key)))
-  (setq msg (|substituteSegmentedMsg| msg args))
-  (when |$displayMsgNumber| (setq msg `("%b" ,key |:| "%d" . ,msg)))
-  (setq msgp (|flowSegmentedMsg| msg $linelength $margin))
-  (when |$printMsgsToFile| (|sayMSG2File| msgp))
-  (|sayMSG| msgp)))
-
-\end{chunk}
-
-\defun{segmentKeyedMsg}{Break a message into words}
-\calls{segmentKeyedMsg}{string2Words}
-\begin{chunk}{defun segmentKeyedMsg}
-(defun |segmentKeyedMsg| (msg) (|string2Words| msg)) 
-
-\end{chunk}
-
-\defun{sayMSG2File}{Write a msg into spadmsg.listing file}
-\calls{sayMSG2File}{makePathname}
-\calls{sayMSG2File}{defiostream}
-\calls{sayMSG2File}{sayBrightly1}
-\calls{sayMSG2File}{shut}
-\begin{chunk}{defun sayMSG2File}
-(defun |sayMSG2File| (msg)
- (let (file str)
-  (setq file (|makePathname| '|spadmsg| '|listing| 'a))
-  (setq str (defiostream `((mode . output) (file . ,file)) 255 0))
-  (sayBrightly1 msg str)
-  (shut str)))
- 
-\end{chunk}
-
-\defun{sayMSG}{sayMSG}
-\calls{saymsg}{saybrightly1}
-\usesdollar{sayMSG}{algebraOutputStream}
-\begin{chunk}{defun sayMSG}
-(defun |sayMSG| (x)
- (declare (special |$algebraOutputStream|))
- (when x (sayBrightly1 x |$algebraOutputStream|)))
-
-\end{chunk}
- 
 \chapter{Stream Utilities}
 The input stream is parsed into a large s-expression by repeated calls
 to Delay. Delay takes a function f and an argument x and returns a list
@@ -60386,7 +60385,6 @@ digits in TechExplorer. Since Saturn is gone we can remove it.
 \getchunk{defun getDirectoryList}
 \getchunk{defun getFirstWord}
 \getchunk{defun getHtMacroItem}
-\getchunk{defun getKeyedMsg}
 \getchunk{defun getMapSig}
 \getchunk{defun getMapSubNames}
 \getchunk{defun getMsgCatAttr}
@@ -61404,6 +61402,7 @@ digits in TechExplorer. Since Saturn is gone we can remove it.
 \getchunk{defun set}
 \getchunk{defun set1}
 \getchunk{defun setdatabase}
+\getchunk{defun setDefaultMsgDatabaseName}
 \getchunk{defun setExpose}
 \getchunk{defun setExposeAdd}
 \getchunk{defun setExposeAddConstr}
