@@ -2304,7 +2304,7 @@
             BOOT::|squeezeConsDB,fn| BOOT::|mkBold| BOOT::|incString|
             BOOT::|postSignature| BOOT::|killColons| BOOT:|ToString|
             BOOT::|e02dffSolve,flam| BOOT::|removeSuperfluousMapping|
-            BOOT:|StringImage| BOOT::|dbShowConstructorLines|
+            BOOT::|dbShowConstructorLines|
             BOOT:|String?| BOOT::|postAtom| BOOT::|dbName|
             BOOT::|makeSpadConstant| BOOT::|postType|
             BOOT::|childrenOf| BOOT::|htBcLispLinks|
