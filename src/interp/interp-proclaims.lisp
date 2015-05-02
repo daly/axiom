@@ -344,7 +344,7 @@
             BOOT::|algCoerceInteractive| BOOT::|buildPredVector,fn|
             BOOT::|extendsCategoryBasic| BOOT::|catExtendsCat?|
             BOOT::|expandType| BOOT::|expandTypeArgs| 
-            BOOT::|dbPresentOpsSaturn| BOOT::|reduceOpAlistForDomain|
+            BOOT::|reduceOpAlistForDomain|
             BOOT::|mungeAddGensyms,fn| BOOT::|dbReduceBySelection|
             BOOT::|extendsCategoryBasic0| BOOT::|substSlotNumbers|
             BOOT::|dbReduceBySignature| BOOT::|extendsCategory|
@@ -394,7 +394,7 @@
             BOOT:|StringFromTo| BOOT::|patternCheck,equal|
             BOOT:|StringFromLong| BOOT::|rightCharPosition|
             BOOT::|infix?| BOOT::|matchSegment?| BOOT::|stringMatch|
-            BOOT::|skipBlanks| BOOT::|dbPresentConsSaturn|
+            BOOT::|skipBlanks|
             BOOT::MAKE-DEFUN BOOT::|compOrCroak| BOOT::|profileRecord|
             BOOT::|getSignature| 
             BOOT::|getArgumentModeOrMoan|
@@ -593,7 +593,7 @@
             BOOT::|dbShowInfoOp| BOOT::|compReduce1| BOOT::|letPrint3|
             BOOT::|intloopSpadProcess| BOOT::|zagApp|
             BOOT::|findBalancingBrace| BOOT::|appelse| BOOT::|appChar|
-            BOOT::|appInfix| BOOT::|htMakeButtonSaturn|
+            BOOT::|appInfix|
             BOOT::|vconcatapp| BOOT::|superSubApp| BOOT::|xLate|
             BOOT::|appconc| BOOT::MAKELIB BOOT::|appparu|
             BOOT::|charySemiColon| BOOT::|charyElse|
@@ -730,11 +730,11 @@
             BOOT::|f02axf| BOOT::|f02awf| BOOT::|f02akf| BOOT::|f02ajf|
             BOOT::|f02agf| BOOT::|htShowPageNoScroll| BOOT::|f02aff|
             BOOT::|f02aef| BOOT::|f02adf| BOOT::|f02abf| BOOT::|f02aaf|
-            BOOT::|measure| BOOT::|writeSaturnSuffix| 
+            BOOT::|measure|
             BOOT::|htErrorStar|
             BOOT::|queryClients| BOOT::|onDisk| BOOT::|endHTPage|
             BOOT::|readSpadProfileIfThere| BOOT::|bcDraw3Dpar1|
-            BOOT::|bcDraw3Dpar| BOOT::|htShowPageStarSaturn|
+            BOOT::|bcDraw3Dpar|
             BOOT::|htShowPageStar| BOOT::|bcDraw3Dfun|
             BOOT::|bcDraw2Dpar| BOOT::|bcSum| BOOT::|bcSeries|
             BOOT::|bcProduct| BOOT::|bcLimit|
@@ -929,9 +929,9 @@
             BOOT::|mkDependentsHashTable|
             BOOT::|buildDefaultPackageNamesHT|
             BOOT::|dbAugmentConstructorDataTable| FOAM:|fiGetDebugVar|
-            BOOT::|menuButton| BOOT::|htSaturnBreak| BOOT::|random|
+            BOOT::|menuButton| BOOT::|random|
             BOOT::|dbConsExposureMessage| BOOT::|mkSigPredVectors|
-            BOOT::FIRST-ERROR BOOT::|writeSaturnPrefix| BOOT::|on|
+            BOOT::FIRST-ERROR BOOT::|on|
             BOOT::|offDisk| BOOT::|htBigSkip| 
             BOOT::|traceReply| BOOT::|?t|
             BOOT::SKIP-BLANKS BOOT::|pspacers| BOOT::NEXT-LINES-SHOW
@@ -963,9 +963,9 @@
             BOOT::|printStatisticsSummary| BOOT::|printStorage|
             BOOT::|prTraceNames| BOOT::|spad| BOOT::|spadpo|
             BOOT::|intloop| BOOT::|off| BOOT::|htEndTabular|
-            BOOT::|htSaySaturnAmpersand| BOOT::|page|
-            BOOT::|clearFrame| BOOT::|getSaturnExampleList|
-            BOOT::|saturnTERPRI| BOOT::|bcSadFaces| BOOT::YEARWEEK
+            BOOT::|page|
+            BOOT::|clearFrame| 
+            BOOT::|bcSadFaces| BOOT::YEARWEEK
             BOOT::|npBPileDefinition| BOOT::|npTypified|
             BOOT::|npVariablelist| BOOT::|npTagged| BOOT::|bcvspace|
             BOOT::|npTypeStyle| BOOT::|npColonQuery| BOOT::|npPretend|
@@ -1233,7 +1233,7 @@
             BOOT::|bcSeriesByFormulaGen| BOOT::|bcNotReady|
             BOOT::|bcDraw2DfunGen| BOOT::|bcTaylorSeriesGen|
             BOOT::|bcDraw2DSolveGen| BOOT::KCL-OS-ENV-GET
-            BOOT::|bcComplexLimitGen| BOOT::|saturnPRINTEXP|
+            BOOT::|bcComplexLimitGen|
             BOOT::|bcSeriesExpansionGen| BOOT::COMPILE-BOOT-FILE
             BOOT::|bcCreateVariableString| BOOT::|bcGenEquations|
             BOOT::|vConcatSuper| BOOT::BOOT-LOAD
@@ -1264,7 +1264,7 @@
             BOOT::|ncAlist| BOOT::|tuple2String,f|
             BOOT::|formatAttributeArg| BOOT::|formString|
             BOOT::|form2StringWithPrens| BOOT::|prefix2String|
-            BOOT::|form2StringAsTeX| BOOT::|prefix2StringAsTeX|)) 
+            BOOT::|form2StringAsTeX|)) 
 (PROCLAIM
     '(FTYPE (FUNCTION (*) T) BOOT::|bcConform| BOOT:STREAM-EOF
             BOOT::|categoryParts| BOOT:IOCLEAR BOOT:SAY BOOT:MOAN
@@ -1318,7 +1318,7 @@
             BOOT::NEXT-BOOT-LINE BOOT::|concat| BOOT::SPAD_SYNTAX_ERROR
             BOOT::BOOT BOOT::|htQuery| BOOT::SPAD
             BOOT::|htSayIndentRel| BOOT::|bcConPredTable|
-            BOOT::|htSaySaturn| BOOT::|dbSayItems| BOOT::|simpHasPred|
+            BOOT::|dbSayItems| BOOT::|simpHasPred|
             BOOT::|start| BOOT::|protectedPrompt|
             BOOT::|htpMakeEmptyPage| BOOT::|htMakeButton|
             BOOT::|htSayIfStandard| BOOT::|htSay| BOOT::|incZip1|
@@ -1844,7 +1844,7 @@
             VMLISP:|last| BOOT::|postBlockItem| BOOT::|postQuote|
             BOOT::|postSequence| BOOT::|postTranList|
             BOOT::|checkWarning| VMLISP:HASHTABLE-CLASS
-            BOOT::|downlinkSaturn| BOOT::|decodeScripts,fn|
+            BOOT::|decodeScripts,fn|
             BOOT::|mkUnixPattern| BOOT::|tuple2List|
             BOOT::|postCapsule| BOOT::|patternCheck| BOOT::|postElt|
             BOOT::|postSEGMENT| BOOT::|e04nafSolve,ff|
@@ -2297,7 +2297,6 @@
             BOOT::|addConsDB,min| BOOT::NEXT-TAB-LOC
             BOOT:|CsetComplement| BOOT::|measureCommon|
             BOOT:|CsetString| BOOT::|getDependentsOfConstructor|
-            BOOT::|htMakeSaturnFilterPage| BOOT::|writeSaturnLines|
             BOOT::|hasIdent| BOOT::|addConsDB,HashCheck|
             BOOT::|parseNoMacroFromString| BOOT::|mapConsDB|
             BOOT::|pf2Sex| BOOT::|squeezeConsDB| BOOT::|StreamNull|
@@ -2389,28 +2388,28 @@
             BOOT::|numberize| BOOT::|hasNewInfoText|
             BOOT::|splitConTable| BOOT::|dbGetDocTable,gn|
             BOOT::|string2Integer| BOOT::|recordFrame|
-            BOOT::|issueHTSaturn| BOOT::|kTestPred|
+            BOOT::|kTestPred|
             BOOT::|segmentKeyedMsg| BOOT::|htpPageDescription|
-            BOOT::|dbDocTable| BOOT::|saturnTran| BOOT::|bcUnixTable|
+            BOOT::|dbDocTable| BOOT::|bcUnixTable|
             BOOT::|mkTabularItem| BOOT::|printAsTeX|
             BOOT::|isAsharpFileName?| BOOT::|isMenuItemStyle?|
-            BOOT::|saturnTranText| BOOT::|bcError|
+            BOOT::|bcError|
             BOOT::|transOnlyOption| BOOT::|kPageContextMenu|
             BOOT::|bcString2WordList| BOOT::|unTab1|
             BOOT::|shortenForPrinting| BOOT::|getBpiNameIfTracedMap|
             BOOT::|recordAndPrintTest| BOOT::|mkTabularItem,fn|
             BOOT::|PullAndExecuteSpadSystemCommand| BOOT::|htNewPage|
             BOOT::|htpName| BOOT::|prTraceNames,fn|
-            BOOT::|htMakePageSaturn| BOOT::|e02zafSolve,flam|
+            BOOT::|e02zafSolve,flam|
             BOOT::|isCapitalWord| BOOT::|zagSuper| BOOT::|height|
             BOOT::|zagSub| BOOT::|inputPrompt|
             BOOT::|flattenOperationAlist| BOOT::|variableNumber|
             BOOT::|spadTrace,g| BOOT::|mkPredList,fn|
-            BOOT::|isTraceGensym| BOOT::|htPopSaturn|
+            BOOT::|isTraceGensym|
             BOOT::|htMakePageStandard| BOOT::|undo| BOOT::|dbKind|
             BOOT::|undoCount| BOOT::|stringer| BOOT::|outputTranIf|
             BOOT::|htInitPageNoHeading| BOOT::|undoLocalModemapHack|
-            BOOT::|saturnHasExamplePage| BOOT::|reportUndo| BOOT::|iht|
+            BOOT::|reportUndo| BOOT::|iht|
             BOOT::|bcIssueHt| BOOT::|bcConform1| BOOT::|keyp|
             BOOT::|bcConform1,hd| BOOT::|binomialWidth|
             BOOT::|htSaySourceFile| BOOT::|basicStringize|
@@ -2424,15 +2423,15 @@
             BOOT::|dbGetDocTable,hn| BOOT::|absym|
             BOOT::|dbEvalableConstructor?| BOOT::|getCallBack|
             BOOT::|texFormat1| BOOT::|unTab|
-            BOOT::RETRANSLATE-DIRECTORY BOOT::|kPageContextMenuSaturn|
+            BOOT::RETRANSLATE-DIRECTORY
             BOOT::|maPrin| BOOT::RETRANSLATE-FILE-IF-NECESSARY
-            BOOT::|saturnExampleLink| BOOT::|explainLinear|
+            BOOT::|explainLinear|
             BOOT::RECOMPILE-ALL-LIBS BOOT::|htSayCold|
             BOOT::RECOMPILE-LIB-DIRECTORY
-            BOOT::RECOMPILE-NRLIB-IF-NECESSARY BOOT::|writeSaturnTable|
+            BOOT::RECOMPILE-NRLIB-IF-NECESSARY
             BOOT::|maprinRows| BOOT::RECOMPILE-ALL-FILES
-            BOOT::|writeSaturn| BOOT::|maprinChk|
-            BOOT::|writeSaturnPrint| BOOT::RECOMPILE-ALL-ALGEBRA-FILES
+            BOOT::|maprinChk|
+            BOOT::RECOMPILE-ALL-ALGEBRA-FILES
             BOOT::|bcConform1,say| BOOT::|escapeSpecialIds|
             BOOT::|vConcatSub| BOOT::LOAD-DIRECTORY
             BOOT::|postDoubleSharp| BOOT::|sumoverlist|
@@ -2612,7 +2611,7 @@
             BOOT::|e02bafDefaultSolve| BOOT::|e02bdfDefaultSolve|
             BOOT::|e02defDefaultSolve| BOOT::|sockSendFloat|
             BOOT::ERASE
-            BOOT::|sayErrorly| BOOT::|saturnSayErrorly| BOOT::|set1|
+            BOOT::|sayErrorly| BOOT::|set1|
             BOOT::|displaySetOptionInformation| BOOT::|mkGrepPattern|
             BOOT::|showDoc| BOOT::|genSearchSayJump| BOOT::|oPageFrom|
             BOOT::|showConstruct| BOOT::|htCommandToInputLine,fn|
@@ -2747,10 +2746,10 @@
             BOOT::|systemDependentMkAutoload| BOOT:MKPF
             BOOT::|mkAutoLoad| BOOT:STRM BOOT::|wordFrom|
             FOAM::|magicEq1| BOOT::|throwKeyedMsg1|
-            BOOT::|saturnThrowKeyedMsg| BOOT::|center|
+            BOOT::|center|
             BOOT::|substituteCategoryArguments|
             BOOT::|isDomainConstructorForm| BOOT::|keyedSystemError1|
-            BOOT::|orderByDependency| BOOT::|saturnKeyedSystemError|
+            BOOT::|orderByDependency|
             BOOT::|getFunctorOpsAndAtts| BOOT::|breakKeyedMsg|
             BOOT::|fastSearchCurrentEnv| BOOT::|putMode|
             BOOT::|splitListOn| BOOT::|putFlag|
@@ -3273,7 +3272,7 @@
             BOOT::|dbSpecialExpandIfNecessary| BOOT::|sameUnionBranch|
             BOOT::|htpSetPageDescription| BOOT::|testBitVector|
             BOOT::|dbShowConsDoc| BOOT::|printTypeAndTimeNormal|
-            BOOT::|satTypeDownLink| BOOT::|printTypeAndTimeSaturn|
+            BOOT::|satTypeDownLink|
             BOOT::|mkDocLink| BOOT::|addParameterTemplates|
             BOOT::|hasPair| BOOT::|htpAddToPageDescription|
             BOOT::|getAliasIfTracedMapParameter| BOOT::|pfAbSynOp?|
