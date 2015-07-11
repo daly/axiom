@@ -26368,7 +26368,6 @@ The result is a substitution list or 'failed.
 \end{chunk}
 
 \defun{defaultTargetFE}{defaultTargetFE}
-\calls{defaultTargetFE}{typeIsASmallInteger}
 \calls{defaultTargetFE}{isEqualOrSubDomain}
 \calls{defaultTargetFE}{ifcar}
 \calls{defaultTargetFE}{defaultTargetFE}
@@ -26388,7 +26387,7 @@ The result is a substitution list or 'failed.
              (consp (qcdr a)) (eq (qcddr a) nil))
         (equal a |$RationalNumber|)
         (member (qcar a) (list (qcar |$Symbol|) '|RationalRadicals| '|Pi|))
-        (|typeIsASmallInteger| a)
+        (equal a |$SingleInteger|)
         (|isEqualOrSubDomain| a |$Integer|)
         (equal a '(|AlgebraicNumber|)))
      (if (ifcar options)
@@ -26428,6 +26427,1767 @@ The result is a substitution list or 'failed.
                     (equal (qcadr d1) d2))
                (and (consp d1) (eq (qcdr d1) nil)
                     (equal (qcar d1) d2))))))
+
+\end{chunk}
+
+\chapter{Coercions}
+
+\begin{verbatim}
+ main algorithms for canCoerceFrom and coerceInteractive
+
+coerceInteractive and canCoerceFrom are the two coercion functions
+for $InteractiveMode. They translate RN, RF and RR to QF I, QF P
+and RE RN, respectively, and call coerceInt or canCoerce, which
+both work in the same way (e.g. coercion from t1 to t2):
+1. they try to coerce t1 to t2 directly (tower coercion), and, if
+  this fails, to coerce t1 to the last argument of t2 and embed
+  this last argument into t2. These embedding functions are now only
+  defined in the algebra code. (RSS 2-27-87)
+2. the tower coercion looks whether there is any applicable local
+  coercion, which means, one defined in boot or in algebra code.
+  If there is an applicable function from a constructor, which is
+  inside the type tower of t1, to the top level constructor of t2,
+  then this constructor is bubbled up inside t1. This means,
+  special coercion functions (defined in boot) are called, which
+  commute two constructors in a tower. Then the local coercion is
+  called on these constructors, which both are on top level now.
+example:
+let t1 = A B C D E (short for (A (B (C (D (E))))), where A ... E are
+  type constructors), and t2 = F D G H I J
+there is no coercion from t1 to t2 directly, so we try to coerce
+  t1 to s1 = D G H I J, the last argument of t2
+we create the type s2 = A D B C E and call a local coercion A2A
+  from t1 to s2, which, by recursively calling coerce, bubbles up
+  the constructor D
+then we call a commute coerce from s2 to s3 = D A B C E and a local
+  coerce D2D from s3 to s1
+finally we embed s1 into t2, which completes the coercion t1 to t2
+the result of canCoerceFrom is TRUE or NIL
+the result of coerceInteractive is a object or NIL (=failed)
+all boot coercion functions have the following result:
+1. if u=$fromCoerceable$, then TRUE or NIL
+2. if the coercion succeeds, the coerced value (this may be NIL)
+3. if the coercion fails, they throw to a catch point in
+     coerceByFunction
+
+\end{verbatim}
+
+\defun{coerceInteractive}{coerceInteractive}
+\calls{coerceInteractive}{objMode}
+\calls{coerceInteractive}{objVal}
+\calls{coerceInteractive}{clearDependentMaps}
+\calls{coerceInteractive}{throwKeyedMsg}
+\calls{coerceInteractive}{startTimingProcess}
+\calls{coerceInteractive}{mkObj}
+\calls{coerceInteractive}{mkObjWrap}
+\calls{coerceInteractive}{coerceInt0}
+\calls{coerceInteractive}{stopTimingProcess}
+\usesdollar{coerceInteractive}{insideCoerceInteractive}
+\usesdollar{coerceInteractive}{OutputForm}
+\usesdollar{coerceInteractive}{mapName}
+\usesdollar{coerceInteractive}{compilingMap}
+\usesdollar{coerceInteractive}{NoValueMode}
+\usesdollar{coerceInteractive}{EmptyMode}
+\begin{chunk}{defun coerceInteractive}
+(defun |coerceInteractive| (triple t2)
+ (let (|$insideCoerceInteractive| t1 val expr2 result)
+  (declare (special |$insideCoerceInteractive| |$OutputForm|
+                    |$mapName| |$compilingMap| |$NoValueMode| |$EmptyMode|))
+   (setq t1 (|objMode| triple))
+   (setq val (|objVal| triple))
+   (cond
+    ((or (null t2) (equal t2 |$EmptyMode|)) nil)
+    ((equal t2 t1) triple)
+    ((equal t2 '|$NoValueMode|) (mkObj val t2))
+    (t
+     (when (eq (car t2) '|SubDomain|) (setq t2 (second t2)))
+     (cond
+      ((|member| t1
+        '((|Category|) (|Mode|) (|Domain|) (|SubDomain| (|Domain|))))
+       (when (equal t2 |$OutputForm|) (mkObj val t2)))
+      ((equal t1 '|$NoValueMode|)
+       (when |$compilingMap| (|clearDependentMaps| |$mapName| nil))
+       (|throwKeyedMsg|
+        (format nil
+          "You are trying to use something (probably a loop) in a ~
+           situation where a value is expected.  In particular, you ~
+           are trying to convert this to the type %1p . The following ~
+           information may help:  possible function name:  %2p")
+         (list t2 |$mapName|)))
+      (t
+       (setq |$insideCoerceInteractive| t)
+       (setq expr2 (equal t2 |$OutputForm|))
+       (cond
+        (expr2 (|startTimingProcess| '|print|))
+        (t (|startTimingProcess| '|coercion|)))
+       (setq result
+        (cond
+         ((and expr2 (equal t1 val)) (mkObj val |$OutputForm|))
+         ((and expr2 (eq (car t1) '|Variable|))
+           (mkObjWrap (second t1) |$OutputForm|))
+         (t (|coerceInt0| triple t2))))
+          (cond
+           (expr2 (|stopTimingProcess| '|print|))
+           (t (|stopTimingProcess| '|coercion|)))
+          result))))))
+
+\end{chunk}
+
+\defun{coerceInt}{coerceInt}
+\calls{coerceInt}{coerceInt1}
+\calls{coerceInt}{objMode}
+\calls{coerceInt}{getMinimalVarMode}
+\calls{coerceInt}{unwrap}
+\calls{coerceInt}{objVal}
+\calls{coerceInt}{coerceInt}
+\begin{chunk}{defun coerceInt}
+(defun |coerceInt| (triple t2)
+ (let (val newMode newVal)
+  (if (setq val (|coerceInt1| triple t2))
+    val
+    (when (eq (car (|objMode| triple)) '|Variable|)
+     (setq newMode (|getMinimalVarMode| (|unwrap| (|objVal| triple)) nil))
+     (setq newVal (|coerceInt| triple newMode))
+     (|coerceInt| newVal t2)))))
+
+\end{chunk}
+
+\defun{coerceInt0}{coerceInt0}
+\calls{coerceInt0}{objVal}
+\calls{coerceInt0}{objMode}
+\calls{coerceInt0}{conCoerceFrom}
+\calls{coerceInt0}{isWrapped}
+\calls{coerceInt0}{intCodeGenCOERCE}
+\calls{coerceInt0}{unwrap}
+\calls{coerceInt0}{coerceInt0}
+\calls{coerceInt0}{mkObj}
+\calls{coerceInt0}{coerceInt}
+\calls{coerceInt0}{objSetMode}
+\usesdollar{coerceInt0}{OutputForm}
+\usesdollar{coerceInt0}{Any}
+\usesdollar{coerceInt0}{genValue}
+This is the top level interactive coercion, which transfers all RN, RF and RR
+into equivalent types
+\begin{chunk}{defun coerceInt0}
+(defun |coerceInt0| (triple t2)
+ (prog (val t1 s1 s2 let1 t1p valp ans x)
+  (declare (special |$OutputForm| |$Any| |$genValue|))
+  (return
+   (progn
+    (setq val (|objVal| triple))
+    (setq t1 (|objMode| triple))
+    (cond
+     ((eq val '|$fromCoerceable$|) (|canCoerceFrom| t1 t2))
+     ((equal t1 t2) triple)
+     (t
+      (cond
+       ((equal t2 |$OutputForm|) (setq s1 t1) (setq s2 t2))
+       (t
+        (setq s1 t1)
+        (setq s2 t2)
+        (when (equal s1 s2) (return (mkObj val t2)))))
+      (cond
+       ; handle case where we must generate code
+       ((and (null (|isWrapped| val))
+             (or
+              (null (eq (car t1) '|FunctionCalled|))
+              (null |$genValue|)))
+        (|intCodeGenCOERCE| triple t2))
+       ((and (equal t1 |$Any|) 
+             (nequal t2 |$OutputForm|)
+             (progn
+              (setq let1 (|unwrap| val))
+              (setq t1p (car let1))
+              (setq valp (cdr let1))
+              let1)
+             (setq ans (|coerceInt0| (mkObjWrap valp t1p) t2)))
+         ans)
+       (t
+        (unless (eq s1 t1) (setq triple (mkObj val s1)))
+        (when (setq x (|coerceInt| triple s2))
+         (cond
+          ((eq s2 t2) x)
+          (t 
+           (|objSetMode| x t2)
+           x)))))))))))
+
+\end{chunk}
+
+\defun{coerceInt1}{coerceInt1}
+This is general interactive coercion. The result is a new triple
+with type m2 or NIL (= failed).
+\calls{coerceInt1}{NRTcompileEvalForm}
+\calls{coerceInt1}{absolutelyCanCoerceByCheating}
+\calls{coerceInt1}{asTupleAsList}
+\calls{coerceInt1}{bottomUp}
+\calls{coerceInt1}{coerceByFunction}
+\calls{coerceInt1}{coerceInt1}
+\calls{coerceInt1}{coerceInt2Union}
+\calls{coerceInt1}{coerceIntAlgebraicConstant}
+\calls{coerceInt1}{coerceIntFromUnion}
+\calls{coerceInt1}{coerceIntTower}
+\calls{coerceInt1}{coerceIntX}
+\calls{coerceInt1}{coerceInt}
+\calls{coerceInt1}{coerceRetract}
+\calls{coerceInt1}{coerceSubDomain}
+\calls{coerceInt1}{compareTypeLists}
+\calls{coerceInt1}{deconstructT}
+\calls{coerceInt1}{evalDomain}
+\calls{coerceInt1}{getFunctionFromDomain}
+\calls{coerceInt1}{getValue}
+\calls{coerceInt1}{isEqualOrSubDomain}
+\calls{coerceInt1}{isSubDomain}
+\calls{coerceInt1}{mkAtreeNode}
+\calls{coerceInt1}{mkAtree}
+\calls{coerceInt1}{mkObjWrap}
+\calls{coerceInt1}{mkObj}
+\calls{coerceInt1}{nequal}
+\calls{coerceInt1}{nreverse0}
+\calls{coerceInt1}{objMode}
+\calls{coerceInt1}{objVal}
+\calls{coerceInt1}{selectLocalMms}
+\calls{coerceInt1}{selectMms1}
+\calls{coerceInt1}{transferPropsToNode}
+\calls{coerceInt1}{unwrap}
+\catches{coerceInt1}{coerceOrCroaker}
+\usesdollar{coerceInt1}{useCoerceOrCroak}
+\usesdollar{coerceInt1}{Integer}
+\usesdollar{coerceInt1}{QuotientField}
+\usesdollar{coerceInt1}{e}
+\usesdollar{coerceInt1}{genValue}
+\usesdollar{coerceInt1}{Symbol}
+\usesdollar{coerceInt1}{AnonymousFunction}
+\usesdollar{coerceInt1}{OutputForm}
+\usesdollar{coerceInt1}{String}
+\usesdollar{coerceInt1}{Any}
+\usesdollar{coerceInt1}{Void}
+\usesdollar{coerceInt1}{NonNegativeInteger}
+\usesdollar{coerceInt1}{PositiveInteger}
+\usesdollar{coerceInt1}{EmptyMode}
+\usesdollar{coerceInt1}{SingleInteger}
+\begin{chunk}{defun coerceInt1}
+(defun |coerceInt1| (triple t2)
+ (prog (|$useCoerceOrCroak| t1 sintp t1p valp s body vars tree val symNode 
+        mms ml oldName intName t3 triplep let1 arg tt ans)
+ (declare (special |$useCoerceOrCroak| |$Integer| |$QuotientField|
+                   |$e| |$genValue| |$Symbol| |$AnonymousFunction|
+                   |$OutputForm| |$String| |$Any| |$Void| |$SingleInteger|
+                   |$NonNegativeInteger| |$PositiveInteger| |$EmptyMode|))
+  (return
+   (seq 
+    (progn
+     (setq |$useCoerceOrCroak| t)
+     (cond
+      ((equal t2 |$EmptyMode|) nil)
+      (t 
+       (setq t1 (|objMode| triple))
+       (cond
+        ((equal t1 t2) triple)
+        (t
+         (setq val (|objVal| triple))
+         (cond
+          ((|absolutelyCanCoerceByCheating| t1 t2) (mkObj val t2))
+          ((|isSubDomain| t2 t1) (|coerceSubDomain| val t1 t2))
+          (t
+           (cond
+            ((equal t1 |$SingleInteger|)
+             (cond
+              ((or (equal t2 |$Integer|) (equal t2 |$SingleInteger|))
+                (return (mkObj val t2)))
+              (t
+               (setq sintp (typep val 'fixnum))
+               (cond
+                ((and sintp (equal t2 |$PositiveInteger|) (> val 0))
+                  (return (mkObj val t2)))
+                ((and sintp (equal t2 |$NonNegativeInteger|) (>= val 0))
+                  (return (mkObj val t2))))))))
+           (cond
+            ((and (equal t2 |$SingleInteger|)
+                  (|isEqualOrSubDomain| t1 |$Integer|)
+                  (integerp val))
+              (cond
+               ((typep val 'fixnum) (mkObj val t2))
+               (t nil)))
+            ((equal t2 |$Void|) (mkObj (|voidValue|) |$Void|))
+            ((equal t2 |$Any|) (mkObjWrap (cons t1 (|unwrap| val)) '(|Any|)))
+            ((and (equal t1 |$Any|)
+                  (nequal t2 |$OutputForm|)
+                  (progn
+                   (setq let1 (|unwrap| val))
+                   (setq t1p (car let1))
+                   (setq valp (cdr let1))
+                   let1)
+                  (setq ans (|coerceInt| (mkObjWrap valp t1p) t2)))
+                ans)
+              ; tagged union selectors
+            ((or (and (eq (car t1) '|Variable|) (equal (cadr t1) t2))
+                 (and (eq (car t2) '|Variable|) (equal (cadr t2) t1)))
+              (mkObj val t2))
+            ((stringp t2)
+                 (cond
+                  ((and (eq (first t1) '|Variable|)
+                        (equal t2 (pname (second t1))))
+                    (mkObjWrap t2 t2))
+                  (t
+                   (setq valp (|unwrap| val))
+                   (when (and (equal t2 valp)
+                              (or (equal valp t1) (equal t1 |$String|)))
+                    (mkObj val t2)))))
+            ((eq (first t1) '|Tuple|)
+              (|coerceInt1|
+               (mkObjWrap
+                (|asTupleAsList| (|unwrap| val))
+                (list '|List| (setq s (second t1))))
+               t2))
+            ((and (consp t1) (eq (qcar t1) '|Union|))
+              (|coerceIntFromUnion| triple t2))
+            ((and (consp t2) (eq (qcar t2) '|Union|))
+              (|coerceInt2Union| triple t2))
+            ((and (stringp t1) (equal t2 |$String|))
+              (mkObj val |$String|))
+            ((and (stringp t1) (eq (car t2) '|Variable|))
+              (when (equal t1 (pname (second t2))) (mkObjWrap (second t2) t2)))
+            ((and (stringp t1) (equal t1 (|unwrap| val)))
+              (when (equal t2 |$OutputForm|) (mkObj t1 |$OutputForm|)))
+            ((atom t1) nil)
+            (t
+             (cond
+              ((and (equal t1 |$AnonymousFunction|)
+                    (eq (car t2) '|Mapping|))
+                (setq |$useCoerceOrCroak| nil)
+                (setq let1 (|unwrap| val))
+                (setq vars (cadr let1))
+                (setq body (cddr let1))
+                (setq vars
+                 (cond
+                  ((atom vars) (cons vars nil))
+                  ((and (consp vars) (eq (qcar vars) '|Tuple|)) (cdr vars))
+                  (t vars)))
+                (cond
+                 ((nequal (|#| (cddr t2)) (|#| vars)) '|continue|)
+                 (t
+                  (setq tree
+                   (|mkAtree|
+                    (cons 'adef
+                     (cons vars
+                      (cons (cons (cadr t2) (cddr t2))
+                       (cons (loop for x in (cdr t2) collect nil)
+                        body))))))
+                  (cond
+                   ((eq
+                     (catch '|coerceOrCroaker| (|bottomUp| tree)) '|croaked|)
+                     nil)
+                   (t (return (|getValue| tree))))))))
+           (cond
+            ((and (equal t1 |$Symbol|) (eq (car t2) '|Mapping|))
+              (cond
+               ((null (setq mms
+                       (|selectMms1| (|unwrap| val) nil 
+                         (cddr t2) (cddr t2) (cadr t2))))
+                 nil)
+               (t
+                (cond
+                 ((nequal (cadaar mms) (cadr t2)) nil)
+                 (|$genValue|
+                  (mkObjWrap 
+                   (|getFunctionFromDomain|
+                    (|unwrap| val) (caaar mms) (cddaar mms)) t2))
+                 (t
+                  (mkObj
+                   (|NRTcompileEvalForm| 
+                      (|unwrap| val) (cdaar mms) (|evalDomain| (caaar mms)))
+                    t2))))))
+            ((and (eq (car t1) '|Variable|) (eq (car t2) '|Mapping|))
+              (setq mms 
+               (|selectMms1| (cadr t1) (cadr t2) (cddr t2) (cddr t2) nil))
+              (cond
+               ((and (null mms)
+                     (null 
+                      (setq mms 
+                       (|selectMms1| (cadr t1) (cadr t2) 
+                                     (cddr t2) (cddr t2) t))))
+                 nil)
+               (t
+                (cond
+                 ((nequal (cadaar mms) (cadr t2)) nil)
+                 ((eq (caaaar mms) '|_FreeFunction_|) 
+                   (mkObj (cdaaar mms) t2))
+                 (|$genValue|
+                   (mkObjWrap
+                    (|getFunctionFromDomain| (cadr t1) (caaar mms) 
+                                             (cddaar mms)) t2))
+                 (t
+                  (mkObj
+                    (|NRTcompileEvalForm| (cadr t1) (cdr (caar mms)) 
+                     (|evalDomain| (caaar mms)))
+                    t2))))))
+            ((and (eq (car t1) '|FunctionCalled|) (eq (qcar t2) '|Mapping|))
+              (setq symNode (|mkAtreeNode| (cadr t1)))
+              (|transferPropsToNode| (cadr t1) symNode)
+              (cond
+               ((null
+                 (setq mms
+                  (|selectLocalMms| symNode (cadr t1) (cddr t2) (cadr t2))))
+                 nil)
+               (t
+                (cond
+                 ((nequal (cadaar mms) (cadr t2)) nil)
+                 (t
+                  (setq ml (cons (cadr t2) (cddr t2)))
+                  (setq intName
+                   (when
+                    (some #'(lambda (mm)
+                             (setq oldName (second mm))
+                             (|compareTypeLists| (cdar mm) ml)) mms)
+                    (list oldName)))
+                  (cond
+                   ((null intName) nil)
+                   (t (mkObjWrap intName t2))))))))
+            ((eq (car t1) '|FunctionCalled|)
+              (setq t3 (|get| (second t1) '|mode| |$e|))
+              (when (and (eq (car t3) '|Mapping|)
+                         (setq triplep (|coerceInt| triple t3)))
+               (|coerceInt| triplep t2)))
+            ((and (eq (car t1) '|Variable|)
+                  (consp t2)
+                  (or (|isEqualOrSubDomain| t2 |$Integer|)
+                      (equal t2 (list |$QuotientField| |$Integer|))
+                      (member (car t2)
+                       '(|RationalNumber| |BigFloat|
+                         |NewFloat| |Float| |DoubleFloat|))))
+               nil)
+            (t
+             (setq ans
+              (or
+               (|coerceRetract| triple t2)
+               (|coerceIntTower| triple t2)
+               (progn
+                (setq arg (cdr (|deconstructT| t2)))
+                (and arg
+                 (progn
+                   (setq tt (|coerceInt| triple (|last| arg)))
+                   (and tt (|coerceByFunction| tt t2)))))))
+             (or ans
+                 (and (|isSubDomain| t1 |$Integer|)
+                      (|coerceInt| (mkObj val |$Integer|) t2))
+                 (|coerceIntAlgebraicConstant| triple t2)
+                 (|coerceIntX| val t1 t2)))))))))))))))))
+
+\end{chunk}
+
+\defun{coerceByFunction}{coerceByFunction}
+\begin{chunk}{defun coerceByFunction}
+(defun |coerceByFunction| (t$ m2)
+ (let ($ m1 ud x tmp1 a tmp2 b funName mm dc tar args slot dcVector fun fn
+       d val env code m1p m2p)
+  (declare (special $ |$coerceFailure| |$Boolean|))
+  (setq x (|objVal| T$))
+  (cond
+   ((eq x '|$fromCoerceable$|) nil)
+   ((eq (car m2) '|Union|) nil)
+   (t
+    (setq m1 (|objMode| t$))
+    (cond
+     ((and (consp m2) (eq (qcar m2) '|Boolean|)
+           (consp m1) (eq (qcar m1) '|Equation|)
+           (PROGN
+            (setq tmp1 (cdr m1))
+            (and (consp tmp1) (eq (cdr tmp1) nil)
+                 (progn (setq ud (car tmp1)) t))))
+       (setq dcVector (|evalDomain| ud))
+       (setq fun
+        (cond
+         ((|isWrapped| x)
+          (|NRTcompiledLookup| '= (list |$Boolean| '$ '$) dcVector))
+         (t
+          (|NRTcompileEvalForm| '= (list |$Boolean| '$ '$) dcVector))))
+       (setq fn (car fun))
+       (setq d (cdr fun))
+       (cond
+        ((|isWrapped| x) 
+         (setq x (|unwrap| x))
+         (mkObjWrap (spadcall (car x) (cdr x) fun) m2))
+        ((null (and (consp x) (eq (car x) 'spadcall)
+               (progn
+                (setq tmp1 (cdr x))
+                (and (consp tmp1)
+                     (progn
+                      (setq a (car tmp1))
+                      (setq tmp2 (cdr tmp1))
+                      (and (consp tmp2)
+                           (progn
+                            (setq b (car tmp2)) t)))))))
+          (|keyedSystemError| "Generated code is incorrect for equation" nil))
+        (t
+         (setq code (list 'spadcall a b fun))
+         (mkObj code |$Boolean|))))
+     (t
+      (cond
+       ((null 
+         (setq mm (|coerceConvertMmSelection| (setq funName '|coerce|) m1 m2)))
+        (setq mm 
+         (|coerceConvertMmSelection| (setq funName '|convert|) m1 m2))))
+      (when mm
+        (setq dc (caar mm))
+        (setq tar (cadar mm))
+        (setq args (cddar mm))
+        (setq slot (cadr mm))
+        (setq dcVector (|evalDomain| dc))
+        (setq fun
+         (cond
+          ((|isWrapped| x) (|NRTcompiledLookup| funName slot dcVector))
+          (t (|NRTcompileEvalForm| funName slot dcVector))))
+        (setq fn (car fun))
+        (setq d (cdr fun))
+        (cond
+         ((equal fn #'|Undef|) nil)
+         ((|isWrapped| x)
+          (setq $ dcVector)
+          (setq val (catch '|coerceFailure| (spadcall (|unwrap| x) fun)))
+          (cond
+           ((equal val |$coerceFailure|) nil)
+           (t (mkObjWrap val m2))))
+         (t
+          (setq env fun)
+          (setq code (list '|failCheck| (list 'spadcall x env)))
+          (mkObj code m2))))))))))
+
+\end{chunk}
+
+\defun{coerceIntTower}{coerceIntTower}
+This tries to find a coercion from top level t2 to somewhere inside t1
+It builds a new argument type, for which coercion is called recursively
+\calls{coerceIntTower}{coerceIntPermute}
+\calls{coerceIntTower}{coerceIntSpecial}
+\calls{coerceIntTower}{last}
+\calls{coerceIntTower}{coerceIntTest}
+\calls{coerceIntTower}{constructT}
+\calls{coerceIntTower}{replaceLast}
+\calls{coerceIntTower}{deconstructT}
+\calls{coerceIntTower}{bubbleConstructor}
+\calls{coerceIntTower}{isValidType}
+\calls{coerceIntTower}{coerceIntCommute}
+\calls{coerceIntTower}{coerceIntByMap}
+\calls{coerceIntTower}{coerceIntTableOrFunction}
+\begin{chunk}{defun coerceIntTower}
+(defun |coerceIntTower| (triple t2)
+ (let (t1 c1 arg1 tt c arg tl let1 c2 arg2 s x)
+  (cond
+   ((setq x (|coerceIntByMap| triple t2)) x)
+   ((setq x (|coerceIntCommute| triple t2)) x)
+   ((setq x (|coerceIntPermute| triple t2)) x)
+   ((setq x (|coerceIntSpecial| triple t2)) x)
+   ((setq x (|coerceIntTableOrFunction| triple t2)) x)
+   (t
+    (setq t1 (|objMode| triple))
+    (setq let1 (|deconstructT| t1))
+    (setq c1 (car let1))
+    (setq arg1 (cdr let1))
+    (and arg1
+         (progn
+          (setq tl nil)
+          (setq arg arg1)
+          (loop until (or x (not arg)) do
+           (setq tt (|last| arg))
+           (setq let1 (|deconstructT| tt))
+           (setq c (car let1))
+           (setq arg (cdr let1))
+           (setq tl (cons c (cons arg tl)))
+           (cond
+            ((setq x (and arg (|coerceIntTest| tt t2)))
+             (cond
+              ((cddr tl)
+                (setq s 
+                 (|constructT| c1 
+                  (|replaceLast| arg1 (|bubbleConstructor| tl))))
+                (cond
+                 ((null (|isValidType| s)) (setq x nil))
+                 ((setq x (or (|coerceIntByMap| triple s)
+                              (|coerceIntTableOrFunction| triple s)))
+                   (setq let1 (|deconstructT| (|last| s)))
+                   (setq c2 (car let1))
+                   (setq arg2 (cdr let1))
+                   (setq s (|bubbleConstructor| (list c2 arg2 c1 arg1)))
+                   (cond
+                    ((null (|isValidType| s)) (setq x nil))
+                    ((setq x (|coerceIntCommute| x s))
+                      (setq x (or (|coerceIntByMap| x t2)
+                                  (|coerceIntTableOrFunction| x t2))))))))
+              (t
+               (setq s (|bubbleConstructor| (list c arg c1 arg1)))
+               (cond
+                ((null (|isValidType| s)) (setq x nil))
+                ((setq x (|coerceIntCommute| triple s))
+                  (setq x (or (|coerceIntByMap| x t2)
+                              (|coerceIntTableOrFunction| x t2))))))))))
+          x))))))
+
+\end{chunk}
+
+\defun{coerceIntTest}{coerceIntTest}
+This looks whether there exists a table entry or a coercion function.
+Thus the type can be bubbled before coerceIntTableOrFunction is called.
+\calls{coerceIntTest}{coerceConvertMmSelection}
+\calls{coerceIntTest}{assq}
+\usesdollar{coerceIntTest}{CoerceTable}
+\usesdollar{coerceIntTest}{useConvertForCoercions}
+\begin{chunk}{defun coerceIntTest}
+(defun |coerceIntTest| (t1 t2)
+ (let (p b)
+  (declare (special |$useConvertForCoercions| |$CoerceTable|))
+  (or (equal t1 t2)
+      (setq b
+       (and (setq p (assq (car t1) |$CoerceTable|))
+            (assq (car t2) (cdr p))))
+      (or b 
+          (|coerceConvertMmSelection| '|coerce| t1 t2)
+          (and |$useConvertForCoercions|
+               (|coerceConvertMmSelection| '|convert| t1 t2))))))
+
+\end{chunk}
+
+\defun{coerceConvertMmSelection}{coerceConvertMmSelection}
+This calls selectMms with \verb|$Coerce=NIL| and tests for required
+target type. funName is either 'coerce or 'convert.
+\begin{verbatim}
+  mmS := [[sig,[targ,arg],:pred] for x in l | x is [sig,[.,arg],:pred] and
+    hasCorrectTarget(m2,sig) and sig is [dc,targ,oarg] and oarg = m1]
+\end{verbatim}
+\calls{coerceConvertMmSelection}{coerceConvertMmSelection;AL}
+\calls{coerceConvertMmSelection}{selectMms1}
+\usesdollar{coerceConvertMmSelection}{reportBottomUpFlag}
+\usesdollar{coerceConvertMmSelection}{declaredMode}
+\begin{chunk}{defun coerceConvertMmSelection}
+(defun |coerceConvertMmSelection| (&rest g1)
+ (labels (
+  (checktargets (funName m1 m2)
+   (let (|$declaredMode| |$reportBottomUpFlag|)
+   (declare (special |$declaredMode| |$reportBottomUpFlag|))
+    (setq |$declaredMode| nil)
+    (setq |$reportBottomUpFlag| nil)
+    (car
+     (loop for x in (|selectMms1| funName m2 (list m1) (list m1) nil)
+      collect
+      (when (and (|hasCorrectTarget| m2 (car x)) (equal (caddar x) m1))
+       (cons (car x) (cons (cons (cadar x) (list (cadadr x))) (cddr x)))))))))
+ (let (g3)
+  (if (setq g3 (hget |coerceConvertMmSelection;AL| g1))
+    (|CDRwithIncrement| g3)
+    (cdr (hput |coerceConvertMmSelection;AL| g1
+          (cons 1 (apply #'checktargets g1))))))))
+
+\end{chunk}
+
+\defun{hasCorrectTarget}{hasCorrectTarget}
+This tests whether the target of signature sig is either m or a union
+containing m. It also discards TEQ as it is not meant to be used at top-level
+\begin{chunk}{defun hasCorrectTarget 0}
+(defun |hasCorrectTarget| (m sig)
+ (let (tar)
+  (setq tar (second sig))
+  (cond
+   ((eq (caar sig) '|TypeEquivalence|) nil)
+   ((equal m tar) t)
+   ((and (eq (car tar) '|Union|) 
+         (eq (third tar) '|failed|))
+    (equal (second tar) m))
+   ((and (eq (car tar) '|Union|) 
+         (eq (second tar) '|failed|)
+         (equal (third tar) m))))))
+
+\end{chunk}
+
+\defun{coerceIntPermute}{coerceIntPermute}
+\calls{coerceIntPermute}{member}
+\calls{coerceIntPermute}{objMode}
+\calls{coerceIntPermute}{computeTTTranspositions}
+\calls{coerceIntPermute}{coerceInt}
+\begin{chunk}{defun coerceIntPermute}
+(defun |coerceIntPermute| (object t2)
+ (let (t1 towers ok)
+  (cond
+   ((|member| t2 '((|Integer|) (|OutputForm|))) nil)
+   (t
+     (setq t1 (|objMode| object))
+     (setq towers (|computeTTTranspositions| t1 t2))
+     ; At this point, CAR towers = t1 and last towers should be similar
+     ; to t2 in the sense that the components of t1 are in the same order
+     ; as in t2. If length towers = 2 and t2 = last towers, we quit to
+     ; avoid an infinte loop.
+     (cond
+      ((or (null towers) (null (cdr towers))) nil)
+      ((and (null (cddr towers)) (equal t2 (cadr towers))) nil)
+      (t
+       (setq ok t)
+       ;  do the coercions successively, quitting if any fail
+       (loop for tt in (cdr towers) while ok do
+         (unless (setq object (|coerceInt| object tt)) (setq ok nil)))
+       (when ok object)))))))
+
+\end{chunk}
+
+\defun{computeTTTranspositions}{computeTTTranspositions}
+\calls{computeTTTranspositions}{decomposeTypeIntoTower}
+\calls{computeTTTranspositions}{member}
+\calls{computeTTTranspositions}{nequal}
+\calls{computeTTTranspositions}{msort}
+\calls{computeTTTranspositions}{remdup}
+\calls{computeTTTranspositions}{length}
+\calls{computeTTTranspositions}{list2vec}
+\calls{computeTTTranspositions}{permuteToOrder}
+\calls{computeTTTranspositions}{setelt}
+\calls{computeTTTranspositions}{vec2list}
+\calls{computeTTTranspositions}{reassembleTowerIntoType}
+\begin{chunk}{defun computeTTTranspositions}
+(defun |computeTTTranspositions| (t1 t2)
+ (labels (
+  (compress (z start len)
+   (cond
+    ((>= start len) z)
+    ((|member| start z) (compress z (1+ start) len))
+    (t
+     (compress
+      (loop for i in z do collect (if (> start i) i (1- i))) start len)))))
+ (let (tl1 tl2 p2p n1 p2 perms tower tt towers)
+  ;  decompose t1 into its tower parts
+  (setq tl1 (|decomposeTypeIntoTower| t1))
+  (setq tl2 (|decomposeTypeIntoTower| t2))
+  (cond
+   ; if not at least 2 parts, don't bother working here
+   ((null (and (cdr tl1) (cdr tl2))) nil)
+   (t
+    ; determine the relative order of the parts of t1 in t2
+    (setq p2 (nreverse0 (loop for d1 in tl1 collect (position d1 tl2))))
+    (cond
+     ; something not present
+     ((|member| (- 1) p2) nil)
+     (t
+      ; if they are all ascending, this function will do nothing
+      (setq p2p (msort p2))
+      (cond
+       ((equal p2 p2p) nil)
+       ; if anything is repeated twice, leave
+       ((nequal p2p (msort (remdup p2p))) nil)
+       (t
+        ; create a list of permutations that transform the tower parts
+        ; of t1 into the order they are in in t2
+        (setq n1 (|#| tl1))
+        (setq p2 (list2vec (compress p2 0 (|#| (remdup tl1)))))
+        ; p2 now has the same position numbers as p1, we need to determine
+        ; a list of permutations that takes p1 into p2. 
+        (setq perms (|permuteToOrder| p2 (- n1 1) 0))
+        (setq towers (list tl1))
+        (setq tower (list2vec tl1))
+        (loop for perm in perms do
+         (setq tt (elt tower (car perm)))
+         (setelt tower (car perm) (elt tower (cdr perm)))
+         (setelt tower (cdr perm) tt)
+         (setq towers (cons (vec2list tower) towers)))
+        (setq towers (nreverse0
+         (loop for tower in towers collect (|reassembleTowerIntoType| tower))))
+        (unless (equal (car towers) t2) (setq towers (cons t2 towers)))
+        (nreverse towers))))))))))
+
+\end{chunk}
+
+\defun{permuteToOrder}{permuteToOrder}
+\calls{permuteToOrder}{permuteToOrder}
+\calls{permuteToOrder}{setelt}
+\begin{chunk}{defun permuteToOrder}
+(defun |permuteToOrder| (p n start)
+ (let (r x perms tt stpos)
+  (setq r (- n start))
+ (cond
+  ((<= r 0) nil)
+  ((eql r 1)
+   (cond
+    ((> (elt p (+ r 1)) (elt p r)) nil)
+    (t (list (cons r (+ r 1))))))
+  ((equal (elt p start) start) (|permuteToOrder| p n (+ start 1)))
+  (t
+   (setq stpos nil)
+   (loop for i from (+ start 1) to n while (not stpos) do
+    (when (equal (elt p i) start) (setq stpos i)))
+   (setq perms nil)
+   (loop while (not (equal stpos start)) do
+    (setq x (- stpos 1))
+    (setq perms (cons (cons x stpos) perms))
+    (setq tt (elt p stpos))
+    (setelt p stpos (elt p x))
+    (setelt p x tt)
+    (setq stpos x))
+   (append (nreverse perms) (|permuteToOrder| p n (+ start 1)))))))
+
+\end{chunk}
+
+\defun{decomposeTypeIntoTower}{decomposeTypeIntoTower}
+\calls{decomposeTypeIntoTower}{decomposeTypeIntoTower}
+\calls{decomposeTypeIntoTower}{deconstructT}
+\begin{chunk}{defun decomposeTypeIntoTower}
+(defun |decomposeTypeIntoTower| (tt)
+ (let (rd)
+  (cond
+   ((atom tt) (list tt))
+   ((null (cdr (|deconstructT| tt))) (list tt))
+   (t
+    (setq rd (reverse tt))
+    (cons (reverse (cdr rd)) (|decomposeTypeIntoTower| (car rd)))))))
+
+\end{chunk}
+
+\defun{reassembleTowerIntoType}{reassembleTowerIntoType}
+\calls{reassembleTowerIntoType}{reassembleTowerIntoType}
+\begin{chunk}{defun reassembleTowerIntoType}
+(defun |reassembleTowerIntoType| (tower)
+ (let (let1)
+  (cond
+   ((atom tower) tower)
+   ((null (cdr tower)) (car tower))
+   (t
+    (setq let1 (reverse tower))
+    (|reassembleTowerIntoType|
+      (append (nreverse (cddr let1))
+              (list (append (second let1) (list (first let1))))))))))
+
+\end{chunk}
+
+\defun{coerceIntCommute}{coerceIntCommute}
+\calls{coerceIntCommute}{objMode}
+\calls{coerceIntCommute}{coerceCommuteTest}
+\calls{coerceIntCommute}{underDomainOf}
+\calls{coerceIntCommute}{getl}
+\calls{coerceIntCommute}{strconc}
+\calls{coerceIntCommute}{objValUnwrap}
+\calls{coerceIntCommute}{mkObjWrap}
+\usesdollar{coerceIntCommute}{coerceFailure}
+\catches{coerceIntCommute}{coerceFailure}
+\begin{chunk}{defun coerceIntCommute}
+(defun |coerceIntCommute| (obj target)
+ (let (source s t$ d fun u c)
+  (declare (special |$coerceFailure|))
+  (setq source (|objMode| obj))
+  (cond
+   ((null (|coerceCommuteTest| source target)) nil)
+   (t
+    (setq s (|underDomainOf| source))
+    (setq t$ (|underDomainOf| target))
+    (cond
+     ((equal source t$) nil)
+     ((setq d (car source))
+      (setq fun
+       (or (getl d '|coerceCommute|)
+            (intern (strconc "commute" (princ-to-string d)))))
+      (cond
+       ((canFuncall? fun) 
+        (put d '|coerceCommute| fun)
+        (setq u (|objValUnwrap| obj))
+        (setq c (catch '|coerceFailure| (funcall fun u source s target t$)))
+        (cond
+         ((equal c |$coerceFailure|) nil)
+         ((eq u '|$fromCoerceable$|) c)
+         (t (mkObjWrap c target)))))))))))
+
+\end{chunk}
+
+\defun{coerceCommuteTest}{coerceCommuteTest}
+\calls{coerceCommuteTest}{isLegitimateMode}
+\calls{coerceCommuteTest}{underDomainOf}
+\calls{coerceCommuteTest}{deconstructT}
+\begin{chunk}{defun coerceCommuteTest}
+(defun |coerceCommuteTest| (t1 t2)
+ (let (u1 u2)
+  (cond
+   ((null (|isLegitimateMode| t2 nil nil)) nil)
+   ((null (setq u1 (|underDomainOf| t1))) nil)
+   ((null (setq u2 (|underDomainOf| t2))) nil)
+   ((null (|underDomainOf| u1)) nil)
+   ((null (|underDomainOf| u2)) nil)
+   (t
+    (and (equal (car (|deconstructT| t1)) (car (|deconstructT| u2)))
+         (equal (car (|deconstructT| t2)) (car (|deconstructT| u1))))))))
+
+\end{chunk}
+
+\defun{coerceIntTableOrFunction}{coerceIntTableOrFunction}
+This function does the actual coercion to t2, but not to an
+argument type of t2
+\calls{coerceIntTableOrFunction}{isValidType}
+\calls{coerceIntTableOrFunction}{isLegitimateMode}
+\calls{coerceIntTableOrFunction}{objMode}
+\calls{coerceIntTableOrFunction}{assq}
+\calls{coerceIntTableOrFunction}{coerceByTable}
+\calls{coerceIntTableOrFunction}{objVal}
+\calls{coerceIntTableOrFunction}{coerceByFunction}
+\usesdollar{coerceIntTableOrFunction}{CoerceTable}
+\begin{chunk}{defun coerceIntTableOrFunction}
+(defun |coerceIntTableOrFunction| (triple t2)
+ (let (t1 p tmp1)
+  (declare (special |$CoerceTable|))
+  (cond
+   ((null (|isValidType| t2)) nil)
+   ((null (|isLegitimateMode| t2 nil nil)) nil)
+   (t
+    (setq t1 (|objMode| triple))
+    (setq p (assq (car t1) |$CoerceTable|))
+    (cond
+     ((and p (setq tmp1 (assq (car t2) (cdr p))))
+      (cond
+       ((eq (third tmp1) '|Identity|) (mkObj (|objVal| triple) t2))
+       ((eq (second tmp1) '|total|)
+         (or (|coerceByTable| (third tmp1) (|objVal| triple) t1 t2 t)
+             (|coerceByFunction| triple t2)))
+       (t
+         (or (|coerceByTable| (third tmp1) (|objVal| triple) t1 t2 nil)
+             (|coerceByFunction| triple t2)))))
+     (t (|coerceByFunction| triple t2)))))))
+
+\end{chunk}
+
+\defun{coerceByTable}{coerceByTable}
+\calls{coerceByTable}{isWrapped}
+\calls{coerceByTable}{unwrap}
+\calls{coerceByTable}{mkObjWrap}
+\calls{coerceByTable}{isTotalCoerce}
+\calls{coerceByTable}{mkObj}
+\calls{coerceByTable}{mkq}
+\usesdollar{coerceByTable}{OutputForm}
+\usesdollar{coerceByTable}{coerceFailure}
+\catches{coerceByTable}{coerceFailure}
+\begin{chunk}{defun coerceByTable}
+(defun |coerceByTable| (fn x t1 t2 isTotalCoerce)
+ (let (c)
+  (declare (special |$coerceFailure| |$OutputForm|))
+  (cond
+   ((equal t2 |$OutputForm|) nil)
+   ((|isWrapped| x)
+    (setq x (|unwrap| x))
+    (setq c (catch '|coerceFailure| (funcall fn x t1 t2)))
+    (unless (equal c |$coerceFailure|) (mkObjWrap c t2)))
+   (|isTotalCoerce| (mkObj (list fn x (mkq t1) (mkq t2)) t2))
+   (t
+    (mkObj (list '|catchCoerceFailure| (mkq fn) x (mkq t1) (mkq t2)) t2)))))
+
+\end{chunk}
+
+\defun{catchCoerceFailure}{catchCoerceFailure}
+This function is funcalled from code constructed by {\bf coerceByTable}.
+\calls{catchCoerceFailure}{unwrap}
+\calls{catchCoerceFailure}{wrap}
+\calls{catchCoerceFailure}{throwKeyedMsgCannotCoerceWithValue}
+\usesdollar{catchCoerceFailure}{coerceFailure}
+\catches{catchCoerceFailure}{coerceFailure}
+\begin{chunk}{defun catchCoerceFailure}
+(defun |catchCoerceFailure| (fn x t1 t2)
+ (let (c)
+  (declare (special |$coerceFailure|))
+  (setq c (catch '|coerceFailure| (funcall fn x t1 t2)))
+  (if (equal c |$coerceFailure|)
+   (|throwKeyedMsgCannotCoerceWithValue| (|wrap| (|unwrap| x)) t1 t2)
+   c)))
+
+\end{chunk}
+
+\defun{coerceIntSpecial}{coerceIntSpecial}
+\calls{coerceIntSpecial}{objMode}
+\calls{coerceIntSpecial}{coerceInt}
+\begin{chunk}{defun coerceIntSpecial}
+(defun |coerceIntSpecial| (triple t2)
+ (let (x)
+  (when (and (eq (first t2) '|SimpleAlgebraicExtension|)
+             (equal (second t2) (|objMode| triple)))
+    (unless (setq x (|coerceInt| triple (third t2)))
+     (|coerceInt| x t2))))))
+
+\end{chunk}
+
+\defun{coerceIntByMap}{coerceIntByMap}
+The idea is this: if t1 is D U1 and t2 is D U2, then look for a map:
+\verb|(U1 -> U2, D U1) -> D U2|.  If it exists, then create a function
+to do the coercion on the element level and call the map function.
+\calls{coerceIntByMap}{objMode}
+\calls{coerceIntByMap}{length}
+\calls{coerceIntByMap}{deconstructT}
+\calls{coerceIntByMap}{nequal}
+\calls{coerceIntByMap}{valueArgsEqual?}
+\calls{coerceIntByMap}{underDomainOf}
+\calls{coerceIntByMap}{member}
+\calls{coerceIntByMap}{isSubDomain}
+\calls{coerceIntByMap}{sayFunctionSelection}
+\calls{coerceIntByMap}{selectMms1}
+\calls{coerceIntByMap}{sayFunctionSelectionResult}
+\calls{coerceIntByMap}{compiledLookup}
+\calls{coerceIntByMap}{evalDomain}
+\calls{coerceIntByMap}{wrapped2Quote}
+\calls{coerceIntByMap}{objVal}
+\calls{coerceIntByMap}{timedEvaluate}
+\calls{coerceIntByMap}{mkObjWrap}
+\catches{coerceIntByMap}{coerceFailure}
+\begin{chunk}{defun coerceIntByMap}
+(defun |coerceIntByMap| (triple t2)
+ (let (t1 top u1 u2 args mms fun code val)
+  (declare (special |$coerceFailure| |$reportBottomUpFlag|))
+  (setq t1 (|objMode| triple))
+  (cond
+   ((equal t2 t1) triple)
+   (t
+    (setq u2 (|deconstructT| t2)) ; compute t2 first because of Expression
+    (cond
+      ((eql 1 (|#| u2)) nil)      ; no under domain
+      (t
+       (setq u1 (|deconstructT| t1))
+       (cond
+        ((eql 1 (|#| u1)) nil)
+        ((nequal (caar u1) (caar u2)) nil) ; constructors not equal
+        ((null (|valueArgsEqual?| t1 t2)) nil)
+        (t
+         ; handle a couple of special cases for subdomains of Integer
+         (setq top (caar u1))
+         (setq u1 (|underDomainOf| t1))
+         (setq u2 (|underDomainOf| t2))
+         (cond
+          ((and (|member| top
+                  '(|List| |Vector| |Segment| |Stream| 
+                    |UniversalSegment| |Array|))
+                (|isSubDomain| u1 u2))
+            (mkObj (|objVal| triple) t2))
+          (t
+           (setq args (list (list '|Mapping| u2 u1) t1))
+           (when |$reportBottomUpFlag|
+            (|sayFunctionSelection| '|map| args t2 nil
+                                     "coercion facility (map)"))
+           (setq mms (|selectMms1| '|map| t2 args args nil))
+           (when |$reportBottomUpFlag|
+             (|sayFunctionSelectionResult| '|map| args mms))
+           (cond
+            ((null mms) nil)
+            (t
+             (setq fun 
+              (|compiledLookup| '|map| (cdaar mms) (|evalDomain| (caaar mms))))
+             (cond
+              ((null fun) nil)
+              (t
+               (cond
+                ((equal (car fun) #'|Undef|) nil)
+                (t
+                 ;  now compile a function to do the coercion
+                 (setq code
+                  (list 'spadcall
+                   (list 'cons 
+                    (list 'function  '|coerceIntByMapInner|) 
+                     (mkq (cons u1 u2)))
+                    (|wrapped2Quote| (|objVal| triple))
+                     (mkq fun)))
+                 ; and apply the function
+                 (setq val (catch '|coerceFailure| (|timedEvaluate| code)))
+                 (unless (equal val |$coerceFailure|)
+                  (mkObjWrap val t2))))))))))))))))))
+
+\end{chunk}
+
+\defun{coerceIntByMapInner}{coerceIntByMapInner}
+This is a helper function for {\bf coerceIntByMap} which constructs
+a {\bf spadcall} and then evaluates it.
+\calls{coerceIntByMapInner}{coerceOrThrowFailure}
+\begin{chunk}{defun coerceIntByMapInner}
+(defun |coerceIntByMapInner| (arg g1)
+ (|coerceOrThrowFailure| arg (car g1) (cdr g1)))
+
+\end{chunk}
+
+\defun{coerceOrThrowFailure}{coerceOrThrowFailure}
+\calls{coerceOrThrowFailure}{coerceOrRetract}
+\calls{coerceOrThrowFailure}{mkObjWrap}
+\calls{coerceOrThrowFailure}{coercionFailure}
+\calls{coerceOrThrowFailure}{objValUnwrap}
+\begin{chunk}{defun coerceOrThrowFailure}
+(defun |coerceOrThrowFailure| (value t1 t2)
+ (let (result)
+  (or (setq result (|coerceOrRetract| (mkObjWrap value t1) t2))
+      (|coercionFailure|))
+  (|objValUnwrap| result)))
+
+\end{chunk}
+
+\defun{coercionFailure}{coercionFailure}
+This does a throw on coercion failure.
+\throws{coercionFailure}{coerceFailure}
+\begin{chunk}{defun coercionFailure}
+(defun |coercionFailure| ()
+  (declare (special |$coerceFailure|))
+  (throw '|coerceFailure| |$coerceFailure|))
+
+\end{chunk}
+
+\defun{valueArgsEqual?}{valueArgsEqual?}
+\verb|[u1,:u2]| gets passed as the ``environment'', which is why we have this
+slightly clumsy locution  JHD 31.July,1990
+
+This returns true if the object-valued arguments to t1 and t2 are the same
+under coercion
+\calls{valueArgsEqual?}{getdatabase}
+\calls{valueArgsEqual?}{getConstructorSignature}
+\calls{valueArgsEqual?}{replaceSharps}
+\calls{valueArgsEqual?}{coerceInt}
+\calls{valueArgsEqual?}{mkObjWrap}
+\calls{valueArgsEqual?}{algEqual}
+\calls{valueArgsEqual?}{objValUnwrap}
+\begin{chunk}{defun valueArgsEqual?}
+(defun |valueArgsEqual?| (t1 t2)
+ (let (coSig constrSig tl1 tl2 newVal done value trip)
+  (setq coSig (cdr (getdatabase (car t1) 'cosig)))
+  (setq constrSig (cdr (|getConstructorSignature| (car t1))))
+  (setq tl1 (|replaceSharps| constrSig t1))
+  (setq tl2 (|replaceSharps| constrSig t2))
+  (cond
+   ((null (member nil coSig)) t)
+   (t 
+    (setq done nil)
+    (setq value t)
+    (loop for a1 in (cdr t1) for a2 in (cdr t2) for cs in coSig 
+          for m1 in tl1 for m2 in tl2 while (not done) do
+          (cond
+           ((null cs)
+             (setq trip (mkObjWrap a1 m1))
+             (setq newVal (|coerceInt| trip m2))
+             (cond
+              ((null newVal)
+                (setq done t)
+                (setq value nil))
+              ((null (|algEqual| a2 (|objValUnwrap| newVal) m2))
+                (setq done t)
+                (setq value nil))))))
+     value))))
+
+\end{chunk}
+
+\defun{algEqual}{algEqual}
+This function sees if 2 objects of the same domain are equal by using the
+$=$ from the domain. The objects should not be wrapped.
+\calls{algEqual}{spadcall}
+\calls{algEqual}{compiledLookupCheck}
+\calls{algEqual}{evalDomain}
+\usesdollar{algEqual}{Boolean}
+\begin{chunk}{defun algEqual}
+(defun |algEqual| (object1 object2 domain)
+ (declare (special |$Boolean|))
+ (spadcall object1 object2 
+  (|compiledLookupCheck| '= (list |$Boolean| '$ '$) (|evalDomain| domain))))
+
+\end{chunk}
+
+\defun{coerceIntFromUnion}{coerceIntFromUnion}
+\begin{chunk}{defun coerceIntFromUnion}
+(defun |coerceIntFromUnion| (object t2)
+  (|coerceInt| (|coerceUnion2Branch| object) t2))
+
+\end{chunk}
+
+\defun{coerceInt2Union}{coerceInt2Union}
+\begin{chunk}{defun coerceInt2Union}
+(defun |coerceInt2Union| (object union)
+ (let (unionDoms t1 val valp noCoerce)
+  (declare (special |$String|))
+  (setq unionDoms (|stripUnionTags| (cdr union)))
+  (setq t1 (|objMode| object))
+  (cond
+   ((|member| t1 unionDoms) (|coerceBranch2Union| object union))
+   (t
+    (setq val (|objVal| object))
+    (setq valp (|unwrap| val))
+    (cond
+     ((and (equal t1 |$String|) (|member| valp unionDoms))
+       (|coerceBranch2Union| (mkObj val valp) union))
+     (t
+      (setq noCoerce t)
+      (setq valp nil)
+      (loop for d in unionDoms while noCoerce do
+       (when (setq valp (|coerceInt| object d)) (setq noCoerce nil)))
+      (when valp (|coerceBranch2Union| valp union))))))))
+
+\end{chunk}
+
+\defun{coerceBranch2Union}{coerceBranch2Union}
+\calls{coerceBranch2Union}{orderUnionEntries}
+\calls{coerceBranch2Union}{mkPredList}
+\calls{coerceBranch2Union}{stripUnionTags}
+\calls{coerceBranch2Union}{position}
+\calls{coerceBranch2Union}{keyedSystemError}
+\calls{coerceBranch2Union}{objMode}
+\calls{coerceBranch2Union}{objVal}
+\calls{coerceBranch2Union}{mkObjWrap}
+\calls{coerceBranch2Union}{removeQuote}
+\calls{coerceBranch2Union}{unwrap}
+\calls{coerceBranch2Union}{mkObj}
+\begin{chunk}{defun coerceBranch2Union}
+(defun |coerceBranch2Union| (object union)
+ (let (predList doms p val tag)
+  (setq doms (|orderUnionEntries| (cdr union)))
+  (setq predList (|mkPredList| doms))
+  (setq doms (|stripUnionTags| doms))
+  (setq p (|position| (|objMode| object) doms))
+  (cond
+   ((equal p (- 1))
+     (|keyedSystemError| "The type %1p is not branch of %2p"
+      (list (|objMode| object) union)))
+   (t
+    (setq val (|objVal| object))
+    (if (eq (car (setq tag (elt predlist p))) 'eqcar)
+     (mkObjWrap (cons (|removeQuote| (third tag)) (|unwrap| val)) union)
+     (mkObj val union))))))
+
+\end{chunk}
+
+\defun{coerceIntAlgebraicConstant}{coerceIntAlgebraicConstant}
+\calls{coerceIntAlgebraicConstant}{objMode}
+\calls{coerceIntAlgebraicConstant}{objValUnwrap}
+\calls{coerceIntAlgebraicConstant}{ofCategory}
+\calls{coerceIntAlgebraicConstant}{mkObjWrap}
+\calls{coerceIntAlgebraicConstant}{getConstantFromDomain}
+\begin{chunk}{defun coerceIntAlgebraicConstant}
+(defun |coerceIntAlgebraicConstant| (object t2)
+ (let (t1 val)
+  (setq t1 (|objMode| object))
+  (setq val (|objValUnwrap| object))
+  (cond
+   ((and (|ofCategory| t1 '(|Monoid|))
+         (|ofCategory| t2 '(|Monoid|))
+         (equal val (|getConstantFromDomain| '(|One|) t1)))
+     (mkObjWrap (|getConstantFromDomain| '(|One|) t2) t2))
+   ((and (|ofCategory| t1 '(|AbelianMonoid|))
+         (|ofCategory| t2 '(|AbelianMonoid|))
+         (equal val (|getConstantFromDomain| '(|Zero|) t1)))
+     (mkObjWrap (|getConstantFromDomain| '(|Zero|) t2) t2)))))
+
+\end{chunk}
+
+\defun{getConstantFromDomain}{getConstantFromDomain}
+The function {\bf getConstantFromDomain} is used to look up the 
+constants $0$ and $1$ from the given domainForm.
+
+If isPartialMode returns true then the
+domain modemap contains the constant \verb|$EmptyMode| which indicates
+that the domain is not fully formed. In this case we return nil.
+
+\calls{getConstantFromDomain}{isPartialMode}
+\calls{getConstantFromDomain}{opOf}
+\calls{getConstantFromDomain}{lassoc}
+\calls{getConstantFromDomain}{getOperationAlistFromLisplib}
+\calls{getConstantFromDomain}{getConstantFromDomain}
+\calls{getConstantFromDomain}{throwKeyedMsg}
+\calls{getConstantFromDomain}{spadcall}
+\calls{getConstantFromDomain}{compiledLookupCheck}
+\calls{getConstantFromDomain}{evalDomain}
+\begin{chunk}{defun getConstantFromDomain}
+(defun |getConstantFromDomain| (form domainForm)
+ (let (key entryList)
+  (unless (|isPartialMode| domainForm)
+   (setq key (|opOf| form))
+   (setq entryList 
+    (lassoc key (|getOperationAlistFromLisplib| (car domainForm))))
+   (cond
+    ((null (eq (cdr entryList) nil))
+     (cond
+      ((eq key '|One|)  (|getConstantFromDomain| (list '|1|) domainForm))
+      ((eq key '|Zero|) (|getConstantFromDomain| (list '|0|) domainForm))
+      (t
+        (|throwKeyedMsg| "No such constant %1 in domain %2p ."
+         (list form domainForm)))))
+    (t
+     ; there should be exactly one item under this key of that form
+     (spadcall 
+      (|compiledLookupCheck| key (caar entryList)
+        (|evalDomain| domainForm))))))))
+
+\end{chunk}
+
+\defun{compareTypeLists}{compareTypeLists}
+Rreturns true if every type in tl1 is equal or is a subdomain of
+the corresponding type in tl2
+\begin{chunk}{defun compareTypeLists}
+(defun |compareTypeLists| (tl1 tl2)
+ (not 
+  (loop for t1 in tl1 for t2 in tl2
+   do (when (null (|isEqualOrSubDomain| t1 t2)) (return t)))))
+
+\end{chunk}
+
+\defun{coerceIntX}{coerceIntX}
+Try to coerce a (List (None)) into a different domain
+\calls{coerceIntX}{unwrap}
+\calls{coerceIntX}{underDomainOf}
+\calls{coerceIntX}{coerceInt}
+\calls{coerceIntX}{mkObjWrap}
+\begin{chunk}{defun coerceIntX}
+(defun |coerceIntX| (val t1 t2)
+ (let (t0)
+   (when (and (equal t1 '(|List| (|None|)))
+              (null (|unwrap| val))
+              (setq t0 (|underDomainOf| t2)))
+    (|coerceInt| (mkObjWrap val (list '|List| t0)) t2))))
+
+\end{chunk}
+
+\defun{coerceSubDomain}{coerceSubDomain}
+\calls{coerceSubDomain}{getdatabase}
+\calls{coerceSubDomain}{coerceSubDomain}
+\calls{coerceSubDomain}{coerceImmediateSubDomain}
+\begin{chunk}{defun coerceSubDomain}
+(defun |coerceSubDomain| (val tSuper tSub)
+ (let (super)
+  (unless (eq val '|$fromCoerceable$|)
+   (setq super (getdatabase (car tSub) 'superdomain))
+   (cond
+    ((equal (car super) tSuper)
+      (|coerceImmediateSubDomain| val tSuper tSub (second super)))
+    ((|coerceSubDomain| val tSuper (car super))
+      (|coerceImmediateSubDomain| val (car super) tSub (second super)))))))
+
+\end{chunk}
+
+\defun{coerceImmediateSubDomain}{coerceImmediateSubDomain}
+\calls{coerceImmediateSubDomain}{getSubDomainPredicate}
+\begin{chunk}{defun coerceImmediateSubDomain}
+(defun |coerceImmediateSubDomain| (val tSuper tSub pred)
+ (when (funcall (|getSubDomainPredicate| tSuper tSub pred) val nil)
+  (mkObj val tSub)))
+
+\end{chunk}
+
+\defun{getSubDomainPredicate}{getSubDomainPredicate}
+\calls{getSubDomainPredicate}{msubst}
+\calls{getSubDomainPredicate}{removeZeroOne}
+\calls{getSubDomainPredicate}{interpret}
+\calls{getSubDomainPredicate}{mkAtree}
+\calls{getSubDomainPredicate}{transferPropsToNode}
+\calls{getSubDomainPredicate}{selectLocalMms}
+\calls{getSubDomainPredicate}{hput}
+\usesdollar{getSubDomainPredicate}{env}
+\usesdollar{getSubDomainPredicate}{superHash}
+\usesdollar{getSubDomainPredicate}{Boolean}
+\usesdollar{getSubDomainPredicate}{InteractiveFrame}
+\begin{chunk}{defun getSubDomainPredicate}
+(defun |getSubDomainPredicate| (tSuper tSub pred)
+ (let (|$env| name decl arg predp defn op predfn)
+  (declare (special |$env| |$superHash| |$Boolean| |$InteractiveFrame|))
+  (setq |$env| |$InteractiveFrame|)
+  (cond
+   ((setq predfn (hget |$superHash| (cons tSuper tSub))) predfn)
+   (t
+    (setq name (gensym))
+    (setq decl (list '|:| name (list '|Mapping| |$Boolean| tSuper)))
+    (|interpret| decl nil)
+    (setq arg (gensym))
+    (setq predp (msubst arg '|#1| pred))
+    (setq defn
+     (list 'def (list name arg) '(nil nil) '(nil nil) (|removeZeroOne| predp)))
+    (|interpret| defn nil)
+    (setq op (|mkAtree| name))
+    (|transferPropsToNode| name op)
+    (setq predfn (cadar (|selectLocalMms| op name (list tSuper) |$Boolean|)))
+    (hput |$superHash| (cons tSuper tSub) predfn)
+    predfn))))
+
+\end{chunk}
+
+\defun{absolutelyCanCoerceByCheating}{absolutelyCanCoerceByCheating}
+This typically involves subdomains and towers where the only
+difference is a subdomain
+\calls{absolutelyCanCoerceByCheating}{isEqualOrSubDomain|}
+\calls{absolutelyCanCoerceByCheating}{deconstructT}
+\calls{absolutelyCanCoerceByCheating}{nequal}
+\calls{absolutelyCanCoerceByCheating}{absolutelyCanCoerceByCheating}
+\usesdollar{absolutelyCanCoerceByCheating}{SingleInteger}
+\usesdollar{absolutelyCanCoerceByCheating}{Integer}
+\begin{chunk}{defun absolutelyCanCoerceByCheating}
+(defun |absolutelyCanCoerceByCheating| (t1 t2)
+ (let (let1 let2)
+  (declare (special |$Integer| |$SingleInteger|))
+  (cond
+   ((|isEqualOrSubDomain| t1 t2) t)
+   ((and (equal t1 |$SingleInteger|) (equal t2 |$Integer|)) t)
+   ((or (atom t1) (atom t2)) nil)
+   (t
+    (setq let1 (|deconstructT| t1))
+    (setq let2 (|deconstructT| t2))
+    (cond
+     ((and (equal (car let1) '(|Stream|))
+           (equal (car let2) '(|InfiniteTuple|)))
+       (cond
+        ((nequal (|#| (cdr let1)) (|#| (cdr let2))) nil)
+        (t
+         (every #'identity 
+          (loop for x1 in (cdr let1) for x2 in (cdr let2) collect
+           (|absolutelyCanCoerceByCheating| x1 x2))))))
+     ((nequal (car let1) (car let2)) nil)
+     ((nequal (|#| (cdr let1)) (|#| (cdr let2))) nil)
+     (t
+      (every #'identity 
+       (loop for x1 in (cdr let1) for x2 in (cdr let2) collect
+        (|absolutelyCanCoerceByCheating| x1 x2)))))))))
+
+\end{chunk}
+
+\defun{coerceOrRetract}{coerceOrRetract}
+\calls{coerceOrRetract}{coerceInteractive}
+\calls{coerceOrRetract}{retract}
+\begin{chunk}{defun coerceOrRetract}
+(defun |coerceOrRetract| (z m)
+ (prog (tp tt ans)
+  (return
+    (cond
+     ((setq tp (|coerceInteractive| z m)) tp)
+     (t 
+      (setq tt z) 
+      (setq ans nil)
+      (do () (nil nil)
+       (cond
+        (ans (return ans))
+        (t
+         (setq tt (|retract| tt))
+         (cond
+          ((eq tt '|failed|) (return ans))
+          (t (setq ans (|coerceInteractive| tt m)))))))
+      ans)))))
+
+\end{chunk}
+
+\defun{retract2Specialization}{retract2Specialization}
+Handle some specialization retraction cases, like matrices
+\calls{retract2Specialization}{objVal}
+\calls{retract2Specialization}{unwrap}
+\calls{retract2Specialization}{objMode}
+\calls{retract2Specialization}{mkObjWrap}
+\calls{retract2Specialization}{coerceUnion2Branch}
+\calls{retract2Specialization}{coerceInt}
+\calls{retract2Specialization}{remdup}
+\calls{retract2Specialization}{varsInPoly}
+\calls{retract2Specialization}{mkObj}
+\calls{retract2Specialization}{member}
+\calls{retract2Specialization}{retract}
+\calls{retract2Specialization}{objValUnwrap}
+\calls{retract2Specialization}{objMode}
+\calls{retract2Specialization}{resolveTypeListAny}
+\calls{retract2Specialization}{isRectangularList}
+\calls{retract2Specialization}{get}
+\calls{retract2Specialization}{isPartialMode}
+\usesdollar{retract2Specialization}{e}
+\usesdollar{retract2Specialization}{QuotientField}
+\usesdollar{retract2Specialization}{Symbol}
+\usesdollar{retract2Specialization}{Integer}
+\usesdollar{retract2Specialization}{Any}
+\usesdollar{retract2Specialization}{NonNegativeInteger}
+\usesdollar{retract2Specialization}{PositiveInteger}
+\begin{chunk}{defun retract2Specialization}
+(defun |retract2Specialization| (object)
+ (prog (val type dom obj dp bad vl tl ep vlp n D num den valp m)
+ (declare (special |$e| |$QuotientField| |$Symbol| |$Integer| |$Any|
+                   |$NonNegativeInteger| |$PositiveInteger|))
+  (return
+   (seq
+    (progn
+     (setq val (|objVal| object))
+     (setq valp (|unwrap| val))
+     (setq type (|objMode| object))
+     (cond
+      ; type is Any
+      ((equal type |$Any|)
+        (setq dom (car valp))
+        (setq obj (cdr valp))
+        (mkObjWrap obj dom))
+      ; type is ['Union,:unionDoms]
+      ((eq (car type) '|Union|) 
+        (|coerceUnion2Branch| object))
+      ; type is Symbol
+      ((equal type |$Symbol|)
+        (mkObjWrap 1 (list '|OrderedVariableList| (list valp))))
+      ; type is ['OrderedVariableList,var]
+      ((eq (car type) '|OrderedVariableList|)
+        (|coerceInt|
+         (mkObjWrap (elt (second type) (- valp 1)) |$Symbol|)
+         '(|Polynomial| (|Integer|))))
+      ; type is ['Polynomial,d]
+      ((eq (car type) '|Polynomial|)
+        (cond
+         ((eql (car valp) 1)
+           (when (eql 1 (|#| (remdup (|varsInPoly| valp))))
+             (|coerceInt| object 
+              (list '|UnivariatePolynomial| (second valp)  (second type)))))
+         ((eql (car valp) 0) (|coerceInt| object (second type)))
+         (t nil)))
+      ; type is ['Matrix,d]
+      ((eq (car type) '|Matrix|)
+        (setq n (|#| valp))
+        (setq m (|#| (elt valp 0)))
+        (cond
+         ((= n m) (mkObj val (list '|SquareMatrix| n (second type))))
+         (t (mkObj val (list '|RectangularMatrix| n m (second type))))))
+      ; type is ['RectangularMatrix,n,m,d]
+      ((eq (first type) '|RectangularMatrix|)
+        (setq n (second type))
+        (setq m (third type))
+        (setq d (fourth type))
+        (when (eql n m) (mkObj val (list '|SquareMatrix| n d))))
+      ; type is [agg,d] agg is |Vector|,|Segment|, or |UniversalSegment|
+      ((|member| (first type) '(|Vector| |Segment| |UniversalSegment|))
+        (cond
+         ((equal (second type) |$PositiveInteger|)
+          (mkObj val (cons (first type) (list |$NonNegativeInteger|))))
+         ((equal (second type) |$NonNegativeInteger|)
+          (mkObj val (list (first type) |$Integer|)))))
+      ; type is ['Array,bds,d]
+      ((eq (first type) '|Array|)
+       (cond
+        ((equal (third type) |$PositiveInteger|)
+         (mkObj val (list '|Array| (second type) |$NonNegativeInteger|)))
+        ((equal (third type) |$NonNegativeInteger|)
+         (mkObj val (list '|Array| (second type) |$Integer|)))))
+      ; type is ['List,d]
+      ((eq (car type) '|List|)
+       (setq d (second type))
+       (setq dp (second d))
+       (cond
+        ; type isnt ['List,dp]
+        ((null (eq (car d) '|List|))
+          (cond
+           ((equal d |$PositiveInteger|)
+             (mkObj val (list '|List| |$NonNegativeInteger|)))
+           ((equal d |$NonNegativeInteger|)
+             (mkObj val (list '|List| |$Integer|)))
+           ((null valp) nil)
+           (t
+            (setq vl nil)
+            (setq tl nil)
+            (setq bad nil)
+            (loop for e in valp while (not bad) do 
+             (cond
+              ((equal (setq ep (|retract| (mkObjWrap e d))) '|failed|)
+                (setq bad t))
+              (t
+               (setq vl (cons (|objValUnwrap| ep) vl))
+               (setq tl (cons (|objMode| ep) tl))))) 
+            (cond
+             (bad nil)
+             ((equal (setq m (|resolveTypeListAny| tl)) d) nil)
+             ((equal d m) nil)
+             (t 
+              (setq vlp nil)
+              (setq ep t)
+              (loop for e in vl for tt in tl while ep do
+               (cond
+                ((equal tt m) (setq vlp (cons e vlp)))
+                (t
+                 (setq ep (|coerceInt| (mkObjWrap e tt) m))
+                 (when ep (setq vlp (cons (|objValUnwrap| ep) vlp))))))
+              (mkObjWrap vlp (list '|List| m)))))))
+        ((equal dp |$PositiveInteger|)
+          (mkObj val (list '|List| (list '|List| |$NonNegativeInteger|))))
+        ((equal dp |$NonNegativeInteger|)
+          (mkObj val (list '|List| (list '|List| |$Integer|))))
+        ((or (eq (car dp) '|Variable|)
+             (eq (car dp) '|OrderedVariableList|))
+          (|coerceInt| object (list '|List| (list '|List| |$Symbol|))))
+        (t
+         (setq n (|#| valp))
+         (setq m (|#| (elt valp 0)))
+         (cond
+          ((null (|isRectangularList| valp n m)) nil)
+          (t (|coerceInt| object (list '|Matrix| dp)))))))
+    ; type is ['Expression,d]
+    ((eq (car type) '|Expression|)
+      (setq num (car valp))
+      (setq den (cdr valp))
+      (cond
+       ((null (equal (car num) 0)) nil)
+       ((null (equal (car den) 0)) nil)
+       (t 
+        (mkObjWrap (cons (cdr num) (cdr den))
+         (list |$QuotientField| (second type))))))
+    ; type is ['SimpleAlgebraicExtension,k,rep,.]
+    ; try to retract as an element of rep and see if we can get an element of k
+    ((eq (car type) '|SimpleAlgebraicExtension|)
+      (setq valp (|retract| (mkObj val (third type))))
+      (do ()
+          ((null (and (nequal valp '|failed|)
+                      (nequal (|objMode| valp) (second type))))
+             nil)
+       (setq valp (|retract| valp)))
+      (unless (equal valp '|failed|) valp))
+    ; type is ['UnivariatePuiseuxSeries,coef,var,cen]
+    ((eq (car type) '|UnivariatePuiseuxSeries|)
+      (|coerceInt| object
+        (list '|UnivariateLaurentSeries|
+         (second type) (third type) (fourth type))))
+    ; type is ['UnivariateLaurentSeries,coef,var,cen]
+    ((eq (car type) '|UnivariateLaurentSeries|)
+      (|coerceInt| object
+       (list '|UnivariateTaylorSeries|
+        (second type) (third type) (fourth type))))
+      ; type is ['FunctionCalled,name]
+    ((eq (car type) '|FunctionCalled|)
+      (cond
+       ((null (setq m (|get| (second type) '|mode| |$e|))) nil)
+       ((|isPartialMode| m) nil)
+       (t (mkObj val m))))
+    (t nil)))))))
+
+\end{chunk}
+
+\defun{coerceUnion2Branch}{coerceUnion2Branch}
+\calls{coerceUnion2Branch}{orderUnionEntries}
+\calls{coerceUnion2Branch}{objMode}
+\calls{coerceUnion2Branch}{mkPredList}
+\calls{coerceUnion2Branch}{stripUnionTags}
+\calls{coerceUnion2Branch}{objValUnwrap}
+\calls{coerceUnion2Branch}{evalSharpOne}
+\calls{coerceUnion2Branch}{mkObj}
+\calls{coerceUnion2Branch}{objVal}
+\begin{chunk}{defun coerceUnion2Branch}
+(defun |coerceUnion2Branch| (object)
+ (let (predList doms valp predicate targetType)
+  (setq doms (|orderUnionEntries| (cdr (|objMode| object))))
+  (setq predList (|mkPredList| doms))
+  (setq doms (|stripUnionTags| doms))
+  (setq valp (|objValUnwrap| object))
+  (loop for typ in doms for pred in predList while (not targetType) do
+   (when (|evalSharpOne| pred valp)
+    (setq predicate pred)
+    (setq targetType typ)))
+  (cond
+   ((null targetType)
+     (|keyedSystemError| "Cannot determine branch of Union." nil))
+   ((eq (car predicate) 'eqcar) (mkObjWrap (cdr valp) targetType))
+   (t (mkObj (|objVal| object) targetType)))))
+
+\end{chunk}
+
+\defun{stripUnionTags}{stripUnionTags}
+\begin{chunk}{defun stripUnionTags}
+(defun |stripUnionTags| (doms)
+ (loop for dom in doms 
+  collect (if (eq (first dom) '|:|) (third dom) dom)))
+
+\end{chunk}
+
+\defun{evalSharpOne}{evalSharpOne}
+\begin{chunk}{defun evalSharpOne 0}
+(defun |evalSharpOne| (x |#1|)
+ (declare (special |#1|))
+ (eval `(let() (declare (special |#1|)) ,x)))
+
+\end{chunk}
+
+\defun{retractUnderDomain}{retractUnderDomain}
+\calls{retractUnderDomain}{underDomainOf}
+\calls{retractUnderDomain}{deconstructT}
+\calls{retractUnderDomain}{nequal}
+\calls{retractUnderDomain}{constructT}
+\calls{retractUnderDomain}{coerceInt}
+\begin{chunk}{defun retractUnderDomain}
+(defun |retractUnderDomain| (object type underDomain)
+ (let (ud let1 typep objectp)
+  (cond
+   ((null (setq ud (|underDomainOf| underDomain))) '|failed|)
+   (t
+    (setq let1 (|deconstructT| type))
+    (cond
+     ((nequal 1 (|#| (cdr let1))) '|failed|)
+     ((nequal 1 (|#| (car let1))) '|failed|)
+     (t
+      (setq typep (|constructT| (car let1) (list ud)))
+      (cond
+       ((setq objectp (|coerceInt| object typep)) objectp)
+       (t '|failed|))))))))
+
+\end{chunk}
+
+\defun{coerceRetract}{coerceRetract}
+\calls{coerceRetract}{objValUnwrap}
+\calls{coerceRetract}{objMode}
+\calls{coerceRetract}{isEqualOrSubDomain}
+\calls{coerceRetract}{mkObjWrap}
+\calls{coerceRetract}{retractByFunction}
+\calls{coerceRetract}{getl}
+\calls{coerceRetract}{canFuncall?}
+\usesdollar{coerceRetract}{coerceFailure}
+\usesdollar{coerceRetract}{SingleInteger}
+\usesdollar{coerceRetract}{OutputForm}
+\usesdollar{coerceRetract}{Symbol}
+\usesdollar{coerceRetract}{Integer}
+\catches{coerceRetract}{coerceFailure}
+\begin{chunk}{defun coerceRetract}
+(defun |coerceRetract| (object t2)
+ (let (val t1 fun c)
+  (declare (special |$coerceFailure| |$OutputForm| |$Symbol| |$Integer|
+           |$SingleInteger|))
+  (cond
+   ((eq (setq val (|objValUnwrap| object)) '|$fromCoerceable$|) nil)
+   (t
+    (setq t1 (|objMode| object))
+    (cond
+     ((equal t2 |$OutputForm|) nil)
+     ((and (|isEqualOrSubDomain| t1 |$Integer|)
+           (equal t2 |$SingleInteger|)
+           (typep val 'fixnum))
+        (mkObjWrap val t2))
+     ((equal t1 |$Integer|) nil)
+     ((equal t1 |$Symbol|) nil)
+     ((equal t1 |$OutputForm|) nil)
+     ((setq c (|retractByFunction| object t2)) c)
+     ((consp t1) 
+       (setq fun
+        (or (getl (car t1) '|retract|)
+            (intern (strconc "retract" (princ-to-string (car t1))))))
+       (when (canFuncall? fun) 
+        (put (car t1) '|retract| fun)
+        (setq c (catch '|coerceFailure| (funcall fun object t2)))
+        (unless (equal c |$coerceFailure|) c))))))))
+
+\end{chunk}
+
+\defun{retractByFunction}{retractByFunction}
+\calls{retractByFunction}{objValUnwrap}
+\calls{retractByFunction}{sayFunctionSelection}
+\calls{retractByFunction}{findFunctionInDomain}
+\calls{retractByFunction}{orderMms}
+\calls{retractByFunction}{sayFunctionSelectionResult}
+\calls{retractByFunction}{evalDomain}
+\calls{retractByFunction}{compiledLookup}
+\calls{retractByFunction}{coerceUnion2Branch}
+\calls{retractByFunction}{mkObjWrap}
+\calls{retractByFunction}{spadcall}
+\calls{retractByFunction}{objMode}
+\usesdollar{retractByFunction}{reportBottomUpFlag}
+\usesdollar{retractByFunction}{dollar}
+\begin{chunk}{defun retractByFunction}
+(defun |retractByFunction| (object u)
+ (let (|$reportBottomUpFlag| $ tt val target funName mms dcVector fun objectp)
+ (declare (special |$reportBottomUpFlag| $))
+  (setq tt (|objMode| object))
+  (setq val (|objValUnwrap| object))
+  (setq target (list '|Union| u "failed"))
+  (setq funName '|retractIfCan|)
+  (when |$reportBottomUpFlag|
+    (|sayFunctionSelection| funName (list tt) target
+      nil "coercion facility (retraction)"))
+  (when 
+   (setq mms
+    (append 
+     (|findFunctionInDomain| funName tt target (list tt) (list tt) nil t)
+     (|findFunctionInDomain| funName u target (list tt) (list tt) nil t)))
+    (setq mms (|orderMms| funName mms (list tt) (list tt) target)))
+  (when |$reportBottomUpFlag|
+    (|sayFunctionSelectionResult| funName (list tt) mms))
+  (when mms
+   (setq dcVector (|evalDomain| (caaar mms)))
+   (setq fun (|compiledLookup| funName (list target tt) dcVector))
+   (cond
+    ((null fun) nil)
+    ((equal (car fun) #'|Undef|) nil)
+    (t
+     (setq $ dcVector)
+     (setq objectp
+      (|coerceUnion2Branch| (mkObjWrap (spadcall val fun) target)))
+     (when (equal u (|objMode| objectp)) objectp))))))
 
 \end{chunk}
 
@@ -26975,36 +28735,12 @@ Thus:
 ;  NMSORT [n for [n,:.] in CAAR $InteractiveFrame |
 ;    (n ^= "--macros--" and n^= "--flags--")]
 \end{verbatim}
-\calls{getWorkspaceNames}{seq}
 \calls{getWorkspaceNames}{nmsort}
-\calls{getWorkspaceNames}{exit}
 \usesdollar{getWorkspaceNames}{InteractiveFrame}
 \begin{chunk}{defun getWorkspaceNames}
 (defun |getWorkspaceNames| ()
- (PROG (n)
-  (declare (special |$InteractiveFrame|))
-    (return
-      (seq (nmsort (PROG (G166322)
-                     (setq G166322 NIL)
-                     (RETURN
-                       (DO ((G166329 (CAAR |$InteractiveFrame|)
-                                (CDR G166329))
-                            (G166313 NIL))
-                           ((OR (ATOM G166329)
-                                (PROGN
-                                  (SETQ G166313 (CAR G166329))
-                                  NIL)
-                                (PROGN
-                                  (PROGN
-                                    (setq n (CAR G166313))
-                                    G166313)
-                                  NIL))
-                            (NREVERSE0 G166322))
-                         (SEQ (EXIT (COND
-                                      ((AND (not (eq n '|--macros--|))
-                                        (not (eq n '|--flags--|)))
-                                       (SETQ G166322
-                                        (CONS n G166322))))))))))))))
+ (declare (special |$InteractiveFrame|))
+ (nmsort (loop for g2 in (caar |$InteractiveFrame|) collect (car g2))))
 
 \end{chunk}
 
@@ -41141,6 +42877,13 @@ alternate polynomial types of Symbols.
 
 \end{chunk}
 
+\defun{isTaggedUnion}{isTaggedUnion}
+\begin{chunk}{defun isTaggedUnion}
+(defun |isTaggedUnion| (u)
+ (and (eq (car u) '|Union|) (eq (caadr u) '|:|)))
+
+\end{chunk}
+
 \defun{mkEvalableRecord}{mkEvalableRecord}
 \calls{mkEvalableRecord}{mkEvalable}
 \begin{chunk}{defun mkEvalableRecord}
@@ -53779,9 +55522,9 @@ This is a list with the fields
   (PROG (numChars default stringName spadType filter mess2)
   (declare (special |$curPage|))
     (return
-      (SEQ (DO ((G166358 strings (CDR G166358)) (G166343 nil))
-               ((or (atom G166358)
-                    (progn (setq G166343 (CAR G166358)) nil)
+      (SEQ (DO ((g2 strings (CDR g2)) (G166343 nil))
+               ((or (atom g2)
+                    (progn (setq G166343 (CAR g2)) nil)
                     (progn
                       (progn
                         (setq numChars (car G166343))
@@ -55235,8 +56978,8 @@ This is a list with the fields
                                        nil))))
              (|bcHt| "Select one of the following: \\newline\\tab{3} ")
              (setq links
-                      (prog (G167460)
-                        (setq G167460 nil)
+                      (prog (g2)
+                        (setq g2 nil)
                         (return
                           (DO ((G167465 values (cdr G167465))
                                (opt nil))
@@ -55244,8 +56987,8 @@ This is a list with the fields
                                    (progn
                                      (setq opt (car G167465))
                                      nil))
-                               (NREVERSE0 G167460))
-                            (SEQ (EXIT (setq G167460
+                               (NREVERSE0 g2))
+                            (SEQ (EXIT (setq g2
                                         (cons
                                          (cons
                                           (STRCONC ""
@@ -55253,7 +56996,7 @@ This is a list with the fields
                                           (cons "\\newline\\tab{3}"
                                            (cons functionToCall
                                             (cons opt nil))))
-                                         G167460))))))))
+                                         g2))))))))
              (|htMakePage| (cons (cons '|bcLispLinks| links) nil))
              (|bcHt| 
               (cons 
@@ -57403,8 +59146,8 @@ There are 8 parts of an htPage:
     (cond
       ((eq (qcar conform) '|Join|)
         (jfn
-          (|delete| '(|Type| |Object|) (qcdr conform))
-          (|delete| '(|Type| |Object|) (ifcdr domform))))
+          (|delete| '(|Type| object) (qcdr conform))
+          (|delete| '(|Type| object) (ifcdr domform))))
       ((eq (qcar conform) 'category) nil)
       (t (|domainsOf| conform domform)))
     (|domainsOf| conform domform))))
@@ -59951,6 +61694,7 @@ There are 8 parts of an htPage:
 
 \getchunk{defun emptyInterpreterFrame 0}
 \getchunk{defun endedp 0}
+\getchunk{defun evalSharpOne 0}
 
 \getchunk{defun fin 0}
 \getchunk{defun findFrameInRing 0}
@@ -59973,6 +61717,7 @@ There are 8 parts of an htPage:
 \getchunk{defun getPreStL 0}
 \getchunk{defun getspoolname 0}
 
+\getchunk{defun hasCorrectTarget 0}
 \getchunk{defun hasOptArgs? 0}
 
 \getchunk{defun ignorep 0}
@@ -60195,6 +61940,7 @@ There are 8 parts of an htPage:
 \getchunk{defun abbQuery}
 \getchunk{defun abbreviations}
 \getchunk{defun abbreviationsSpad2Cmd}
+\getchunk{defun absolutelyCanCoerceByCheating}
 \getchunk{defun addBinding}
 \getchunk{defun addBindingInteractive}
 \getchunk{defun addInputLibrary}
@@ -60202,6 +61948,7 @@ There are 8 parts of an htPage:
 \getchunk{defun addoperations}
 \getchunk{defun addTraceItem}
 \getchunk{defun algCoerceInteractive}
+\getchunk{defun algEqual}
 \getchunk{defun allConstructors}
 \getchunk{defun allOperations}
 \getchunk{defun alqlGetOrigin}
@@ -60323,6 +62070,7 @@ There are 8 parts of an htPage:
 
 \getchunk{defun canFuncall?}
 \getchunk{defun categoryopen}
+\getchunk{defun catchCoerceFailure}
 \getchunk{defun changeHistListLen}
 \getchunk{defun changeToNamedInterpreterFrame}
 \getchunk{defun charDigitVal}
@@ -60348,10 +62096,38 @@ There are 8 parts of an htPage:
 \getchunk{defun close}
 \getchunk{defun closeInterpreterFrame}
 \getchunk{defun cmpnote}
+\getchunk{defun coerceBranch2Union}
+\getchunk{defun coerceByFunction}
+\getchunk{defun coerceByTable}
+\getchunk{defun coerceCommuteTest}
+\getchunk{defun coerceConvertMmSelection}
+\getchunk{defun coerceImmediateSubDomain}
+\getchunk{defun coerceInt}
+\getchunk{defun coerceInt0}
+\getchunk{defun coerceInt1}
+\getchunk{defun coerceIntX}
+\getchunk{defun coerceIntAlgebraicConstant}
+\getchunk{defun coerceIntByMap}
+\getchunk{defun coerceIntByMapInner}
+\getchunk{defun coerceIntCommute}
+\getchunk{defun coerceInteractive}
+\getchunk{defun coerceIntFromUnion}
+\getchunk{defun coerceIntPermute}
+\getchunk{defun coerceIntSpecial}
+\getchunk{defun coerceIntTableOrFunction}
+\getchunk{defun coerceIntTest}
+\getchunk{defun coerceIntTower}
+\getchunk{defun coerceInt2Union}
+\getchunk{defun coerceOrRetract}
+\getchunk{defun coerceOrThrowFailure}
+\getchunk{defun coerceRetract}
 \getchunk{defun coerceSpadArgs2E}
 \getchunk{defun coerceSpadFunValue2E}
+\getchunk{defun coerceSubDomain}
 \getchunk{defun coerceTraceArgs2E}
 \getchunk{defun coerceTraceFunValue2E}
+\getchunk{defun coerceUnion2Branch}
+\getchunk{defun coercionFailure}
 \getchunk{defun commandAmbiguityError}
 \getchunk{defun commandError}
 \getchunk{defun commandErrorIfAmbiguous}
@@ -60359,10 +62135,12 @@ There are 8 parts of an htPage:
 \getchunk{defun commandsForUserLevel}
 \getchunk{defun commandUserLevelError}
 \getchunk{defun compareposns}
+\getchunk{defun compareTypeLists}
 \getchunk{defun compileBoot}
 \getchunk{defun compiledLookup}
 \getchunk{defun compiledLookupCheck}
 \getchunk{defun computeDomainVariableAlist}
+\getchunk{defun computeTTTranspositions}
 \getchunk{defun condErrorMsg}
 \getchunk{defun conLowerCaseConTran}
 \getchunk{defun conOpPage}
@@ -60415,6 +62193,7 @@ There are 8 parts of an htPage:
 \getchunk{defun dbSubConform}
 \getchunk{defun dbWordFrom}
 \getchunk{defun decideHowMuch}
+\getchunk{defun decomposeTypeIntoTower}
 \getchunk{defun defaultTargetFE}
 \getchunk{defun defiostream}
 \getchunk{defun deldatabase}
@@ -60525,6 +62304,7 @@ There are 8 parts of an htPage:
 \getchunk{defun getAndSay}
 \getchunk{defun getBpiNameIfTracedMap}
 \getchunk{defun getBrowseDatabase}
+\getchunk{defun getConstantFromDomain}
 \getchunk{defun getConstructorDocumentation}
 \getchunk{defun getdatabase}
 \getchunk{defun getDependentsOfConstructor}
@@ -60549,6 +62329,7 @@ There are 8 parts of an htPage:
 \getchunk{defun getRefvU16}
 \getchunk{defun getRefvU32}
 \getchunk{defun getStFromMsg}
+\getchunk{defun getSubDomainPredicate}
 \getchunk{defun getSystemCommandLine}
 \getchunk{defun getTraceOption}
 \getchunk{defun getTraceOption,hn}
@@ -60779,6 +62560,7 @@ There are 8 parts of an htPage:
 \getchunk{defun isSharpVarWithNum}
 \getchunk{defun isSubForRedundantMapName}
 \getchunk{defun isSystemDirectory}
+\getchunk{defun isTaggedUnion}
 \getchunk{defun isTraceGensym}
 \getchunk{defun isUncompiledMap}
 
@@ -61198,6 +62980,7 @@ There are 8 parts of an htPage:
 \getchunk{defun pathnameTypeId}
 \getchunk{defun patternVarsOf}
 \getchunk{defun patternVarsOf1}
+\getchunk{defun permuteToOrder}
 \getchunk{defun pcounters}
 \getchunk{defun pfAbSynOp}
 \getchunk{defun pfAbSynOp?}
@@ -61442,6 +63225,7 @@ There are 8 parts of an htPage:
 \getchunk{defun readline}
 \getchunk{defun readSpadProfileIfThere}
 \getchunk{defun readSpad2Cmd}
+\getchunk{defun reassembleTowerIntoType}
 \getchunk{defun recordAndPrint}
 \getchunk{defun recordFrame}
 \getchunk{defun recordNewValue}
@@ -61486,6 +63270,9 @@ There are 8 parts of an htPage:
 \getchunk{defun restart0}
 \getchunk{defun restoreHistory}
 \getchunk{defun retract}
+\getchunk{defun retractByFunction}
+\getchunk{defun retractUnderDomain}
+\getchunk{defun retract2Specialization}
 \getchunk{defun rread}
 \getchunk{defun ruleLhsTran}
 \getchunk{defun rulePredicateTran}
@@ -61624,6 +63411,7 @@ There are 8 parts of an htPage:
 \getchunk{defun stringMatches?}
 \getchunk{defun string2Constructor}
 \getchunk{defun StringToDir}
+\getchunk{defun stripUnionTags}
 \getchunk{defun strpos}
 \getchunk{defun strposl}
 \getchunk{defun stupidIsSpadFunction}
@@ -61704,6 +63492,7 @@ There are 8 parts of an htPage:
 \getchunk{defun userLevelErrorMessage}
 
 \getchunk{defun validateOutputDirectory}
+\getchunk{defun valueArgsEqual?}
 \getchunk{defun vec2list}
 \getchunk{defun voidValue}
 
