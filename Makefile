@@ -10,6 +10,7 @@ MNT:=${SPD}/mnt
 TMP:=${OBJ}/tmp
 ZIPS:=${SPD}/zips
 BOOKS:=${SPD}/books
+PROOFS:=${OBJ}/${SYS}/proofs
 SPAD:=${SPD}/mnt/${SYS}
 SRCDIRS:="interpdir sharedir algebradir etcdir docdir \
           graphdir smandir hyperdir browserdir inputdir"
@@ -104,6 +105,7 @@ OBJ=${OBJ} \
 PART=${PART} \
 PATCH=${PATCH} \
 PLF=${PLF} \
+PROOFS=${PROOFS} \
 RANLIB=${RANLIB} \
 RUNTYPE=${RUNTYPE} \
 SPAD=${SPAD} \
@@ -128,8 +130,8 @@ all: rootdirs tanglec libspad
 	@ echo 1 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
 	@ echo 2 Environment ${ENV}
 	@ ${BOOKS}/tanglec Makefile.pamphlet "Makefile.${SYS}" >Makefile.${SYS}
-	@ cp books/dvipdfm.def ${MNT}/${SYS}/doc
-	@ cp books/changepage.sty ${MNT}/${SYS}/doc
+	@ cp ${BOOKS}/dvipdfm.def ${MNT}/${SYS}/doc
+	@ cp ${BOOKS}/changepage.sty ${MNT}/${SYS}/doc
 	@ ${EXTRACT} Makefile.pamphlet
 	@ cp Makefile.pdf ${MNT}/${SYS}/doc/src/root.Makefile.pdf
 	@ if [ "${RUNTYPE}" = "parallel" ] ; then \
@@ -200,6 +202,7 @@ rootdirs:
 	 mkdir -p ${OBJ}/${SYS}/interp
 	 mkdir -p ${OBJ}/${SYS}/lib
 	 mkdir -p ${OBJ}/${SYS}/sman
+	 mkdir -p ${OBJ}/${SYS}/proofs
 	 mkdir -p ${MNT}/doc
 	 mkdir -p ${MNT}/${SYS}/algebra
 	 mkdir -p ${MNT}/${SYS}/autoload
