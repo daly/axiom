@@ -10,13 +10,13 @@ MNT:=${SPD}/mnt
 TMP:=${OBJ}/tmp
 ZIPS:=${SPD}/zips
 BOOKS:=${SPD}/books
-PROOFS:=${OBJ}/${SYS}/proofs
-SPAD:=${SPD}/mnt/${SYS}
 SRCDIRS:="interpdir sharedir algebradir etcdir docdir \
           graphdir smandir hyperdir browserdir inputdir"
 
 SYS:=$(notdir $(AXIOM))
 DAASE:=${SRC}/share
+PROOFS:=${OBJ}/${SYS}/proofs
+SPAD:=${SPD}/mnt/${SYS}
 
 SPADBIN:=${MNT}/${SYS}/bin
 DOCUMENT:=${SPADBIN}/document
@@ -76,9 +76,12 @@ RUNTYPE:=serial
 # alltests, notests
 TESTSET:=notests
 BUILD:=full
+ACL2:=
+COQ:=
 
 
 ENV:= \
+ACL2=${ACL2} \
 AWK=${AWK} \
 BOOKS=${BOOKS} \
 BUILD=${BUILD} \
@@ -86,6 +89,7 @@ BYE=${BYE} \
 CC=${CC} \
 CCF=${CCF} \
 COMMAND=${COMMAND} \
+COQ=${COQ} \
 DAASE=${DAASE} \
 DESTDIR=${DESTDIR} \
 DOCUMENT=${DOCUMENT} \
