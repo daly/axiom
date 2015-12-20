@@ -53,8 +53,6 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
 ;--        ERROR(formatstring,arg)
 ;        ERROR FORMAT([],formatstring,arg)
 
-(defun |FloatError| (formatstring arg)
- (error (format nil formatstring arg)))
 
 ;nangenericcomplex () ==
 ;        1.0/COMPLEX(0.0)
@@ -230,14 +228,14 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
     (setq restx (cadr lx))
     (cond
      ((zerop restx)
-       (|FloatError| "Gamma undefined for non-positive integers: ~D" x)
+       (FloatError "Gamma undefined for non-positive integers: ~D" x)
        (setq result (|nangenericcomplex|)))
      (t
       (setq result
-       (/ |dfPi|
+       (/ Pi
          (* (* (|gammaRatapprox| (- 1.0 x))
                (expt (- 1.0) (+ intpartx 1)))
-            (sin (* restx |dfPi|)))))))))
+            (sin (* restx Pi)))))))))
   result))
 
 ;gammaRatkernel(x) ==
@@ -287,162 +285,11 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
 ;-- However along the way it does a few tricky things to reduce
 ;-- problems due to roundoff/cancellation error for particular values.
 
-;-- cgammat is auxiliary "t" function (see p. 263 Kuki)
-;cgammat(x) ==
-;        MAX(0.1, MIN(10.0, 10.0*SQRT(2.0) - ABS(x)))
-
-; \cite{kuki72a,kuki72b}
-(defun |cgammat| (x)
- (max 0.10000000000000001 (min 10.0 (- (* 10.0 (sqrt 2.0)) (abs x)))))
-
 ;lncgamma(z) ==
 ;   clngamma(REALPART z, IMAGPART z, z)
 
 (defun |lncgamma| (z)
  (clngamma (realpart z) (imagpart z) z))
-
-;clngammacase1(z1,z2,z) ==
-;        result1 := PiMinusLogSinPi(z1,z2,z)
-;        result2 := clngamma(1.0-z1,-z2,1.0-z)
-;        result1-result2
-
-(defun |clngammacase1| (real imag z)
- (- (|PiMinusLogSinPi| real imag z)
-    (clngamma (- 1.0 real) (- imag) (- 1.0 z))))
-
-;PiMinusLogSinPi(z1,z2,z) ==
-;        cgammaG(z1,z2)  - logH(z1,z2,z)
-
-(defun |PiMinusLogSinPi| (real imag z)
- (- (|cgammaG| real imag) (|logH| real imag z)))
-
-;cgammaG(z1,z2) ==
-;        LOG(2*dfPi) + dfPi*z2 - COMPLEX(0.0,1.0)*dfPi*(z1-.5)
-
-(defun |cgammaG| (real imag)
-  (- (+ (log (* 2 |dfPi|)) (* |dfPi| imag))
-     (* (* (complex 0.0 1.0) |dfPi|) (- real 0.5))))))
-
-;logH(z1,z2,z) ==
-;        z1bar := CADR(MULTIPLE_-VALUE_-LIST(FLOOR(z1))) ---frac part of z1
-;        piz1bar := dfPi*z1bar
-;        piz2 := dfPi*z2
-;        twopiz2 := 2.0*piz2
-;        i := COMPLEX(0.0,1.0)
-;        part2 := EXP(twopiz2)*(2.0*SIN(piz1bar)**2 + SIN(2.0*piz1bar)*i)
-;        part1 := -TANH(piz2)*(1.0+EXP(twopiz2))
-;--- part1 is another way of saying 1 - exp(2*Pi*z1bar)
-;        LOG(part1+part2)
-
-(defun |logH| (real imag z)
- (declare (ignore z))
- (let (part1 part2 twopiz2 z1bar)
-   (setq z1bar (cadr (multiple-value-list (floor real))))
-   (setq twopiz2 (* 2.0 (* |dfPi| imag)))
-   (setq part2
-     (* (exp twopiz2)
-       (+ (* 2.0 (expt (sin (* |dfPi| z1bar)) 2))
-          (* (sin (* 2.0 (* |dfPi| z1bar))) (complex 0.0 1.0)))))
-   ;--- part1 is another way of saying 1 - exp(2*Pi*z1bar)
-   (setq part1 (- (* (tanh (* |dfPi| imag)) (+ 1.0 (exp twopiz2)))))
-   (log (+ part1 part2))))
-
-;clngammacase23(z1,z2,z) ==
-;        tz2 := cgammat(z2)
-;        if (z1 < tz2)
-;        then result:= clngammacase2(z1,z2,tz2,z)
-;        else result:= clngammacase3(z)
-;        result
-
-(defun |clngammacase23| (real imag z)
- (let ((tz2 (|cgammat| imag)))
-  (if (< real tz2)
-    (|clngammacase2| real imag tz2 z)
-    (|clngammacase3| z))))
-
-;clngammacase2(z1,z2,tz2,z) ==
-;        n := float(CEILING(tz2-z1))
-;        zpn := z+n
-;        (z-.5)*LOG(zpn) - (zpn) + cgammaBernsum(zpn) - cgammaAdjust(logS(z1,z2,z,n,zpn))
-
-(defun |clngammacase2| (real imag tz2 z)
- (let (zpn n)
-  (setq n (|float| (ceiling (- tz2 real))))
-  (setq zpn (+ z n))
-  (- (+ (- (* (- z 0.5) (log zpn)) zpn) (|cgammaBernsum| zpn))
-     (|cgammaAdjust| (|logS| real imag z n zpn)))))
-
-;logS(z1,z2,z,n,zpn) ==
-;        sum := 0.0
-;        for k in 0..(n-1) repeat
-;                if z1+k < 5.0 - 0.6*z2
-;                then sum := sum + LOG((z+k)/zpn)
-;                else sum := sum + LOG(1.0 - (n-k)/zpn)
-;        sum
-
-(defun |logS| (real imag z n zpn)
- (let ((sum 0.0))
-  (dotimes (k n)
-   (if (< (+ real k) (- 5.0 (* 0.60000000000000009 imag)))
-    (setq sum (+ sum (log (/ (+ z k) zpn)))))
-    (setq sum (+ sum (log (- 1.0 (/ (- n k) zpn))))))
-  sum))
-
-;cgammaAdjust(z) ==
-;        if IMAGPART(z)<0.0
-;        then result := z + COMPLEX(0.0, 2.0*dfPi)
-;        else result := z
-;        result
-
-;logS result should have its imaginary part adjusted by 2 Pi if it is negative.
-; \cite{kuki72a,kuki72b}
-(defun |cgammaAdjust| (z)
- (if (< (imagpart z) 0.0)
-  (+ z (complex 0.0 (* 2.0 |dfPi|)))
-  z))
-
-;clngammacase3(z) ==
-;        (z- .5)*LOG(z) - z + cgammaBernsum(z)
-
-(defun |clngammacase3| (z)
- (+ (- (* (- z 0.5) (log z)) z) (|cgammaBernsum| z)))
-
-;cgammaBernsum (z) ==
-;        sum := LOG(2.0*dfPi)/2.0
-;        zterm := z
-;        zsquaredinv := 1.0/(z*z)
-;        l:= [.083333333333333333333, -.0027777777777777777778,_
-;                .00079365079365079365079,  -.00059523809523809523810,_
-;                .00084175084175084175084, -.0019175269175269175269,_
-;                .0064102564102564102564]
-;        for m in 1..7 for el in l repeat
-;                zterm := zterm*zsquaredinv
-;                sum := sum + el*zterm
-;        sum
-
-(defun |cgammaBernsum| (z)
- (let (l zsquaredinv zterm sum)
-  (setq sum (/ (LOG (* 2.0 |dfPi|)) 2.0))
-  (setq zterm z)
-  (setq zsquaredinv (/ 1.0 (* z z)))
-  (setq l
-   (list 0.083333333333333315 (- 0.0027777777777777779)
-         7.9365079365079376E-4 (- 5.9523809523809529E-4)
-         8.4175084175084182E-4 (- 0.0019175269175269176)
-         0.0064102564102564109))
-  ((lambda (m t7 el)
-   (loop
-    (cond
-     ((or (> m 7) (atom t7) (progn (setq el (car t7)) nil))
-       (return nil))
-     (t
-      (progn
-       (setq zterm (* zterm zsquaredinv))
-       (setq sum (+ sum (* el zterm))))))
-    (setq m (+ m 1))
-    (setq t7 (cdr t7))))
-   1 l nil)
-  sum))
 
 ;--- nth derivatives of ln gamma for real x, n = 0,1,....
 ;--- requires files floatutils, rgamma
@@ -570,14 +417,14 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
         ((NOT (< 0.0 |x|))
          (COND
            ((ZEROP (|fracpart| |x|))
-            (|FloatError| "singularity encountered at ~D" |x|))
+            (FloatError "singularity encountered at ~D" |x|))
            ('T (SETQ |m| (MOD |n| 2)) (SETQ |sign| (EXPT (- 1) |m|))
             (COND
               ((EQUAL (|fracpart| |x|) 0.5) (SETQ |skipit| 1))
               ('T (SETQ |skipit| 0)))
             (* |sign|
-               (+ (* (EXPT |dfPi| (+ |n| 1))
-                     (|cotdiffeval| |n| (* |dfPi| (- |x|)) |skipit|))
+               (+ (* (EXPT Pi (+ |n| 1))
+                     (|cotdiffeval| |n| (* Pi (- |x|)) |skipit|))
                   (|rPsi| |n| (- 1.0 |x|)))))))
         ((EQL |n| 0) (- (|rPsiW| |n| |x|)))
         ('T
@@ -861,7 +708,7 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
         (SETQ |bound| 10.0)
         (COND
           ((< |x| 0.0)
-           (|FloatError| "Psi implementation can't compute at ~S "
+           (FloatError "Psi implementation can't compute at ~S "
                (LIST |n| |z|)))
           ((AND (< 0.0 |x|) (< |bound| (ABS |z|)))
            (RETURN (|PsiXotic| |n| (|PsiAsymptotic| |n| |z|))))
@@ -908,8 +755,8 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
       (PROGN
         (SETQ |m| (MOD |n| 2))
         (SETQ |sign| (EXPT (- 1) |m|))
-        (+ (* (* |sign| (EXPT |dfPi| (+ |n| 1)))
-              (|cotdiffeval| |n| (* |dfPi| |z|) 0))
+        (+ (* (* |sign| (EXPT Pi (+ |n| 1)))
+              (|cotdiffeval| |n| (* Pi |z|) 0))
            (|cPsi| |n| (- 1.0 |z|)))))))
 
 ;--- c parameter to 0F1, possibly complex
@@ -1127,7 +974,7 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
     (RETURN
       (COND
         ((|negintp| |c|)
-         (|FloatError|
+         (FloatError
              "0F1 not defined for negative integer parameter value ~S"
              |c|))
         ((AND (< (ABS |c|) 1000.0) (< (ABS |z|) 1000.0))
@@ -1138,7 +985,7 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
         ((AND (< (ABS |z|) (* 10.0 (ABS |c|))) (< (ABS |c|) 10000.0)
               (< (ABS |z|) 10000.0))
          (|brutef01| |c| |z|))
-        ('T (|FloatError| "0F1 not implemented for ~S" (LIST |c| |z|)))))))
+        ('T (FloatError "0F1 not implemented for ~S" (LIST |c| |z|)))))))
 
 ;--- c parameter to 0F1
 ;--- w scale factor so that 0<z/w<1
@@ -1505,7 +1352,7 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
                      (EXPT (/ |z| 2.0) |v|))))
                (T (|BesselJRecur| |v| |z|))
                ('T
-                (|FloatError| "BesselJ not implemented for ~S"
+                (FloatError "BesselJ not implemented for ~S"
                     (LIST |v| |z|)))))))))))
 
 ;BesselJRecur(v,z) ==
@@ -1557,62 +1404,6 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
              (SETQ |i| (+ |i| |bfVar#19|))))
          (- 1) (- |m| 3))
         (AREF |w| 0)))))
-
-;BesselI(v,z) ==
-;        B1 := 15.0
-;        B2 := 10.0
-;        ZEROP(z) and FLOATP(v) and (v>=0.0) =>  --- zero arg, pos. real order
-;            ZEROP(v) => 1.0  --- I(0,0)=1
-;            0.0             --- I(v,0)=0 for real v>0
-;--- Transformations for negative integer orders
-;        FLOATP(v) and ZEROP(fracpart(v)) and (v<0) => BesselI(-v,z)
-;--- Halfplane transformations for Re(z)<0
-;        REALPART(z)<0.0 => BesselI(v,-z)*EXPT(-1.0,v)
-;--- Conjugation for complex order and real argument
-;        REALPART(v)<0.0 and not ZEROP IMAGPART(v) and FLOATP(z) =>
-;              CONJUGATE(BesselI(CONJUGATE(v),z))
-;---We now know that Re(z)>= 0.0
-;        ABS(z) > B1 =>    --- asymptotic argument case
-;                                FloatError('"BesselI not implemented for ~S",[v,z])
-;        ABS(v) > B1 =>
-;                                FloatError('"BesselI not implemented for ~S",[v,z])
-;---     case of small argument and order
-;        REALPART(v)>= 0.0 =>  besselIback(v,z)
-;        REALPART(v)< 0.0 =>
-;                        chebterms := 50
-;                        besselIcheb(z,v,chebterms)
-;        FloatError('"BesselI not implemented for ~S",[v,z])
-
-(DEFUN |BesselI| (|v| |z|)
-  (PROG (|chebterms| B2 B1)
-    (RETURN
-      (PROGN
-        (SETQ B1 15.0)
-        (SETQ B2 10.0)
-        (COND
-          ((AND (ZEROP |z|) (FLOATP |v|) (NOT (< |v| 0.0)))
-           (COND ((ZEROP |v|) 1.0) ('T 0.0)))
-          ((AND (FLOATP |v|) (ZEROP (|fracpart| |v|)) (MINUSP |v|))
-           (|BesselI| (- |v|) |z|))
-          ((< (REALPART |z|) 0.0)
-           (* (|BesselI| |v| (- |z|)) (EXPT (- 1.0) |v|)))
-          ((AND (< (REALPART |v|) 0.0) (NULL (ZEROP (IMAGPART |v|)))
-                (FLOATP |z|))
-           (CONJUGATE (|BesselI| (CONJUGATE |v|) |z|)))
-          ((< B1 (ABS |z|))
-           (|FloatError| "BesselI not implemented for ~S"
-               (LIST |v| |z|)))
-          ((< B1 (ABS |v|))
-           (|FloatError| "BesselI not implemented for ~S"
-               (LIST |v| |z|)))
-          ((NOT (< (REALPART |v|) 0.0)) (|besselIback| |v| |z|))
-          ((< (REALPART |v|) 0.0)
-           (PROGN
-             (SETQ |chebterms| 50)
-             (|besselIcheb| |z| |v| |chebterms|)))
-          ('T
-           (|FloatError| "BesselI not implemented for ~S"
-               (LIST |v| |z|))))))))
 
 ;--- Compute n terms of the chebychev series for f01
 ;besselIcheb(z,v,n) ==
@@ -1847,7 +1638,7 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
   (PROG (|zfth| |zsqr| |mu| |pi|)
     (RETURN
       (PROGN
-        (SETQ |pi| |dfPi|)
+        (SETQ |pi| Pi)
         (SETQ |mu| (* (* 4.0 |v|) |v|))
         (SETQ |zsqr| (* |z| |z|))
         (SETQ |zfth| (* |zsqr| |zsqr|))
@@ -1912,9 +1703,9 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
                   (SETQ |sum2| (+ |sum2| (ABS |term1|))))))
              (SETQ |r| (+ |r| 1))))
          1)
-        (SETQ |sqrttwopiz| (SQRT (* (* |two| |dfPi|) |z|)))
+        (SETQ |sqrttwopiz| (SQRT (* (* |two| Pi) |z|)))
         (+ (* (/ (EXP |z|) |sqrttwopiz|) (+ 1.0 |sum1|))
-           (* (/ (* (EXP (- (* (* (+ (|float| |n|) 0.5) |dfPi|) |i|)))
+           (* (/ (* (EXP (- (* (* (+ (|float| |n|) 0.5) Pi) |i|)))
                     (EXP (- |z|)))
                  |sqrttwopiz|)
               (+ 1.0 |sum2|)))))))
@@ -1965,7 +1756,7 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
         (SETQ |ca4| (* |ca2| |ca2|))
         (SETQ |ca8| (* |ca4| |ca4|))
         (* (/ (EXP (- (* |v| (- |alpha| |tanhalpha|))))
-              (SQRT (* (* (* 2.0 |dfPi|) |v|) |tanhalpha|)))
+              (SQRT (* (* (* 2.0 Pi) |v|) |tanhalpha|)))
            (+ (+ (+ (+ (+ (+ 1.0
                              (/ (* (|horner| (LIST (- 5.0) 3.0) |ca2|)
                                    |ca|)
@@ -2051,7 +1842,7 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
           ((< (REALPART |v|) 0.0)
            (RETURN
              (+ (|BesselIAsymptOrder| (- |v|) |vz|)
-                (* (* (/ 2.0 |dfPi|) (SIN (- (* |v| |dfPi|))))
+                (* (* (/ 2.0 Pi) (SIN (- (* |v| Pi))))
                    (|BesselKAsymptOrder| (- |v|) |vz|))))))
         (COND
           ((< (REALPART |vz|) 0.0)
@@ -2111,7 +1902,7 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
               (|horner| (LIST |u5p| |u4p| |u3p| |u2p| |u1p| |u0p|)
                   |vinv|))
         (* (/ (EXP (* |v| |eta|))
-              (* (SQRT (* (* 2.0 |dfPi|) |v|)) (SQRT |opzsqroh|)))
+              (* (SQRT (* (* 2.0 Pi) |v|)) (SQRT |opzsqroh|)))
            |hornerresult|)))))
 
 ;---See also Olver, pp. 376-382
@@ -2195,7 +1986,7 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
         (SETQ |hornerresult|
               (|horner| (LIST |u5p| |u4p| |u3p| |u2p| |u1p| |u0p|)
                   |vinv|))
-        (* (/ (* (SQRT (/ |dfPi| (* 2.0 |v|))) (EXP (- (* |v| |eta|))))
+        (* (/ (* (SQRT (/ Pi (* 2.0 |v|))) (EXP (- (* |v| |eta|))))
               (SQRT |opzsqroh|))
            |hornerresult|)))))
 
