@@ -47419,7 +47419,61 @@ DoubleFloatSpecialFunctions.
     1.0
     (if (< 20 x)
      (gammaStirling x)
-     (|gammaRatapprox| x))))
+     (gammaRatapprox x))))
+
+\end{chunk}
+
+\defun{gammaRatapprox}{gammaRatapprox}
+\begin{chunk}{defun gammaRatapprox}
+(defun gammaRatapprox (x)
+ (let (restx intpartx lx prod reducedarg a n result)
+  (cond
+   ((and (not (< x 2)) (not (< 3 x)))
+     (setq result (gammaRatkernel x)))
+   ((< 3 x)
+     (setq n (- (floor x) 2))
+     (setq a (- (- x n) 2))
+     (setq reducedarg (+ 2 a))
+     (setq prod
+      (reduce #'* (loop for i from 0 to (- n 1) collect (+ reducedarg i))))
+     (setq result (* prod (gammaRatapprox reducedarg))))
+   ((and (< x 2) (< 0 x))
+    (setq n (- 2 (floor x)))
+    (setq a (- x (floor x)))
+    (setq reducedarg (+ 2 a))
+    (setq prod (reduce #'* (loop for i from 0 to (- n 1) collect (+ x i))))
+    (setq result (/ (gammaRatapprox reducedarg) prod)))
+   (t
+    (setq lx (multiple-value-list (floor x)))
+    (setq intpartx (+ (car lx) 1))
+    (setq restx (cadr lx))
+    (cond
+     ((zerop restx)
+       (FloatError "Gamma undefined for non-positive integers: ~D" x)
+       (setq result (|nangenericcomplex|)))
+     (t
+      (setq result
+       (/ Pi
+         (* (* (gammaRatapprox (- 1.0 x))
+               (expt (- 1.0) (+ intpartx 1)))
+            (sin (* restx Pi)))))))))
+  result))
+
+\end{chunk}
+
+\defun{gammaRatkernel}{gammaRatkernel}
+\begin{chunk}{defun gammaRatkernel}
+(defun gammaRatkernel (x)
+  (/
+   (|horner|
+    '(0.77807958561330059 6.1260674503360839 48.95434622790993 
+     222.11239616801177   893.58180452374972 2077.4597938941874
+     3786.0105034825724)
+     (- x 2))
+   (|horner|
+    '(1  -13.400414785781347 50.788475328895402 83.550058667919771 
+         -867.23098753110298 476.79386050368794 3786.0105034825719)
+     (- x 2.0))))
 
 \end{chunk}
 
@@ -47592,11 +47646,118 @@ if it is negative. \cite{kuki72a,kuki72b}
      (FloatError "BesselI not implemented for ~S" (list v z)))
    ; case of small argument and order
    ((not (< (realpart v) 0.0))
-     (|besselIback| v z))
+     (besselIback v z))
    ((< (realpart v) 0.0)
-     (|besselIcheb| z v 50))
+     (besselIcheb z v 50))
    (t
      (FloatError "BesselI not implemented for ~S" (list v z))))))
+
+\end{chunk}
+
+\defun{besselIback}{besselIback}
+\begin{chunk}{defun besselIback}
+(defun besselIback (v z)
+ (let (result vp1 tv n m lm rpv ipv)
+  (setq ipv (imagpart v))
+  (setq rpv (realpart v))
+  (setq lm (multiple-value-list (floor rpv)))
+  (setq m (car lm))                ; floor of real part of v
+  (setq n (* 2 (max 20 (+ m 10)))) ; how large the back recurrence should be
+  (setq tv (+ (cadr lm) (- v rpv))); fractional part of real part of v
+                                   ; plus imaginary part of v
+  (setq vp1 (+ tv 1.0))
+  (setq result (|BesselIBackRecur| v m tv z "I" n))
+  (setq result (* (/ result (cgammaImpl vp1)) (expt (/ z 2.0) tv)))))
+
+\end{chunk}
+
+\defun{besselIcheb}{Compute n terms of the chebychev series for f01}
+\begin{chunk}{defun besselIcheb}
+(defun besselIcheb (z v n)
+ (let (result arr sum tmp1 vp1 w arg)
+  (setq arg (/ (* z z) 4.0))
+  (setq w (* 2.0 arg))
+  (setq vp1 (+ v 1.0))
+  (setq tmp1 (chebf01coefmake vp1 w n))
+  (setq sum (car tmp1))
+  (setq arr (cadr tmp1))
+  (setq result
+    (* (/ (chebstarevalarr arr (/ arg w) n) (cgammaImpl vp1))
+       (expt (/ z 2.0) v)))))
+
+\end{chunk}
+
+\defun{chebf01coefmake}{chebf01coefmake}
+Program transcribed from Fortran,, p. 80 Luke 1977 \cite{Luke77}
+
+where $c$ is a parameter to 0F1, $w$ is a scale factor so that $0<z/w<1$,
+$n$ such that $n+2$ coefficients will be produced stored in an array
+indexed from $0$ to $n+1$.
+The $arr$ array will be used to store the Cheb. series coefficients
+
+\begin{chunk}{defun chebf01coefmake 0}
+(defun chebf01coefmake (c w n)
+ (let (p sum rho divfac c1 x1 arr ncount z1 a1 a2 a3 n2 n1 start four)
+  (setq four 4.0)
+  (setq start (expt 10.0 (- 200)))
+  (setq n1 (+ n 1))
+  (setq n2 (+ n 2))
+  (setq a3 0.0)
+  (setq a2 0.0)
+  (setq a1 start)      ; arbitrary starting value
+  (setq z1 (/ four w))
+  (setq ncount n1)
+  (setq arr (make-array n2))
+  (setf (aref arr ncount) start) ; start off
+  (setq x1 n2)
+  (setq c1 (- 1.0 c))
+  (loop for ncount from n downto 0 do
+    (setq divfac (/ 1.0 x1))
+    (setq x1 (- x1 1.0))
+    (setf (aref arr ncount)
+      (* x1
+       (- (+ (* (+ divfac (* z1 (- x1 c1))) a1)
+             (* (+ (/ 1.0 x1) (* z1 (+ (+ x1 c1) 1.0))) a2))
+          (* divfac a3))))
+    (setq a3 a2)
+    (setq a2 a1)
+    (setq a1 (aref arr ncount)))
+  (setf (aref arr 0) (/ (aref arr 0) 2.0))
+  ; compute scale factor
+  (setq rho (aref arr 0))
+  (setq sum rho)
+  (setq p 1.0)
+  (loop for i from 1 to n1 do
+   (setq rho (- rho (* p (aref arr i))))
+   (setq sum (+ sum (aref arr i)))
+   (setq p (- p)))
+  (loop for l from 0 to n1 do
+   (setf (aref arr l) (/ (aref arr l) rho)))
+  (setq sum (/ sum rho))
+  (list sum arr)))
+
+\end{chunk}
+
+\defun{chebstarevalarr}{chebstarevalarr}
+Evaluation of the sum(C(n)*T*(n,x))
+\begin{chunk}{defun chebstarevalarr 0}
+(defun chebstarevalarr (coefarr x n)
+ (let (c y temp b)
+  (setq b 0)
+  (setq temp 0)
+  (setq y (* 2 (- (* 2 x) 1)))
+  (loop for i from (+ n 1) downto 0 do
+    (setq c b)
+    (setq b temp)
+    (setq temp (+ (- (* y b) c) (aref coefarr i))))
+   (- temp (/ (* y b) 2))))
+
+\end{chunk}
+
+\defun{lncgamma}{lncgamma}
+\begin{chunk}{defun lncgamma}
+(defun lncgamma (z)
+ (clngamma (realpart z) (imagpart z) z))
 
 \end{chunk}
 
@@ -47908,6 +48069,20 @@ See Steele Common Lisp 1990 p293
 \end{chunk}
 
 \defun{cgamma}{Complex Gamma $\Gamma(z)$}
+
+The cgamma(z) function is the $\Gamma$ function for complex arguments 
+implemented by Bruce Char, April-May, 1990.
+
+Our text for complex gamma is H. Kuki's paper Complex Gamma
+Function with Error Control"\cite{kuki72a}
+
+It uses the reflection formula and the basic $z+1$ recurrence to
+transform the argument into something that Stirling's asymptotic
+formula can handle.
+
+However along the way it does a few tricky things to reduce
+problems due to roundoff/cancellation error for particular values.
+
 \begin{chunk}{defun cgamma}
 (defun cgamma (z)
   (c-to-s (cgammaImpl (s-to-c z)) ))
@@ -47917,7 +48092,7 @@ See Steele Common Lisp 1990 p293
 \defun{clngamma}{The complex logGamma function}
 \begin{chunk}{defun clngamma}
 (defun clngamma (z)
-  (c-to-s (|lncgamma| (s-to-c z)) ))
+  (c-to-s (lncgamma (s-to-c z)) ))
 
 \end{chunk}
 
@@ -62057,6 +62232,8 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defun cgammaAdjust 0}
 \getchunk{defun cgammaG 0}
 \getchunk{defun cgammat 0}
+\getchunk{defun chebf01coefmake 0}
+\getchunk{defun chebstarevalarr 0}
 \getchunk{defun cleanupLine 0}
 \getchunk{defun clearMacroTable 0}
 \getchunk{defun concat 0}
@@ -62452,6 +62629,8 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defun bcwords2liststring}
 \getchunk{defun beforeAfter}
 \getchunk{defun BesselI}
+\getchunk{defun besselIback}
+\getchunk{defun besselIcheb}
 \getchunk{defun bracketString}
 \getchunk{defun break}
 \getchunk{defun breaklet}
@@ -62704,6 +62883,8 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defun frameSpad2Cmd}
 \getchunk{defun funfind,LAM}
 
+\getchunk{defun gammaRatapprox}
+\getchunk{defun gammaRatkernel}
 \getchunk{defun gammaStirling}
 \getchunk{defun gatherGlossLines}
 \getchunk{defun genDomainTraceName}
@@ -63025,6 +63206,7 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defun listDecideHowMuch}
 \getchunk{defun listOfStrings2String}
 \getchunk{defun listOutputter}
+\getchunk{defun lncgamma}
 \getchunk{defun lnFileName}
 \getchunk{defun load}
 \getchunk{defun loadFunctor}
