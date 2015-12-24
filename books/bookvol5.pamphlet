@@ -41891,7 +41891,7 @@ This reports the traced functions
      (|sayBrightly|
       `("  " ,@(|bright| timer) |:| " "
          ,(quotient (eval (intern (concat timer ",TIMER")))
-            (|float| |$timerTicksPerSecond|)) " sec.")))))
+            (float |$timerTicksPerSecond|)) " sec.")))))
 
 \end{chunk}
 
@@ -47351,6 +47351,15 @@ found a bug related to this ambiguity so this was renamed.
 \end{chunk}
 
 \chapter{Numeric Function Support}
+
+\defmacro{fracpart}
+\sig{fracpart}{or rational float}{or rational float}
+\begin{chunk}{defmacro fracpart 0}
+(defmacro fracpart (x)
+ `(cadr (multiple-value-list (floor ,x))))
+
+\end{chunk}
+
 \defun{s-to-c}{list to complex conversion}
 \begin{chunk}{defun s-to-c 0}
 (defun s-to-c (c)
@@ -47450,7 +47459,7 @@ DoubleFloatSpecialFunctions.
     (cond
      ((zerop restx)
        (FloatError "Gamma undefined for non-positive integers: ~D" x)
-       (setq result (|nangenericcomplex|)))
+       (setq result (/ 1.0 (complex 0.0))))
      (t
       (setq result
        (/ Pi
@@ -47465,15 +47474,24 @@ DoubleFloatSpecialFunctions.
 \begin{chunk}{defun gammaRatkernel}
 (defun gammaRatkernel (x)
   (/
-   (|horner|
+   (horner
     '(0.77807958561330059 6.1260674503360839 48.95434622790993 
      222.11239616801177   893.58180452374972 2077.4597938941874
      3786.0105034825724)
      (- x 2))
-   (|horner|
+   (horner
     '(1  -13.400414785781347 50.788475328895402 83.550058667919771 
          -867.23098753110298 476.79386050368794 3786.0105034825719)
      (- x 2.0))))
+
+\end{chunk}
+
+\defun{horner}{Horner's rule of polynomial evaluation}
+\begin{chunk}{defun horner 0}
+(defun horner (l x)
+ (let ((result 0))
+  (loop for el in l do (setq result (+ (* x result) el)))
+  result))
 
 \end{chunk}
 
@@ -47566,7 +47584,7 @@ The cgammat is auxiliary "t" function \cite{kuki72a,kuki72b}
 \begin{chunk}{defun clngammacase2}
 (defun clngammacase2 (real imag tz2 z)
  (let (zpn n)
-  (setq n (|float| (ceiling (- tz2 real))))
+  (setq n (float (ceiling (- tz2 real))))
   (setq zpn (+ z n))
   (- (+ (- (* (- z 0.5) (log zpn)) zpn) (cgammaBernsum zpn))
      (cgammaAdjust (logS real imag z n zpn)))))
@@ -47631,7 +47649,7 @@ if it is negative. \cite{kuki72a,kuki72b}
    ((and (zerop z) (floatp v) (not (< v 0.0)))
      (if (zerop v) 1.0 0.0))
    ; Transformations for negative integer orders
-   ((and (floatp v) (zerop (|fracpart| v)) (minusp v))
+   ((and (floatp v) (zerop (fracpart v)) (minusp v))
      (BesselI (- v) z))
    ; Halfplane transformations for Re(z)<0
    ((< (realpart z) 0.0)
@@ -47666,10 +47684,61 @@ if it is negative. \cite{kuki72a,kuki72b}
   (setq tv (+ (cadr lm) (- v rpv))); fractional part of real part of v
                                    ; plus imaginary part of v
   (setq vp1 (+ tv 1.0))
-  (setq result (|BesselIBackRecur| v m tv z "I" n))
+  (setq result (BesselIBackRecur v m tv z "I" n))
   (setq result (* (/ result (cgammaImpl vp1)) (expt (/ z 2.0) tv)))))
 
 \end{chunk}
+
+\defun{BesselIBackRecur}{Backward recurrence for Bessel functions}
+Backward recurrence for Bessel functions.  Luke (1975), p. 247.
+works for $-\pi < arg z <= \pi$ and  $-\pi < arg v <= \pi$
+\begin{chunk}{defun BesselIBackRecur}
+(defun BesselIBackRecur (largev argm v z type n)
+ (declare (ignore largev))
+ (let (v1 pn ct1 xm m m1 val w m2 z2 start zero two one)
+  (setq one 1.0)
+  (setq two 2.0)
+  (setq zero 0.0)
+  (setq start (EXPT 10.0 (- 40)))
+  (setq z2 (/ two z))
+  (setq m2 (+ n 3))
+  (setq w (make-array (+ m2 1)))
+  (setf (aref w m2) zero)
+  (if (string= type "I")
+    (setq val one)
+    (setq val (- one)))
+  (setq m1 (+ n 2))
+  (setf (aref w m1) start)
+  (setq m (+ n 1))
+  (setq xm (float m))
+  (setq ct1 (* z2 (+ xm v)))
+  ; initialize
+  (loop for m from (+ n 1) downto 1 by 1 do
+    (setf (aref w m) (+ (* (aref w (+ m 1)) ct1) (* val (aref w (+ m 2)))))
+    (setq ct1 (- ct1 z2)))
+  (setq m (+ 1 (floor (/ n 2))))
+  (setq m2 (- (+ m m) 1))
+  (cond
+    ((eql v 0)
+     (setq pn (aref w (+ m2 2)))
+     (loop for m2 from (- (* 2 m) 1) downto 3 by 2 do
+       (setq pn (- (aref w m2) (* val pn))))
+     (setq pn (- (aref w 1) (* val (+ pn pn)))))
+    ('T (setq v1 (- v one)) (setq xm (float m))
+     (setq ct1 (+ (+ v xm) xm))
+     (setq pn (* ct1 (aref w (+ m2 2))))
+     (loop for m2 from (- (+ m m) 1) downto 3 by 2 do
+       (setq ct1 (- ct1 two))
+       (setq pn (- (* ct1 (aref w m2)) (* (/ (* val pn) xm) (+ v1 xm))))
+       (setq xm (- xm one)))
+     (setq pn (- (aref w 1) (* val pn)))))
+  (setq m1 (+ n 2))
+  (loop for m from 1 to m1 do
+    (setf (aref w m) (/ (aref w m) pn)))
+  (aref w (+ argm 1))))
+
+\end{chunk}
+
 
 \defun{besselIcheb}{Compute n terms of the chebychev series for f01}
 \begin{chunk}{defun besselIcheb}
@@ -48082,6 +48151,12 @@ formula can handle.
 
 However along the way it does a few tricky things to reduce
 problems due to roundoff/cancellation error for particular values.
+
+Small float implementation of Gamma function.  Valid for
+real arguments.  Maximum error (relative) seems to be
+2-4 ulps for real $x$ $2<x<9$, and up to ten ulps for larger $x$
+up to overflow.  See Hart and Cheney.
+(Bruce Char, April, 1990).
 
 \begin{chunk}{defun cgamma}
 (defun cgamma (z)
@@ -62055,6 +62130,7 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defmacro bvec-elt 0}
 \getchunk{defmacro idChar? 0}
 \getchunk{defmacro identp 0}
+\getchunk{defmacro fracpart 0}
 \getchunk{defmacro frameExposureData 0}
 \getchunk{defmacro frameHiFiAccess 0}
 \getchunk{defmacro frameHistListAct 0}
@@ -62285,6 +62361,7 @@ Note that ACL2 does not support FLOATP.
 
 \getchunk{defun hasCorrectTarget 0}
 \getchunk{defun hasOptArgs? 0}
+\getchunk{defun horner 0}
 
 \getchunk{defun ignorep 0}
 \getchunk{defun incActive? 0}
@@ -62630,6 +62707,7 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defun beforeAfter}
 \getchunk{defun BesselI}
 \getchunk{defun besselIback}
+\getchunk{defun BesselIBackRecur}
 \getchunk{defun besselIcheb}
 \getchunk{defun bracketString}
 \getchunk{defun break}
