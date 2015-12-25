@@ -47384,10 +47384,10 @@ found a bug related to this ambiguity so this was renamed.
 
 \end{chunk}
 
-\defun{FloatError}{Format an error string}
-\begin{chunk}{defun FloatError 0}
-(defun FloatError (formatstring arg)
-  (error (format nil formatstring arg)))
+\defmacro{FloatError}
+\begin{chunk}{defmacro FloatError 0}
+(defmacro FloatError (formatstring arg)
+  `(error (format nil ,formatstring ,arg)))
 
 \end{chunk}
 
@@ -47397,7 +47397,21 @@ found a bug related to this ambiguity so this was renamed.
  "(x-.5)*log(x) - x + log(sqrt(2.0*dfPi)) + phiRatapprox(x)"
   (+ (+ (- (* (- x 0.5) (log x)) x)
         (log (sqrt (* 2.0 Pi))))
-     (|phiRatapprox| x)))
+     (phiRatapprox x)))
+
+\end{chunk}
+
+\defun{phiRatapprox}{phiRatapprox}
+\begin{chunk}{defun phiRatapprox}
+(defun phiRatapprox (x)
+ (let ((arg (/ 1 (* x x))))
+  (/
+   (horner
+    '(0.066662907040200753 0.64507302912899211
+      0.67082783834332138 0.12398282342474939) arg)
+   (* x
+    (horner
+     '(1.0 7.9966911236636431 8.0995271894897574 1.4877938810969931) arg)))))
 
 \end{chunk}
 
@@ -47406,7 +47420,7 @@ found a bug related to this ambiguity so this was renamed.
 (defun lnrgamma (x)
  (if (< 20 x)
    (lnrgammaRatapprox x)
-   (log (|gammaRatapprox| x))))
+   (log (gammaRatapprox x))))
 
 \end{chunk}
 
@@ -47830,6 +47844,134 @@ Evaluation of the sum(C(n)*T*(n,x))
 
 \end{chunk}
 
+\defun{rPsiImpl}{rPsiImpl}
+\begin{chunk}{defun rPsiImpl}
+(defun rPsiImpl (n x)
+ (let (skipit sign m)
+  (cond
+   ((not (< 0.0 x))
+     (cond
+       ((zerop (fracpart x))
+         (FloatError "singularity encountered at ~D" x))
+       (t
+        (setq m (mod n 2))
+        (setq sign (expt (- 1) m))
+        (if (equal (fracpart x) 0.5)
+         (setq skipit 1)
+         (setq skipit 0))
+        (* sign
+          (+ (* (expt Pi (+ n 1))
+                (|cotdiffeval| n (* Pi (- x)) skipit))
+             (rPsiImpl n (- 1.0 x)))))))
+   ((eql n 0) (- (rPsiW n x)))
+   (t
+     (* (* (rgammaImpl (float (+ n 1))) (rPsiW n x))
+        (expt (- 1) (mod (+ n 1) 2)))))))
+
+\end{chunk}
+
+\defun{rPsiW}{Amos' w function}
+Amos' w function, with w(0,x) picked to be $-\psi(x)$ for $x>0$
+\begin{chunk}{defun rPsiW}
+(defun rPsiW (n x result)
+ (let (bign fln c a xmin beta alpha nd result)
+  (when (or (not (< 0 x)) (minusp n))
+   (|HardError| "rPsiW not implemented for negative n or non-positive x"))
+  (setq nd 6) ; magic number for number of digits in a word?
+  (setq alpha (+ 3.5 (* 0.40000000000000002 nd)))
+  (setq beta
+   (+ (+ 0.20999999999999999 (* 8.6770000000000001E-6 (- nd 3)))
+      (* 6.0380000000000002E-8 (expt (- nd 3) 2))))
+  (setq xmin (float (+ (floor (+ alpha (* beta n))) 1)))
+  (when (< 0 n)
+    (setq a
+     (min 0 (* (/ 1.0 (float n)) (log (/ double-float-epsilon (min 1.0 x))))))
+    (setq c (exp a))
+    (if (not (< (abs a) 0.001))
+      (setq fln (* (/ x c) (- 1.0 c)))
+      (setq fln (- (/ (* x a) c))))
+    (setq bign (+ (floor fln) 1))
+    ; Amos says to use alternative series for large order if ordinary
+    ; backwards recurrence too expensive
+    (when (and (< bign 15) (< (+ 7.0 x) xmin))
+      (setq result (|PsiAsymptoticOrder| n x bign))))
+  (when (and (not result) (not (< x xmin)))
+    (setq result (|PsiAsymptotic| n x)))
+  (unless result
+    ; ordinary case -- use backwards recursion
+    (setq result (PsiBack n x xmin)))
+  result))
+
+\end{chunk}
+
+\defun{PsiBack}{PsiBack}
+\begin{chunk}{defun PsiBack}
+(defun PsiBack (n x xmin)
+ (let (result x0 xintpart)
+  (setq xintpart (PsiIntpart x))
+  (setq x0 (- x xintpart)) ; frac part of x
+  (setq result (|PsiAsymptotic| n (+ (+ x0 xmin) 1.0)))
+  ; Why not decrement from x?   See Amos p. 498
+  (loop for k from xmin downto xintpart by 1 do
+    (setq result (+ result (/ 1.0 (expt (+ x0 (float k)) (+ n 1))))))
+  result))
+
+\end{chunk}
+
+\defvar{PsiAsymptoticBern}
+The $n^{th}$ derivatives of ln gamma for real $x$, $n = 0,1,\ldots$
+\begin{chunk}{initvars}
+(defvar |$PsiAsymptoticBern|
+  (vector 0.0 0.16666666666666669   (- 0.033333333333333333)
+              0.023809523809523812  (- 0.033333333333333333)
+              0.07575757575757576   (- 0.2531135531135531)
+              1.1666666666666672    (- 7.0921568627450986)
+             54.971177944862163   (- 529.12424242424242)
+           6192.123188405797    (- 86580.253113553103)
+        1425517.166666667           (- 2.729823106781609E7)
+              6.015808739006424E8   (- 1.5116315767092161E10)
+              4.2961464306116675E11 (- 1.371165520508833E13)
+              4.8833231897359325E14 (- 1.9296579341940072E16)
+              8.4169304757368269E17 (- 4.0338071854059463E19)))
+
+\end{chunk}
+
+\defun{PsiAsymptotic}{PsiAsymptotic}
+\begin{chunk}{defun PsiAsymptotic}
+(defun |PsiAsymptotic| (n x)
+ (let (sum factterm xterm xsq xnp1 xn)
+ (declare (special |$PsiAsymptoticBern|))
+  (setq xn (expt x n))
+  (setq xnp1 (* xn x))
+  (setq xsq (* x x))
+  (setq xterm xsq)
+  (setq factterm (/ (/ (rgammaImpl (+ n 2)) 2.0) (rgammaImpl (float (+ n 1)))))
+  ; initialize to 1/n!
+  (setq sum (/ (* (aref |$PsiAsymptoticBern| 1) factterm) xterm))
+  (loop for k from 2 to 22 do
+    (setq xterm (* xterm xsq))
+    (cond
+     ((eql n 0) (setq factterm (/ 1.0 (float (* 2 k)))))
+     ((eql n 1) (setq factterm 1))
+     (t
+      (setq factterm
+       (/ (* (* factterm (float (- (+ (* 2 k) n) 1)))
+             (float (- (+ (* 2 k) n) 2)))
+          (* (float (* 2 k)) (float (- (* 2 k) 1)))))))
+    (setq sum (+ sum (/ (* (aref |$PsiAsymptoticBern| k) factterm) xterm))))
+  (+ (+ (|PsiEps| n x) (/ 1.0 (* 2.0 xnp1))) (* (/ 1.0 xn) sum))))
+
+\end{chunk}
+
+\defun{PsiIntpart}{PsiIntpart}
+\begin{chunk}{defun PsiIntpart 0}
+(defun PsiIntpart (x)
+ (if (minusp x)
+  (- (PsiIntpart (- x)))
+  (floor x)))
+
+\end{chunk}
+
 \chapter{Common Lisp Algebra Support}
 These functions are called directly from the algebra source code.
 They fall into two basic categories, one are the functions that are
@@ -48174,14 +48316,14 @@ up to overflow.  See Hart and Cheney.
 \defun{rlngamma}{The real logGamma function}
 \begin{chunk}{defun rlngamma}
 (defun rlngamma (x)
-  (|lnrgamma| x))
+  (lnrgamma x))
 
 \end{chunk}
 
 \defun{rpsi}{The real Psi function}
 \begin{chunk}{defun rpsi}
 (defun rpsi (n x)
-  (|rPsi| n x))
+  (rPsiImpl n x))
 
 \end{chunk}
 
@@ -62130,6 +62272,7 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defmacro bvec-elt 0}
 \getchunk{defmacro idChar? 0}
 \getchunk{defmacro identp 0}
+\getchunk{defmacro FloatError 0}
 \getchunk{defmacro fracpart 0}
 \getchunk{defmacro frameExposureData 0}
 \getchunk{defmacro frameHiFiAccess 0}
@@ -62340,7 +62483,6 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defun fin 0}
 \getchunk{defun findFrameInRing 0}
 \getchunk{defun flatten 0}
-\getchunk{defun FloatError 0}
 \getchunk{defun fnameExists? 0}
 \getchunk{defun fnameName 0}
 \getchunk{defun fnameReadable? 0}
@@ -62531,13 +62673,14 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defun pfWhileCond 0}
 \getchunk{defun placep 0}
 \getchunk{defun pmDontQuote? 0}
+\getchunk{defun pname 0}
 \getchunk{defun poCharPosn 0}
 \getchunk{defun poGetLineObject 0}
 \getchunk{defun poNopos? 0}
 \getchunk{defun poNoPosition 0}
 \getchunk{defun poNoPosition? 0}
 \getchunk{defun printAsTeX 0}
-\getchunk{defun pname 0}
+\getchunk{defun PsiIntpart 0}
 
 \getchunk{defun qenum 0}
 \getchunk{defun qeset 0}
@@ -63831,6 +63974,7 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defun phParse}
 \getchunk{defun phInterpret}
 \getchunk{defun phIntReportMsgs}
+\getchunk{defun phiRatapprox}
 \getchunk{defun pileCforest}
 \getchunk{defun pileColumn}
 \getchunk{defun pileCtree}
@@ -63870,6 +64014,8 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defun prTraceNames}
 \getchunk{defun prTraceNames,fn}
 \getchunk{defun pSearch}
+\getchunk{defun PsiAsymptotic}
+\getchunk{defun PsiBack}
 \getchunk{defun pspacers}
 \getchunk{defun ptimers}
 \getchunk{defun put}
@@ -63951,6 +64097,8 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defun rgammaImpl}
 \getchunk{defun rlngamma}
 \getchunk{defun rpsi}
+\getchunk{defun rPsiImpl}
+\getchunk{defun rPsiW}
 \getchunk{defun rread}
 \getchunk{defun ruleLhsTran}
 \getchunk{defun rulePredicateTran}
