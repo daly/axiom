@@ -48076,6 +48076,236 @@ The $n^{th}$ derivatives of ln gamma for real $x$, $n = 0,1,\ldots$
 
 \end{chunk}
 
+\defun{cPsiImpl}{cPsiImpl}
+\begin{chunk}{defun cPsiImpl}
+(defun cPsiImpl (n z)
+ (prog (result m bound nterms conjresult y x)
+  (return
+   (progn
+    (setq x (realpart z))
+    (setq y (imagpart z))
+    (cond ((zerop y) (return (rPsiImpl n x)))) ; call real function if real
+    (when (< y 0.0) ; if imagpart(z) negative, take conjugate of conjugate
+      (setq conjresult (cPsiImpl n (complex x (- y))))
+      (return (complex (realpart conjresult) (- (imagpart conjresult)))))
+    (setq nterms 22)
+    (setq bound 10.0)
+    (cond
+      ((< x 0.0)
+        (FloatError "Psi implementation can't compute at ~S " (list n z)))
+      ((and (< 0.0 x) (< bound (abs z)))
+        (return (PsiXotic n (PsiAsymptotic n z))))
+      (t  ; use recursion formula
+       (setq m (ceiling (+ (- (sqrt (- (* bound bound) (* y y))) x) 1.0)))
+       (setq result (complex 0.0 0.0))
+       (loop for k from 0 to (- m 1) do
+         (setq result (+ result (/ 1.0 (expt (+ z (float k)) (+ n 1))))))
+       (return (PsiXotic n (+ result (PsiAsymptotic n (+ z m)))))))))))
+
+\end{chunk}
+
+\defun{PsiXotic}{PsiXotic}
+The $n^{th}$ derivatives of ln gamma for complex $z$, $n=0,1,\ldots$
+requires files rpsi (and dependents), floaterrors
+currently defined only in right half plane until reflection formula works
+\begin{chunk}{defun PsiXotic}
+(defun PsiXotic (n result)
+ (* (* (rgammaImpl (float (+ n 1))) (expt (- 1) (mod (+ n 1) 2))) result))
+
+\end{chunk}
+
+\defun{BesselJ}{BesselJ}
+BesselJ works for complex and real values of v and z
+\begin{chunk}{defun BesselJ}
+(defun BesselJ (v z)
+ (let (arr sum t1 vp1 w arg rz rv n b2 b1)
+  (setq b1 10)  ; Ad hoc boundaries for approximation
+  (setq b2 10)
+  (setq n 50)   ; number of terms in Chebychev series.
+  (cond
+   ; tests for negative integer order
+   ((or (and (floatp v) (zerop (fracpart v)) (minuspl v))
+        (and (complexp v) (zerop (imagpart v)) (zerop (fracpart (realpart v)))
+             (< (realpart v) 0.0)))
+     ; odd or even according to v (9.1.5 A&S)
+     ; $J_{-n}(z)=(-1)^{n} J_{n}(z)$
+     (* (BesselJ (- v) z) (expt (- 1.0) v)))
+   ((or (and (floatp z) (minusp z)) (and (complexp z) (< (realpart z) 0.0)))
+     ; negative argument (9.1.35 A&S) 
+     ; $J_{\nu}(z e^{m \pi i}) = e^{m \nu \pi i} J_{\nu}(z)$
+     (* (BesselJ v (- z)) (expt (- 1.0) v)))
+   ((and (zerop z)
+         (or (and (floatp v) (not (< v 0.0)))
+             (and (complexp v) (zerop (imagpart v)) 
+                  (not (< (realpart v) 0.0)))))
+     ; zero arg, pos. real order
+     (if (zerop v) 1.0 0.0))
+    (t
+      (setq rv (abs v))
+      (setq rz (abs z))
+      (cond
+       ((and (< b1 rz) (< (* b2 rv) rz))   ; asymptotic argument
+         (BesselJAsympt v z))
+       ((and (< b1 rv) (< (* b2 rz) rv))   ; asymptotic order
+         (BesselJAsymptOrder v z))
+       ((and (< rz b1) (< rv b1))          ; small order and argument
+          (setq arg (- (/ (* z z) 4.0)))
+          (setq w (* 2.0 arg))
+          (setq vp1 (+ v 1.0))
+          (setq t1 (chebf01coefmake vp1 w n))
+          (setq sum (car t1))
+          (setq arr (cadr t1))
+          ; if we get NaNs then half n
+          ((lambda ()
+             (loop
+              (cond
+               ((= sum sum) (return nil))
+               (t
+                 (setq n (floor (/ n 2)))
+                 (setq t1 (chebf01coefmake vp1 w n))
+                 (setq sum (car t1))
+                 (setq arr (cadr t1))
+                 t1)))))
+          ; now n is safe, can we increase it (we know that 2*n is bad)?
+          (* (/ (chebstarevalarr arr (/ arg w) n) (cgammaImpl vp1))
+             (expt (/ z 2.0) v)))
+      (t (BesselJRecur v z)))))))
+
+\end{chunk}
+
+Asymptotic functions for large values of z.  See Luke \cite{Luke69a} p. 204
+where 
+{\bf mu} is $4v^2$, {\bf zsqr} is $z^2$, and {\bf zfth}  is $z^4$
+
+\defun{BesselJAsympt}{Asymptotic series for BesselJ}
+Asymptotic series only works when $|v| < |z|$.
+\begin{chunk}{defun BesselJAsympt}
+(defun BesselJAsympt (v z)
+ (let (zfth zsqr mu)
+   (setq mu (* (* 4.0 v) v))
+   (setq zsqr (* z z))
+   (setq zfth (* zsqr zsqr))
+   (* (* (sqrt (/ 2.0 (* Pi z))) (exp (BesselasymptA mu zsqr zfth)))
+      (cos (- (- (BesselasymptB mu z zsqr zfth)
+                 (/ (* Pi v) 2.0))
+              (/ Pi 4.0))))))
+
+\end{chunk}
+
+\defun{BesselasymptA}{BesselasymptA}
+\begin{chunk}{defun BesselasymptA 0}
+(defun BesselasymptA (mu zsqr zfth)
+  (* (/ (- mu 1) (* 16.0 zsqr))
+     (+ (+ 1 (/ (- mu 13.0) (* 8.0 zsqr)))
+        (/ (+ (- (* mu mu) (* 53.0 mu)) 412.0)
+           (* 48.0 zfth)))))
+
+\end{chunk}
+
+\defun{BesselasymptB}{BesselasymptB}
+\begin{chunk}{defun BesselasymptB 0}
+(defun BesselasymptB (mu z zsqr zfth)
+ (let ((musqr (* mu mu)))
+   (+ z
+      (* (/ (- mu 1.0) (* 8.0 z))
+         (+ (+ (+ 1.0 (/ (- mu 25.0) (* 48.0 zsqr)))
+               (/ (+ (- musqr (* 114.0 mu)) 1073.0) (* 640.0 zfth)))
+            (/ (- (+ (- (* (* 5.0 mu) musqr) (* 1535.0 musqr))
+                     (* 54703.0 mu))
+                  375733.0)
+               (* (* 128.0 zsqr) zfth)))))))
+
+\end{chunk}
+
+\defun{BesselJRecur}{BesselJRecur}
+\begin{chunk}{defun BesselJRecur}
+(defun BesselJRecur (v z)
+ (let (w m so)
+  ; boost order. Numerical.Recipes. suggest so:=v+sqrt(n.s.f.^2*v)
+  (setq so (* 15.0 z))
+  ; reduce order until non-zero
+  (loop while (not (zerop (abs (BesselJAsymptOrder so z)))) do
+    (setq so (/ so 2.0)))
+  (when (< (abs so) (abs z))
+    (setq so (+ v (* 18.0 (sqrt v)))))
+  (setq m (+ (floor (abs (- so v))) 1))
+  (setq w (make-array m))
+  (setf (aref w (- m 1)) (BesselJAsymptOrder (- (+ v m) 1) z))
+  (setf (aref w (- m 2)) (BesselJAsymptOrder (- (+ v m) 2) z))
+  (loop for i from (- m 3) downto 0 by 1 do
+    (setf (aref w i)
+      (- (/ (* (* 2.0 (+ (+ v i) 1.0)) (aref w (+ i 1))) z)
+         (aref w (+ i 2)))))
+  (aref w 0)))
+
+\end{chunk}
+
+\defun{BesselJAsymptOrder}{BesselJAsymptOrder}
+
+Asymptotic formula for BesselJ when order is large comes from
+Debye (1909).  See Olver, Asymptotics and Special Functions, p. 134.
+
+Expansion good for $0 <= phase(v) < \pi$
+
+A\&S recommend ``uniform expansion'' with complicated coefficients 
+and Airy function.
+
+Debye's Formula is in 9.3.7,9.3.9,9.3.10 of A\&S
+
+AXIOM recurrence for $u_{k}$
+\begin{verbatim}
+  f(0)==1::EXPR INT
+  f(n)== (t^2)*(1-t^2)*D(f(n-1),t)/2 + (1/8)*integrate( (1-5*t^2)*f(n-1),t)
+\end{verbatim}
+
+\begin{chunk}{defun BesselJAsymptOrder}
+(defun BesselJAsymptOrder (v z)
+ (let (ca8 ca4 ca2 ca tanhalpha alpha sechalpha)
+  (setq sechalpha (/ z v))
+  (setq alpha (acosh (/ 1.0 sechalpha)))
+  (setq tanhalpha (sqrt (- 1.0 (* sechalpha sechalpha))))
+  (setq ca (/ 1.0 tanhalpha))
+  (setq ca2 (* ca ca))
+  (setq ca4 (* ca2 ca2))
+  (setq ca8 (* ca4 ca4))
+  (* (/ (exp (- (* v (- alpha tanhalpha))))
+              (sqrt (* (* (* 2.0 Pi) v) tanhalpha)))
+     (+ (+ (+ (+ (+ (+ 1.0 (/ (* (horner '(-5.0 3.0) ca2) ca)
+                              (* v 24.0)))
+                    (/ (* (horner '(385.0 -462.0 81.0) ca2) ca2)
+                       (* (* 1152.0 v) v)))
+                 (/ (* (* (horner
+                            '(-425425.0 765765.0 -369603.0 30375.0)
+                            ca2)
+                          ca2)
+                       ca)
+                    (* (* (* 414720.0 v) v) v)))
+              (/ (* (horner
+                      '(1.85910725E8 -4.4618574E8 3.4992243E8 
+                        -9.4121676E7 4465125.0)
+                      ca2)
+                    ca4)
+                 (* (* (* (* 3.981312E7 v) v) v) v)))
+           (/ (* (* (horner
+                      '(-1.88699385875E11 5.66098157625E11
+                        -6.1413587235E11  2.84499769554E11
+                        -4.9286948607E10  1.519035525E9)
+                      ca2)
+                    ca4)
+                  ca)
+              (* (* (* (* (* 6.68860416E9 v) v) v) v) v)))
+        (/ (* (* (horner
+                   '(1.023694168371875E15 -3.6852990061387505E15
+                     5.104696716244125E15 -3.36903206826186E15
+                     1.050760774457901E15 -1.2757729835475E14
+                     2.757049477875E12)
+                   ca2)
+                 ca4)
+              ca2)
+           (* (* (* (* (* (* 4.8157949952E12 v) v) v) v) v) v))))))
+
+\end{chunk}
+
 \chapter{Common Lisp Algebra Support}
 These functions are called directly from the algebra source code.
 They fall into two basic categories, one are the functions that are
@@ -48450,7 +48680,7 @@ up to overflow.  See Hart and Cheney.
 \calls{cpsi}{s-to-c}
 \begin{chunk}{defun cpsi}
 (defun cpsi (n z)
-  (c-to-s (|cPsi| n (s-to-c z)) ))
+  (c-to-s (cPsiImpl n (s-to-c z)) ))
 
 \end{chunk}
 
@@ -48459,7 +48689,7 @@ up to overflow.  See Hart and Cheney.
 \calls{rbesselj}{BesselJ}
 \begin{chunk}{defun rbesselj}
 (defun rbesselj (n x)
-  (c-to-r (|BesselJ| n x)) ))
+  (c-to-r (BesselJ n x)) ))
 
 \end{chunk}
 
@@ -48469,7 +48699,7 @@ up to overflow.  See Hart and Cheney.
 \calls{cbesselj}{s-to-c}
 \begin{chunk}{defun cbesselj}
 (defun cbesselj (v z)
-  (c-to-s (|BesselJ| (s-to-c v) (s-to-c z)) ))
+  (c-to-s (BesselJ (s-to-c v) (s-to-c z)) ))
 
 \end{chunk}
  
@@ -48673,7 +48903,7 @@ See Steele Common Lisp 1990 p300
 \defmacro{DFSin}
 Compute a strongly typed doublefloat sin
 See Steele Common Lisp 1990 p304
-\begin{chunk}{defmacro DFSin}
+\begin{chunk}{defmacro DFSin 0}
 (defmacro DFSin (x)
  `(the double-float (sin (the double-float ,x))))
 
@@ -48682,7 +48912,7 @@ See Steele Common Lisp 1990 p304
 \defmacro{DFCos}
 Compute a strongly typed doublefloat cos
 See Steele Common Lisp 1990 p304
-\begin{chunk}{defmacro DFCos}
+\begin{chunk}{defmacro DFCos 0}
 (defmacro DFCos (x)
  `(the double-float (cos (the double-float ,x))))
 
@@ -48691,7 +48921,7 @@ See Steele Common Lisp 1990 p304
 \defmacro{DFTan}
 Compute a strongly typed doublefloat tan
 See Steele Common Lisp 1990 p304
-\begin{chunk}{defmacro DFTan}
+\begin{chunk}{defmacro DFTan 0}
 (defmacro DFTan (x)
  `(the double-float (tan (the double-float ,x))))
 
@@ -48701,7 +48931,7 @@ See Steele Common Lisp 1990 p304
 Compute a strongly typed doublefloat asin. The result is complex if the 
 absolute value of the argument is greater than 1.
 See Steele Common Lisp 1990 p305
-\begin{chunk}{defmacro DFAsin}
+\begin{chunk}{defmacro DFAsin 0}
 (defmacro DFAsin (x)
  `(asin (the double-float ,x)))
 
@@ -48711,7 +48941,7 @@ See Steele Common Lisp 1990 p305
 Compute a strongly typed doublefloat acos. The result is complex if the 
 absolute value of the argument is greater than 1.
 See Steele Common Lisp 1990 p305
-\begin{chunk}{defmacro DFAcos}
+\begin{chunk}{defmacro DFAcos 0}
 (defmacro DFAcos (x)
  `(acos (the double-float ,x)))
 
@@ -48720,7 +48950,7 @@ See Steele Common Lisp 1990 p305
 \defmacro{DFAtan}
 Compute a strongly typed doublefloat atan
 See Steele Common Lisp 1990 p305
-\begin{chunk}{defmacro DFAtan}
+\begin{chunk}{defmacro DFAtan 0}
 (defmacro DFAtan (x)
  `(the double-float (atan (the double-float ,x))))
 
@@ -48742,7 +48972,7 @@ $y = 0$ & $x = 0$ & Origin          & error
 \end{tabular}
 
 See Steele Common Lisp 1990 p306
-\begin{chunk}{defmacro DFAtan2}
+\begin{chunk}{defmacro DFAtan2 0}
 (defmacro DFAtan2 (y x)
  `(the double-float (atan (the double-float ,x) (the double-float ,y))))
 
@@ -48752,7 +48982,7 @@ See Steele Common Lisp 1990 p306
 Compute a strongly typed doublefloat sinh
 \[(e^z-e^{-z})/2\]
 See Steele Common Lisp 1990 p308
-\begin{chunk}{defmacro DFSinh}
+\begin{chunk}{defmacro DFSinh 0}
 (defmacro DFSinh (x)
  `(the double-float (sinh (the double-float ,x))))
 
@@ -48762,7 +48992,7 @@ See Steele Common Lisp 1990 p308
 Compute a strongly typed doublefloat cosh
 \[(e^z+e^{-z})/2\]
 See Steele Common Lisp 1990 p308
-\begin{chunk}{defmacro DFCosh}
+\begin{chunk}{defmacro DFCosh 0}
 (defmacro DFCosh (x)
  `(the double-float (cosh (the double-float ,x))))
 
@@ -48772,7 +49002,7 @@ See Steele Common Lisp 1990 p308
 Compute a strongly typed doublefloat tanh
 \[(e^z-e^{-z})/(e^z+e^{-z})\]
 See Steele Common Lisp 1990 p308
-\begin{chunk}{defmacro DFTanh}
+\begin{chunk}{defmacro DFTanh 0}
 (defmacro DFTanh (x)
  `(the double-float (tanh (the double-float ,x))))
 
@@ -48782,7 +49012,7 @@ See Steele Common Lisp 1990 p308
 Compute the inverse hyperbolic sin.
 \[log\left(z+\sqrt{1+z^2}\right)\]
 See Steele Common Lisp 1990 p308
-\begin{chunk}{defmacro DFAsinh}
+\begin{chunk}{defmacro DFAsinh 0}
 (defmacro DFAsinh (x)
  `(the double-float (asinh (the double-float ,x))))
 
@@ -48793,7 +49023,7 @@ Compute the inverse hyperbolic cos. Note that the acosh function will return
 a complex result if the argument is less than 1.
 \[log\left(z+(z+1)\sqrt{(z-1)/(z+1)}\right)\]
 See Steele Common Lisp 1990 p308
-\begin{chunk}{defmacro DFAcosh}
+\begin{chunk}{defmacro DFAcosh 0}
 (defmacro DFAcosh (x)
  `(acosh (the double-float ,x)))
 
@@ -48804,7 +49034,7 @@ Compute the inverse hyperbolic tan. Note that the acosh function will return
 a complex result if the argument is greater than 1.
 \[log\left((1+z)\sqrt{1/(1-z^2)}\right)\]
 See Steele Common Lisp 1990 p308
-\begin{chunk}{defmacro DFAtanh}
+\begin{chunk}{defmacro DFAtanh 0}
 (defmacro DFAtanh (x)
  `(atanh (the double-float ,x)))
 
@@ -48955,46 +49185,44 @@ See Steele Common Lisp 1990 pp305-307
 
 \section{\enspace{}DoubleFloatMatrix}
 \defmacro{make-double-matrix}{DoubleFloatMatrix qnew function support}
-\begin{chunk}{defmacro make-double-matrix}
+\begin{chunk}{defmacro make-double-matrix 0}
 (defmacro make-double-matrix (n m)
    `(make-array (list ,n ,m) :element-type 'double-float))
 
 \end{chunk}
 
 \defmacro{make-double-matrix1}{DoubleFloatMatrix new function support}
-\begin{chunk}{defmacro make-double-matrix1}
+\begin{chunk}{defmacro make-double-matrix1 0}
 (defmacro make-double-matrix1 (n m s)
-   `(make-array (list ,n ,m) :element-type 'double-float
-           :initial-element ,s))
+ `(make-array (list ,n ,m) :element-type 'double-float :initial-element ,s))
 
 \end{chunk}
 
 \defmacro{daref2}{DoubleFloatMatrix qelt function support}
-\begin{chunk}{defmacro daref2}
+\begin{chunk}{defmacro daref2 0}
 (defmacro daref2 (v i j)
-   `(aref (the (simple-array double-float (* *)) ,v) ,i ,j))
+ `(aref (the (simple-array double-float (* *)) ,v) ,i ,j))
 
 \end{chunk}
 
 \defmacro{dsetaref2}{DoubleFloatMatrix qsetelt! function support}
-\begin{chunk}{defmacro dsetaref2}
+\begin{chunk}{defmacro dsetaref2 0}
 (defmacro dsetaref2 (v i j s)
-   `(setf (aref (the (simple-array double-float (* *)) ,v) ,i ,j)
-          ,s))
+  `(setf (aref (the (simple-array double-float (* *)) ,v) ,i ,j) ,s))
 
 \end{chunk}
 
 \defmacro{danrows}{DoubleFloatMatrix nrows function support}
-\begin{chunk}{defmacro danrows}
+\begin{chunk}{defmacro danrows 0}
 (defmacro danrows (v)
-    `(array-dimension (the (simple-array double-float (* *)) ,v) 0))
+  `(array-dimension (the (simple-array double-float (* *)) ,v) 0))
 
 \end{chunk}
 
 \defmacro{dancols}{DoubleFloatMatrix ncols function support}
-\begin{chunk}{defmacro dancols}
+\begin{chunk}{defmacro dancols 0}
 (defmacro dancols (v)
-    `(array-dimension (the (simple-array double-float (* *)) ,v) 1))
+  `(array-dimension (the (simple-array double-float (* *)) ,v) 1))
 
 \end{chunk}
 
@@ -49004,35 +49232,35 @@ made available at the Spad language level. Note that these vectors
 are 0 based whereas other Spad language vectors are 1-based.
 
 \defmacro{dlen}{DoubleFloatVector Qsize function support}
-\begin{chunk}{defmacro dlen}
+\begin{chunk}{defmacro dlen 0}
 (defmacro dlen (v)
  `(length (the (simple-array double-float (*)) ,v)))
 
 \end{chunk}
 
 \defmacro{make-double-vector}{DoubleFloatVector Qnew function support}
-\begin{chunk}{defmacro make-double-vector}
+\begin{chunk}{defmacro make-double-vector 0}
 (defmacro make-double-vector (n)
  `(make-array (list ,n) :element-type 'double-float))
 
 \end{chunk}
 
 \defmacro{make-double-vector1}{DoubleFloatVector Qnew1 function support}
-\begin{chunk}{defmacro make-double-vector1}
+\begin{chunk}{defmacro make-double-vector1 0}
 (defmacro make-double-vector1 (n s)
  `(make-array (list ,n) :element-type 'double-float :initial-element ,s))
 
 \end{chunk}
 
 \defmacro{delt}{DoubleFloatVector Qelt1 function support}
-\begin{chunk}{defmacro delt}
+\begin{chunk}{defmacro delt 0}
 (defmacro delt (v i)
  `(aref (the (simple-array double-float (*)) ,v) ,i))
 
 \end{chunk}
 
 \defmacro{dsetelt}{DoubleFloatVector Qsetelt1 function support}
-\begin{chunk}{defmacro dsetelt}
+\begin{chunk}{defmacro dsetelt 0}
 (defmacro dsetelt (v i s)
  `(setf (aref (the (simple-array double-float (*)) ,v) ,i) ,s))
 
@@ -62410,7 +62638,20 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defmacro cdlen 0}
 \getchunk{defmacro cdsetaref2 0}
 \getchunk{defmacro cdsetelt 0}
+\getchunk{defmacro dancols 0}
+\getchunk{defmacro danrows 0}
+\getchunk{defmacro daref2 0}
+\getchunk{defmacro delt 0}
+\getchunk{defmacro DFAcos 0}
+\getchunk{defmacro DFAcosh 0}
 \getchunk{defmacro DFAdd 0}
+\getchunk{defmacro DFAsin 0}
+\getchunk{defmacro DFAsinh 0}
+\getchunk{defmacro DFAtan 0}
+\getchunk{defmacro DFAtan2 0}
+\getchunk{defmacro DFAtanh 0}
+\getchunk{defmacro DFCos 0}
+\getchunk{defmacro DFCosh 0}
 \getchunk{defmacro DFDivide 0}
 \getchunk{defmacro DFEql 0}
 \getchunk{defmacro DFExp 0}
@@ -62425,10 +62666,17 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defmacro DFMin 0}
 \getchunk{defmacro DFMinusp 0}
 \getchunk{defmacro DFMultiply 0}
+\getchunk{defmacro DFSin 0}
+\getchunk{defmacro DFSinh 0}
 \getchunk{defmacro DFSqrt 0}
 \getchunk{defmacro DFSubtract 0}
+\getchunk{defmacro DFTan 0}
+\getchunk{defmacro DFTanh 0}
 \getchunk{defmacro DFUnaryMinus 0}
 \getchunk{defmacro DFZerop 0}
+\getchunk{defmacro dlen 0}
+\getchunk{defmacro dsetaref2 0}
+\getchunk{defmacro dsetelt 0}
 \getchunk{defmacro idChar? 0}
 \getchunk{defmacro identp 0}
 \getchunk{defmacro FloatError 0}
@@ -62455,6 +62703,10 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defmacro hashCode? 0}
 \getchunk{defmacro make-cdouble-matrix 0}
 \getchunk{defmacro make-cdouble-vector 0}
+\getchunk{defmacro make-double-matrix 0}
+\getchunk{defmacro make-double-matrix1 0}
+\getchunk{defmacro make-double-vector 0}
+\getchunk{defmacro make-double-vector1 0}
 \getchunk{defmacro qcsize 0}
 \getchunk{defmacro qsabsval 0}
 \getchunk{defmacro qsadd1 0}
@@ -62487,26 +62739,6 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defmacro assq}
 \getchunk{defmacro bvec-setelt}
 \getchunk{defmacro bvec-size}
-\getchunk{defmacro danrows}
-\getchunk{defmacro dancols}
-\getchunk{defmacro daref2}
-\getchunk{defmacro delt}
-\getchunk{defmacro DFAcos}
-\getchunk{defmacro DFAcosh}
-\getchunk{defmacro DFAsin}
-\getchunk{defmacro DFAsinh}
-\getchunk{defmacro DFAtan}
-\getchunk{defmacro DFAtan2}
-\getchunk{defmacro DFAtanh}
-\getchunk{defmacro DFCos}
-\getchunk{defmacro DFCosh}
-\getchunk{defmacro DFSin}
-\getchunk{defmacro DFSinh}
-\getchunk{defmacro DFTan}
-\getchunk{defmacro DFTanh}
-\getchunk{defmacro dlen}
-\getchunk{defmacro dsetaref2}
-\getchunk{defmacro dsetelt}
 \getchunk{defmacro eltU8}
 \getchunk{defmacro eltU16}
 \getchunk{defmacro eltU32}
@@ -62514,10 +62746,6 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defmacro hget}
 \getchunk{defmacro leader?}
 \getchunk{defmacro line?}
-\getchunk{defmacro make-double-matrix}
-\getchunk{defmacro make-double-matrix1}
-\getchunk{defmacro make-double-vector}
-\getchunk{defmacro make-double-vector1}
 \getchunk{defmacro makeMatrixU8}
 \getchunk{defmacro makeMatrix1U8}
 \getchunk{defmacro makeMatrixU16}
@@ -62568,6 +62796,8 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defun asech 0}
 \getchunk{defun axiomVersion 0}
 
+\getchunk{defun BesselasymptA 0}
+\getchunk{defun BesselasymptB 0}
 \getchunk{defun BesselIBackRecur 0}
 \getchunk{defun BooleanEquality 0}
 \getchunk{defun bvec-and 0}
@@ -62990,6 +63220,10 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defun BesselI}
 \getchunk{defun besselIback}
 \getchunk{defun besselIcheb}
+\getchunk{defun BesselJ}
+\getchunk{defun BesselJAsympt}
+\getchunk{defun BesselJAsymptOrder}
+\getchunk{defun BesselJRecur}
 \getchunk{defun bracketString}
 \getchunk{defun break}
 \getchunk{defun breaklet}
@@ -63101,6 +63335,7 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defun copyright}
 \getchunk{defun countCache}
 \getchunk{defun cpsi}
+\getchunk{defun cPsiImpl}
 \getchunk{defun cSearch}
 \getchunk{defun c-to-r}
 
@@ -64153,6 +64388,7 @@ Note that ACL2 does not support FLOATP.
 \getchunk{defun pSearch}
 \getchunk{defun PsiAsymptotic}
 \getchunk{defun PsiBack}
+\getchunk{defun PsiXotic}
 \getchunk{defun pspacers}
 \getchunk{defun ptimers}
 \getchunk{defun put}

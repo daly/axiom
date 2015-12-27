@@ -114,92 +114,6 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
 ;        else
 ;                return s
 
-;--- nth derivatives of ln gamma for complex z, n=0,1,...
-;--- requires files rpsi (and dependents), floaterrors
-;--- currently defined only in right half plane until reflection formula
-;--- works
-
-;--- B. Char, June, 1990.
-
-;cPsi(n,z) ==
-;        x := REALPART(z)
-;        y := IMAGPART(z)
-;        if ZEROP y 
-;        then    --- call real function if real
-;                return rPsi(n,x)
-;        if y<0.0
-;        then    -- if imagpart(z) negative, take conjugate of conjugate
-;                conjresult := cPsi(n,COMPLEX(x,-y))
-;                return COMPLEX(REALPART(conjresult),-IMAGPART(conjresult))
-;        nterms := 22
-;        bound := 10.0
-;        if x<0.0 --- and ABS(z)>bound and ABS(y)<bound
-;        then
-;                FloatError('"Psi implementation can't compute at ~S ",[n,z])
-;---             return cpsireflect(n,x,y,z)
-;        else if (x>0.0 and ABS(z)>bound ) --- or (x<0.0 and ABS(y)>bound)
-;        then
-;                return PsiXotic(n,PsiAsymptotic(n,z))
-;        else            --- use recursion formula
-;                m := CEILING(SQRT(bound*bound - y*y) - x + 1.0)
-;                result := COMPLEX(0.0,0.0)
-;                for k in 0..(m-1) repeat
-;                        result := result + 1.0/((z + float(k))**(n+1))
-;                return PsiXotic(n,result+PsiAsymptotic(n,z+m))
-
-(DEFUN |cPsi| (|n| |z|)
-  (PROG (|result| |m| |bound| |nterms| |conjresult| |y| |x|)
-    (RETURN
-      (PROGN
-        (SETQ |x| (REALPART |z|))
-        (SETQ |y| (IMAGPART |z|))
-        (COND ((ZEROP |y|) (RETURN (rPsiImpl |n| |x|))))
-        (COND
-          ((< |y| 0.0)
-           (SETQ |conjresult| (|cPsi| |n| (COMPLEX |x| (- |y|))))
-           (RETURN
-             (COMPLEX (REALPART |conjresult|)
-                      (- (IMAGPART |conjresult|))))))
-        (SETQ |nterms| 22)
-        (SETQ |bound| 10.0)
-        (COND
-          ((< |x| 0.0)
-           (FloatError "Psi implementation can't compute at ~S "
-               (LIST |n| |z|)))
-          ((AND (< 0.0 |x|) (< |bound| (ABS |z|)))
-           (RETURN (|PsiXotic| |n| (|PsiAsymptotic| |n| |z|))))
-          ('T
-           (SETQ |m|
-                 (CEILING (+ (- (SQRT (- (* |bound| |bound|)
-                                       (* |y| |y|)))
-                                |x|)
-                             1.0)))
-           (SETQ |result| (COMPLEX 0.0 0.0))
-           ((LAMBDA (|bfVar#11| |k|)
-              (LOOP
-                (COND
-                  ((> |k| |bfVar#11|) (RETURN NIL))
-                  ('T
-                   (SETQ |result|
-                         (+ |result|
-                            (/ 1.0
-                               (EXPT (+ |z| (float |k|)) (+ |n| 1)))))))
-                (SETQ |k| (+ |k| 1))))
-            (- |m| 1) 0)
-           (RETURN
-             (|PsiXotic| |n|
-                 (+ |result| (|PsiAsymptotic| |n| (+ |z| |m|)))))))))))
-
-;PsiXotic(n,result) ==
-;        rgamma(float(n+1))*(-1)**MOD(n+1,2)*result
-
-(DEFUN |PsiXotic| (|n| |result|)
-  (PROG ()
-    (RETURN
-      (* (* (rgammaImpl (float (+ |n| 1)))
-            (EXPT (- 1) (MOD (+ |n| 1) 2)))
-         |result|))))
-
 ;cpsireflect(n,z) ==
 ;        m := MOD(n,2)
 ;        sign := (-1)**m
@@ -213,7 +127,7 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
         (SETQ |sign| (EXPT (- 1) |m|))
         (+ (* (* |sign| (EXPT Pi (+ |n| 1)))
               (cotdiffeval |n| (* Pi |z|) 0))
-           (|cPsi| |n| (- 1.0 |z|)))))))
+           (cPsiImpl |n| (- 1.0 |z|)))))))
 
 ;--- c parameter to 0F1, possibly complex
 ;--- z argument to 0F1
@@ -602,220 +516,6 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
 ;--External references:  cgamma, rgamma, chebf01coefmake, chebevalstarsf
 ;-- floatutils
 
-;---BesselJ works for complex and real values of v and z
-;BesselJ(v,z) ==
-;---Ad hoc boundaries for approximation
-;        B1:= 10
-;        B2:= 10
-;        n := 50         --- number of terms in Chebychev series.
-;        --- tests for negative integer order
-;        (FLOATP(v) and ZEROP fracpart(v) and (v<0)) or (COMPLEXP(v) and ZEROP IMAGPART(v) and ZEROP fracpart(REALPART(v)) and REALPART(v)<0.0) =>
-;             --- odd or even according to v (9.1.5 A&S)
-;             --- $J_{-n}(z)=(-1)^{n} J_{n}(z)$
-;             BesselJ(-v,z)*EXPT(-1.0,v)
-;        (FLOATP(z) and  (z<0)) or (COMPLEXP(z) and REALPART(z)<0.0) =>
-;          --- negative argument (9.1.35 A&S) 
-;          --- $J_{\nu}(z e^{m \pi i}) = e^{m \nu \pi i} J_{\nu}(z)$
-;             BesselJ(v,-z)*EXPT(-1.0,v)
-;        ZEROP z and ((FLOATP(v) and (v>=0.0)) or (COMPLEXP(v) and 
-;           ZEROP IMAGPART(v) and REALPART(v)>=0.0)) =>  --- zero arg, pos. real order
-;            ZEROP v => 1.0  --- J(0,0)=1
-;            0.0  --- J(v,0)=0 for real v>0
-;        rv := ABS(v)
-;        rz := ABS(z)
-;        (rz>B1) and (rz > B2*rv) =>  --- asymptotic argument
-;            BesselJAsympt(v,z)
-;        (rv>B1) and (rv > B2*rz) => --- asymptotic order
-;            BesselJAsymptOrder(v,z)
-;        (rz< B1) and (rv<B1) =>       --- small order and argument
-;                 arg := -(z*z)/4.0
-;                 w := 2.0*arg
-;                 vp1 := v+1.0
-;                 [sum,arr] := chebf01coefmake(vp1,w,n)
-;                 ---if we get NaNs then half n
-;                 while not _=(sum,sum) repeat
-;                        n:=FLOOR(n/2)
-;                        [sum,arr] := chebf01coefmake(vp1,w,n)
-;                 ---now n is safe, can we increase it (we know that 2*n is bad)?
-;                 chebstarevalarr(arr,arg/w,n)/cgamma(vp1)*EXPT(z/2.0,v)
-;        true => BesselJRecur(v,z)
-;        FloatError('"BesselJ not implemented for ~S", [v,z])
-
-(DEFUN |BesselJ| (|v| |z|)
-  (PROG (|arr| |sum| |LETTMP#1| |vp1| |w| |arg| |rz| |rv| |n| B2 B1)
-    (RETURN
-      (PROGN
-        (SETQ B1 10)
-        (SETQ B2 10)
-        (SETQ |n| 50)
-        (COND
-          ((OR (AND (FLOATP |v|) (ZEROP (fracpart |v|)) (MINUSP |v|))
-               (AND (COMPLEXP |v|) (ZEROP (IMAGPART |v|))
-                    (ZEROP (fracpart (REALPART |v|)))
-                    (< (REALPART |v|) 0.0)))
-           (* (|BesselJ| (- |v|) |z|) (EXPT (- 1.0) |v|)))
-          ((OR (AND (FLOATP |z|) (MINUSP |z|))
-               (AND (COMPLEXP |z|) (< (REALPART |z|) 0.0)))
-           (* (|BesselJ| |v| (- |z|)) (EXPT (- 1.0) |v|)))
-          ((AND (ZEROP |z|)
-                (OR (AND (FLOATP |v|) (NOT (< |v| 0.0)))
-                    (AND (COMPLEXP |v|) (ZEROP (IMAGPART |v|))
-                         (NOT (< (REALPART |v|) 0.0)))))
-           (COND ((ZEROP |v|) 1.0) ('T 0.0)))
-          ('T
-           (PROGN
-             (SETQ |rv| (ABS |v|))
-             (SETQ |rz| (ABS |z|))
-             (COND
-               ((AND (< B1 |rz|) (< (* B2 |rv|) |rz|))
-                (|BesselJAsympt| |v| |z|))
-               ((AND (< B1 |rv|) (< (* B2 |rz|) |rv|))
-                (|BesselJAsymptOrder| |v| |z|))
-               ((AND (< |rz| B1) (< |rv| B1))
-                (PROGN
-                  (SETQ |arg| (- (/ (* |z| |z|) 4.0)))
-                  (SETQ |w| (* 2.0 |arg|))
-                  (SETQ |vp1| (+ |v| 1.0))
-                  (SETQ |LETTMP#1| (chebf01coefmake |vp1| |w| |n|))
-                  (SETQ |sum| (CAR |LETTMP#1|))
-                  (SETQ |arr| (CADR |LETTMP#1|))
-                  ((LAMBDA ()
-                     (LOOP
-                       (COND
-                         ((= |sum| |sum|) (RETURN NIL))
-                         ('T
-                          (PROGN
-                            (SETQ |n| (FLOOR (/ |n| 2)))
-                            (SETQ |LETTMP#1|
-                                  (chebf01coefmake |vp1| |w| |n|))
-                            (SETQ |sum| (CAR |LETTMP#1|))
-                            (SETQ |arr| (CADR |LETTMP#1|))
-                            |LETTMP#1|))))))
-                  (* (/ (|chebstarevalarr| |arr| (/ |arg| |w|) |n|)
-                        (cgammaImpl |vp1|))
-                     (EXPT (/ |z| 2.0) |v|))))
-               (T (|BesselJRecur| |v| |z|))
-               ('T
-                (FloatError "BesselJ not implemented for ~S"
-                    (LIST |v| |z|)))))))))))
-
-;BesselJRecur(v,z) ==
-;        -- boost order
-;        --Numerical.Recipes. suggest so:=v+sqrt(n.s.f.^2*v)
-;        so:=15.0*z
-;        -- reduce order until non-zero
-;        while ZEROP ABS(BesselJAsymptOrder(so,z)) repeat so:=so/2.0 
-;        if ABS(so)<ABS(z) then so:=v+18.*SQRT(v)
-;        m:= FLOOR(ABS(so-v))+1
-;        w:=MAKE_-ARRAY(m)
-;        SETF(AREF(w,m-1),BesselJAsymptOrder(v+m-1,z))
-;        SETF(AREF(w,m-2),BesselJAsymptOrder(v+m-2,z))
-;        for i in m-3 .. 0 by -1 repeat
-;          SETF(AREF(w,i), 2.0 * (v+i+1.0) * AREF(w,i+1) /z -AREF(w,i+2)) 
-;        AREF(w,0)
-
-(DEFUN |BesselJRecur| (|v| |z|)
-  (PROG (|w| |m| |so|)
-    (RETURN
-      (PROGN
-        (SETQ |so| (* 15.0 |z|))
-        ((LAMBDA ()
-           (LOOP
-             (COND
-               ((NOT (ZEROP (ABS (|BesselJAsymptOrder| |so| |z|))))
-                (RETURN NIL))
-               ('T (SETQ |so| (/ |so| 2.0)))))))
-        (COND
-          ((< (ABS |so|) (ABS |z|))
-           (SETQ |so| (+ |v| (* 18.0 (SQRT |v|))))))
-        (SETQ |m| (+ (FLOOR (ABS (- |so| |v|))) 1))
-        (SETQ |w| (MAKE-ARRAY |m|))
-        (SETF (AREF |w| (- |m| 1))
-              (|BesselJAsymptOrder| (- (+ |v| |m|) 1) |z|))
-        (SETF (AREF |w| (- |m| 2))
-              (|BesselJAsymptOrder| (- (+ |v| |m|) 2) |z|))
-        ((LAMBDA (|bfVar#19| |i|)
-           (LOOP
-             (COND
-               ((COND ((MINUSP |bfVar#19|) (< |i| 0)) (T (> |i| 0)))
-                (RETURN NIL))
-               ('T
-                (SETF (AREF |w| |i|)
-                      (- (/ (* (* 2.0 (+ (+ |v| |i|) 1.0))
-                               (AREF |w| (+ |i| 1)))
-                            |z|)
-                         (AREF |w| (+ |i| 2))))))
-             (SETQ |i| (+ |i| |bfVar#19|))))
-         (- 1) (- |m| 3))
-        (AREF |w| 0)))))
-
-;---Asymptotic functions for large values of z.  See p. 204 Luke 1969 vol. 1.
-
-;--- mu is 4*v**2
-;--- zsqr is z**2
-;--- zfth is z**4
-
-;BesselasymptA(mu,zsqr,zfth) ==
-;        (mu -1)/(16.0*zsqr) * (1 + (mu - 13.0)/(8.0*zsqr) + _
-;                (mu**2 - 53.0*mu + 412.0)/(48.0*zfth))
-
-(DEFUN |BesselasymptA| (|mu| |zsqr| |zfth|)
-  (PROG ()
-    (RETURN
-      (* (/ (- |mu| 1) (* 16.0 |zsqr|))
-         (+ (+ 1 (/ (- |mu| 13.0) (* 8.0 |zsqr|)))
-            (/ (+ (- (EXPT |mu| 2) (* 53.0 |mu|)) 412.0)
-               (* 48.0 |zfth|)))))))
-
-;BesselasymptB(mu,z,zsqr,zfth) ==
-;        musqr := mu*mu
-;        z + (mu-1.0)/(8.0*z) *(1.0 + (mu - 25.0)/(48.0*zsqr) + _
-;                (musqr - 114.0*mu + 1073.0)/(640.0*zfth) +_
-;                (5.0*mu*musqr - 1535.0*musqr + 54703.0*mu - 375733.0)/(128.0*zsqr*zfth))
-
-(DEFUN |BesselasymptB| (|mu| |z| |zsqr| |zfth|)
-  (PROG (|musqr|)
-    (RETURN
-      (PROGN
-        (SETQ |musqr| (* |mu| |mu|))
-        (+ |z|
-           (* (/ (- |mu| 1.0) (* 8.0 |z|))
-              (+ (+ (+ 1.0 (/ (- |mu| 25.0) (* 48.0 |zsqr|)))
-                    (/ (+ (- |musqr| (* 114.0 |mu|)) 1073.0)
-                       (* 640.0 |zfth|)))
-                 (/ (- (+ (- (* (* 5.0 |mu|) |musqr|)
-                             (* 1535.0 |musqr|))
-                          (* 54703.0 |mu|))
-                       375733.0)
-                    (* (* 128.0 |zsqr|) |zfth|)))))))))
-
-;--- Asymptotic series only works when |v| < |z|.
-
-;BesselJAsympt (v,z) ==
-;        pi := dfPi
-;        mu := 4.0*v*v
-;        zsqr := z*z
-;        zfth := zsqr*zsqr
-;        SQRT(2.0/(pi*z))*EXP(BesselasymptA(mu,zsqr,zfth))*_
-;                COS(BesselasymptB(mu,z,zsqr,zfth) - pi*v/2.0 - pi/4.0)
-
-(DEFUN |BesselJAsympt| (|v| |z|)
-  (PROG (|zfth| |zsqr| |mu| |pi|)
-    (RETURN
-      (PROGN
-        (SETQ |pi| Pi)
-        (SETQ |mu| (* (* 4.0 |v|) |v|))
-        (SETQ |zsqr| (* |z| |z|))
-        (SETQ |zfth| (* |zsqr| |zsqr|))
-        (* (* (SQRT (/ 2.0 (* |pi| |z|)))
-              (EXP (|BesselasymptA| |mu| |zsqr| |zfth|)))
-           (COS (- (- (|BesselasymptB| |mu| |z| |zsqr| |zfth|)
-                      (/ (* |pi| |v|) 2.0))
-                   (/ |pi| 4.0))))))))
-
-;---Asymptotic series for I.  See Whittaker, p. 373.
-;--- valid for -3/2 Pi < arg z < 1/2 Pi
-
 ;BesselIAsympt(v,z,n) ==
 ;        i := COMPLEX(0.0, 1.0)
 ;        if (REALPART(z) = 0.0)
@@ -836,6 +536,10 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
 ;        EXP(z)/sqrttwopiz*(1.0 + sum1 ) +_
 ;                EXP(-(float(n)+.5)*dfPi*i)*EXP(-z)/sqrttwopiz*(1.0+ sum2)
 
+
+;defun{BesselIAsympt}{Asymptotic series for BesselJ}
+;Asymptotic series for I.  See Whittaker, p. 373.
+;This is  valid for $\frac{-3}{2}\pi < arg z < \frac{1}{2}\pi$
 (DEFUN |BesselIAsympt| (|v| |z| |n|)
   (PROG (|sqrttwopiz| |term1| |eight| |two| |fourvsq| |sum2| |sum1|
             |i|)
@@ -845,7 +549,7 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
         (COND
           ((EQUAL (REALPART |z|) 0.0)
            (RETURN
-             (* (EXPT |i| |v|) (|BesselJ| |v| (- (IMAGPART |z|)))))))
+             (* (EXPT |i| |v|) (BesselJ |v| (- (IMAGPART |z|)))))))
         (SETQ |sum1| 0.0)
         (SETQ |sum2| 0.0)
         (SETQ |fourvsq| (* 4.0 (EXPT |v| 2)))
@@ -874,102 +578,6 @@ More fixes to BesselJ, T. Tsikas 24 Feb, 1995.
                     (EXP (- |z|)))
                  |sqrttwopiz|)
               (+ 1.0 |sum2|)))))))
-
-;---Asymptotic formula for BesselJ when order is large comes from
-;---Debye (1909).  See Olver, Asymptotics and Special Functions, p. 134.
-;---Expansion good for 0<=phase(v)<Pi
-;---A&S recommend "uniform expansion" with complicated coefficients and Airy function.
-;---Debye's Formula is in 9.3.7,9.3.9,9.3.10 of A&S
-;---AXIOM recurrence for u_{k} 
-;---f(0)==1::EXPR INT
-;---f(n)== (t^2)*(1-t^2)*D(f(n-1),t)/2 + (1/8)*integrate( (1-5*t^2)*f(n-1),t)
-;BesselJAsymptOrder(v,z) ==
-;        sechalpha := z/v
-;        alpha := ACOSH(1.0/sechalpha)
-;        tanhalpha := SQRT(1.0-(sechalpha*sechalpha))
-;    --  cothalpha := 1.0/tanhalpha
-;        ca := 1.0/tanhalpha
-;
-;        Pi := dfPi
-;        ca2:=ca*ca
-;        ca4:=ca2*ca2
-;        ca8:=ca4*ca4
-;        EXP(-v*(alpha-tanhalpha))/SQRT(2.0*Pi*v*tanhalpha)*_
-;        (1.0+_
-;        horner([              -5.0,                3.0],_
-;                                                                ca2)*ca/(v*24.0)+_
-;        horner([             385.0,             -462.0,              81.0],_
-;                                                                ca2)*ca2/(1152.0*v*v)+_
-;        horner([         -425425.0,           765765.0,         -369603.0,             30375.0],_
-;                                                                ca2)*ca2*ca/(414720.0*v*v*v)+_
-;        horner([       185910725.0,       -446185740.0,       349922430.0,        -94121676.0,         4465125.0],_
-;                                                                ca2)*ca4/(39813120.0*v*v*v*v)+_
-;        horner([   -188699385875.0,     566098157625.0,   -614135872350.0,     284499769554.0,    -49286948607.0,      1519035525.0],_
-;                                                                ca2)*ca4*ca/(6688604160.0*v*v*v*v*v)+_
-;        horner([1023694168371875.0,-3685299006138750.0,5104696716244125.0,-3369032068261860.0,1050760774457901.0,-127577298354750.0,2757049477875.0],_
-;                                                                ca2)*ca4*ca2/(4815794995200.0*v*v*v*v*v*v))
-
-(DEFUN |BesselJAsymptOrder| (|v| |z|)
-  (PROG (|ca8| |ca4| |ca2| |ca| |tanhalpha| |alpha| |sechalpha|)
-    (RETURN
-      (PROGN
-        (SETQ |sechalpha| (/ |z| |v|))
-        (SETQ |alpha| (ACOSH (/ 1.0 |sechalpha|)))
-        (SETQ |tanhalpha| (SQRT (- 1.0 (* |sechalpha| |sechalpha|))))
-        (SETQ |ca| (/ 1.0 |tanhalpha|))
-        (SETQ |ca2| (* |ca| |ca|))
-        (SETQ |ca4| (* |ca2| |ca2|))
-        (SETQ |ca8| (* |ca4| |ca4|))
-        (* (/ (EXP (- (* |v| (- |alpha| |tanhalpha|))))
-              (SQRT (* (* (* 2.0 Pi) |v|) |tanhalpha|)))
-           (+ (+ (+ (+ (+ (+ 1.0
-                             (/ (* (horner (LIST (- 5.0) 3.0) |ca2|)
-                                   |ca|)
-                                (* |v| 24.0)))
-                          (/ (* (horner (LIST 385.0 (- 462.0) 81.0)
-                                    |ca2|)
-                                |ca2|)
-                             (* (* 1152.0 |v|) |v|)))
-                       (/ (* (* (horner
-                                    (LIST (- 425425.0) 765765.0
-                                     (- 369603.0) 30375.0)
-                                    |ca2|)
-                                |ca2|)
-                             |ca|)
-                          (* (* (* 414720.0 |v|) |v|) |v|)))
-                    (/ (* (horner
-                              (LIST 1.85910725E8 (- 4.4618574E8)
-                                    3.4992243E8 (- 9.4121676E7)
-                                    4465125.0)
-                              |ca2|)
-                          |ca4|)
-                       (* (* (* (* 3.981312E7 |v|) |v|) |v|) |v|)))
-                 (/ (* (* (horner
-                              (LIST (- 1.88699385875E11)
-                                    5.66098157625E11
-                                    (- 6.1413587235E11)
-                                    2.84499769554E11
-                                    (- 4.9286948607E10) 1.519035525E9)
-                              |ca2|)
-                          |ca4|)
-                       |ca|)
-                    (* (* (* (* (* 6.68860416E9 |v|) |v|) |v|) |v|)
-                       |v|)))
-              (/ (* (* (horner
-                           (LIST 1.023694168371875E15
-                                 (- 3.6852990061387505E15)
-                                 5.104696716244125E15
-                                 (- 3.36903206826186E15)
-                                 1.050760774457901E15
-                                 (- 1.2757729835475E14)
-                                 2.757049477875E12)
-                           |ca2|)
-                       |ca4|)
-                    |ca2|)
-                 (* (* (* (* (* (* 4.8157949952E12 |v|) |v|) |v|) |v|)
-                       |v|)
-                    |v|))))))))
-
 
 ;---  See Olver, p. 376-382.
 ;BesselIAsymptOrder(v,vz) ==
