@@ -1,4 +1,4 @@
-VERSION:="Axiom (August 2014)"
+VERSION:="Axiom (May 2016)"
 
 ##### special paths
 SPD:=$(shell pwd)
@@ -51,10 +51,14 @@ BYE:=bye
 #GCLVERSION=gcl-2.6.8pre2
 #GCLVERSION=gcl-2.6.8pre3 
 #GCLVERSION=gcl-2.6.8pre4
-GCLVERSION=gcl-2.6.8pre7
+#GCLVERSION=gcl-2.6.8pre7
 #GCLVERSION=gcl-cygwin
+#GCLVERSION=gcl-2.6.9
+#GCLVERSION=gcl-2.6.10
+#GCLVERSION=gcl-2.6.11
+GCLVERSION=gcl-2.6.12
 GCLDIR:=${LSP}/${GCLVERSION}
-GCLOPTS="--enable-vssize=65536*2 --disable-xgcl --disable-tkconfig" 
+GCLOPTS="--enable-vssize=65536*2 --disable-xgcl --disable-tkconfig"
 LISP:=lsp
 
 ##### C related variables
