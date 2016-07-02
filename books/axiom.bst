@@ -1,3 +1,4 @@
+% 'algebra' keyword added for Axiom Spad references
 % BibTeX bibliography style `abstract' cloned by Tim Daly for Axiom
 % BibTeX bibliography style `abstract' by David Kotz
 %    modifed from
