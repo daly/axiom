@@ -15,6 +15,7 @@
 ENTRY
   { abstract
     address
+    algebra
     author
     booktitle
     chapter
@@ -593,6 +594,14 @@ FUNCTION {format.comment}
   if$
 }
 
+% TPD added
+FUNCTION {format.algebra}
+{ algebra empty$
+    { "" }
+    { "{\bf Algebra:} " algebra *}
+  if$
+}
+
 % DFK added
 FUNCTION {dfk.stuff}
 { new.block
@@ -601,6 +610,8 @@ FUNCTION {dfk.stuff}
   format.keyword output.quote
 %  new.block
   format.comment output.quote
+%  new.block
+  format.algebra output.quote
 }
 
 % DFK: added a call to dfk.stuff in all entry-type functions below
