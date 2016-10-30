@@ -4,6 +4,785 @@
 \mainmatter
 \setcounter{chapter}{0} % Chapter 1
 
+\chapter{Type Inference and Coercion}
+\section{Introduction}
+
+The Axiom system is centered on a strongly typed abstract datatype
+programming language with multiple inheritance. The compiler for this
+language produces a library of packages of polynomorpic functions and
+parameterized abstract datatypes. The system interpreter provides an
+interface to the compiler and library and supports a subset of the
+Axiom language. The design of the interpreter includes extensive
+datatype inferences and coercion facilities to ease the burden of
+working with a strongly typed language and a library containing over
+1100 Categories, Domains, and Packages.
+
+The Axiom interpreter is unusual because 
+\begin{itemize}
+\item Axiom has an infinite number of datatypes and packages
+\item each generic operation generally has an infinite number of
+interpretations
+\item datatypes and packages are instantiated dynamically in response
+to user input, and
+\item operation interpretation is done by pattern matching on modemaps.
+\end{itemize}
+
+The design philosophy is that the interpreter language equals the
+compiler language minus the constraints. 
+
+This means that declarations are largely optional and that automatic
+datatype conversions may take place when they are deemed appropriate.
+
+In Axiom we use the term {\sl conversion} to mean the transformation
+an object of one datatype into an object of another datatype. A special
+kind of conversion is {\sl coercion}, where we further require that
+transformation is reasonable (usually in an algebraic or 
+non-information-losing sense). Examples of coercions involve changing
+integers into rational numbers, rational numbers into (constant)
+polynomials with rational number coefficients, lists of lists into
+two dimensional arrays, etc.
+
+Conversion is done through two operations, {\bf coerce} and {\bf
+convert} which are otherwise ordinary operations exported by the
+abstract datatypes of the system. The interpreter is allowed to
+perform conversions named {\bf coerce} whenever it determines they are
+necessary. Most coercions are reversible and their application does
+not lose information. An example of a conversion that is not a
+coercion is the transformation of a rational number into a floating
+point number. Having an automatic conversion from an exact to an
+inexact object is not acceptable.
+
+All atomic expressions (as produced by the parser) have default
+datatypes. These are {\bf Boolean}, {\bf Float}, {\bf Integer}, 
+{\bf String}, {\bf Symbol}, and {\bf List(None)} (for an empty list). If
+these are assigned in declared variables or used as arguments to
+functions, coercions are often performed to create objects of other
+datatypes.
+
+Coercion is combined with the {\sl type resolve facility} to
+determine the result datatype of an expression presented to the
+interpreter. Datatypes {\bf T1} and {\bf T2} {\sl resolve} to a
+datatype {\bf T3} if all objects belonging to {\bf T1} and {\bf T2}
+can be coerced to {\bf T3}. In Axiom, the resolve facility is driven
+by a rule system, by information about coercions, and by the structure
+of the datatypes involved.
+
+\section{Overview of the Abstract Datatype System}
+
+It is not within the scope of this chapter to fully discuss the Axiom
+abstract datatype system. This section is an overview of those terms
+and concepts needed to describe the implemention of the interpreter. 
+Other sources are available that contain more detailed discussions. 
+\cite{Jenk81}\cite{Lisk79}\cite{Fort85}\cite{Swee86}
+\cite{Jenk86}\cite{Watt87}
+
+The Axiom library consists of compiled code that creates
+``categories'', ``domains'', and ``packages''. A {\sl domain} is a
+datatype, a {\sl package} is a collection of functions, and a 
+{\sl category} is a collection of operation signatures and attributes, as
+shown below. These are created by special functions called 
+{\sl constructors}, which are generally parameterized.
+
+Domains and packages implement the functions in categories. Categories
+serve to separate the contract from the implementation. However,
+default implementations can be given in categories by assuming the
+existence of other implemented operations. For example, a default
+implementation of binary ``-" can be given by using unary ``-'' and
+binary ``+"".
+
+\subsection{Categories}
+
+A domain is an instance of an abstract datatype specified by one or
+more categories. Categories serve to group together domains with
+common properties (e.g. operations). A basic category in Axiom is {\bf
+Set} which has the definition:
+\begin{verbatim}
+   Set(): Category == with
+     "=" : ($,$) -> Boolean
+     coerce : $  -> Expression
+\end{verbatim}
+
+The syntax means the following. {\bf Set} is a category constructor
+having no parameters. Lines 2 and 3 of the definition present {\sl
+signatures} for the two operations that are exported by {\bf Set}:
+an operation ``$=$'' that takes 2 elements of the set and returns a
+{\bf Boolean}, and an operation {\bf coerce} that takes an element 
+of the set and returns a printable representation of it. The symbol
+``\$'' refers to the set itself. All domains which belong to {\bf Set}
+contain ``$=$'' and {\bf coerce} among their operations (though it is
+possible that they are not implemented).
+
+Categories may be extended. A semigroup is a set that has an
+associative multiplication operation. Given such a mulitplication, it
+is easy to define an exponentiation by positive integers 
+($x**1=x$, $x**2=x*x$, $x**3=x*x**2$,\ldots). The definition of the
+{\bf SemiGroup} constructor in Axiom is
+\begin{verbatim}
+   SemiGroup(): Category == Set with
+     "*" : ($,$) -> $
+     "**" : ($, PositiveInteger) => $
+     associate("*")
+\end{verbatim}
+
+The last line of this definition presents an {\sl attribute} declaring
+that multiplication is associative. Attributes declare properties of
+the operations or the datatype.
+
+As an example, {\bf Integer} belongs to {\sl SemiGroup} which means 
+that it should have everything from {\bf Set} plus the listed
+mutiplication and exponentiation operators. Multiplication is 
+asserted to be associative and so this may be assumed for {\bf Integer}.
+If a category {\bf C2} extends a category {\bf C1}, any domain that
+belongs to {\bf C2} also belongs to {\bf C1}.
+
+Categories may be parameterized.
+\begin{verbatim}
+   ListCategory(S: Set): Category == Set with
+     first : $ -> $
+     rest :  $ -> $
+     null :  $ -> Boolean
+     . . .
+\end{verbatim}
+presumably describes the operations and attributes that any abstract
+datatype that purports to act like a linked list should have. The
+parameter {\bf S} can be any domain that belongs to {\bf Set}. If
+we defined a special version of this
+\begin{verbatim}
+   SemiGroupListCategory(S: SemiGroup): Category == Set
+     with
+       first : $ -> $
+       rest :  $ -> $
+       null :  $ -> Boolean
+       . . .
+\end{verbatim}
+then {\bf S} must have been explicitly declared to belong to 
+{\bf SemiGroup}. Category membership is by name: a domain having the
+operations and attributes of {\bf SemiGroup} does not belong to this
+category unless it has been explicitly declared to belong to 
+{\bf SemiGroup} or one of its extensions.
+
+Categories allow multiple inheritance.
+\begin{verbatim}
+   FiniteList(S: Set): Category ==
+     Join(Finite, ListCategory(S))
+\end{verbatim}
+defines a category constructor that contains all operation signatures
+and attributes from both the categories {\bf Finite} and
+{\bf ListCategory(S)}.
+
+\subsection{Domains}
+
+Domains are created by domain constructors and are objects. They
+provide a representation for an instance of an abstract datatype,
+implement the operations of the categories to which they belong, and
+presumably satisfy the attributes of the categories. The
+representation of a domain does not depend at all on the categories to
+which the domain belongs.
+
+In the implementation of {\bf Integer}, the following category definition
+is given and specifies the behavior of the domain:
+\begin{verbatim}
+   Integer(): Join(UniqueFactorizationDomain,
+     EuclideanDomain, OrderedRing, DifferentialRing)
+       with
+         oddp : $ -> Boolean
+         random : () -> $
+         numberOfDigits : ($,$) -> $
+         abs : $ -> $
+         canonicalUnitNormal
+\end{verbatim}
+
+The category of {\bf Integer} is not one named category but, instead,
+is composed of several pieces. The full category is that obtained by
+joining 4 named categories, 4 additional operations, and 1 additional
+attribute. Note, though, that {\bf Integer} belongs to each of the 4
+named categories, {\sl plus} their ancestors. In particular, 
+{\bf Integer} is a {\bf SemiGroup} because it is a {\bf DifferentialRing},
+which is a {\bf Ring}, which is a {\bf SemiGroup}. In fact, the 
+{\bf Join} creates several paths back to the category {\bf SemiGroup}. 
+{\bf Integer} may be used anywhere a {\bf SemiGroup} is required.
+
+Domains may provide functions for objects other than those which they
+create. For example, {\bf RationalNumber} implements a ``$/$'' for
+two {\bf Integer} arguments.
+
+Two domain constructors that are particularly useful in representing
+other domains are {\bf Record} and {\bf Union}. A record is similar to
+structures of the same name in many other languages: it has one or
+more fields accessed via selector names. The objects in the fields can
+be of any datatype. The construtor {\bf Union} creates 
+{\sl discriminated} unions: an object of {\bf Union(Integer,String)}
+belongs either to the {\bf Integer} branch or the {\bf String} branch
+of the union. The {\bf case} function is used to test for membership
+in branches.
+
+The constructor {\bf Mapping} creates the datatypes of functions.
+Declaring {\bf oddp : Mapping(Boolean,Integer)} states that {\bf oddp}
+is a function taking one integer argument and returning a boolean.
+A convenient alternative notation for this is 
+{\bf oddp:~Integer~$\rightarrow$~Boolean}. Functions are first-class
+objects and can be passed to other functions.
+
+The Axiom language design completely separates the concrete 
+implementation inheritance from the abstract specification inheritance.
+Domains can inherit implementations from their representations, but
+the external view of them is only determined by the categories to
+which they belong. The idea of {\sl subtype} in languages such
+Trellis/Owl\footnote{Trellis is a trademark of Digital Equipment
+Corporation} \cite{Scha86} is replaced in Axiom by the two notions of category
+and domain.
+
+In addition to providing an organizational hierarchy, categories allow
+Axiom to have extra information about domains. Thus, for example, the
+compiler knows where operations will be located in domains and can
+compile efficient function calls. This information is part of a
+structure associated with each operation called a {\sl modemap}.
+
+\subsection{Packages}
+
+A package is a special kind of domain in that it provides no new
+objects to the system (other than the package itself). It consists of
+a category listing operations and attributes and implementations of
+the operations. Because they may be parameterized, packages can be
+used to implement algorithms at their most natural level of
+abstraction. For example, a repeating-squaring algorithm may be
+contained in a package that is parameterized by a domain that is a
+{\bf SemiGroup}.
+
+Packages provide an excellent vehicle to implement both
+domain-specific and category-general algorithms. They can be used to
+implement algorithms that are not included in other domains for
+reasons of convenience or necessity. For example, the repeated squaring
+algorithm and the integration algorithms are implemented in
+packages. They also require extra work by the interpreter because
+argument datatypes give no simple clue to the possible location of a
+package function. For example, in the expression $2+9$ the operation
+``$+$'' is found in the domain {\bf Integer}, which is the common
+datatype of the two arguments. However, the function {\bf solve} in
+{\tt solve(x**3-1,x)} is not present in either the domain 
+{\bf Polynomial(Integer)} of the first argument or the domain {\bf Symbol}
+of the second. This, along with the last example of the previous
+section, demonstrates the need for a systematic search mechanism of
+the Axiom library.
+
+\subsection{Modemaps}
+
+A {\sl modemap} is a syntactic specification of an operation. It gives
+the name of the operation, source and target datatypes for its
+parameters, and the name of the datatype or package exporting the
+operation. For example, the modemap
+\begin{verbatim}
+   oddp : Integer -> Boolean from Integer
+\end{verbatim}
+specifies an operation from type {\sl Integer} which takes an integer
+argument and returns a boolean value. The ``from''-clause indicates
+the {\sl domain of implementation} of the operation (in this case,
+{\bf Integer}).
+
+When the datatype or package is parameterized, the conditions on their
+parameters appear in an ``if''-clause for the modemap. For example,
+every domain created by domain constructor {\bf Matrix} exports a
+trace operation:
+\begin{verbatim}
+   trace: Matrix(R) -> $ if R has Ring from Matrix(R)
+\end{verbatim}
+
+The domain constructor {\bf Matrix} takes one parameter {\bf R}
+which is required to belong to the category {\bf Ring}.
+
+Operations may also be conditionally exported by a domain constructor.
+For example, domains created by {\bf Matrix} export a {\sl {\bf determinant}}
+operation only if the homogeneous multiplication ``*'' in the underlying
+domain is commutative, that is, {\bf R} has {\sl {\bf commutative("*")}}.
+The modemap for {\sl {\bf determinant}} is
+\begin{verbatim}
+   determinant: Matrix(R) -> $ if R has Ring
+     and R has commutative("*") from Matrix(R)
+\end{verbatim}
+
+Similarly, datatypes creaated by {\bf Matrix} export an {\sl {\bf inverse}}
+operation only if their argument domain belongs to {\bf Field}. Since
+the requirement ``{\bf R} has {\bf Field}'' implies
+``{\bf R} has {\bf Ring}'' the modemap for {\sl {\bf inverse}} is
+\begin{verbatim}
+   inverse: Matrix(R) -> Union(R,"failed")
+      if R has Field from Matrix(R)
+\end{verbatim}
+
+The collection of modemaps from all abstract datatypes and packages
+constitutes the {\sl global modemap database} for Axiom. To standardize
+the presentation of modemaps, arguments and other parameters are 
+prefaced by ``pattern variables'', here called {\bf *1}, {\bf *2}, etc.
+The resulting form of the modemap for {\bf Matrix} {\sl {\bf inverse}}
+in the modemap database is, for example,
+\begin{verbatim}
+   inverse: *1 -> Union(*1,"failed")
+      if *1 is Matrix(*2) and *2 has Field from *1
+\end{verbatim}
+
+In addition to this general modemap database, each domain or package has
+a {\sl local modemap database} for all its exported operations. Note
+that the pattern variables and ``if''-clauses of the above global
+modemaps depend on the parameters to a domain or package constructor.
+For a domain or package itself, all parameters to the constructor are
+known. Thus local modemaps have no patterns. Predicates reduce to
+{\sl true} or {\sl false}. All modemaps in a local modemap database 
+for a domain or package {\bf D} therefore have the general form
+\begin{verbatim}
+   f: S -> T if true from D
+\end{verbatim}
+
+Those having a predicate of {\tt false} simply do not exist for a
+given domain or package. For example, {\bf Matrix(RationalNumber)}
+will have an {\sl {\bf inverse}} operation whereas {\bf Matrix(Integer)}
+will not, since {\bf RationalNumber} is a field but {\bf Integer} is not.
+
+\subsection{Interpretation}
+
+The role of the interpreter is to evaluate input expressions entered
+by the user. In addition to computations, these expressions may be
+declarations, function definitions, or system commands. A value in Axiom
+is described by a pair $<a$,A$>$ where $a$ is an object and A is its type.
+
+Evaluation of an operator-operand expression $f(x,y,\ldots)$,
+with $n$ $(n > 1)$ arguments $x,y,\ldots$, is done in a bottom-up
+manner. The interpreter will evaluate the arguments to produce a 
+corresponding $n$-tuple of argument values $<a$,A$>$, $<b$,B$>$,
+$\ldots$. At this point an attempt will be made to select an
+applicable modemap for $f$. If this modemap has a return type of {\bf T},
+$f$ is applied to the (possibly coerced) arguments to yield a result $t$
+and subsequent value pair $<t$,T$>$.
+
+\subsection{Modemap Selection}
+
+Given a function call $f(x,y,\ldots)$ and evaluated arguments $<a$,A$>$,
+$<b$,B$>$, $\ldots$ as in the previous section, the interpreter 
+tries to find an appropriate $f$ to apply. The first attempt involves
+constructing a list of the domains A, B, ... of the evaluated arguments,
+plus the target type of the function call, if it exists,\footnote{
+As an example of a target type, consider the expression 
+{\tt m:Matrix(Integer):=f(x,y,z)}. The target type of the function
+call is {\tt Matrix(Integer)}.}
+plus those types contained in any of the argument types if they are
+constructed from {\bf Record}, {\bf Union}, or {\bf Mapping}. Duplicates
+are removed from the list and domains and packages in the list are
+searched for an applicable $f$. If a modemap is found of the form
+\begin{verbatim}
+   f: (A,B,...) -> T from C
+\end{verbatim}
+with arity $n$, for some {\bf T} and {\bf C}, the function is gotten
+from {\bf C} and applied to $a,b,\ldots$ to yield a result {\sl t}
+and subsequent value pair $<t$,T$>$.
+
+This kind of search for an applicable $f$ generalizes the idea of a 
+{\sl controlling object} in a function call \cite{Lisk79}\cite{Scha86}. 
+In Axiom, though,
+the arguments in a function call need not give any hint to the actual
+location of the function to be applied. If there is no applicable 
+modemap to be found among the argument domains of a function, a two-stage
+search for a suitable modemap is made in the global modemap database. A
+set $M$ of candidate modemaps is constructed, each of the form:
+\begin{verbatim}
+   f:(D,E,...) -> T if p from C
+\end{verbatim}
+for some result type {\bf T} and domain of implementation {\bf C},
+each of arity $n$ and each generally containing pattern variables and
+predicates $p$. The set $M$ is partitioned into two subsets: those
+modemaps coming from domains or packages whose names contain those of
+any of the arguments of the function, and those that do not. The
+modemaps in the first subset are examined for applicability and, if
+one is found, it is returned. Otherwise, those in the second subset
+are checked for applicability.
+
+At first this partitioning may seem odd, but it reflects a naming
+convention for domains and packages in the Axiom library. As an 
+example, the constructor {\bf ListPackage1} takes one {\bf Set}
+argument and implements several functions that could be but are not
+now implemented in the {\bf List} domain. The constructor
+{\bf ListPackage2} takes two domain arguments, each belonging to the
+category {\bf Set}. The functions in this package implement operations
+that requires lists with two different element types. For example,
+the function
+\begin{verbatim}
+   map: (S -> T, List(S)) -> List(T)
+\end{verbatim}
+which maps a function from {\bf S} to {\bf T} across the elements
+of {\bf List(S)}, producing an object of {\bf List(T)}, is implemented
+in {\bf ListPackage2(S,T)}. Looking at the modemaps in the first
+partition of $M$ reflects an extension of the search method that
+looks for applicable functions in the domains of the function 
+arguments. In the future we anticipate using attributes in such
+associated packages to determine the first subset of the general
+candidate modemaps. That is, {\bf ListPackage2} will contain the
+attribute {\bf associated("List")} in its category.
+
+For our purposes here, it suffices to regard the predicate of a
+modemap as a conjunction of simple predicates of two kinds:
+\begin{verbatim}
+   X is Y
+   X has Y
+\end{verbatim}
+
+Predicates of the first kinds state that pattern $X$ matches
+only the explicit domain {\tt Y}. If a modemap only has predicates
+of the first kind, patterns are replaced by the domain or package
+names to produce a new modemap free of patterns.
+
+When the modemap has predicates of the second kind, substitutions
+are sought for the pattern variables such that the predicate is
+satisfied. Here {\tt Y} is a category or an attribute. Pattern
+variables are given initial substitutions based on the value pairs
+of the arguments. Any pattern variable $X$ for which there is a 
+predicate ``$X$ is {\tt Y}'' has {\tt Y} assigned as a {\sl permanent}
+substitution. Other substitutions are labeled {\sl tentative}. To
+satisfy the predicate, any or all the operations of {\sl coercing},
+{\sl resolving}, and {\sl forcing} (see below) may be necessary. As
+above, if pattern variable $X$ has permanent substitution {\tt Y},
+any argument value of $f$ of type {\bf Z} must be coerced to type {\tt Y}.
+
+The {\sl resolve} of two types {\bf T1} and {\bf T2} will always succeed.
+It produces a third type {\bf T3} to which all objects of type {\bf T1}
+and {\bf T2} can be coerced. The type {\bf Any} is used for {\bf T3}
+if a less general type cannot be found. Resolving is necessary to use 
+a modemap with homogeneous arguments. For example, the modemap
+\begin{verbatim}
+   "+":(*1,*1) -> *1 if *1 has AbelianMonoid from *1
+\end{verbatim}
+is used for addition in most algebraic domains in Axiom. Given an
+expression $1+(2/3)$, a bottom-up analysis will first produce
+$<$1,Integer$>$ and $<$2/3,RationalNumber$>$ as the values of the
+two operands of ``$+$''. The resolve of {\bf Integer} and
+{\bf RationalNumber} is defined to be {\bf RationalNumber}. This
+causes the integer object $1$ to be coerced to the rational number
+object $1/1$. {\bf RationalNumber} now matches *1 in the above
+modemap, the predicate evaluates to true, and the corresponding
+function is gotten from {\bf RationalNumber} and applied to produce
+the result $5/3$ and pair $<$5/3,RationalNumber$>$.
+
+A {\sl force} is an operation performed on one or more types to satisfy
+a predicate. For example, the predicate ``*1 has {\bf Field}'' where
+*1 has a tentative substitution {\bf Integer} results in the forcing
+of {\bf Integer} to {\bf RationalNumber} by the application of
+{\bf QuotientField}, i.e. {\bf QuotientField(Integer)} is equivalent
+to {\bf RationalNumber}. As another example, $x$ has default type
+{\bf Symbol}. When appearing in a sum (e.g. $x+1$), the modemap of $x$
+requires its argument to be from a domain which belongs to the category
+{\bf AbelianMonoid}. As a result, {\bf Symbol} is forced to 
+{\bf Polynomial(Integer)}.
+
+A list of all applicable modemaps is produced together with a list of
+required coercions on the source parameters. Duplicates and modemaps
+subsumed by others are discarded. Each modemap is assigned a cost based
+on the required coercions and the target type of the operation. By
+definition of the cost function, any modemap which directly matches
+the argument types (e.g. {\bf A=D}, {B=E}, etc.) will have the 
+cheapest cost.
+
+\subsection{Ambiguity}
+
+Two remaining modemaps are said to be {\sl ambiguous} unless there are
+coercions to and from the respective substitution datatypes for the
+pattern variables *1,*2,... . If there are no ambiguities, the cheapest
+modemap is selected and applied.
+
+As a practical matter, users can always use a ``package call'' to avoid
+ambiguities, e.g. {\tt x *\$D y} and {\tt foo\$D(x,y)} direct the
+interpreter to apply the functions ``*'' and {\sl foo} from the 
+domain or package {\bf D}. Package calling is the only way to identify
+uniquely functions of no arguments if they are ambiguous.
+
+\subsection{Modes}
+
+If the explicit conversion {\tt p::P} or {\tt p::P(?)} is given, 
+{\tt p} is converted to a polynomial. The datatype of coefficients
+may be any domain which satisfies the categorical requirements of the
+argument to the domain constructor {\tt Polynomial}. The form {\tt P(?)}
+is a {\sl mode} specification rather than a {\sl type} specification: 
+the interpreter is free to choose what replaces the {\tt ?}.
+
+A mode is a partial type specification in that zero or more arguments
+in a domain constructor call are replaced by {\tt ?}. The process
+of {\sl merging} takes a type {\bf T1} and a mode {\bf M} and
+determines type substitutions for the {\tt ?}'s in {\bf M} to 
+create a new type {\bf T2} to which {\bf T1} is coercable. For example,
+the merger of {\bf RationalNumber} and {\bf Polynomial(?)} is
+{\bf Polynomial{RationalNumber}}. If the mode {\bf M} has no {\tt ?}'s,
+it is a type and the merger will only succeed if {\bf T1} is coercable
+to {\bf M}. Thus merging a type and a mode may fail, unlike resolving
+two types. If {\bf M} is simply {\tt ?}, then the result of the merger
+is {\bf T1}.
+
+Axiom now only supports modes with at most one {\tt ?}, and that
+must be in the innermost constructor call position (e.g.
+{\bf List(Polynomial(?))}. In our experience, this restriction has
+not seemed burdensome, though a future area of research might be the
+extension of the merging process to more general modes.
+
+\section{The Coerce Facility}
+
+Our goal in the design of the coerce facility is to have as much as
+possible controlled by modemap selection of compiled Axiom
+functions. This allows the domain and package writer maximum control
+over the behaviour of the interpreter and removes the requirement of
+having a system developer tune the interpreter for dealing with new
+datatypes. The coerce facility has several components.
+
+\subsection{Coerce by Function}
+
+The interpreter does modemap selection for an operation named
+{\sl {\bf coerce}} that has the appropriate argument and target
+types. This is the easist way for a programmer to control the
+coerce facility. For example, the category {\bf Ring} provides
+a modemap
+\begin{verbatim}
+   coerce: Integer -> R from R
+\end{verbatim}
+where {\bf R} is the ring being defined. Thus any ring has a coercion
+from {\bf Integer} and, in fact, this operation has a default 
+categorical definition.
+
+Coercions can sometimes be defined in domains but are often defined in
+packages. A coercion of the form
+\begin{verbatim}
+   coerce: Polynomial(QuotientField(R)) ->
+     QuotientField(Polynomial(R))
+       if R has IntegralDomain
+\end{verbatim}
+would typically be defined in a package parameterized by the domain
+{\bf R}. On the other hand, it is not feasible to have so many 
+explicit coercions being written and, in fact, there are general
+methods that will perform these kinds of coercions.
+
+It is not now possible to define a coercion of the form
+\begin{verbatim}
+   coerce: List(S) -> List(T)
+\end{verbatim}
+in the domain constructor {\bf List}. This is because {\bf List} is
+parameterized by only one set ({\bf S} or {\bf T}) and the modemap
+cannot, therefore, be part of the category of {\bf List}. Such an
+explicit coercion can be provided in a package, but is, in fact,
+handled by the general mechanism described in the next section.
+
+\subsection{Coerce by Mapping}
+
+When the interpreter encounters a coercion of the form
+\begin{verbatim}
+   D(T1) -> D(T2)
+\end{verbatim}
+where {\bf D} is a domain constructor with a parameter (for reasons
+of exposition, we here omit the case of {\bf D} having multiple
+parameters), it looks for a function
+\begin{verbatim}
+   map: (T1 -> T2, D(T1)) -> D(T2)
+\end{verbatim}
+that takes a function from {\bf T1} to {\bf T2} and an object of
+{\bf D(T1)} and produces an object of {\bf D(T2)}. It then creates
+a function stub that coerces objects of {\bf T1} to those of {\bf T2}
+and passes it to {\sl {\bf map}}, along with the original argument.
+
+Since the function {\sl {\bf map}} is part of the library of Axiom
+compiled code, it allows the package writer to automatically provide
+an interpreter mechanism of ``lifting'' coercions from {\bf T1} to
+{\bf T1} to {\bf D(T1)} and {\bf D(T2)}.
+
+\subsection{Coerce by Internal System Code}
+
+Some special cases of coercions are handled by internal system code
+rather than compiled Axiom code. These typically involve polynomials
+where the variable ordering is changed or distributed across a tower
+of parameterized domains. It will eventually be moved into Axiom code
+as the pattern matching facilities are improved.
+
+Another case that is now handled internally involves rearrangement
+of a tower of paramterized domains. The domain constructor {\bf Gaussian}
+creates domains with objects similar to the complex numbers in that they
+contain real and imaginary parts. The coercion
+\begin{verbatim}
+   Gaussian(Polynomial(RationalNumber)) ->
+      QuotientField(Polynomial(Gaussian(Integer)))
+\end{verbatim}
+is performed in the following steps. The type {\bf RationalNumber}
+is changed into the equivalent type {\bf QuotientField(Integer)} and
+the {\bf QuotientField} is bubbled to the top of the original type to
+get {\bf QuotientField(Gaussian(Polynomial(Integer)))}. This new type
+and the old target now have the same top level constructor 
+({\bf QuotientField}) and the coerce facility is called recursively
+on the underlying domains {\bf Gaussian(Polynomial(Integer))} and
+{\bf Polynomial(Gaussian(Integer))}.
+
+\subsection{Coercion of Algebraic Constants}
+
+Several categories specify the existence of constants. For example,
+{\bf AbelianMonoid} specifies the operation ``$+$'':\$ $\rightarrow$ \$'' and
+the constant $0:\$$. If {\bf T1} and {\bf T2} each belong to a common
+category with specified constants and the object of {\bf T1} to be
+coerced is one of the constants, the corresponding constant in {\bf T2}
+may be extacted and returned.
+
+\subsection{Retraction}
+
+A retraction is a coercion of an object of a domain to a more specific
+(degenerate) domain. Unlike other forms of coercion where the target
+type is known, retraction involves examining an operand pair $<t$,T$>$
+to see if there exists a degenerate form of {\bf T} to which $t$ can
+be coerced. For example, $<$7/1,RationalNumber$>$ retracts to 
+$<$7,Integer$>$ and $<$1,Polynomial(Integer)$>$ retracts to $<$1,Integer$>$.
+Retraction can occur multiple times, so arbitrarily long sructures collapse
+to their simplest forms, e.g. $<$1,Polynomial(RationalNumber)$>$ to 
+$<$1,Integer$>$.
+
+If no applicable modemap is found in modemap selection, retraction is
+done on the arguments and then selection is attempted again. Retraction
+is also attempted when a coercion is requested from a domain to its
+underlying domain. For example, if {\tt p} is an element of
+{\bf Polynomial(Integer)}, the statement {\tt p::I} will cause the
+interpreter to try to retract {\tt p} to an element of {\bf Integer}.
+
+For the most part, retraction can be accomplished by functions in the
+Axiom library. The category {\bf RetractWithUnderDomain(R)} specifies
+two operations
+\begin{verbatim}
+   retractable? : $ -> Boolean
+   retract :      $ -> R
+\end{verbatim}
+
+In our example of polynomials above, the function {\sl {\bf retractable?}}
+would be called to see if the object was a constant polynomial. If the
+result was {\sl true}, {\sl {\bf retract}} can be called to extract the
+constant.
+
+\subsection{Coercion Query}
+
+There are situations where one wishes to know ahead of time whether it
+is possible to coerce an object of type {\bf T1} to one of type 
+{\bf T2}. The Axiom interpreter provides this information, for example, to
+the type resolve and modemap selection facilities. The facility is
+used when one needs to know absolutely when a coercion will be
+successful. An answer of ``no'', however, does not guarantee that a
+coercion could not be performed for specific data. For example the
+system will respond ``no'' when asked whether an object of 
+{\bf Polynomial(Integer)} can be coerced to an object of {\bf Integer}.
+As we saw above, though, retractions can be performed for constant
+polynomials.
+
+\section{The Resolve Facility}
+
+The resolve facility is used to determine a type {\bf T3} to which two
+types {\bf T1} and {\bf T2} can be coerced. It is used when an
+operation has homogeneous arguments (such as ``$+$'') or when a
+statement has several exit points and they must all return the same
+type ({\tt then} and {\tt else} clauses of an {\tt if} statement, or
+multiple {\tt return} statements in a function).
+
+The resolve facility is symmetric: {\tt resolve({\bf T1},{\bf T2})} $=$
+{\tt resolve({\bf T2},{\bf T1})}. The resolve facility is always successful
+because type {\bf Any} is returned if a less general type cannot be found.
+{\bf Any} is represented by a record with two components, the first being
+the original type of the object and the second being the object itself.
+Thus anything can be coerced to an object of type {\bf Any} and
+{\tt resolve({\bf Any},{\bf T})} $=$ {\bf Any} for all {\bf T}.
+
+Two other types have special resolve rules. Type {\bf Void} has but 
+one object and is the type returned by such operations as variable
+declaration, function definition, {\tt if} statements without {\tt else}
+clauses and {\tt repeat} loops. Several functions also return the object
+of type {\bf Void}, including those that display things in two dimensional
+algebaic, 
+TeX\footnote{TeX is a trademark of the American Mathematical Society} 
+and FORTRAN forms. Like {\bf Any}, {\tt resolve({\bf Void},{\bf T})}
+$=$ {\bf Void} for all {\bf T}. Type {\bf Exit} is used for {\tt return}
+statements and error statements. Its rule is 
+{\tt resolve({\bf Exit},{\bf T})} $=$ {\bf T} for all {\bf T}.
+
+After some checks for special cases, the resolve facility has three
+components.
+
+\subsection{Resolve by Coercion Query}
+
+If {\bf T1} $=$ {\bf T2}, then the resolve of the pair is just {\bf T1}.
+If {\bf T1} can be coerced to {\bf T2} and {\bf T2} cannot be coerced to
+{\bf T1}, then {\tt resolve({\bf T1},{\bf T2})} $=$ {\bf T2}. If {\bf T1}
+and {\bf T2} are coercable to one another, an arbitrary but canonical
+choice is made and returned.
+
+\subsection{Resolve by Rules}
+
+The interpreter has an internal database of rules which it tries to use
+to resolve two types. The rules are not complete, as they only attempt
+to take care of cases that cannot be dealt with in a more general way.
+Almost all of the rules deal with polynomials. For example, one rule is
+\begin{verbatim}
+   resolve(Polynomial(T1),UnivariatePoly(x,T2))=
+      resolve(Polynomial(T1),T2)
+\end{verbatim}
+
+The variable of {\bf UnivariatePoly} can be absorbed into the general
+constructor {\bf Polynomial} and then the resolve facility is called
+again with different arguments. The second call may or may not use
+the rule system. 
+
+\subsection{Resolve by Type Destructuring}
+
+This type of resolution is similar to the process involved in the
+coercion described in the last paragraph of ``Coerce by Internal
+System Code''. Given two towers of parameterized types, the
+interpreter tries to rearrange the towers and create a new type to
+which both of the original types are coerceable. This is a recursive
+process and involves using the coercion query facility to determine
+what tower rearrangements are possible.
+
+\section{An Example}
+As an example of coerce and resolve, we describe the inference involved
+in determining that the expression $x+1/2$ evaluates to an object of the
+datatype {\bf Polynomial(RationalNumber)}. We assume $x$ has not 
+previously been given a value.
+
+\begin{itemize}
+\item Choose a default datatype of {\bf Symbol} for $x$
+\item Choose the datatype of {\bf Integer} for 1 and 2
+\item Look for an operation ``$/$'' in {\bf Integer} that has two
+arguments, each an integer. It is not found.
+\item Start a general search in the library for an operation ``$/$''
+with two {\bf Integer} arguments. One is found in 
+{\bf RationalNumber} and applied
+\item Look for a ``$+$'' that takes a {\bf Symbol} and a 
+{\bf RationalNumber}. None is found.
+\item Force $x$ to an object of type {\bf Polynomial(Integer)}
+\item Look for a ``$+$'' that takes a {\bf Polynomial(Integer)} and
+a {\bf RationalNumber}. None is found.
+\item Start a general search in the library for ``$+$'' operations.
+The only ones found take two arguments, each of the same datatype.
+Resolve {\bf Polynomial(Integer)} and {\bf RationalNumber} to get the
+datatype {\bf Polynomial(RationalNumber)}
+\item Do the coercions
+\begin{verbatim}
+   Polynomial(Integer) -> Polynomial(RationalNumber)
+   RationalNumber -> Polynomial(RationalNumber)
+\end{verbatim}
+\item Apply the ``$+$'' in the datatype {\bf Polynomial(RationalNumber)}
+and return the result
+\end{itemize}
+
+\section{Acknowledgement}
+
+In addition to the authors, Richard Jenks and Robert Sutor, three people
+\index{Jenks, Richard}
+\index{Sutor, Robert}
+have contributed significantly to the development of the Axiom interpreter.
+Scott C. Morrison
+\index{Morrison, Scott C.}
+(University of California, Berkeley) is responsible for the overall
+structure of the interpreter as it is today, having largely rewritten
+this part of the system in 1984. Albrecht Fortenbacher
+\index{Fortenbacher, Albrecht}
+(University of Karlsruhe) rewrote and greatly extended the resolve 
+and coerce facilities in 1985. Michael Lucks
+\index{Lucks, Michael}
+(Southern Methodist University) contributed to the coerce and modemap
+selection facilities in 1986.
+
+
+
 \chapter{The Interpreter}
 The Axiom interpreter is a large common lisp program. 
 It has several forms of interaction and run from
