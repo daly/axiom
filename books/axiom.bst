@@ -12,7 +12,7 @@
 	% This restriction helps ensure that all standard styles are identical.
 	% The file btxbst.doc has the documentation for this style.
 
-% DFK added abstract, comment, keyword
+% DFK added abstract, comment, keyword, link, isbn
 ENTRY
   { abstract
     address
@@ -25,9 +25,11 @@ ENTRY
     editor
     howpublished
     institution
+    isbn
     journal
     key
     keyword
+    link
     month
     note
     number
@@ -595,6 +597,22 @@ FUNCTION {format.comment}
   if$
 }
 
+% DFK added
+FUNCTION {format.link}
+{ link empty$
+    { "" }
+    { "\begin{quote} {\bf Link:} " link * " \end{quote}" *}
+  if$
+}
+
+% DFK added
+FUNCTION {format.isbn}
+{ isbn empty$
+  { "" }
+  'isbn
+ if$
+}
+
 % TPD added
 FUNCTION {format.algebra}
 { algebra empty$
@@ -611,6 +629,7 @@ FUNCTION {dfk.stuff}
   format.keyword output.quote
 %  new.block
   format.comment output.quote
+  format.link output.quote
 %  new.block
   format.algebra output.quote
 }
@@ -627,6 +646,7 @@ FUNCTION {article}
     { journal emphasize "journal" output.check
       format.vol.num.pages output
       format.date "year" output.check
+      format.isbn output
     }
     { format.article.crossref output.nonnull
       format.pages output
@@ -665,6 +685,7 @@ FUNCTION {book}
   if$
   format.edition output
   format.date "year" output.check
+  format.isbn output
   new.block
   note output
   dfk.stuff
@@ -680,6 +701,7 @@ FUNCTION {booklet}
   howpublished output
   address output
   format.date output
+  format.isbn output
   new.block
   note output
   dfk.stuff
@@ -715,6 +737,7 @@ FUNCTION {inbook}
   if$
   format.edition output
   format.date "year" output.check
+  format.isbn output
   new.block
   note output
   dfk.stuff
@@ -737,6 +760,7 @@ FUNCTION {incollection}
       address output
       format.edition output
       format.date "year" output.check
+      format.isbn output
     }
     { format.incoll.inproc.crossref output.nonnull
       format.chapter.pages output
@@ -764,9 +788,11 @@ FUNCTION {inproceedings}
 	  organization output
 	  publisher output
 	  format.date "year" output.check
+          format.isbn output
 	}
 	{ address output.nonnull
 	  format.date "year" output.check
+          format.isbn output
 	  new.sentence
 	  organization output
 	  publisher output
@@ -814,6 +840,7 @@ FUNCTION {manual}
   if$
   format.edition output
   format.date output
+  format.isbn output
   new.block
   note output
   dfk.stuff
@@ -830,6 +857,7 @@ FUNCTION {mastersthesis}
   school "school" output.check
   address output
   format.date "year" output.check
+  format.isbn output
   new.block
   note output
   dfk.stuff
@@ -844,6 +872,7 @@ FUNCTION {misc}
   howpublished new.block.checka
   howpublished output
   format.date output
+  format.isbn output
   new.block
   note output
   dfk.stuff
@@ -861,6 +890,7 @@ FUNCTION {phdthesis}
   school "school" output.check
   address output
   format.date "year" output.check
+  format.isbn output
   new.block
   note output
   dfk.stuff
@@ -886,9 +916,11 @@ FUNCTION {proceedings}
       if$
       publisher output
       format.date "year" output.check
+      format.isbn output
     }
     { address output.nonnull
       format.date "year" output.check
+      format.isbn output
       new.sentence
       editor empty$
 	'skip$
@@ -913,6 +945,7 @@ FUNCTION {techreport}
   institution "institution" output.check
   address output
   format.date "year" output.check
+  format.isbn output
   new.block
   note output
   dfk.stuff
@@ -927,6 +960,7 @@ FUNCTION {unpublished}
   new.block
   note "note" output.check
   format.date output
+  format.isbn output
   dfk.stuff
   fin.entry
 }
