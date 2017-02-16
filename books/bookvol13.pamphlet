@@ -96,6 +96,13 @@ the {\sl computational content} of the proposition.}
 
 \end{quote}
 
+\begin{quote}
+Q: Why bother doing proofs about programming languages? They are almost
+always boring if the definitions are right.
+
+A: The definitions are almost always wrong.
+\end{quote}
+
 \chapter{Here is a problem}
 
 Proving programs correct involves working with a second programming
@@ -422,6 +429,32 @@ We quote the {\bf Division Theorem} proof \cite{Wiki14b}:
 
 For every pair of integers $a$, $b$ where $b \ne 0$, there exist unique
 integers $q,r$ such that $a = qb + r$ and $0 \le r \le \abs{b}$.
+
+\subsection{Hoare's axioms and gcd proof}
+From Hoare\cite{Hoar69}
+\begin{tabular}{rll}
+A1 & $x+y = y+x$ & addition is commutative\\
+A2 & $x\times y = y\times x$ & multiplication is commutative\\
+A3 & $(x+y)+z = x+(y+z)$ &  addition is associative\\
+A4 & $(x\times y)\times z = x\times (y\times z)$ &
+multiplication is associative\\
+A5 & $x\times (y+z) = x\times y + x\times z$ &
+multiplication distributes through addition\\
+A6 & $y \le x \to (x-y) + y = x$ & addition cancels subtraction\\
+A7 & $x + 0 = x$ &\\
+A8 & $x\times 0 = 0$ &\\
+A9 & $x\times 1 = x$ &\\
+\end{tabular}
+
+{\bf D0 Axiom of Assignment}
+\[\vdash P_0 \{x:=f\} P\]
+where
+\begin{itemize}
+\item $x$ is a variable identifer
+\item $f$ is an expression
+\item $P_0$ is obtained from $P$ by substituting $f$ for all
+occurences of $x$
+\end{itemize}
 
 \section{The Division Algorithm}
 From Judson \cite{Juds15},
@@ -2176,6 +2209,597 @@ Definition land a b := bitwise andb a a b.
 Definition lor a b := bitwise orb (max a b) a b.
 Definition ldiff a b := bitwise (fun b b' => andb b (negb b')) a a b.
 Definition lxor a b := bitwise xorb (max a b) a b.
+\end{verbatim}
+
+\chapter{Binary Power in COQ by Casteran and Sozeau}
+
+From Casteran and Sozeau\cite{Cast16}:
+
+\begin{verbatim}
+(* About integer powers (monomorphic version) *)
+
+Set Implicit Arguments.
+Require Import ZArith.
+Require Import Div2.
+Require Import Program.
+Open Scope Z_scope.
+\end{verbatim}
+
+Let us consider a simple arithmetic operation: raising some integer $x$
+to the $n$-th power, where $n$ is a natural number. The following
+function definition is a direct translation of the mathematical
+concept:
+\begin{verbatim}
+Fixpoint power (a:Z)(n:nat) :=
+  match n with 0%nat => 1
+             | S p =>  a * power a p
+  end.
+
+Eval vm_compute in power 2 40.
+ = 1099511627776 : Z
+\end{verbatim}
+
+This definition can be considered as a very naive way of programming,
+since computing $x^n$ requires $n$ multiplications. Nevertheless, this
+definition is very simple to read, and everyone can admit that it is
+correct with respect to the mathematical definition. Thus, we can consider
+it as a {\sl specification}: when we write more efficient but less readable
+functions for exponentiation, we should be able to prove their correctness
+by proving in Coq their equivalence with the naive power function.
+
+The following function allows one to compute $x^n$, with a number of
+multiplications proportional to $\log_2(n)$:
+\begin{verbatim}
+Program
+Fixpoint binary_power_mult (acc x:Z) (n:nat) {measure (fun i=>i) n} : Z
+  (* acc * (power x n) *) :=
+  match n with 
+    | 0%nat => acc
+    | _ => if Even.even_odd_dec n
+           then binary_power_mult acc (x * x) (div2 n)
+           else binary_power_mult (acc * x) (x * x) (div2 n)
+  end.
+
+Solve Obligations with program_simpl; intros; apply lt_div2; auto with arith.
+
+Definition binary_power (x:Z)(n:nat) := binary_power_mult 1 x n.
+
+Eval vm_compute in binary_power 2 40.
+ = 1099511627776 : Z
+
+Goal binary_power 2 234 = power 2 234.
+reflexivity.
+Qed.
+\end{verbatim}
+
+We want now to {\sl prove} {\tt binary\_power's} correctness, i.e. that
+this function and the naive {\tt power} function are pointwise equivalent.
+
+Proving this equivalence in Coq may require a lot of work. Thus it is not
+worth at all writing a proof dedicated only to powers of integers. In fact, 
+the correctness of {\tt binary\_power} with respect to {\tt power} holds
+in any structure composed of an associative binary operation on some domain, 
+that admits a neutral element. For instance, we can compute powers of square
+matrices using the most efficient of both algorithms.
+
+Thus, let us throw away our previous definition, and try to define them in
+a more generic framework.
+
+\section{On Monoids}
+
+{\bf Definition 2.1} {\sl A monoid is a mathematical structure composed of}
+\begin{itemize}
+\item {\sl a carrier A}
+\item {\sl a binary, associative operation} $\circ$ {\sl on A}
+\item {\sl a neutral element} $1 \in A$ {\sl for} $\circ$
+\end{itemize}
+
+Such a mathematical structure can be defined in Coq as a type class.
+\cite{Soze08}. In the following definition, parameterized by a type $A$
+(implicit), a binary operation {\tt dot} and a neutral element {\tt unit},
+three fields describe the properties that {\tt dot} and {\tt unit} must
+satisfy.
+\begin{verbatim}
+Class Monoid {A:Type}(dot : A -> A -> A)(one : A) : Prop := {
+  dot_assoc : forall x y z:A, dot x (dot y z) = dot (dot x y) z;
+  unit_left : forall x, dot one x = x;
+  unit_right : forall x, dot x one = x }.
+\end{verbatim}
+
+Note that other definitions could have been given for representing this
+mathematical structure. 
+
+From an implementational point of view, such a type class is just a record
+type, i.e. an inductive type with a single construtor {\tt Build\_Monoid}
+\begin{verbatim}
+Print Monoid.
+
+Record Monoid (A:Type)(dot : A -> A -> A)(one : A) : Prop := Build_Monoid
+  { dot_assoc : forall x y z:A, dot x (dot y z) = dot (dot x y) z;
+    one_left : forall x, dot one x = x;
+    one_right : forall x, dot x one = x }
+
+For Monoid: Argument A is implicit and maximally inserted
+For Build_Monoid: Argument A is implicit
+For Monoid: Argument scopes are [type_scope _ _]
+For Build_Monoid: Argument scopes are [type_scope _ _ _ _ _]
+\end{verbatim}
+
+Nevertheless, implementation of type classes by M. Sozeau provides several
+specific tools --- dedicated tactics for instance --, and we advise the
+reader not to replace the {\tt Class} keyword with {\tt Record} or
+{\tt Inductive}.
+
+WIth the command {\tt About}, we can see the polymorphic type of the 
+fields of the class {\tt Monoid}:
+\begin{verbatim}
+About one_left
+
+one_left:
+forall (A : Type) (dot : A -> A -> A) (one : A),
+Monoid dot one -> forall x : A, dot one x = x
+
+Arguments A, dot, one, Monoid are implicit and maximally inserted
+Argument scopes are [type_scope _ _ _ _]
+one_left is transparent
+\end{verbatim}
+
+\subsection{Classes and Instances}
+
+Members of a given class are called {\sl instances} of this class. 
+Instances are defined to the Coq system through the {\tt Instance}
+keyword. Our first example is a definition of the monoid structure
+on the set $\mathbb{Z}$ of integers, provided with integer multiplication,
+with 1 as the neutral element. Thus we give these parameters to the
+{\tt Monoid} class (note that $\mathbb{Z}$ is implicitly given).
+\begin{verbatim}
+Instance ZMult : Monoid Zmult 1
+\end{verbatim}
+
+For this instance to be created, we need to prove that the binary
+operation {\tt Zmult} is associative and admits 1 as the neutral
+element. Applying the constructor {\tt Build\_Monoid} -- for instance
+with the tactic {\tt split} -- generates three subgoals.
+\begin{verbatim}
+split.
+3 subgoals
+ =================================================
+  forall x y z : Z, x * (y * z) = x * y * z
+
+subgoal 2 is:
+  forall x : Z, 1 * x = x
+subgoal 3 is:
+  forall x : Z, x * 1 = x
+\end{verbatim}
+
+Each subgoal is easily solved by {\tt intros; ring}.
+
+When the proof is finished, we register our instance with a simple {\tt Qed}.
+Note that we used {\tt Qed} because we consider a class of sort {\tt Prop}.
+In some cases where instances must store some information constants,
+ending an instance construction with {\tt Defined} may be necessary.
+
+\begin{verbatim}
+Check Zmult.
+ZMult : Monoid Zmult 1
+\end{verbatim}
+
+We explained on the preceding page why it is better to use the {\tt Class}
+keyword than {\tt Record} or {\tt Inductive}. For the same reason, the 
+definition of an instance of some class should be written using 
+{\tt Instance} and not {\tt Lemma}, {\tt Theorem}, {\tt Example}, etc.
+nor {\tt Definition}.
+
+\subsection{A generic definition of {\tt power}}
+
+We are now able to give a definition of the function {\tt power} than can
+be applied with any instance of class {\tt Monoid}:
+
+A first definition could be
+\begin{verbatim}
+Fixpoint power {A:Type}{dot:A->A->A}{one:A}{M: Monoid dot one}
+               (a:A)(n:nat) :=
+  match n with 0:nat => one
+             | S p => dot a (power a p)
+  end.
+
+Compute power 2 10.
+ = 1024 : Z
+\end{verbatim}
+
+Happily, we can make the declaration of the three first arguments
+implicit, by using the {\tt Generalizable Variables} command:
+\begin{verbatim}
+Reset power.
+
+Generalizable Variables A dot one.
+
+Fixpoint power `{M: Monoid A dot one}(a:A)(n:nat) :=
+  match n with 0%nat => one
+             | S p => dot a (power a p)
+  end.
+
+Compute power 2 10.
+ = 1024 : Z
+\end{verbatim}
+
+The variables {\tt A dot one} appearing in the binder for {\tt M} are
+implicitly bound before the binder for {\tt M} and their types are
+inferred from the {\tt Monoid A dot one} type. This syntactic sugar
+helps abbreviate bindings for classes with parameters. The resulting
+internal Coq term is exactly the same as the first definition above.
+
+\subsection{Instance Resolution}
+
+The attentitive reader has certainly noticed that in the last
+computation, the binary operation {\tt Zmult} and the neutral element 1
+need not to be given explicitly. The mechanism that allows Coq to infer
+all the arguments needed by the {\tt power} funtion to be applied is called
+{\sl instance resolution}.
+
+In order to understand how it operates, let's have a look at {\tt power}'s
+type:
+\begin{verbatim}
+About power.
+power :
+forall (A : Type) (dot : A -> A -> A) (one : A),
+Monoid dot one -> A -> nat -> A
+
+Arguments A, dot, one, M are implicit and maximally inserted
+
+Compute power 2 100.
+= 1267650600228229401496703205376 : Z
+
+Set Printing Implicit.
+Check power 2 100.
+@power Z Zmult 1 Zmult 2 100 : Z
+Unset Printing Implicit.
+\end{verbatim}
+
+We see that the {\sl instance} {\tt ZMult} has been inferred from the
+type of 2. We are in the simple case where only one monoid of carrier {\tt Z}
+has been declared as an instance of the {\tt Monoid} class.
+
+The implementation of type classes in Coq can retrieve the instance
+{\tt ZMult} from the type {\tt Z}, then filling the arguments {\tt ZMult}
+and 1 from {\tt ZMult}'s definition.
+
+\section{More Monoids}
+\subsection{Matrices over some ring}
+
+We all know that multiplication of square matrices is associative and
+admits identity matrices as neutral elements. For simplicity's sake let us
+restrict our study to $2\times 2$ matrices over some ring.
+
+We first load the {\tt Ring} library, then open a section with some useful
+declarations and notations. 
+\begin{verbatim}
+Require Import Ring.
+
+Section matrices.
+  Variables (A:Type)
+            (zero one : A)
+            (plus mult minus : A -> A -> A)
+            (sym : A -> A).
+  Notation "0" := zero.
+  Notation "1" := one.
+  Notation "x + y" := (plus x y).
+  Notation "x * y" := (mult x y).
+
+  Variable rt : ring_theory zero one plus mult minus sym (@eq A).
+
+  Add Ring Aring : rt.
+\end{verbatim}
+
+We can now define a carrier type for $2\times 2$-matrices, as well as
+matrix multiplication and the identiy matrix.
+\begin{verbatim}
+Structure M2 : Type := {c00 : A; c01 : A; c10 : A; c11 : A}.
+
+Definition Id2 : M2 := Build_M2 1 0 0 1.
+
+Definition M2_mult (m m':M2) : M2 :=
+  Build_M2 (c00 m * c00 m' + c01 m * c10 m')
+           (c00 m * c01 m' + c01 m * c11 m')
+           (c10 m * c00 m' + c11 m * c10 m')
+           (c10 m * c01 m' + c11 m * c11 m').
+\end{verbatim}
+
+As for multiplication of integers, we can now define an instance of
+{\tt Monoid} for the type {\tt M2}.
+\begin{verbatim}
+Global Instance M2_Monoid : Monoid (M2_mult plus mult) (Id2 0 1).
+split.
+destruct x; destruct y; destruct z; simpl.
+unfold M2_mult. apply M2_eq_intros; simpl; ring.
+destruct x; simpl;
+unfold M2_mult; apply M2_eq_intros; simpl; ring.
+destruct x; simpl;
+unfold M2_mult; apply M2_eq_intros; simpl; ring.
+Qed.
+
+End matrices.
+\end{verbatim}
+
+We want now to play with $2\times 2$ matrices over $\mathbb{Z}$.
+We declare an instance {\bf M2Z} for this purpose, and can use directly
+the function {\tt power}.
+\begin{verbatim}
+Instance M2Z : Monoid _ _ := M2_Monoid Zth.
+
+Compute power (Build_M2 1 1 1 0) 40.
+ = {|
+     c00 := 165580141;
+     c01 := 102334155;
+     c10 := 102334155;
+     c11 := 63245986 |}
+   : M2 Z
+
+Definition fibonacci (n:nat) :=
+  C00 (power (Build_M2 1 1 1 0) n).
+
+Compute fibonacci 20.
+ = 10946
+ :Z
+\end{verbatim}
+
+\section{Reasoning within a Type Class}
+
+We are now able to consider again the equivalence between two functions
+for computing powers. Let use define the binary algorithm for any monoid.
+
+First, we define an auxiliary function. We use the {\tt Program} 
+extension to define an efficient version of exponentiation using an
+accumulator. The function is defined by well-founded recursion on 
+the exponent $n$.
+\begin{verbatim}
+Function binary_power_mult (A:Type) (dot:A->A->A) (one:A)
+     (M: @Monoid A dot one) (acc x:A)(n:nat){measure (fun i=>i) n} : A
+  (* acc * (x ** n) *) :=
+  match n with 
+    | 0%nat => acc
+    | _ => if Even.even_odd_dec n
+             then binary_power_mult _ acc (dot x x) (div2 n)
+             else binary_power_mult _ (dot acc x) (dot x x) (div2 n)
+  end.
+intros; apply lt_div2; auto with arith.
+intros; apply l2_div2; auto with arith.
+Defined.
+
+Definition binary_power `{M:Monoid} x n := binary_power_mult M one x n.
+
+Compute binary_power 2 100.
+ = 1267650600228229401496703205376 : Z
+\end{verbatim}
+
+\subsection{The Equivalence Proof}
+
+The proof of equivalence between {\tt power} and {\tt binary\_power}
+is quite long, and can be split in several lemmas. Thus, it is useful
+to open a section, in which we fix some arbitrary monoid M. Such a
+declaration is made with the {\tt Context} command, which can be 
+considered as a version of {\tt Variables} for declaring arbitrary
+instances of a given class.
+\begin{verbatim}
+
+Section About_power.
+
+Require Import Arith.
+ Context `(M:Monoid A dot one ).
+\end{verbatim}
+
+It is good practice to define locally some specialized notations and 
+tactics.
+\begin{verbatim}
+
+Ltac monoid_rw :=
+    rewrite (@one_left A dot one M) || 
+    rewrite (@one_right A dot one M)|| 
+    rewrite (@dot_assoc A dot one M).
+
+
+Ltac monoid_simpl := repeat monoid_rw.
+
+Local Infix "*" := dot.
+Local Infix "**" := power (at level 30, no associativity).
+\end{verbatim}
+
+\subsection{Some Useful Lemmas About {\tt power}}
+
+We start by proving some well-known equalities about powers in a monoid.
+Some of these equalities are integrated later in simplification tactics.
+
+\begin{verbatim}
+Lemma power_x_plus : forall x n p, x ** (n + p) =  x ** n *  x ** p.
+Proof.
+ induction n as [| p IHp];simpl.
+   intros;  monoid_simpl;trivial.
+  intro q;rewrite (IHp q);  monoid_simpl;trivial. 
+Qed.
+
+Ltac power_simpl := repeat (monoid_rw || rewrite <- power_x_plus).
+
+Lemma power_commute : forall x n p,  
+               x ** n * x ** p = x ** p * x ** n. 
+Proof.
+  intros x n p;power_simpl; rewrite (plus_comm n p);trivial.
+Qed.
+
+Lemma power_commute_with_x : forall x n ,  
+        x * x ** n = x ** n * x.
+Proof.
+  induction n;simpl;power_simpl;trivial.
+  repeat rewrite <- (@dot_assoc A dot one M); rewrite IHn; trivial.
+Qed.
+
+Lemma power_of_power : forall x n p,  (x ** n) ** p = x ** (p * n).
+Proof.
+   induction p;simpl;[| rewrite power_x_plus; rewrite IHp]; trivial.
+Qed.
+
+Lemma power_S : forall x n, x *  x ** n = x ** S n.
+Proof. intros;simpl;auto. Qed.
+
+Lemma sqr : forall x, x ** 2 =  x * x.
+Proof.
+ simpl;intros;monoid_simpl;trivial.
+Qed.
+
+Ltac factorize := repeat (
+                rewrite <- power_commute_with_x ||
+                rewrite  <- power_x_plus  ||
+                rewrite <- sqr ||
+                rewrite power_S ||
+                rewrite power_of_power).
+
+Lemma power_of_square : forall x n, (x * x) ** n = x ** n * x ** n.
+  induction n;simpl;monoid_simpl;trivial.
+  repeat rewrite dot_assoc;rewrite IHn; repeat rewrite dot_assoc.
+ factorize; simpl;trivial.
+Qed.
+\end{verbatim}
+
+\subsection{Final Steps}
+
+We are now able to prove that the auxilliary function
+{\tt binary\_power\_mult} satisfies its intuitive meaning. 
+The proof uses well-founded induction and the lemmas proven in the
+previous section.
+
+\begin{verbatim}
+Lemma binary_power_mult_ok :
+  forall n a x,  binary_power_mult a x n = a * x ** n.
+Proof.
+  intro n; pattern n;apply lt_wf_ind.
+  clear n; intros n Hn;   destruct n.
+   intros;simpl; monoid_simpl;  trivial.
+  intros; rewrite binary_power_mult_equation. 
+     destruct (Even.even_odd_dec (S n)).
+   rewrite Hn.   rewrite power_of_square;  factorize.
+   pattern (S n) at 3;replace (S n) with (div2 (S n) + div2 (S n))%nat;auto.
+   generalize (even_double _ e);simpl;auto. 
+   apply lt_div2;auto with arith.
+   rewrite Hn. 
+  rewrite power_of_square ; factorize.
+  pattern (S n) at 3;replace (S n) with (S (div2 (S n) + div2 (S n)))%nat;auto.
+
+  rewrite <- dot_assoc; factorize;auto.
+  generalize (odd_double _ o);intro H;auto.
+  apply lt_div2;auto with arith.
+Qed.
+\end{verbatim}
+
+Then the main theorem follows immediately:
+\begin{verbatim}
+Lemma binary_power_ok : forall (x:A) (n:nat), binary_power x n = x ** n.
+Proof.
+  intros n x;unfold binary_power;rewrite binary_power_mult_ok;
+  monoid_simpl;auto.
+Qed.
+\end{verbatim}
+
+\subsection{Discharging the Context}
+
+It is time to close the section we opened for writing our proof of
+equivalence. The theorem {\tt binary\_power\_ok} is now provided
+with a universal quantification over all the parameters of any monoid.
+
+\begin{verbatim}
+End About_power.
+
+About binary_power_ok.
+binary_power_ok :
+forall (A : Type) (dot : A -> A -> A) (one : A) (M : Monoid dot one)
+  (x : A) (n : nat), binary_power x n = power x n
+
+Arguments A, dot, one M are implicit and maximally inserted
+Argument scopes are [type_scope _ _ _ _ nat_scope]
+binary_power_ok is opaque
+Expands to Constant Top.binary_power_ok
+
+Check binary_power_ok 2 20.
+binary_power_ok 2 20
+  : binary_power 2 20 = power 2 20
+
+Let Mfib := Build_M2  1 1 1 0.
+
+Check  binary_power_ok Mfib 56.
+binary_power_ok Mfib 56
+  : binary_power Mfib 56 = power Mfib 56
+
+\end{verbatim}
+
+\subsection{Subclasses}
+
+We could prove many useful equalities in the section {\tt about\_power}.
+Nevertheless, we couldn't prove the equality $(xy)^n=x^ny^n$ because it
+is false in general -- consider for instance the free monoid of strings,
+or simply matrix multiplication. But this equality holds in every 
+commutative (a.k.a abelian) monoid.
+
+Thus we say that abelian monoids form a {\sl subclass} of the class of
+monoids, and prove this equality in a context declaring an arbitrary 
+instance of this subclass.
+
+Structurally, we parameterize the new class {\tt Abelian\_Monoid} by an
+arbitrary instance {\sl M} of {\tt Monoid}, and add a new field stating
+the commutativity of {\tt dot}. Please keep in mind that we declared
+{\tt A}, {\tt dot}, and {\tt one} as {\sl generalizable variables},
+hence we can use the backquote symbol here.
+
+\begin{verbatim}
+Class Abelian_Monoid `(M:Monoid A dot one) := {
+  dot_comm : forall x y, dot x y = dot y x}.
+\end{verbatim}
+
+A quick look at the representation of {\sl Abelian\_Monoid} as a record
+type helps us understand how this class is implemented.
+\begin{verbatim}
+Print Abelian_Monoid.
+Record Abelian_Monoid (A : Type) (dot : A -> A -> A)
+  (one : A) (M : Monoid dot one) : Prop := Build_Abelian_Monoid
+  {dot_comm : forall x y : A, dot x y = dot y x }
+
+For Abelian_Monoid: Arguments A, dot, one are implicit and maximally inserted
+For Build_Abelian_Monoid: Arguments A, dot, one are implicit
+For Abelian_Monoid: Arguemnt scopes are [type_scope _ _ _]
+For Build_Abelian_Monoid: Argument scopes are [type_scope _ _ _ _]
+\end{verbatim}
+
+For building an instance of {\tt Abelian\_Monoid} we can start from
+{\tt ZMult}, the monoid on {\tt Z}, adding a proof that integer
+multiplication is commutative.
+\begin{verbatim}
+Instance ZMult_Abelian : Abelian_Monoid ZMult.
+split. 
+ exact Zmult_comm.
+Qed.
+\end{verbatim}
+
+We can now prove our equality by building an appropriate context. Note
+that we can specify just the parameters of the monoid here in the binder
+of the abelian monoid, an instance of monoid on those same parameters is
+automatically generalized. Superclass parameters are automatically
+generalized inside quote binders. Again, this is siimply syntactic sugar.
+\begin{verbatim}
+Section Power_of_dot.
+ Context `{M: Monoid A} {AM:Abelian_Monoid M}.
+ 
+Theorem power_of_mult : forall n x y, 
+    power (dot x y)  n =  dot (power x  n) (power y n). 
+Proof.
+ induction n;simpl.
+ rewrite one_left;auto.
+ intros; rewrite IHn; repeat rewrite dot_assoc.
+  rewrite <- (dot_assoc  x y (power x n)); rewrite (dot_comm y (power x n)).
+ repeat rewrite dot_assoc;trivial.
+Qed.
+
+End Power_of_dot.
+
+Check power_of_mult 3 4 5.
+power_of_mult 3 4 5
+     : power (4 * 5) 3 = power 4 3 * power 5 3
 \end{verbatim}
 
 \chapter{Other Ideas to Explore}
