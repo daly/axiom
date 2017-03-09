@@ -64,7 +64,7 @@ LISP:=lsp
 ##### C related variables
 INC:=${SPD}/src/include
 PLF:=LINUXplatform
-CCF:="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include"
+CCF:="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include -std=gnu89"
 CC:=gcc
 XLIB:=/usr/X11R6/lib
 #LDF:=" -L/usr/X11R6/lib -L/usr/lib ${XLIB}/libXpm.a -lXpm"
@@ -134,7 +134,7 @@ WEAVE=${WEAVE} \
 XLIB=${XLIB} \
 ZIPS=${ZIPS} 
 
-all: rootdirs tanglec libspad
+all: rootdirs axiom.sty tanglec libspad
 	@ echo 1 making a ${SYS} system, PART=${PART} SUBPART=${SUBPART}
 	@ echo 2 Environment ${ENV}
 	@ ${BOOKS}/tanglec Makefile.pamphlet "Makefile.${SYS}" >Makefile.${SYS}
@@ -195,6 +195,10 @@ libspad:
 	    ${BOOKS}/tanglec ${BOOKS}/bookvol8.pamphlet Makefile >Makefile ; \
             ${ENV} ${MAKE} libspad.a )
 
+axiom.sty:
+	@ echo 11c copying books/axiom.sty
+	@ cp ${BOOKS}/axiom.sty .
+
 rootdirs:
 	@ echo 11 checking directory structure
 	 mkdir -p ${TMP}
@@ -213,6 +217,7 @@ rootdirs:
 	 mkdir -p ${OBJ}/${SYS}/proofs
 	 mkdir -p ${MNT}/doc
 	 mkdir -p ${MNT}/${SYS}/algebra
+	 mkdir -p ${MNT}/${SYS}/src/algebra
 	 mkdir -p ${MNT}/${SYS}/autoload
 	 mkdir -p ${MNT}/${SYS}/bin
 	 mkdir -p ${MNT}/${SYS}/doc/axbook
@@ -332,4 +337,6 @@ clean:
 	@ rm -f src/interp/Makefile.pdf 
 	@ rm -f src/share/Makefile src/share/Makefile.dvi
 	@ rm -f src/share/Makefile.pdf 
+	@ rm -f Makefile.aux
+	@ rm -f Makefile.log
 
