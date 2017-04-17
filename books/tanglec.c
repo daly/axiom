@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -28,6 +29,7 @@ int printline(int i, int length) {
   int j;
   for (j=0; j<length; j++) { putchar(buffer[i+j]); }
   printf("\n");
+  return(0);
 }
 
 /* handle begin{chunk}{chunkname}        */
@@ -80,7 +82,6 @@ char *getChunkname(int k, int getlen) {
   
 /* print lines in this chunk, possibly recursing into getchunk */
 int printchunk(int i, int chunklinelen, char *chunkname) {
-  int j;
   int k;
   int linelen;
   char *getname;
@@ -113,7 +114,6 @@ int printchunk(int i, int chunklinelen, char *chunkname) {
 /* find the named chunk and call printchunk on it */
 int getchunk(char *chunkname) {
   int i;
-  int j;
   int linelen;
   int chunklen = strlen(chunkname);
   if (DEBUG==3) { printf("getchunk(%s)\n",chunkname); }
