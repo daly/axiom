@@ -34,6 +34,17 @@ TAR:=tar
 TOUCH:=touch
 UNCOMPRESS:=gunzip
 
+####K C Related variables
+PLF=${SYS}platform
+CCF="-O2 -fno-strength-reduce -D_GNU_SOURCE -D${PLF} \
+     -I/usr/X11/include \
+     -Wno-absolute-value -std=gnu89 -w" 
+INC:=${SPD}/src/include
+CC:=gcc
+XLIB:=/usr/X11R6/lib
+LDF="-L/usr/X11/lib -L/usr/X11R6/lib64 -L/usr/local/lib64 -L/usr/openwin/lib64 -L/usr/lib64 "
+O:=o
+
 ##### lisp related variables
 BYE:=bye
 #GCLVERSION=gcl-2.4.1
@@ -60,16 +71,6 @@ GCLVERSION=gcl-2.6.12
 GCLDIR:=${LSP}/${GCLVERSION}
 GCLOPTS="--enable-vssize=65536*2 --disable-xgcl --disable-tkconfig"
 LISP:=lsp
-
-##### C related variables
-INC:=${SPD}/src/include
-PLF:=LINUXplatform
-CCF:="-O2 -fno-strength-reduce -Wall -D_GNU_SOURCE -D${PLF} -I/usr/X11/include -std=gnu89"
-CC:=gcc
-XLIB:=/usr/X11R6/lib
-#LDF:=" -L/usr/X11R6/lib -L/usr/lib ${XLIB}/libXpm.a -lXpm"
-LDF:=" -L/usr/X11R6/lib -L/usr/lib  -lXpm"
-O:=o
 
 ##### command line control
 NOISE:="-o ${TMP}/trace"
