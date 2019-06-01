@@ -14,6 +14,898 @@ Confronting every new programmer learning a new language are
 -- Daniel Higginbotham in Clojure for the Brave and True
 \end{quote}
 
+\section{MODLISP by James Davenport}
+This is based on a paper by Davenport and Jenks \cite{Dave80a}.
+
+It provides historical details of the original SCRATCHPAD II design.
+Some of these details have changed over time but it is important to
+know what motivates some of the design choices. The verbatim text
+of the paper follows.
+
+This paper discusses the design and implementation of MODLISP, a
+LISP-like language enhanced with the idea of MODes. This extension
+permits, but does not require, the uesr to declare the types of
+various variables, and to compile functions with the arguments
+declared to be of a particular type. It is possible to declare several
+functions of the same name, with arguments of different type
+(e.g. PLUS could be declared for Integer arguments, or Rational, or
+Real, or even Polynomial arguments) and the system will apply the
+correct function for the types of the arguments.
+
+The MODLISP language differs from other abstract data type languages
+such as CLU\cite{Lisk77,Lisk77a,Lisk79} and Russell
+\cite{Dona77} in that it allows dynamic construction of new
+parameterised data types and possesses a unified semantics covering
+interpreted and compiled code, which can call one another at will. In
+short, it is LISP-like.
+
+\subsection{Introduction}
+
+MODLISP is a system developed from LISP with the primary aim of
+supporting research in computer algebra. It has been realised for some
+years (\cite{Loos74,Jenk77}) that progress in computer algera
+required the development of systems  which were able to deal with
+formal ``modes'' such as ``polynomial'' or ``matrix''.
+
+Just as LISP has been the vehicle of choice for implementing computer
+algebra systems in the past, it was felt that implementing such a
+system was best done in a typed variant of LISP, and since none such
+was available at the time the project started, MODLISP was born. 
+However, MODLISP is more than just an implementation vehicle. It
+is an interesting language in its own right, with powerful features
+for the manipulation of abstract and parameterised data types.
+
+\subsection{Interpretive Structure}
+
+The evaluator is the key to any LISP system, and so it is to MODLISP. 
+The quintessential difference between MODLISP and LISP 1.5 can be
+discerned in the evaluator: whereas a conventional LISP evaluator has
+two arguments (the expression to be evaluated and the environment in
+which it is to be evaluated), the MODLISP evaluator has three (the
+expression to be evaluated, the desired mode of the answer, and the
+environment in which it is to be evaluated). We present in Appendix A
+a somewhat simplified description of the MODLISP evaluator. Here we
+make some brief remarks on the evaluation strategy.
+
+The major difference between MODLISP and LISP 1.5 lies in the area of
+function application. A conventional LISP system's strategy, when
+faced with an operator-operand form to evaluate, is to evaluate the
+CAR (i.e. the operator part) and then (assuming it is not some sort of
+macro) to evaluate the arguments recursively in a left-right manner,
+and then to APPLY the operator part to the list of arguments in some
+manner (evalutating in an environment enriched by the bindings of the
+arguments, in the case that the CAR was a $\lambda$ expression.
+
+Regretably, such a simple approach is impossible in the case of
+MODLISP.  The easiest way of exemplifying this is to see that we
+cannot evaluate the operator until we know what the modes\footnote{ We
+will later define precisely what we mean by the term 'mode'. For the
+time being, it may help the reader to regard it as the equivalent of
+`type' in conventional typed languages.}  of the operands are:
+e.g. the TIMES function for integers is different from that for
+polynomials or for matrices. Furthermore, there is the additional
+complication of heterogeneous argument lists; e.g. multiplying a
+polynomial by an integer.
+
+Fortunately things are not as bleak as all that -- we can still
+evaluate as far as the name of the operator (assuming that evaluating
+the operator will yield a name) without knowing the types of (or
+indeed anything else about) the operands. The difficulty comes in the
+step that corresponds to a conventional LISP 1.5 system accessing the
+EXPR (or whatever) property of the operator name. The MODLISP system
+needs to apply one of a variety of functions at this point, depending
+on the modes of the operands, rather than one specific function.
+
+Rather than associate an EXPR property with an atom, therefore,
+MODLISP associates a MODEMAP property with it, whose corresponding
+value is a {\sl modemap list}\footnote{We imply here that a modemap
+list is a list of (map, function) pairs. The actual structure is not
+significantly more complicated (as mentioned in the Appendix A) and is
+a list of (map, cond-part) pairs, where a cond-part is a list of
+(predicate, function) pairs. The function is only used if the
+predicate evaluates to T. While this additional level is not required
+in the system as described so far, several of the features of MODLISP
+described later in the paper require it. It is mentioned here to avoid
+giving a false impression.} These modemap lists are to MODLISP what
+{\sl subrs} (i.e. BPIs) are to conventional LISPs: they are the
+applicable objects, as defined by the evaluator. The evaluator looks
+through the modemap list, which is a list of maps and associated
+functions, until it finds a map which matches the arguments. This
+causes somewhat of a ``chicken and egg'' situation, since the map
+cannot be matched until we know what the modes of the arguments are,
+and we cannot evaluate the arguments until we know what mode to
+evaluate them in, which the map will tell us.
+
+Hence the evaluator (in fact function EVFORM, as described in Appendix
+A) runs down the list of arguments, evaluating them in the mode given
+by the corresponding entry of the map. An example of a case where this
+complexity is needed is given by the (admittedly artificial, but
+realistic examples are more complex) construct:
+\begin{verbatim}
+   (TIMES (ZERO) (RATIONAL 1 2))
+\end{verbatim}
+where RATIONAL is a function which takes two Integer arguments and
+returns a Rational result. ZERO is a function which returns the zero
+element of whatever type is required (and, of course, the Integer zero
+may well be different from the Rational zero or the Matrix zero). 
+TIMES might have a (simplified) modemap-list such as:
+\begin{verbatim}
+   ( ((Integer Integer Integer) IntegerTimes)
+     ((Rational Rational Rational) RationalTimes) )
+\end{verbatim}
+Then (assuming for the sake of simplicity that there is no particular
+mode for the result) the evaluator would first try to apply the first
+modemap (which states that TIMES can yield an Integer result from two
+Integer arguments) and would evaluate (ZERO) in mode Integer, which
+would work, and then would evaluate (RATIONAL 1 2) in mode Integer,
+which would not (i.e. eval returns NIL). Hence we infer that that map
+is not applicable, and we attempt to apply the second modemap. This
+causes (ZERO) and (RATIONAL 1 2) to be evaluated in mode Rational,
+which works, and hence the function (in the untyped sense -- i.e. that
+definition which was asserted to be valid for the case of multiplying
+two Rationals) RationalTimes is applied.
+
+The modemap for TIMES quoted above looks as if it is the solution to
+the problem of {\sl polymorphic operators}, i.e. those which
+correspond to different functions for different data types, but in a
+computer algebra setting it is not a complete answer. One way of
+seeing this is to ask ``How many definitions of TIMES are there?'',
+and the answer is that there are an unlimited number of them. There
+are definitions of TIMES for polynomials over the integers, matrices
+over the rational numbers, polynomials over matrices over the
+integers, polynomials over the Gaussian integers, polynomials over the
+field of fractions of the polynomials over the integers modulo 7
+etc. Searching such a modemap would be extremely inefficient, but that
+is by no means the worst of the problem -- how are we to know that we
+have placed enough definitions on the modemap. It should now be
+obvious that a modemap which lists simple domains and the associated
+functions is insufficient for our purposes -- and that is why we need
+the concept of a {\sl mode}.
+
+\subsection{What is a MODE?}
+
+In order to discuss MODLISP, we need to define what is meant by the
+term 'mode'. The terminology in this area is sufficiently confused,
+with different authors using the same word to mean many different
+things, that we hope the reader will bear with us while we define many
+terms in the way we intend to use them.
+
+The first term we wish to define is 'domain', (short for 'domain of
+computation') whose meaning approximates that of 'data type' in
+traditional programming languages. The traditional view of such 'data
+types' is best summarised by Jensen \& Wirth \cite[p.~12]{Jens75} 
+-- ``A data type defines the set of values a variable may assume''. 
+More recent work has lead to the view-point [Morris, 1973] that a type 
+is a set of values complete with a list of operations that can be 
+performed on those values.
+
+The simplest example of such a domain is that of a basic type,
+e.g. Integer or Boolean. The basic types built into MODLISP are
+Integer, Boolean, Identifier and String, though the user can (and
+probably will) define others.
+
+The next level of complexity is provided by the structured types, of
+which MODLISP provides two: Union and Struct. Familiar examples of
+these are Sexpr, defined as Union(Pair,Atom) and Pair, defined as
+Struct(Car:Sexpr, Cdr:Sexpr).
+
+We can move up from this to {\sl parameterised data types} or just
+{\sl types}, also known as 'type generators', as defined by ADJ
+\cite{Ehri80a}.
+The basic MODLISP system provides two parameterised data types for
+efficiency (List and Vector), but there are facilities for defining
+one's own, and it is expected that a large amount of MODLISP
+programming will be done via these user-defined types. General
+examples of parameterised data types include Stack and Alist, while
+computer algebra is full of such types: Polynomial, Matrix, Algebraic
+Extension, Rational Function etc.
+
+ADJ only considered parameterised data types parameterised by one or
+more domains (in their terminology 'data types'), whereas we may also
+wish to parameterise them by actual values, or a mixture of the
+two. An exmple of this is ``3-dimensional vectors over the rational
+numbers'', which is parameterised both by the number 3 and by the type
+``rational number''.
+
+The previous definitions allow us to define a {\sl domain}
+(recursively) as being either a basic type, or the result of supplying
+actual values and domains for all the parameters of a (parameterised
+data) type. Hence ``Vectors of Integers, of length 3'', is a domain,
+since ``Integers'' is a basic type, 3 is an actual value for the
+length of the vectors, and ``Vector'' is a type parameterised by a
+positive integer and a type. Conversely, ``Vectors of Integers'' is
+not a domain, for we have not specified the length.
+
+We can now answer the question posed by the heading of this section:
+``What is a mode?''. The answer is deceptively simple: a mode is
+{\sl any} class of domains. While the MODLISP system places no
+limitation on the definition of this class, some classes are more
+useful than others. We shall see below (under the heading 'Compilation
+for Arbitrary Domains') that it is possible to define a mode
+consisting of all the domains on which certain operations (satisfying
+certain axioms) are defined -- this kind of mode will be called a
+'category'.
+
+Some particularly useful modes are those constructed by substituting
+actual values for some parameters of a type, hence we can speak about
+the mode of ``Vectors of length 3'' or the mode of ``Stacks''. These
+modes appear naturally in the modemap for many operations, as we see
+in the next paragraph. One mode that crops up particularly in
+interactive computer algebra, but is useful elsewhere, is NilMode,
+denoting the class of all domains.
+
+With parameterised data types, one wants only one routine, and one
+entry inthe modemap for a particular operator, for all the various
+parameterisations of one type, e.g. one entry for Vector, and not one
+for Vector(3,Rational), another for Vector(2,Complex) etc. This is
+made possible by the use of pattern-matching variables (denoted by
+*1, *2, ...) in modemaps. For example, the map for 'scalar product of
+vectors' might look like\footnote{The internal representation is
+actually somewhat different, since we distinguish between parameters
+which are types, and those which are expressions (e.g. between
+``Rational'' and ``3''), and there is also space to record whether or
+not that part of the map is obligatory or optional (see below under
+``Partial Declarations'').}
+\begin{verbatim}
+   (*2 (Vector *1 *2) (Vector *1 *2))
+\end{verbatim}
+which could be applied with *1=3 and *2=Rational, or with *1=2 and
+*2=Complex. If pattern matching alone is unable to express the precise
+nature of an operation, then the conditional-part of the modemap
+(mentioned in the prior footnote) can be used to add extra
+restrictions to the applicability of a particular function
+definitions. For example we could have a map of (*2 *3 *3) and a
+conditional expression of the form
+\begin{verbatim}
+   (EQUAL *3 '(VECTOR *1 *2))
+\end{verbatim}
+which would have the same overall effects as the previous map.
+
+\subsection{Compilation}
+
+While such a system may appear laudable, it will not make progress in
+computer algebra unless efficient compilation is available. Many of
+the problems of computer algebra strain the resources of even the
+largest computers, and any extra overhead due to interpretation cannot
+be afforded (especially as MODLISP interpretation is inherently more
+expensive than LISP interpretation due to the necessity to analyse
+modemaps). This gives rise to the obvious question: ``How do we
+compile modemap selection?''.
+
+It is reasonably clear that, in the case where all the arguments of a
+$\lambda$ expression are of known definite type (e.g. Integer), then
+all the analysis can indeed be done, and we are in a situation similar
+to standard LISP compilation. The only difficulty might be that both
+the compiler and the evaluator (i.e. interpreter) would perform
+modemap analysis, and it would be possible for these two to get out of
+step, thus giving compiled code a different semantics from interpreted
+code. This difficulty is met by adopting the technique of {\sl partial
+compilation} \cite{Ersh77}, in which the evaluator also acts as the
+compiler, producing values where it can, and compiled code where it
+cannot\footnote{Note that we are not considering delayed (or lazy)
+evaluation \cite{Hend76} here. The 'rule' feature of
+MODLISP \cite{Jenk79} is based on such a concept, but, as it is
+independent of the ideas considered in this paper, we shall not
+discuss it further.} As an example of this, let us consider the
+compilation of (PLUS X Y) in three cases:
+\begin{enumerate}
+\item X is 2 of mode Integer, Y is 3 of mode Integer. Then the modemap
+for PLUS tells us to apply the function IntegerPlus, and the evaluator
+does so, returning the answer 5.
+\item X and Y are known to be of mode Integer, but their values are
+not known. For example, they might be the formal parameters of a
+function. In this case, we can still select a function from the
+modemap for PLUS, since we do know the modes of X and Y. We cannot
+apply the function IntegerPlus that is produced, but we can compile
+code to produce it, so the compiled code\footnote{The current MODLISP
+implementation compiles into LISP370\cite{IBMx78}, which is compiled
+into machine code by the LISP370 compiler.} is (IntegerPlus X Y).
+\item Nothing is known about X and Y. In this case, we have no idea
+how to apply the modemap for PLUS, and we must compile a call to eval.
+\end{enumerate}
+
+These additions to the evaluator, to allow it to function as a
+compiler as well, while requiring significant changes to the treatment
+of some of the special forms, do not require a major rewrite of the
+actual evaluator. Having compilation performed by the partial
+compilation feature of the MODLISP evaluator has an additional
+advantage -- any expressions which can be evaluated at compile time
+are, and so, for example, in (PLUS X (TIMES 1 2)) the multiplication
+would be replaced by 2. While one could argue that such code should
+not be written, one case where it is hard not to do so is
+conversions. If X is Rational, then in (TIMES X 2), the number 2 must
+be converted from Integer to Rational for the multiplication to be
+performed. This conversion would automatically be done at compile time
+rather than run time.
+
+\subsection{Compilation for Arbitrary Domains}
+
+A significant problem is how to compile code (not just calls to the
+evaluator) for parameterised data types, so that, for example, the
+code for Polynomial can be compiled, and can then be used for
+Polynomials of Integers, Polynomials of Matrices, Polynomials of
+Polynomials etc. or so that we can write (and compile)
+{\sl polymorphic functions}, such as a sort function that will sort
+any set on which a comparison predicate has been defined. Note that
+this is a problem not addressed by, say, the Mode Reduce system
+\cite{Hear74}, where a separate version of the module is compiled for
+each underlying domain. Some of the mechanism required for this exists
+already -- as we saw above we can declare a modemap for the
+scalar-product of two vectors which is independent of the dimension of
+the vectors, or of the ground field. Hence calls to this routine can
+be compiled even when these parameters of Vector are not known.
+
+The answer adopted is to declare some properties of the parameterising
+types, so that, just as the first argument to Vector, as discussed
+above, is declared to be an integer, so the second is declared to be a
+Field, i.e. a type on which certain operators are valid.
+
+We require a theoretical basis for ``declaring some properties of the
+parameterising types'', and this is provided in the work of ADJ.
+\cite{Gogu76, Ehri80a}
+We do not intend to discuss the whole of their approach
+here, and the reader is referred to the papers quoted for further
+details, but it is sufficient for present purposes to say that they
+consider a {\sl data type} (which corresponds to our {\sl domain}) to
+be a (many-sorted) {\sl algebra} and a list of operations between the
+carriers. This agrees with Morris\cite{Morr73} in interpreting a type as a
+set (or sets) with operations. These operations must not only exist
+but are also required to satisfy certain {\sl axioms}.
+
+We might wish to define a stack of integers this way (this example is
+based on a rigorous discussion by ADJ \cite[p.~11]{Ehri80a})
+by saying that there
+are two carriers I and S (informally the integers themselves, and
+stacks of them)\footnote{Actually the mathematics demands a third
+carrier, that of the Booleans, since the function Empty takes values
+in the Booleans (i.e. True or False). Computationally, however, the
+Booleans are a constant, and we do not need to declare them specially.},
+and operations:
+\[\begin{array}{ll}
+{\tt Create}: & () \rightarrow S ({\tt no arguments}),\\
+{\tt Push}:   & (I,S) \rightarrow S,\\
+{\tt Pop}:    & (S) \rightarrow S\footnote{Here we avoid detailed discussions
+of problems such as ``What is Top of an empty stack?''. The literature
+mentions at least two basic techniques for dealing with such
+'exceptional states' -- the simplistic 'hard stop' and the return of a
+Union mode \cite{Blac80}. Both solutions are possible in MODLISP, and
+indeed both are used in the algebra system being implemented in MODLISP.}\\
+{\tt Top}:    & (S) \rightarrow I,\\
+{\tt Empty}:  & (S) \rightarrow Boolean
+\end{array}\]
+Of course, what we want to do is to define stack as an abstract idea,
+implemented by one program, rather than just to define
+stack-of-integers, and later define stack-of-rationals, etc. by
+separate programs.
+
+We now define a {\sl category} of algebras (i.e. types) to be the
+class of all algebras with carriers indexed by the same sets, and with
+equivalent operators which satisfy a certain list of axioms (this
+definition is deliberately vague and intuitive -- precise definitions
+are given by ADJ\cite{Ehri80a}). As an example we can define the category of
+all stacks to be the class of all algebras with two carriers (indexed
+by I and S)\footnote{As remarked in a previous footnote, there is a
+technical requirement for a third carrier Boolean. Since this is
+intended to be a constant, we shall ignore this requirement. We can
+view what we write as a shorthand for a formal language in which these
+constant carriers were always fully defined, and with suitable extra
+axioms to ensure that all instances of the constant Boolean were
+isomorphic.} with operators
+\[\begin{array}{ll}
+{\tt Create}: & () \rightarrow C_S ({\tt no arguments}),\\
+{\tt Push}:   & (C_I,C_S) \rightarrow C_S,\\
+{\tt Pop}:    & (C_S) \rightarrow C_S\\
+{\tt Top}:    & (C_S) \rightarrow C_I,\\
+{\tt Empty}:  & (C_S) \rightarrow Boolean
+\end{array}\]
+Here $C_S$ is the carrier indexed by S and $C_i$ is the carrier
+indexed by I. These operations must satify certain axioms, such as
+\begin{verbatim}
+             Top(Push(x,s)) = x;
+             Pop(Push(x,s)) = s;
+             Empty(Create()) = True;
+             Empty(Push(x,s)) = False;
+\end{verbatim}
+
+We can also abstractly define other structures, corresponding not to
+one concrete implementation (such as Stack), but to whole
+families. One example is Collection, which consists of two carriers I
+and S (or, more precisely, each element of the category Collection
+consists of two carriers indexed by I and S) with the following
+operations: 
+\begin{verbatim}
+             New:    () -> S;
+             Add:    (I,S) -> S;
+             Empty:  (S) -> Boolean;
+             Member: (I,S) -> Boolean
+\end{verbatim}
+and the following axioms:
+\begin{verbatim}
+             Empty(New())       = True;
+             Empty(Add(x,s))    = False;
+             Member(x,New())    = False;
+             Member(x,Add(y,s)) = if x=y then True else Member(x,s)
+\end{verbatim}
+This represents any collection to which we can add things, and can
+test whether or not an item is in the collection. The concrete
+representation of this abstract category includes lists, lists without
+duplicates, hash tables, balanced trees etc.
+
+The general problem of compilation is then typified by the question:
+``How do we compile something to run over any of these domains,
+without any modemap resolution at run time?''.
+
+We discussed above, when describing modemaps for parameterised
+routines, the possibility of using pattern matching variables in
+modemaps. Using these, we can describe the modemap for a routine (such
+as BelongsList, which, given a list of members of I, and a collection,
+returns a list of those members of the list that lie in the
+collection) by a map like ((List *1) (List *1) *2) with a conditional
+part expressing the fact that *2 has to be a collection of *1.
+
+The remaining problem is to place something in the modemap which the
+compiler can access and place into the compiled code, even though it
+does not know what, in this case, either I or S actually is -- I could
+be the Integers and S a hash table, or I could be a set of polynomials
+and S a linked list. However we do know, from our formalism that the
+only functions that can be accessed are New, Add, Empty and Member, so
+that if we know of a vector which will contain the four functions, in
+a fixed order, at run time, then the compiler can just compile
+accesses into this vector. For example, New might be element 5 of the
+vector\footnote{In the system, ``user'' functions start at the fifth
+element -- elements 0, 1 and 2 are reserved for bookkeeping, 3
+contains the equality-testing function, and 4 contains the printing
+function.} and then a call to New would compile into code to select
+the fifth element and apply it.
+
+This is in fact the scheme adopted -- each description of a category
+(such as Collection above, or the many categories Ring, Group, Field
+etc. are needed in computer algebra) defines the layout of a vector
+which is to represent the operations defined on any domain lying in
+that category. The modemaps for these operations are updated to
+include appropriate entries, for example PLUS has an entry of
+\begin{verbatim}
+   ((*1 *1 *1) ( (OF *1 Monoid) (Elt *1 5)))
+\end{verbatim}
+meaning that PLUS is a function valid in all Monoids (the clause
+starting OF is the conditional part of the modemap) and that its
+definition is to be found as element 5 of the vector representing the
+operations on the monoid.
+
+Hence the only extra overhead at run-time due to the existence of
+parameterised types (i.e. not knowing at compile time what the types
+of the operands were) is the cost of the element extraction --
+typically two machine instructions.
+
+\subsection{Partial Declaration}
+
+We have seen in the previous section that, if we can declare, for
+example, that X and Y belong to some unspecified domain G which is a
+Group (for example) then we will be able to compile code which will
+operate over all groups. This is not difficult to do (though the
+algebra system being implemented in MODLISP has a high-level language
+preprocessor to make it easier), and gives rise to a very powerful system.
+
+In fact we can do more -- this system opens up the possibility of
+``partial declaration'', which can be performed in either interpreted
+or compiled code. We can say, for example, that F is to be a
+polynomial in X, but we do not care over what the polynomial is taken
+(one example of this would be in integration, where we wish to express
+the function to be integrated in terms of the variable of integration,
+and all other variables etc. are secondary). Code to manipulate F can
+still be compiled, because we know that polynomials always lie in
+rings, and the precise nature of the underlying coefficients is
+irrelevant since all the necessary information (functions to
+manipulate them, etc.) will be contained in the vector implementing
+the particular polynomial domain.
+
+\subsection{Status of the Project}
+
+The MODLISP system is currently implemented above LISP/370\cite{IBMx78},
+and is being used to develop an experimental computer algebra system
+which is based on abstract data types, in
+the sense that it is possible to define ``Polynomial'' as an operation
+which takes a ring, and yields another one (i.e. a vector of
+operations which can be accessed by a MODLISP program compiled knowing
+that its arguments came from a ring).
+
+\subsection{Acknowledgments}
+
+We are grateful to J.W. Thatcher and E.G. Wagner for many useful
+discussions about abstract parameterised data types, and to
+D.R. Barton, J.D. Cohen and D.Y.Y. Yun for many fruitful discussions
+on MODLISP. Earlier drafts of this paper were read by F.W. Blair,
+R.W. Ryniker II and J.W. Thatcher, and we are grateful to them for
+many helpful comments and criticisms.
+
+\subsection{Appendix A: Description of MODLISP Evaluator}
+
+This appendix first gives a formal description of a simplified MODLISP
+evaluator, one which does not provide for partial compilation or
+partial declarations. The overall interpretive structure is more
+easily seen from this simpler description. We then discuss how this
+evaluator can be extended to the complete MODLISP evaluator, which
+provides both partial compilation and partial declaration, and for the
+interaction of the two.
+
+The following summarizes the dialect of LISP used below to describe
+the evaluator. (QUOTE X) is abbreviated by "X. (LET X .) is used to
+introduce a local variable X. The notation \textless X M E\textgreater
+is used for an
+atomic datatype called {\sl triple} consisting of an expression X, a
+mode M, and an environment E. An argument of the form (: A B) to a
+$\lambda$ expression means ``A has the form of B'', and has the
+side-effect of binding symbols appearing in B to the indicated parts
+of the structure. The (REPEAT (..) X) repeats X as given by the
+iterators (..) and has the value NIL. (COLLECT (..) X) does the same
+but its value is a list of the successive values of X (thus, (COLLECT
+((IN U X)) (F U)) is similar to (MAPCAR X (FUNCTION F))). COLLECT and
+REPEAT do not generate PROGs, so that (RETURN X) always causes an exit
+from the function containing it with value X.
+
+\begin{verbatim}
+(EVAL (LAMBDA ((: T <X M E>)) (COND
+  ((ATOM X) (PROGN
+    (LET TP (COND
+      ((TRIPLEP X) ((GETEVALFUN M E) X))
+      ((SYMBOLP X) (EVSYMBOL X E))
+      ("T <X (MODE X) E>) ))
+    (EVCONVERT TP M) ))
+  ((ATOM (LET OP (CAR X))) (PROGN
+    ((LET FN (GET OP "SPECIAL E)) (FN T))
+    ((REPEAT ((IN MAP (GET OP "MODEMAP E)))
+      (COND ((LET Z (EVFORM T MAP))
+              (RETURN Z)))))
+    ("T NIL) ))
+  ((EQ (CAR OP) "LAMBDA)
+    (EVLAPPLY (CADR OP) (CADDR OP) (CDR X) M E))
+  ("T (EVAL <(S:EXPR (EVAL <OP "SEXPR E>))
+             M
+             E>)) )))
+\end{verbatim}
+
+\begin{verbatim}
+(EVSYMBOL (LAMBDA (S E) (COND
+  ((LET V (GET S "VALUE E)) V)
+  ((GET S "MODE E) NIL)
+  ("T <S "SYMBOL E>) )))
+\end{verbatim}
+
+\begin{verbatim}
+(EVCONVERT (LAMBDA (T M) (COERCE T M)))
+\end{verbatim}
+
+\begin{verbatim}
+(EVFORM (LAMBDA ((: T <(OP . ARGL) TM E>)
+                (: MAP (SIG . CEXPR))) (PROGN
+  (LET MAP (SUBLIS (OR (MATCH TM (CAR SIG))
+                       (RETURN NIL)) MAP))
+  (LET L (COLLECT ((IN A ARGL) (IN M (CADR MAP)))
+    (S:EXPR (LET T (OR (EVAL <A M
+                               (LET E (S:ENV T))>)
+                         (RETURN NIL)))) ))
+  (REPEAT ((IN X L))
+    (COND ((EQUAL "True
+             (S:EXPR (EVAL <(CAR X) "Boolean E>)))
+          (RETURN <(LISPAPPLY (CADR X) L) MD E>))))
+  (RETURN NIL) )))
+\end{verbatim}
+
+\begin{verbatim}
+(EVLAPPLY (LAMBDA (VL B ARGL M E) (PROGN
+  (LET XE (EXTEND E))
+  (REPEAT ((IN A ARGL) (IN X VL))
+    (LET XE (BIND (CAR X) XE (LIST
+             (CONS "MODE (CDR X))
+             (CONS "VALUE (EVAL <A (CDR X) E>))))))
+  (EVAL <B M XE>) )))
+\end{verbatim}
+
+\subsection{Explanation}
+
+EVAL takes a triple T consisting of an expression X, a ``target'' mode
+M, and an environment E, and returns either a triple or else NIL
+indicating failure to produce such a triple. If X is an atom, a triple
+TP is created, then EVCONVERTed to M. There are three ways that
+triples are produced from atomic X. If X is already a triple
+(remember, triples are atomic), then an evaluation function associated
+with M is applied to evaluate X in the new environment E (for example,
+if M is SEXPR then that evaluation function is EVAL). If X is a
+symbol, then TP is produced by EVSYMBOL. Otherwise, the atom is a
+basic object for which the function MODE can produce the triple directly.
+
+If X is not an atom but its first element OP is, then there are three
+cases. First, symbol OP may be a special MODLISP operator such as
+EXIT, IF, LAMBDA, QUOTE, RETURN, SETQ, in which case the name FN
+stored under property SPECIAL is applied to the list of arguments of
+X. If OP has a MODEMAP property, then the value stored under that
+property is a list of modemaps. Each modemap is applied in turn by
+EVFORM attempting to evaluate form X successfully to produce a triple
+Z. If both of the above two cases fail, EVAL returns NIL.
+
+If neither X nor its CAR is atomic, then two cases remain. If the CAR
+of OP is "LAMBDA, then EVLAPPLY is called. Otherwise, the OP is
+evaluated with target mode SEXPR to produce a new OP which is consed
+onto the list of arguments and passed recursively to EVAL.
+
+EVSYMBOL takes a symbol S and an environment E, and returns either a
+triple or NIL. If S has a VALUE property\footnote{As set by an
+assignment (the SETQ special form) or by a binding (function
+EVLAPPLY).} then a triple stored under that property is returned. If S
+has a MODE property but not a VALUE, then EVSYMBOL fails. Otherwise, a
+triple with mode SYMBOL is created directly for S.
+
+EVCONVERT takes a triple T and a mode MP, and produces either another
+triple or NIL. In a system without partial declarations (for example,
+all conventional ``typed'' languages), EVCONVERT is equivalent to the
+conversion function COERCE described below.
+
+EVFORM takes two arguments: a triple T=\textless X TM E\textgreater, 
+where X consists of a
+(generic) OPerator consed onto a list ARGL of arguments, and, a
+Modemap MAP consisting of a ``signature pattern'' SIG consed onto a
+conditional expression CEXPR. The SIG is a list of patterns whose CAR
+gives a ``mode-pattern'' of the result and whose CDR gives the
+mode-patterns for the arguments in left-to-right order. First, an
+attempt is made to MATCH SIG's result mode to the mode TM of the
+triple. If this match fails, then EVFORM returns NIL. The substitution
+list resulting from a successful match is SUBLISted into the signature
+pattern to produce a signature MAP containing no free variables. Next,
+each argument in ARGL is evaluated in turn with the corresponding mode
+from the new signature; if all evaluations are successful, a list L of
+evaluated arguments is produced. The CDR of the new MAP is a
+conditional expression list, each element of which is a list (Boolean
+expression, function descriptor). If the Boolean expression can be
+successfully EVALed with mode Boolean to yield "true, then the
+function descriptor is consed onto L and LISPEVALed.
+
+EVLAPPLY takes a triple T consisting of a LAMBDA-expression with
+symbol list VL and a body B consed onto a list of arguments ARGL as
+the expression part, a mode, and an environment. Here, VL is a list of
+pairs each consisting of a formal parameter consed with a mode. First,
+XE is created by extending E with a new (empty) local
+environment. Next, XE is incrementally extended by adding a binding
+for each successive member of VL. Each binding in MODLISP is a
+property list consisting of a MODE m together with a VALUE consisting
+of a triple created by evaling the corresponding member of ARGL using
+m as target mode, and the original E as the environment. Having
+extended XE to include bindings for all the formal parameters of VL, a
+triple is formed by evaluating the body of the LAMBDA-expression in
+that extended environment.
+
+The following auxillary functions are used:
+
+\vskip 2mm
+\noindent
+(BIND S E PL) adds a property list PL as a binding for symbol S in the
+current local environment of E and returns the updated E.
+
+\vskip 2mm
+\noindent
+(COERCE T M) converts triple T to one with mode M, or else returns NIL
+if that conversion is not possible.
+
+\vskip 2mm
+\noindent
+(EXTEND E) extends E to contain a new empty local environment.
+
+\vskip 2mm
+\noindent
+(GET S P E) returns value stored under property P for symbol S in
+environment E.
+
+\vskip 2mm
+\noindent
+(GETEVALFUN M) returns the evaluator function for mode M.
+
+\vskip 2mm
+\noindent
+(MATCH E P) returns a list of substitution pairs ((A . B) ..) if
+pattern P (containing ``free variables'' A,..) matches expression E
+(that is, P=E when all A's in P are replaced by corresponding B's)
+
+\vskip 2mm
+\noindent
+(LISPAPPLY FN L) applies MODLISP function FN to a list L of evaluated
+arguments by a LISP evaluation of (CONS (CAR FN) (APPEND L (LIST (CDR
+FN)))). In MODLISP, all functions are represented as pairs whose CAR
+is a code pointer and whose CDR is a run-time environment (as defined
+by the modemap) which will be supplied to FN as its last argument when
+FN is called.
+
+\vskip 2mm
+\noindent
+(MODE X) returns the mode of X, assumed to be a built-in type
+
+\vskip 2mm
+\noindent
+(S:EXPR T) returns the expression part of triple T.
+
+\vskip 2mm
+\noindent
+(S:MODE T) returns the mode part of triple T.
+
+\vskip 2mm
+\noindent
+(S:ENV T) returns the environment part of triple T.
+
+\vskip 2mm
+\noindent
+(SYMBOLP X) tests that X is a symbol.
+
+\vskip 2mm
+\noindent
+(TRIPLEP X) tests that X is a triple.
+
+\vskip 2mm
+\noindent
+(COMPILE FN ARGS) compiles a call to the function FN, with argumets ARGS.
+
+\vskip 2mm
+\noindent
+(COMPILEDP X) test if X represents a piece of compiled code, rather
+than a value.
+
+\subsection{On Extensions for Partial Compilation}
+
+In order to cope with partial compilation, several modifications to
+the evaluator must be made. The first, and easiest, is that the fourth
+line of EVSYMBOL should be changed to return a compiled reference to X
+rather than returning NIL. The other changes are to EVFORM. The loop
+in lines 5-8 should be modified to set the flag EVALFG if some (S:MODE
+T) is "NilMode, COMPFG, if some (S:EXPR T) represents compiled
+code. In addition, the call to LISPAPPLY on the last line should be
+replaced by a conditional expression (COND (EVALFG "CALLEVAL) (COMPFG
+"COMPILE) ("T "LISPAPPLY)). These changes to EVFORM discriminate (in
+reverse order) between the 3 cases described in the section
+"Compilation" in the body of the paper. To recap, if any of the
+arguments has an unknown mode (indicated by a return mode of "NilMode),
+then all we can do is call the evaluator at run-time, when the modes
+are known. If the modes are known, but some of the values are not
+(i.e. the expression part of at least one triple represents a piece of
+compiled code, as determined by COMPILEDP), then we can compile a call
+to the function determined from the modemap. Finally, if all the
+values are known, then we can proceed by calling LISPEVAL, just as in
+the case of the basic evaluator without the additions for partial
+compilation.
+
+\subsection{On Extensions for Partial Declarations}
+
+In the general case where partial declarations are allowed \cite{Cohe80},
+the definition of EVCONVERT must be replaced by:
+\begin{verbatim}
+(EVCONVERT (LAMBDA ((: T <X M E>) MP)
+  (COERCE T (OR (RESOLVE M MP) (RETURN NIL))) ))
+\end{verbatim}
+Here, the mode M of T is RESOLVEd with MP to produce a third mode M'
+(if no such mode can be found, EVCONVERT returns NIL immediately). The
+expression X of T is then COERCEd to M' producing a final triple, or
+NIL if that is not possible.
+
+In addition, the description of EVFORM becomes somewhat more
+complicated. First of all, it is not necessary for the result mode of
+SIG to match successfully the target mode TM of the triple. As a
+result SIG will generally contain free variables throughout the
+process of left-to-right argument evaluation. This process has the
+following alternative code replacing the loop in lines 5-8 of EVFORM:
+\begin{verbatim}
+(LET LT (COLLECT ((IN A ARGL) (IN P (CDR SIG)))
+  (PROGN
+    (LET MD (PATTERN_TO_MODE (SUBLIS LS P)))
+    (LET T (OR (EVAL <A MD E>) (RETURN NIL)))
+    (LET E (S:ENV T))
+    (LET LS (NCONC (MATCH (S:MODE T) P) LS))
+    T)))
+\end{verbatim}
+\begin{verbatim}
+(LET L (COLLECT ((IN T TL)
+                 (IN MD (SUBLIS LS (CDR SIG))))
+  (S:EXPR (OR (COERCE T MD) (RETURN NIL)))))
+\end{verbatim}
+
+This is described as follows. First, a list LT of triples is
+produced. The first argument A of ARGL is evaluated in the initial
+environment with a target mode obtained by SUBLISting LS (initially
+NIL\footnote{This initial setting determines a {\sl bottom-up}
+evaluation strategy, where the mode of a result is determined purely
+by the modes of its arguments. This clearly creates difficulties for
+functions without arguments. The strategy actually used in MODLISP is
+first to try a {\sl top-down} evaluation, and then to use a bottom-up
+strategy if the top-down one fails. The top-down strategy is
+implemented by setting the initial value of LS to be the result of
+MATCHing the mode-pattern of the result (CAR SIG) with the target mode
+TM.}) into P and converting the result to a mode by
+PATTERN\_TO\_MODE. If evaluation successfully produces a triple T, the
+initial environment is replaced by the environment of T, the
+substitution list LS is updated to contain new bindings which result
+from MATCHing P to the mode of T. A second argument is then evaluated
+with a target mode determined from the evaluation of the first
+argument, etc. until a triple is either produced for each argument or
+else NIL is returned along the way.
+
+The list LT now consists of triples containing values whose modes are
+specific domains. All relevant free variables in the final LS are
+paired with domains, with later pairings (those which appear left-most
+in LS) taking precedence. A final signature is determined therefore by
+SUBLISting LS into (CDAR MAP). A pass over TL is then made to COERCE
+all expressions to the appropriate domain.
+
+\subsection{Appendix B: Sample Compilation by the MODLISP Evaluator}
+
+The following illustrates a sample source language function definition
+and corresponding compilation by the current MODLISP evaluator into
+LISP code. The example describes a function to raise an expression to
+a power using a repeated squaring method. The domain of the
+expression, r, is assumed to be in the category Ring, the power
+assumed to be a NonNegativeInteger. The example is taken from the
+context of the definition of the category Ring in our experimental
+computer algebra system.
+\begin{verbatim}
+Source language:
+  given
+    x: r
+    n: NonNegativeInteger
+  define
+    x ** n ->
+      if n = 0 then 1
+        else if n = 1 then x
+	  else if oddp(n) then x*((x*x)**((n-1)/2))
+	    else (x*x)**(n/2).
+\end{verbatim}
+Compilation into LISP:
+\begin{verbatim}
+(LAMBDA (x n r) ((LAMBDA (G4 G1 G2 G0 G3)
+  (COND
+    ((EQUAL n 0) (ELT r 10))
+    ((EQUAL n 1) x)
+    ((oddp n)
+      ((CAR (SETQ G2 (ELT r 9)))
+        x
+	((CAR (SETQ G1 (ELT r 11)))
+	  ((CAR (SETQ G0 (ELT r 9))) x x (QCDR G0))
+	  (QUOTIENT (DIFFERENCE n 1) 2) (QCDR G1))
+	(QCDR G2)) )
+    ("T
+      ((CAR (SETQ G4 (ELT r 11)))
+        ((CAR (SETQ G3 (ELT r 9))) x x (QCDR G3))
+        (QUOTIENT n 2)
+        (QCDR G4))) ))
+  NIL NIL NIL NIL NIL ))
+\end{verbatim}
+Explanation. A representation of the ring r is passed as a third
+argument to the function. Rings are represented by vectors of length
+11 (or more, if they are of a more restrictive category). Elements 5
+through 11 are allocated as follows:
+\begin{verbatim}
+   (5) the zero element of the ring
+   (6) dyadic +
+   (7) monadic -
+   (8) dyadic -
+   (9) dyadic *
+   (10) the multiplicative identity (1)
+   (11) dyadic **
+\end{verbatim}
+Each of the slots 6-9 and 11 are pairs consisting of a code pointer in
+its CAR and a pointer to the vector representing r in its CDR. In
+particular, the CAR of the contents of slot 11 in the vector is a
+pointer to the compiled code of the above function!
+
+The function QCDR is a version of CDR that does not check to see if
+its argument is a pair first, and hence it can compile into 1 machine
+instruction. Note that this function is only used in circumstances
+where the CAR has already been taken, so we know that the argument
+really is a pair. (ELT v n) extracts the n-th element (counting from
+0) of the vector v. The symbols G0-G4 represent ``gensyms'' generated
+by MODLISP.
+
+We note that there are several optimizations which could be performed
+on the code to improve performance and to reduce the size of the
+compiled code, such as replacing EQUAL by EQ, G2 and G3 by G0, G4 by
+G1, the inner (CAR (SETQ G0..)) by (QCAR (SETQ G0..)), all (ELT r 9)
+by (QELT r 9). These optimisations which are planned, are global in
+nature. The evaluator already performs several local optimisations,
+such as the use of QCDR.
+
 \section{Tedious Maintainer Tasks}
 
 \subsection{Maintaining the credits list}
