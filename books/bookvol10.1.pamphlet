@@ -26985,8 +26985,488 @@ useful in practice.
 
 \chapter{Potential Future Algebra}
 {\center{\includegraphics[scale=0.70]{ps/v101toe.eps}}}
-\chapter{Groebner Basis}
-Groebner Basis
+\chapter{Groebner Basis by Siddharth Bhat}
+
+Quoting Philip Zucker \cite{Zuck19}, the Groebner basis algorithm is: 
+\begin{quote}
+The algorithm churns on a set of multivariate polynomials and spits
+out a new set that is equivalent in the sense that the new set is
+equal to zero if and only if the original set was. However, now (if
+you ask for the appropriate term ordering) the polynomials are
+organized in such a way that they have an increasing number of
+variables in them. So you solve the 1-variables equations (easy), and
+substitute into the 2-variable equation. Then that is a 1-variable
+equation, which you solve (easy) and then you substitute into the
+three variable equation, and so on. It's analogous to gaussian
+elimination. 
+\end{quote}
+
+Siddharth Bhat \cite{Bhat19}
+wrote a couple blog posts on groebner basis which we quote here.
+
+\section{A Grobner Basis example}
+
+Here's a fun little problem, whose only solution I know involves a
+fair bit of math and computer algebra.
+
+We are given the grammar for a language $L$:
+\begin{verbatim}
+   E = T +_mod8 T | T = -_mod8 T
+   T = V | V ^ V | V ^ V ^ V
+   V = 'a1' | 'a2' | ...
+\end{verbatim}
+
+where \verb|+_mod8| is addition modulo 8, \verb|-_mod8| is subtraction
+modulo 8, and \verb|^| is XOR.
+
+This language is equipped with the obvious evaluation rules,
+corresponding to those of arithmetic. We are guaranteed that during
+evaluation, the variables \verb|a_i| will only have values 0 and 1.
+Since we have addition, we can perform multiplication by a constant by
+repeated addition. So we can perform \verb|3*a| as \verb|a+a+a|.
+
+We are then given the input expression
+\begin{verbatim}
+   (a0 ^ a1 ^ a2 ^ a3)
+\end{verbatim}
+We wish t find an equivalent expression in terms of the above language
+$L$. 
+
+We think of $E$ as some set of logic gates we are allowed to use, and
+we are trying to express the above operation in terms of these gates.
+
+The first idea that I thought was that of employing a grobner basis,
+since they essentially embody rewrite rules modulo polynomial
+equalities, which is precisely our setting here. 
+
+In this blog post, I'm going to describe what a grobner basis is and
+why it's natural to reach for them to solve this problem, the code,
+and eventual solution. 
+
+As a spoiler, the solution is:
+\begin{verbatim}
+   a^b^c^d =
+      -a - b + c + 3*d - 3*axorb - axorc
+      + axord - bxorc + bxord + 3*cxord
+      - 3*axorbxorc - axorbxord
+      + axorcxord + bxorcxord
+\end{verbatim}
+
+Clearly, this contains only additions/subtractions and multiplication
+by a constant.
+
+\subsection{What the hell is Grobner Basis?}
+
+The nutshell is that a grobner basis is a way to construct rewrite
+rules which also understand arithmetic (I learnt this viewpoint from
+the book ``Term Rewriting and All That''. Fantastic book in
+general). Expanding on the nutshell, assuming we have a term rewriting
+system:
+\begin{verbatim}
+  A -> -1*B -- (1)
+  C -> B^2  -- (2)
+\end{verbatim}
+over an alphabet \verb|(A, B, C)|.
+
+Now, given the string \verb|C + AB|, we wish to find out if it can be
+rewritten to 0 or not. Let's try to substitute and see what happens.
+\begin{verbatim}
+   C + AB -2-> B^2 + AB -1-> B^2 + (-1*B)B
+\end{verbatim}
+
+At this point, we're stuck! We don't have rewrite rules to allow us to
+rewrite \verb|(-1*B)B| into \verb|-B^2|. Indeed, creating such a list
+would be infinitely long. But if we are willing to accept that we
+somehow have the rewrite rules that correspond to polynomial
+arithmetic, where we view \verb|A,B,C| as variables, then we can
+rewrite the above string to 0.
+\begin{verbatim}
+   B^2 + (-1*B)B -> B^2 - B^2 -> 0
+\end{verbatim}
+
+A Grobner basis is the algorithmic / mathematical machine that allows
+us to perform this kind of sumbstitution.
+
+In this example, this might appear stupid; what is so special? We
+simply substituted variables and arrived at 0 by using
+arithmetic. What's so complicated about that? To understand why this
+is not always so easy, let's consider a pathologicial, specially
+constructed example.
+
+\subsection{A complicated example that shattters dreams}
+
+Here's the patheologicial example:
+\begin{verbatim}
+   A -> 1     -- (1)
+   AB -> -B^2 -- (2)
+\end{verbatim}
+
+And we consider the string \verb|S = AB + B^2|. If we blindly apply
+the first rule, we arrive at
+\begin{verbatim}
+   S = AB + B^2 -1-> 1B + B^2 = B + B^2 (STUCK)
+\end{verbatim}
+
+However, if we apply (2) and then (1)
+\begin{verbatim}
+   S = AB + B^2 -2-> -B^2 + B^2 -> 0
+\end{verbatim}
+
+This tells us that we can't just apply the rewrite rules
+willy-nilly. It's sensitive to the order of the rewrites! That is, the
+rewrite system is not {\bf confluent}.
+
+The grobner basis is a function from rewrite systems to rewrite
+systems. When given a rewrite system $R$, it produces a new rewrite
+system $R^\prime$ that is {\bf confluent}. So, we can apply the
+rewrite rules of $R^\prime$ in any order, and we are guaranteed that
+we will only get a 0 from $R^\prime$ if and only if we could have
+gotten a 0 from $R$ for all strings.
+
+We can then go on to phrase this whole rewriting setup in the language
+of ideals from ring theory, and that is the language in which it is
+most often described. 
+
+Now that we have a handle on what a grobner basis is, let's go on to
+solve the original problem.
+
+\subsection{An explanation through a slightly simpler problem}
+
+I'll first demonstrate the idea of how to solve the original problem
+by solving a slightly simpler problem:
+
+Rewrite \verb|a^b^c| in terms of \verb|a^b|, \verb|b^c|, \verb|c^a|
+and the same \verb|+_mod8| instruction set as the original
+problem. The only difference this time is that we do not have 
+\begin{verbatim}
+   T -> V ^ V ^ V
+\end{verbatim}
+
+The idea is to construct the polynomial ring over \verb|Z/8Z|
+(integers modulo 8) with variables a, b, c, axorb, bxorc, axorc. Now,
+we know that 
+\begin{verbatim}
+   a^b = a + b - 2ab
+\end{verbatim}
+So, we setup rewrite rules such that 
+\begin{verbatim}
+   a + b - 2ab -> axorb
+   b + c - 2bc -> bxorc
+   c + a - 2ca -> cxora
+\end{verbatim}
+
+We construct the polynomial
+\begin{verbatim}
+   f(a, b, c) = a^b^c
+\end{verbatim}
+which has been written in terms of addition and multiplication,
+defined as
+\begin{verbatim}
+   f_orig(a, b, c) = 4*a*b*c - 2*a*b - 2*a*c - 2*b*c + a + b + c
+\end{verbatim}
+We then rewrite \verb|f_orig| with respect to our rewrite
+rules. Hopefully, the rewrite rules should give us a clean expression
+in terms of one variable and two-variable xor's. There is the danger
+that we may have some term such as \verb|a * bxorc|, and we do get
+such a term \verb|(2*b*axorc)| in this case, but it does not appear in
+the original problem.
+
+Create a ring with variables a, b, c, axorb, bxorc, axorc.
+\begin{verbatim}
+   R = IntegerModRing(8)['a, b, c, axorb, bxorc, axorc']
+   (a, b, c, axorb, bxorc, axorc) = R.gens()
+\end{verbatim}
+
+XOR in terms of polynomials
+\begin{verbatim}
+   def xor2(x, y): return x + y - 2*x*y
+\end{verbatim}
+
+Define the ideal which allows us to rewrite 
+\verb|xor2(a,b)->axorb|, and so on we also add the relation
+\verb|a^2-a=0 => a=0| or \verb|a=1| in case this helps the solver.
+\begin{verbatim}
+   I = ideal((axorb - xor2(a,b), 
+              bxorc - xors(b,c), 
+              axorc - xor2(a,c), 
+              a*a-a, b*b-b, c*c-c))
+\end{verbatim}
+
+The polynomial representing \verb|a^b^c| we wish to reduce
+\begin{verbatim}
+   f_orig = xor2(a, b, c)
+\end{verbatim}
+
+We take the groebner basis of the ring to reduce the polynomial $f$
+\begin{verbatim}
+   IG = I.groebner_basis()
+\end{verbatim}
+
+We reduce \verb|a^b^c| with respect to the groebner basis.
+\begin{verbatim}
+   f_reduced = f_orig.reduce(IG)
+\end{verbatim}
+
+\begin{verbatim}
+   print("value of a^b^c:\n\t%s\n\treduced: %s" % (f_orig, f_reduced))
+\end{verbatim}
+
+Code to evaluate the function $f$ on all inputs to check correctness.
+\begin{verbatim}
+   def evalxor2(f)
+     for (i, j, k) in [(i, j, k) 
+       for i in [0, 1] 
+         for j in [0, 1] 
+           for k in [0, 1]]:
+             ref = i^^j^^k
+             eval = f.substitute(a=i, b=j, 
+                                 axorb=i^^j, bxorc=j^^k, axorc=i^^k)
+             print("%s^%s^%s: ref(%s) =?= f(%s): %s" %
+               (i, j, k, ref, eval, ref == eval))
+\end{verbatim}
+
+Check original formulation is correct
+\begin{verbatim}
+   print("evaluating original f for sanity check")
+   evalxor2(f_orig)
+\end{verbatim}
+
+Check reduced formulation is correct
+\begin{verbatim}
+   print("evaluating reduced f:")
+   evalxor2(f_reduced)
+\end{verbatim}
+
+Running the code gives us the redued polynomial
+\verb|-2*b*axorc+b+axorc| which unfortunately contains a term that is 
+\verb|b*axorc|. So, this approach does not work, and I was informed by
+my friend that she is unaware of a solution to this problem (writing
+\verb|a^b^c| in terms of smaller xors and sums).
+
+The full code output is:
+\begin{verbatim}
+   value of a^b^c:
+     4*a*b*c - 2*a*b - 2*a*c - 2*b*c + a + b + c
+     reduced: -2*b*axorc + b + axorc
+   evaluating original f for sanity check:
+\end{verbatim}
+
+\begin{verbatim}
+   0^0^0: ref(0) =?= f(0): True
+   0^0^1: ref(1) =?= f(1): True
+   0^1^0: ref(1) =?= f(1): True
+   0^1^1: ref(0) =?= f(0): True
+   1^0^0: ref(1) =?= f(1): True
+   1^0^1: ref(0) =?= f(0): True
+   1^1^0: ref(0) =?= f(0): True
+   1^1^1: ref(1) =?= f(1): True
+\end{verbatim}
+
+\begin{verbatim}
+   evaluating reduced f:
+   0^0^0: ref(0) =?= f(0): True
+   0^0^1: ref(1) =?= f(1): True
+   0^1^0: ref(1) =?= f(1): True
+   0^1^1: ref(0) =?= f(0): True
+   1^0^0: ref(1) =?= f(1): True
+   1^0^1: ref(0) =?= f(0): True
+   1^1^0: ref(0) =?= f(0): True
+   1^1^1: ref(1) =?= f(1): True
+\end{verbatim}
+
+That is, both the original polynomial and the reduced polynomial match
+the expected results. But the reduced polynomial is not in our
+language $L$, since it has a term that is a product of $b$ with
+$axorc$.
+\begin{verbatim}
+   -a - b + c + 3*d - 3*axorb - axorc
+   + axord - bxorc + bxord + 3*cxord
+   - 3*axorbxorc - axorbxord
+   + axorcxord + bxorcxord
+\end{verbatim}
+
+which happily has no products between terms! It also passes our sanity
+check, so we've now found the answer.
+
+The full output is:
+\begin{verbatim}
+   value of a^b^c^d:
+     4*a*b*c + 4*a*b*d + 4*a*c*d + 4*b*c*d - 2*a*b -2*a*c - 2*b*c
+     - 2*a*d - 2*b*d - 2*c*d + a + b + c + d
+    reduced:
+      -a - b + c + 3*d - 3*axorb - axorc + axord - bxorc + bxord
+      + 3*cxord - 3*axorbxorc - axorbxord + axorcxord + bxorcxord
+ 
+\end{verbatim}
+
+\begin{verbatim}
+   evaluating original a^b^c^d
+   0^0^0^0: ref(0) =?= f(0): True
+   0^0^0^1: ref(1) =?= f(1): True
+   0^0^1^0: ref(1) =?= f(1): True
+   0^0^1^1: ref(0) =?= f(0): True
+   0^1^0^0: ref(1) =?= f(1): True
+   0^1^0^1: ref(0) =?= f(0): True
+   0^1^1^0: ref(0) =?= f(0): True
+   0^1^1^1: ref(1) =?= f(1): True
+   1^0^0^0: ref(1) =?= f(1): True
+   1^0^0^1: ref(0) =?= f(0): True
+   1^0^1^0: ref(0) =?= f(0): True
+   1^0^1^1: ref(1) =?= f(1): True
+   1^1^0^0: ref(0) =?= f(0): True
+   1^1^0^1: ref(1) =?= f(1): True
+   1^1^1^0: ref(1) =?= f(1): True
+   1^1^1^1: ref(0) =?= f(0): True
+\end{verbatim}
+
+\begin{verbatim}
+   evaluating reduced a^b^c^d
+   0^0^0^0: ref(0) =?= f(0): True
+   0^0^0^1: ref(1) =?= f(1): True
+   0^0^1^0: ref(1) =?= f(1): True
+   0^0^1^1: ref(0) =?= f(0): True
+   0^1^0^0: ref(1) =?= f(1): True
+   0^1^0^1: ref(0) =?= f(0): True
+   0^1^1^0: ref(0) =?= f(0): True
+   0^1^1^1: ref(1) =?= f(1): True
+   1^0^0^0: ref(1) =?= f(1): True
+   1^0^0^1: ref(0) =?= f(0): True
+   1^0^1^0: ref(0) =?= f(0): True
+   1^0^1^1: ref(1) =?= f(1): True
+   1^1^0^0: ref(0) =?= f(0): True
+   1^1^0^1: ref(1) =?= f(1): True
+   1^1^1^0: ref(1) =?= f(1): True
+   1^1^1^1: ref(0) =?= f(0): True
+\end{verbatim}
+
+Code for \verb|a^b^c^d|
+\begin{verbatim}
+def xor3(x, y, z): return xor2(x, xor2(y, z))
+
+R = IntegerModRing(8)['a, b, c, d, axorb, axorc, axord,
+                       bxorc, bxord, cxord, axorbxorc,
+                       axorbxord, axorcxord, bxorcxord']
+(a, b, c, d, axorb, axorc, axord, bxorc, bxord, cxord, 
+  axorbxorc, axorbxord, axorcxord, bxorcxord) = R.gens()
+I = ideal((axorb - xor2(a, b),
+           axorc - xor2(a, c),
+           axord - xor2(a, d),
+           bxorc - xor2(b, c),
+           bxord - xor2(b, d),
+           cxord - xor2(c, d),
+           axorbxorc - xor3(a, b, c),
+           axorbxord - xor3(a, b, d),
+           axorcxord - xor3(a, c, d),
+           bxorcxord - xor3(b, c, d),
+           a*a-a,
+           b*b-b,
+           c*c-c,
+           d*d-d))
+IG = I.groebner_basis()
+f_orig = (xor2(a, xor2(b, xor2(c, d))))
+f_reduced = f_orig.reduce(IG)
+print("value of a^b^c^d:\n\t%s\n\treduced: %s" % (f_orig, f_reduced))
+
+def evalxor3(f):
+  for (i, j, k, l) in [(i, j, k, l)
+    for i in [0, 1]
+      for j in [0, 1]
+        for k in [0, 1]
+          for l in [0, 1]]:
+    ref = i^^j^^k^^l
+    eval = f.substitute(a=i, b=j, c=k, d=l,
+                        axorb=i^^j, axorc=i^^k, axord=i^^l,
+                        bxorc=j^^k, bxord=j^^l,
+                        cxord=k^^l, axorbxorc=i^^j^^k,
+                        axorbxord=i^^j^^l, axorcxord=i^^k^^l,
+                        bxorcxord=j^^k^^l)
+    print("%s^%s^%s^%s: ref(%s) =?= f(%s): %s" %
+          (i, j, k, l, ref, eval, ref == eval))
+
+print("evaluating original a^b^c^d")
+evalxor3(f_orig)
+
+print("evaluating reduced a^b^c^d")
+evalxor3(f_reduced)
+
+\end{verbatim}
+
+\section{Ideals as Rewrite Systems}
+
+\subsection{A motivating example}
+
+The question a Grobner basis allows us to answer is this: can the
+polynomial
+\[p(x,y)=xy^2+y\]
+be factorized in terms of
+\[a(x,y)=xy+1,\quad b(x,y)=y^2-1\]
+such that
+\[p(x,y)=f(x,y)a(x,y)+g(x,y)b(x,y)\]
+for some {\sl arbitrary} polynomials
+\[f(x,y), g(x,y) \in R[x,y]\]
+
+One might imagine, ``well, I'll divide and see what happens!''. Now,
+there are two routes to do down:
+\[xy^2+y=y(xy+1)=ya(x,y)+0b(x,y)\]
+Well, problem solved?
+\[xy^2+y=xy^2-x+x+y=x(y^2-1)+x+y=xb(x,y)+(x+y)\]
+Now what? We're stuck, and we can't apply $a(x,y)$.
+
+So, clearly, the {\sl order} in which we perform the factorization /
+division starts to matter! Ideally, we want an algorithm which is 
+{\sl not sensitive} to the order in which we choose to apply these
+changes. $x^2+1$
+
+\subsection{The rewrite rule perspective}
+
+An alternative viewpoint of asking ``can this be factorized'', is to
+ask ``can we look at the factorization as a rewrite rule?''. For this
+perspective, notice that ``factorizing'' in terms of $xy+1$ is the
+same as being able to set $xy=-1$, and then have the polynomial
+collapse to zero. For the more algebraic minded, this relates to the
+fact that
+\[R[x]/p(x)\approx R(\text{roots of p})\]
+The intuition behind this is that when we ``divide by $xy+1$'', really
+what we are doing is we are setting $xy+1=0$, and then seeing what
+remains. But 
+\[xy+1=0 \Leftrightarrow xy=-1\].
+Thus, we can look at the original question as:
+
+How can we apply the rewrite rules $xy\rightarrow -1$,
+$y^2\rightarrow 1$, along with the regular rewrite rules of polynomial
+arithmetic to the polynomial $p(x,y)=xy^2+y$, such that we end with
+the value 0?
+
+Our two derivations above correspond to the application of the rules:
+\[xy+y \xrightarrow{xy=-1} -y+y=0\]
+\[xy^2+y \xrightarrow{y^2=1} x+y \not\to \text{stuck!}\]
+
+That is, our rewrite rules are not confluent.
+
+The grobner basis is a mathematical object, which is a 
+{\sl confluent set of rewrite rules} for the above problem. That is,
+it's a set of polynomials which manage to find the rewrite
+\[p(x,y)\overset{*}{\rightarrow} 0\]
+regardless of the order in which we apply them. It's also 
+{\sl correct}, in that it only rewrites to 0 if the original system
+has {\sl some way} to rewrite to 0.
+
+\subsection{Buchberger's algorithm}
+
+We need to identify {\sl critical pairs}, which in this setting are
+called S-polynomials.
+
+Let
+\[f_i=H(f_i)+R(f_i)\]
+\[f_j=H(f_j)+R(f_j)\].
+\[m=lcm(H(f_i),H(f_j))\]
+and let $m_i$, $m_j$ be monomials such that
+\[m_i * H(f_i) = m = m_j * H(f_j)\]
+
+The S-polynomial induced by $f_i$, $f_j$ is defined as
+\[S(f_i,f_j)=m_if_i - m_if_j\]
+
+
 \chapter{Greatest Common Divisor}
 Greatest Common Divisor
 \chapter{Polynomial Factorization}
